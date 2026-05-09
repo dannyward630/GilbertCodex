@@ -3,35 +3,77 @@ import { BrowserPreviewPanel } from "../components/browser/BrowserPreviewPanel";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
-import { RightRail } from "../components/inspector/RightRail";
+import { RightRail, chatHasLiveRightRailActivity, chatHasRightRailContent } from "../components/inspector/RightRail";
+import type { ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
 import type { AppInfo } from "../types/app";
-import type { ChatSendInput, ChatSummary } from "../types/chat";
-import type { ThinkingSettings } from "../types/settings";
+import type { ChatComposerDraft, ChatPlanningInputAnswer, ChatSendInput, ChatSummary } from "../types/chat";
+import type { LocalWorkspaceSettings } from "../types/localWorkspace";
+import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../types/settings";
 
 interface ChatPageProps {
   appInfo: AppInfo;
+  browserPreviewEnabled: boolean;
   chat: ChatSummary;
+  composerDraft?: ChatComposerDraft | null;
+  contextWindowSource: "estimate" | "openrouter";
+  contextWindowTokens: number;
   hasApiKey: boolean;
   isSending: boolean;
+  localWorkspace: LocalWorkspaceSettings;
+  lastProviderContextUsage?: ContextWindowUsage | null;
+  maxOutputTokens: number;
   model: string;
+  modelContextWindows: ModelContextWindowMap;
+  onComposerDraftApplied?: () => void;
+  onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string) => void;
+  onRegenerateResponse: (messageId: string) => void | Promise<void>;
   onSendMessage: (input: ChatSendInput) => void | Promise<void>;
+  onStopGeneration: () => void;
+  onSubmitPlanningInput: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
+  providerSettings: ProviderSettings;
   onThinkingChange: (thinking: ThinkingSettings) => void;
+  onWebSearchChange: (webSearch: WebSearchSettings) => void;
+  systemPrompt: string;
   thinking: ThinkingSettings;
+  webSearch: WebSearchSettings;
   onTogglePin: () => void;
+  onToggleTerminal: () => void;
+  terminalEnabled: boolean;
+  terminalOpen: boolean;
 }
 
 export function ChatPage({
   appInfo,
+  browserPreviewEnabled,
   chat,
+  composerDraft,
+  contextWindowSource,
+  contextWindowTokens,
   hasApiKey,
   isSending,
+  localWorkspace,
+  lastProviderContextUsage,
+  maxOutputTokens,
   model,
+  modelContextWindows,
+  onComposerDraftApplied,
+  onLocalWorkspaceChange,
   onModelChange,
+  onRegenerateResponse,
   onSendMessage,
+  onStopGeneration,
+  onSubmitPlanningInput,
+  providerSettings,
   onThinkingChange,
+  onWebSearchChange,
+  systemPrompt,
   thinking,
+  webSearch,
   onTogglePin,
+  onToggleTerminal,
+  terminalEnabled,
+  terminalOpen,
 }: ChatPageProps) {
   const conversationBodyRef = useRef<HTMLDivElement>(null);
   const [composerHeight, setComposerHeight] = useState(152);
@@ -41,11 +83,12 @@ export function ChatPage({
   const [browserPreviewExpanded, setBrowserPreviewExpanded] = useState(false);
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
-  const rightRailHasActivity = chatHasThinkingActivity(chat);
+  const rightRailHasActivity = chatHasLiveRightRailActivity(chat);
+  const rightRailHasContent = chatHasRightRailContent(chat);
   const conversationMainStyle = {
     "--composer-clearance": `${Math.max(composerHeight + 34, 178)}px`,
   } as CSSProperties;
-  const showRightRail = rightRailOpen;
+  const showRightRail = rightRailOpen && rightRailHasContent;
   const showBrowserPreview = browserPreviewOpen;
   const sideLayout = showRightRail && showBrowserPreview ? "split" : showBrowserPreview ? "preview" : showRightRail ? "rail" : "none";
   const conversationBodyStyle = {
@@ -63,6 +106,10 @@ export function ChatPage({
   );
 
   const handleToggleBrowserPreview = useCallback(() => {
+    if (!browserPreviewEnabled) {
+      return;
+    }
+
     setBrowserPreviewOpen((open) => {
       if (open) {
         setBrowserPreviewExpanded(false);
@@ -70,7 +117,7 @@ export function ChatPage({
 
       return !open;
     });
-  }, []);
+  }, [browserPreviewEnabled]);
 
   const handleCloseBrowserPreview = useCallback(() => {
     setBrowserPreviewExpanded(false);
@@ -155,6 +202,12 @@ export function ChatPage({
   }, [chat.id, rightRailHasActivity]);
 
   useEffect(() => {
+    if (!rightRailHasContent) {
+      setRightRailOpen(false);
+    }
+  }, [chat.id, rightRailHasContent]);
+
+  useEffect(() => {
     if (!showBrowserPreview || browserPreviewExpanded) {
       return;
     }
@@ -166,16 +219,28 @@ export function ChatPage({
     return () => window.removeEventListener("resize", handleResize);
   }, [browserPreviewExpanded, clampBrowserPreviewWidth, showBrowserPreview]);
 
+  useEffect(() => {
+    if (!browserPreviewEnabled && browserPreviewOpen) {
+      setBrowserPreviewExpanded(false);
+      setBrowserPreviewOpen(false);
+    }
+  }, [browserPreviewEnabled, browserPreviewOpen]);
+
   return (
     <div className="conversation-frame" data-header-blur={headerBlurActive}>
       <ConversationHeader
+        browserPreviewEnabled={browserPreviewEnabled}
         browserPreviewOpen={showBrowserPreview}
+        inspectorAvailable={rightRailHasContent}
         inspectorOpen={showRightRail}
         pinned={Boolean(chat.pinned)}
         title={chat.title}
         onToggleBrowserPreview={handleToggleBrowserPreview}
-        onToggleInspector={() => setRightRailOpen((open) => !open)}
+        onToggleInspector={() => setRightRailOpen((open) => (rightRailHasContent ? !open : false))}
         onTogglePin={onTogglePin}
+        onToggleTerminal={onToggleTerminal}
+        terminalEnabled={terminalEnabled}
+        terminalOpen={terminalOpen}
       />
       <div
         className="conversation-body"
@@ -193,22 +258,38 @@ export function ChatPage({
             hasApiKey={hasApiKey}
             onHeaderBlurChange={setHeaderBlurActive}
             onOpenActivity={() => setRightRailOpen(true)}
+            onRegenerateResponse={onRegenerateResponse}
+            onStopGeneration={onStopGeneration}
           />
           <ChatComposer
+            chat={chat}
+            contextWindowSource={contextWindowSource}
+            contextWindowTokens={contextWindowTokens}
             disabled={isSending}
+            draft={composerDraft}
+            localWorkspace={localWorkspace}
+            lastProviderContextUsage={lastProviderContextUsage}
+            maxOutputTokens={maxOutputTokens}
             model={model}
+            modelContextWindows={modelContextWindows}
+            onDraftApplied={onComposerDraftApplied}
             onHeightChange={setComposerHeight}
+            onLocalWorkspaceChange={onLocalWorkspaceChange}
             onModelChange={onModelChange}
+            onStopGeneration={onStopGeneration}
             onSubmit={onSendMessage}
+            providerSettings={providerSettings}
             onThinkingChange={onThinkingChange}
+            onWebSearchChange={onWebSearchChange}
+            systemPrompt={systemPrompt}
             thinking={thinking}
+            webSearch={webSearch}
           />
         </section>
-        {showRightRail ? <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} /> : null}
+        {showRightRail ? <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
         {showBrowserPreview ? (
           <BrowserPreviewPanel
             expanded={browserPreviewExpanded}
-            initialUrl={getBrowserPreviewUrl()}
             previewWidth={browserPreviewWidth}
             resizeMaxWidth={BROWSER_PREVIEW_MAX_WIDTH}
             resizeMinWidth={BROWSER_PREVIEW_MIN_WIDTH}
@@ -230,14 +311,6 @@ const BROWSER_PREVIEW_RESIZE_STEP = 40;
 const PREVIEW_ONLY_RESERVED_WIDTH = 320;
 const SPLIT_LAYOUT_RESERVED_WIDTH = 560;
 
-function chatHasThinkingActivity(chat: ChatSummary) {
-  return chat.messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      Boolean(message.reasoning?.trim() || message.thinking?.startedAt || message.thinking?.completedAt),
-  );
-}
-
 function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: number) {
   const reservedWidth = sideLayout === "split" ? SPLIT_LAYOUT_RESERVED_WIDTH : PREVIEW_ONLY_RESERVED_WIDTH;
   const availableWidth = Math.max(BROWSER_PREVIEW_MIN_WIDTH, containerWidth - reservedWidth);
@@ -251,20 +324,4 @@ function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: numbe
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function getBrowserPreviewUrl() {
-  if (typeof window === "undefined") {
-    return "http://127.0.0.1:1420/";
-  }
-
-  try {
-    const currentUrl = new URL(window.location.href);
-    const host = currentUrl.hostname.toLowerCase();
-    const isLocalHost = host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "[::1]";
-
-    return isLocalHost ? currentUrl.href : "http://127.0.0.1:1420/";
-  } catch {
-    return "http://127.0.0.1:1420/";
-  }
 }

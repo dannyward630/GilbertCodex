@@ -1,6 +1,6 @@
 # Gilbert Codex
 
-Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewing, and steering code from one focused surface. The project combines a React interface, a Tauri 2 shell, and a small Rust command layer so the product can grow into a local-first coding assistant without dragging server infrastructure into the first milestone.
+Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewing, and steering code from one focused surface. The app combines React, TypeScript, Tauri 2, and a Rust command layer so agent workflows can run close to the local workspace without requiring a hosted backend for the first public milestone.
 
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db)](https://tauri.app/)
 [![React 18](https://img.shields.io/badge/React-18-61dafb)](https://react.dev/)
@@ -9,38 +9,43 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ## Current Status
 
-Phase 1 is a working desktop-app foundation. It includes the app shell, chat workspace, local project and chat state, OpenRouter chat streaming, reasoning controls, file and image attachments, settings, dialogs, a right-side activity rail, and a browser preview panel.
+Gilbert Codex is in an early collaboration-ready desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, OpenRouter streaming, planning mode, web search, local computer file context, terminal sessions, browser preview, tool toggles, settings, and a Tauri command bridge.
 
-The repo is intentionally lean: generated folders, local logs, dependencies, and build outputs stay out of Git. The source tree is organized around product surfaces rather than framework trivia, which keeps future contributors from needing a map and a lantern just to find the chat composer.
+The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, runtime clients, tools, types, and Rust commands without reverse-engineering the whole app.
 
 ## Product Shape
 
-- Desktop shell: Tauri 2 window, custom chrome, local runtime metadata, and a Rust command bridge.
-- Main workspace: left navigation, searchable chat history, project grouping, pinned chats, and route-level workspace pages.
-- Chat surface: streaming assistant messages, markdown rendering, image/file attachments, model switching, and thinking controls.
-- Review posture: visible review-mode controls, destructive chat deletion confirmation, and local-first state persistence.
-- Companion panels: reasoning/activity rail and embedded browser preview with resize and expand controls.
-- Settings: local OpenRouter key entry, connection validation, appearance mode, model, generation, and thinking controls.
+- Desktop shell: Tauri 2 window, custom chrome, local app metadata, and Rust commands.
+- Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
+- Chat workspace: searchable history, pinned chats, project grouping, markdown rendering, image/file attachments, regeneration, stop, and local persistence.
+- Model runtime: OpenRouter chat streaming, model context estimates, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
+- Tools: web search, local file indexing, file read/write helpers, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
+- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, and visible activity/progress cards.
+- Settings: OpenRouter key entry, connection validation, appearance mode, model, generation, thinking, and web-search controls.
 
 ## Repository Layout
 
 ```text
 .
+|-- public/                 Static app assets
 |-- src/                    React frontend
-|   |-- app/                App composition and Tauri client helpers
+|   |-- app/                App composition, auth, runtime helpers, Tauri clients
 |   |-- components/         Reusable UI grouped by product area
-|   |-- lib/                Local storage, models, clipboard, and chat helpers
-|   |-- pages/              Top-level route surfaces
-|   |-- services/           Provider clients
-|   |-- styles/             Global styles split by surface
+|   |-- lib/                Storage, chat helpers, model metadata, context windows
+|   |-- pages/              Top-level app surfaces
+|   |-- services/           Provider, planning, usage, and web-search clients
+|   |-- styles/             CSS split by surface
+|   |-- tools/              Browser and local-computer tool executors
 |   `-- types/              Shared TypeScript contracts
 |-- src-tauri/              Tauri 2 and Rust host layer
 |   |-- capabilities/       Window and runtime permissions
-|   |-- src/                Rust commands, core modules, and app bootstrap
+|   |-- icons/              App icon assets generated from the project logo
+|   |-- src/commands/       Auth, app info, computer, terminal, and web commands
+|   |-- src/core/           Rust provider, job, storage, and agent scaffolding
 |   `-- tauri.conf.json     Desktop app configuration
 |-- CONTRIBUTING.md         Local setup and contribution rules
-|-- PROGRESS.md             Phase history, completed UI, and roadmap
-|-- SECURITY.md             Responsible disclosure and secret-handling notes
+|-- PROGRESS.md             Current phase history and roadmap
+|-- SECURITY.md             Responsible disclosure and local-data notes
 `-- README.md              Project overview
 ```
 
@@ -70,34 +75,36 @@ Run the full desktop app:
 npm.cmd run app:dev
 ```
 
-Build the frontend:
+Run the full repository check:
+
+```powershell
+npm.cmd run check
+```
+
+Individual checks:
 
 ```powershell
 npm.cmd run build
+npm.cmd run rust:fmt:check
+npm.cmd run rust:check
 ```
 
-Run Rust checks:
+## Local Data And Secrets
 
-```powershell
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo check --manifest-path src-tauri/Cargo.toml
-```
+Gilbert Codex is local-first. OpenRouter keys are entered through Settings and treated as local user data, not repository configuration. Desktop local accounts are stored in the app data area; the browser preview uses localStorage as a development fallback. Do not commit real API keys, local databases, logs, terminal output, private workspace data, or build artifacts.
 
-## OpenRouter Setup
-
-Gilbert Codex currently uses OpenRouter from the desktop UI. Add your API key in Settings, test the connection there, and keep keys out of Git. The key is local user data, not repository configuration.
+See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, or provider errors.
 
 ## Collaboration
 
 Before opening a pull request, run:
 
 ```powershell
-npm.cmd run build
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo check --manifest-path src-tauri/Cargo.toml
+npm.cmd run check
+git diff --check
 ```
 
-Use [CONTRIBUTING.md](CONTRIBUTING.md) for local workflow and [PROGRESS.md](PROGRESS.md) for the phase roadmap.
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for coding and review standards, and [PROGRESS.md](PROGRESS.md) for the current roadmap.
 
 ## License
 

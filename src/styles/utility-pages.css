@@ -43,6 +43,7 @@
 }
 
 .utility-header-actions span,
+.utility-header-actions button,
 .tool-status,
 .tool-chip-row span,
 .workflow-step-row span {
@@ -58,6 +59,15 @@
   font-weight: 720;
   line-height: 1;
   white-space: nowrap;
+}
+
+.utility-header-actions button {
+  cursor: pointer;
+}
+
+.utility-header-actions button:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
 }
 
 .utility-stat-grid {
@@ -166,8 +176,12 @@
 }
 
 .tool-surface-card {
-  min-height: 250px;
+  min-height: 254px;
   padding: 16px;
+}
+
+.tool-surface-card[data-enabled="false"] {
+  opacity: 0.66;
 }
 
 .tool-surface-card[data-featured="false"] {
@@ -197,15 +211,25 @@
 }
 
 .tool-surface-card[data-status="Gated"] .tool-card-icon,
+.tool-surface-card[data-status="Queued"] .tool-card-icon,
 .workflow-card[data-status="Queued"] .tool-card-icon {
   color: var(--gold);
   background: color-mix(in srgb, var(--gold) 18%, transparent);
 }
 
 .tool-surface-card[data-status="Planned"] .tool-card-icon,
+.tool-surface-card[data-status="Preview"] .tool-card-icon,
 .workflow-card[data-status="Draft"] .tool-card-icon {
   color: var(--text-muted);
   background: var(--surface-raised);
+}
+
+.tool-card-title-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
 }
 
 .tool-surface-card h3,
@@ -228,6 +252,8 @@
 .tool-card-meta {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   min-width: 0;
   min-height: 30px;
   margin-top: auto;
@@ -242,6 +268,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-card-meta span:last-child {
+  color: var(--text-muted);
+}
+
+.tool-toggle {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+
+.tool-toggle span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.tool-toggle[data-on="true"] {
+  border-color: color-mix(in srgb, var(--green) 52%, var(--line));
+  background: color-mix(in srgb, var(--green) 22%, var(--surface-raised));
+}
+
+.tool-toggle[data-on="true"] span {
+  background: var(--green);
+  transform: translateX(18px);
 }
 
 .tool-chip-row,

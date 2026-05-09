@@ -1,8 +1,11 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { PanelLeft } from "lucide-react";
 import { AppTopBar } from "../chrome/AppTopBar";
 import { ShellSidebar } from "./ShellSidebar";
 import { SearchDialog } from "../search/SearchDialog";
+import { TerminalPanel } from "../terminal/TerminalPanel";
 import type { AppInfo } from "../../types/app";
+import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
@@ -10,46 +13,68 @@ import type { ProjectSummary } from "../../types/project";
 interface AppShellProps {
   activeRoute: PrimaryRoute;
   appInfo: AppInfo;
+  authUser: AuthUser;
   chats: ChatSummary[];
   children: ReactNode;
+  desktopRuntime: boolean;
   activeChatId: string;
   onCreateProject: () => void;
   onCloseSearch: () => void;
   onDeleteChat: (chatId: string) => void;
   onNewChat: (project?: string) => void;
   onOpenSearch: () => void;
+  onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onShowAbout: () => void;
+  onCloseTerminal: () => void;
+  onTerminalHeightChange: (height: number) => void;
   onSelectChat: (chatId: string) => void;
   onSelectProject: (project: string) => void;
+  onToggleTerminal: () => void;
   onTogglePin: (chatId: string) => void;
   onToggleSidebar: () => void;
   projects: ProjectSummary[];
   searchOpen: boolean;
   sidebarOpen: boolean;
+  terminalHeight: number;
+  terminalOpen: boolean;
+  terminalWorkingDirectory?: string;
 }
 
 export function AppShell({
   activeChatId,
   activeRoute,
   appInfo,
+  authUser,
   chats,
   children,
+  desktopRuntime,
   onCreateProject,
   onCloseSearch,
   onDeleteChat,
   onNewChat,
   onOpenSearch,
+  onLogout,
   onRouteChange,
   onShowAbout,
+  onCloseTerminal,
+  onTerminalHeightChange,
   onSelectChat,
   onSelectProject,
+  onToggleTerminal,
   onTogglePin,
   onToggleSidebar,
   projects,
   searchOpen,
   sidebarOpen,
+  terminalHeight,
+  terminalOpen,
+  terminalWorkingDirectory,
 }: AppShellProps) {
+  const rootStyle = {
+    "--terminal-height": `${terminalHeight}px`,
+  } as CSSProperties;
+
   function closeSidebarOnSmallScreens() {
     if (typeof window === "undefined" || !sidebarOpen) {
       return;
@@ -61,21 +86,34 @@ export function AppShell({
   }
 
   return (
-    <div className="desktop-root">
+    <div className="desktop-root" data-runtime={desktopRuntime ? "desktop" : "web"} data-terminal-open={terminalOpen} style={rootStyle}>
       <AppTopBar
         activeRoute={activeRoute}
         appInfo={appInfo}
         sidebarOpen={sidebarOpen}
+        terminalOpen={terminalOpen}
         onNewChat={onNewChat}
         onOpenSearch={onOpenSearch}
         onRouteChange={onRouteChange}
         onShowAbout={onShowAbout}
+        onToggleTerminal={onToggleTerminal}
         onToggleSidebar={onToggleSidebar}
       />
+      <button
+        className="mobile-sidebar-toggle"
+        type="button"
+        aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+        aria-expanded={sidebarOpen}
+        data-open={sidebarOpen}
+        onClick={onToggleSidebar}
+      >
+        <PanelLeft size={18} aria-hidden="true" />
+      </button>
       <div className="workspace-shell" data-sidebar-open={sidebarOpen}>
         <ShellSidebar
           activeChatId={activeChatId}
           activeRoute={activeRoute}
+          authUser={authUser}
           chats={chats}
           open={sidebarOpen}
           projects={projects}
@@ -95,6 +133,7 @@ export function AppShell({
             onOpenSearch();
             closeSidebarOnSmallScreens();
           }}
+          onLogout={onLogout}
           onRouteChange={(route) => {
             onRouteChange(route);
             closeSidebarOnSmallScreens();
@@ -124,6 +163,14 @@ export function AppShell({
         />
         <main className="app-main">{children}</main>
       </div>
+      <TerminalPanel
+        desktopRuntime={desktopRuntime}
+        height={terminalHeight}
+        open={terminalOpen}
+        workingDirectory={terminalWorkingDirectory}
+        onClose={onCloseTerminal}
+        onHeightChange={onTerminalHeightChange}
+      />
       <SearchDialog chats={chats} open={searchOpen} onClose={onCloseSearch} onSelectChat={onSelectChat} />
     </div>
   );

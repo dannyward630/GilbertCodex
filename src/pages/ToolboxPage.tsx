@@ -3,9 +3,10 @@ import {
   Braces,
   BrainCircuit,
   CheckCircle2,
-  Code2,
   Database,
+  FileCode2,
   FileSearch,
+  GitBranch,
   Globe2,
   HardDrive,
   KeyRound,
@@ -17,13 +18,21 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { normalizeToolRegistrySettings } from "../types/tools";
+import type { ToolRegistryId, ToolRegistrySettings } from "../types/tools";
+
+type ToolPhase = "Current" | "Upcoming";
+type ToolStatus = "Active" | "Available" | "Preview" | "Queued";
 
 interface ToolSurface {
   capabilities: string[];
+  detail: string;
   icon: LucideIcon;
+  id: ToolRegistryId;
   label: string;
+  phase: ToolPhase;
   rail: string;
-  status: "Phase 1 UI" | "Planned" | "Gated";
+  status: ToolStatus;
   summary: string;
 }
 
@@ -34,91 +43,192 @@ interface ToolRail {
   status: string;
 }
 
-const primaryTools: ToolSurface[] = [
+interface ToolboxPageProps {
+  onSettingsChange: (settings: ToolRegistrySettings) => void;
+  settings: ToolRegistrySettings;
+}
+
+const currentTools: ToolSurface[] = [
   {
-    capabilities: ["Search", "Open", "Capture"],
+    capabilities: ["web_search", "DuckDuckGo", "Sources"],
+    detail: "Agent-callable",
     icon: Globe2,
-    label: "Web",
-    rail: "Browser rail",
-    status: "Phase 1 UI",
-    summary: "Browse pages, collect sources, and inspect web app previews.",
+    id: "webSearch",
+    label: "Web Search",
+    phase: "Current",
+    rail: "Agent runtime",
+    status: "Active",
+    summary: "On-demand web search from chat or thinking for current facts, docs, errors, and citations.",
   },
   {
-    capabilities: ["Read", "Chunk", "Embed"],
+    capabilities: ["list_directory", "build_index", "Roots"],
+    detail: "Workspace",
+    icon: HardDrive,
+    id: "fileBrowser",
+    label: "Local Workspace",
+    phase: "Current",
+    rail: "Computer files",
+    status: "Active",
+    summary: "Open folders, browse directories, build the local vector index, and load project memory.",
+  },
+  {
+    capabilities: ["search_files", "Vectors", "Snippets"],
+    detail: "Embedding index",
+    icon: Database,
+    id: "fileSearch",
+    label: "Vector File Search",
+    phase: "Current",
+    rail: "Retrieval",
+    status: "Active",
+    summary: "Find relevant files through the local embedding index before reading or editing code.",
+  },
+  {
+    capabilities: ["view_code", "read_file", "Line/char"],
+    detail: "Precision view",
     icon: FileSearch,
-    label: "Files",
-    rail: "Workspace rail",
-    status: "Planned",
-    summary: "Read project files, build local vectors, and retrieve relevant context.",
+    id: "codeView",
+    label: "Code Viewer",
+    phase: "Current",
+    rail: "Read tools",
+    status: "Active",
+    summary: "Inspect exact line ranges, word offsets, and character windows for careful code work.",
   },
   {
-    capabilities: ["Patch", "Create", "Format"],
+    capabilities: ["edit_file", "write_file", "1-char edits"],
+    detail: "Workspace writes",
     icon: PenTool,
-    label: "Write",
-    rail: "Approval rail",
-    status: "Gated",
-    summary: "Create and edit files through reviewable, permissioned changes.",
+    id: "codeEdit",
+    label: "Code Editor",
+    phase: "Current",
+    rail: "Write tools",
+    status: "Active",
+    summary: "Patch code with exact replacements, line-range edits, or single-letter punctuation fixes.",
   },
   {
-    capabilities: ["Click", "Type", "Screenshot"],
-    icon: MonitorUp,
-    label: "Computer",
-    rail: "Desktop rail",
-    status: "Gated",
-    summary: "Use controlled desktop access for visual checks and local app flows.",
-  },
-];
-
-const supportingTools: ToolSurface[] = [
-  {
-    capabilities: ["Commands", "Logs"],
+    capabilities: ["PowerShell", "CMD", "Logs"],
+    detail: "Desktop surface",
     icon: TerminalSquare,
+    id: "terminal",
     label: "Terminal",
+    phase: "Current",
     rail: "Execution",
-    status: "Planned",
-    summary: "Run local checks and collect command output.",
+    status: "Available",
+    summary: "Run local commands and checks in the built-in terminal panel.",
   },
   {
-    capabilities: ["Repo", "Diff"],
-    icon: Code2,
-    label: "Source control",
-    rail: "Workspace",
-    status: "Planned",
-    summary: "Track branch state, staged work, and reviewable changes.",
+    capabilities: ["Tabs", "Preview", "Localhost"],
+    detail: "Preview surface",
+    icon: MonitorUp,
+    id: "browserPreview",
+    label: "Browser Preview",
+    phase: "Current",
+    rail: "Browser rail",
+    status: "Available",
+    summary: "Open web pages or local app previews beside the chat thread.",
   },
   {
-    capabilities: ["Models", "Keys"],
+    capabilities: ["Reasoning", "Trace", "Effort"],
+    detail: "Model mode",
+    icon: BrainCircuit,
+    id: "thinking",
+    label: "Thinking",
+    phase: "Current",
+    rail: "Model runtime",
+    status: "Active",
+    summary: "Request and display model reasoning for harder coding and debugging work.",
+  },
+  {
+    capabilities: ["Plan mode", "Questions", "Passes"],
+    detail: "Workflow mode",
+    icon: Workflow,
+    id: "planning",
+    label: "Planning",
+    phase: "Current",
+    rail: "Conversation",
+    status: "Active",
+    summary: "Run staged planning passes and clarification cards before implementation.",
+  },
+  {
+    capabilities: ["OpenRouter", "Models", "Context"],
+    detail: "Provider",
     icon: Braces,
-    label: "Provider",
+    id: "provider",
+    label: "Model Provider",
+    phase: "Current",
     rail: "Model calls",
-    status: "Phase 1 UI",
-    summary: "Route chat requests through configured model providers.",
+    status: "Active",
+    summary: "Route chat requests through the selected model, context window, and token settings.",
+  },
+];
+
+const upcomingTools: ToolSurface[] = [
+  {
+    capabilities: ["Click", "Type", "Screenshots"],
+    detail: "Queued",
+    icon: MonitorUp,
+    id: "desktopComputer",
+    label: "Desktop Computer",
+    phase: "Upcoming",
+    rail: "Computer control",
+    status: "Queued",
+    summary: "Controlled visual desktop actions for app QA and local UI flows.",
   },
   {
-    capabilities: ["Policy", "Audit"],
-    icon: ShieldCheck,
-    label: "Permissions",
-    rail: "Safety",
-    status: "Phase 1 UI",
-    summary: "Keep sensitive actions behind confirmation and review gates.",
+    capabilities: ["Git", "Diff", "PR"],
+    detail: "Queued",
+    icon: GitBranch,
+    id: "sourceControl",
+    label: "Source Control",
+    phase: "Upcoming",
+    rail: "Repository",
+    status: "Queued",
+    summary: "Branch state, diffs, commits, pushes, and pull request workflows.",
+  },
+  {
+    capabilities: ["Runs", "Follow-ups", "Monitors"],
+    detail: "Queued",
+    icon: Workflow,
+    id: "workflowAutomation",
+    label: "Workflow Automation",
+    phase: "Upcoming",
+    rail: "Background work",
+    status: "Queued",
+    summary: "Long-running jobs, scheduled checks, and resumable follow-up workflows.",
   },
 ];
 
-const toolRails: ToolRail[] = [
-  { count: "04", icon: Bot, label: "Primary surfaces", status: "Visible" },
-  { count: "03", icon: KeyRound, label: "Approval gates", status: "Required" },
-  { count: "01", icon: Database, label: "Vector index", status: "Planned" },
-  { count: "00", icon: CheckCircle2, label: "Active runs", status: "Idle" },
+const toolFlow = [
+  { icon: ScanSearch, label: "Discover", value: "Search web, files, and local vectors" },
+  { icon: FileCode2, label: "Inspect", value: "View exact code lines or characters" },
+  { icon: BrainCircuit, label: "Reason", value: "Think with tool evidence in context" },
+  { icon: PenTool, label: "Act", value: "Patch files or run local surfaces" },
 ];
 
-const buildPath = [
-  { icon: ScanSearch, label: "Discover", value: "Tool registry and permissions" },
-  { icon: HardDrive, label: "Context", value: "Files, vectors, and workspace state" },
-  { icon: BrainCircuit, label: "Reason", value: "Model call plus retrieved evidence" },
-  { icon: Workflow, label: "Act", value: "Write, browser, terminal, or computer tool" },
-];
+export function ToolboxPage({ onSettingsChange, settings }: ToolboxPageProps) {
+  const normalizedSettings = normalizeToolRegistrySettings(settings);
+  const allTools = [...currentTools, ...upcomingTools];
+  const enabledCount = allTools.filter((tool) => normalizedSettings[tool.id]).length;
+  const disabledCount = allTools.length - enabledCount;
+  const toolRails: ToolRail[] = [
+    { count: String(currentTools.length).padStart(2, "0"), icon: Bot, label: "Current tools", status: "Live" },
+    { count: String(upcomingTools.length).padStart(2, "0"), icon: KeyRound, label: "Upcoming tools", status: "Queued" },
+    { count: String(enabledCount).padStart(2, "0"), icon: CheckCircle2, label: "Enabled", status: disabledCount ? `${disabledCount} off` : "All on" },
+    { count: "01", icon: ShieldCheck, label: "Safety gate", status: "Always enforced" },
+  ];
 
-export function ToolboxPage() {
+  function toggleTool(toolId: ToolRegistryId) {
+    onSettingsChange({
+      ...normalizedSettings,
+      [toolId]: !normalizedSettings[toolId],
+    });
+  }
+
+  function setAllTools(enabled: boolean) {
+    onSettingsChange(
+      Object.fromEntries(allTools.map((tool) => [tool.id, enabled])) as ToolRegistrySettings,
+    );
+  }
+
   return (
     <div className="utility-page">
       <section className="utility-shell" aria-labelledby="toolbox-title">
@@ -127,9 +237,13 @@ export function ToolboxPage() {
             <p className="eyebrow">Toolbox</p>
             <h1 id="toolbox-title">Tool registry</h1>
           </div>
-          <div className="utility-header-actions" aria-label="Toolbox status">
-            <span>UI scaffold</span>
-            <span>Permission first</span>
+          <div className="utility-header-actions" aria-label="Toolbox actions">
+            <button type="button" onClick={() => setAllTools(true)}>
+              Enable all
+            </button>
+            <button type="button" onClick={() => setAllTools(false)}>
+              Disable all
+            </button>
           </div>
         </header>
 
@@ -148,30 +262,29 @@ export function ToolboxPage() {
           })}
         </div>
 
-        <section className="utility-section" aria-labelledby="toolbox-primary-title">
-          <div className="utility-section-heading">
-            <h2 id="toolbox-primary-title">Primary tools</h2>
-            <span>Phase-one layout</span>
-          </div>
-          <div className="tool-surface-grid">
-            {primaryTools.map((tool) => (
-              <ToolSurfaceCard key={tool.label} tool={tool} featured />
-            ))}
-          </div>
-        </section>
+        <ToolSection
+          heading="Current Tools"
+          settings={normalizedSettings}
+          subheading="Live in this build"
+          tools={currentTools}
+          onToggle={toggleTool}
+        />
 
-        <section className="utility-section utility-section-split" aria-labelledby="toolbox-system-title">
+        <ToolSection
+          heading="Upcoming Tools"
+          settings={normalizedSettings}
+          subheading="Pre-enabled for rollout"
+          tools={upcomingTools}
+          onToggle={toggleTool}
+        />
+
+        <section className="utility-section utility-section-split" aria-labelledby="toolbox-flow-title">
           <div className="utility-section-heading">
-            <h2 id="toolbox-system-title">System tools</h2>
-            <span>Shared surfaces</span>
-          </div>
-          <div className="tool-support-grid">
-            {supportingTools.map((tool) => (
-              <ToolSurfaceCard key={tool.label} tool={tool} />
-            ))}
+            <h2 id="toolbox-flow-title">Tool Flow</h2>
+            <span>Runtime path</span>
           </div>
           <div className="tool-flow-panel" aria-label="Tool call path">
-            {buildPath.map((item) => {
+            {toolFlow.map((item) => {
               const Icon = item.icon;
 
               return (
@@ -189,23 +302,65 @@ export function ToolboxPage() {
   );
 }
 
-function ToolSurfaceCard({ featured = false, tool }: { featured?: boolean; tool: ToolSurface }) {
+function ToolSection({
+  heading,
+  onToggle,
+  settings,
+  subheading,
+  tools,
+}: {
+  heading: string;
+  onToggle: (toolId: ToolRegistryId) => void;
+  settings: ToolRegistrySettings;
+  subheading: string;
+  tools: ToolSurface[];
+}) {
+  return (
+    <section className="utility-section" aria-labelledby={`${heading.toLowerCase().replace(/\s+/g, "-")}-title`}>
+      <div className="utility-section-heading">
+        <h2 id={`${heading.toLowerCase().replace(/\s+/g, "-")}-title`}>{heading}</h2>
+        <span>{subheading}</span>
+      </div>
+      <div className="tool-surface-grid">
+        {tools.map((tool) => (
+          <ToolSurfaceCard enabled={settings[tool.id]} key={tool.id} tool={tool} onToggle={() => onToggle(tool.id)} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ToolSurfaceCard({ enabled, onToggle, tool }: { enabled: boolean; onToggle: () => void; tool: ToolSurface }) {
   const Icon = tool.icon;
 
   return (
-    <article className="tool-surface-card" data-featured={featured} data-status={tool.status}>
+    <article className="tool-surface-card" data-enabled={enabled} data-phase={tool.phase} data-status={tool.status}>
       <div className="tool-card-header">
         <span className="tool-card-icon" aria-hidden="true">
           <Icon size={20} />
         </span>
-        <span className="tool-status">{tool.status}</span>
+        <button
+          className="tool-toggle"
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={`${enabled ? "Disable" : "Enable"} ${tool.label}`}
+          data-on={enabled}
+          onClick={onToggle}
+        >
+          <span />
+        </button>
       </div>
       <div>
-        <h3>{tool.label}</h3>
+        <div className="tool-card-title-row">
+          <h3>{tool.label}</h3>
+          <span className="tool-status">{enabled ? "Enabled" : "Off"}</span>
+        </div>
         <p>{tool.summary}</p>
       </div>
       <div className="tool-card-meta">
         <span>{tool.rail}</span>
+        <span>{tool.detail}</span>
       </div>
       <div className="tool-chip-row" aria-label={`${tool.label} capabilities`}>
         {tool.capabilities.map((capability) => (

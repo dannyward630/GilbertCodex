@@ -1,6 +1,6 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, FileText, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, PanelLeft } from "lucide-react";
 import { closeWindow, maximizeWindow, minimizeWindow, startWindowDrag } from "../../app/windowClient";
 import { IconButton } from "../common/IconButton";
 import { WindowControls } from "./WindowControls";
@@ -15,7 +15,9 @@ interface AppTopBarProps {
   onRouteChange: (route: PrimaryRoute) => void;
   onShowAbout: () => void;
   onToggleSidebar: () => void;
+  onToggleTerminal: () => void;
   sidebarOpen: boolean;
+  terminalOpen: boolean;
 }
 
 type MenuId = "file" | "edit" | "view" | "window" | "help";
@@ -91,7 +93,9 @@ export function AppTopBar({
   onRouteChange,
   onShowAbout,
   onToggleSidebar,
+  onToggleTerminal,
   sidebarOpen,
+  terminalOpen,
 }: AppTopBarProps) {
   const topbarRef = useRef<HTMLElement>(null);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
@@ -113,6 +117,7 @@ export function AppTopBar({
       ],
       view: [
         { label: "Show sidebar", shortcut: "Ctrl+B", checked: sidebarOpen, onSelect: onToggleSidebar },
+        { label: "Terminal", shortcut: "Ctrl+`", checked: terminalOpen, onSelect: onToggleTerminal },
         { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onSelect: () => onRouteChange("chat") },
         { label: "Toolbox", checked: activeRoute === "toolbox", onSelect: () => onRouteChange("toolbox") },
         { label: "Workflows", checked: activeRoute === "workflows", onSelect: () => onRouteChange("workflows") },
@@ -128,7 +133,7 @@ export function AppTopBar({
         { label: "Open settings", separatorBefore: true, onSelect: () => onRouteChange("settings") },
       ],
     }),
-    [activeRoute, appInfo, onNewChat, onOpenSearch, onRouteChange, onShowAbout, onToggleSidebar, sidebarOpen],
+    [activeRoute, appInfo, onNewChat, onOpenSearch, onRouteChange, onShowAbout, onToggleSidebar, onToggleTerminal, sidebarOpen, terminalOpen],
   );
 
   useEffect(() => {
@@ -176,6 +181,9 @@ export function AppTopBar({
       } else if (key === "b") {
         event.preventDefault();
         onToggleSidebar();
+      } else if (key === "`") {
+        event.preventDefault();
+        onToggleTerminal();
       } else if (key === ",") {
         event.preventDefault();
         onRouteChange("settings");
@@ -184,7 +192,7 @@ export function AppTopBar({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenSearch, onRouteChange, onToggleSidebar]);
+  }, [onNewChat, onOpenSearch, onRouteChange, onToggleSidebar, onToggleTerminal]);
 
   function isInteractiveTarget(target: HTMLElement) {
     return Boolean(target.closest("button, input, textarea, select, a, [role='menu'], [data-topbar-interactive='true']"));
@@ -276,7 +284,7 @@ export function AppTopBar({
         </nav>
       </div>
       <div className="topbar-center">
-        <FileText size={14} aria-hidden="true" />
+        <img className="topbar-logo" src="/gilbert-codex-logo.svg" alt="" aria-hidden="true" draggable={false} />
         <span>{appInfo.name}</span>
       </div>
       <WindowControls />

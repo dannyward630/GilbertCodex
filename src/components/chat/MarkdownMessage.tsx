@@ -103,8 +103,16 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
     return null;
   }
 
+  if (isStreaming) {
+    return (
+      <div className="markdown-message markdown-message-streaming" data-streaming="true">
+        <span className="markdown-stream-text">{content}</span>
+      </div>
+    );
+  }
+
   return (
-    <div className={isStreaming ? "markdown-message markdown-message-streaming" : "markdown-message"} data-streaming={isStreaming}>
+    <div className="markdown-message" data-streaming={false}>
       <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
         {content}
       </ReactMarkdown>

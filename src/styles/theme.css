@@ -206,7 +206,8 @@
 .thinking-trace-item,
 .thinking-popover-header,
 .thinking-effort-grid button,
-.thinking-trace-toggle {
+.thinking-trace-toggle,
+.thinking-trace-note {
   color: var(--text);
   border-color: var(--popover-border);
   background: var(--composer-control-bg);
@@ -215,6 +216,7 @@
 .thinking-popover-header small,
 .thinking-effort-grid small,
 .thinking-trace-toggle small,
+.thinking-trace-note small,
 .thinking-field-row small,
 .thinking-summary-action {
   color: var(--text-dim);

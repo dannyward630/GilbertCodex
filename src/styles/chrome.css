@@ -25,6 +25,10 @@
   cursor: grabbing;
 }
 
+.mobile-sidebar-toggle {
+  display: none;
+}
+
 .topbar-left,
 .topbar-center,
 .window-controls,
@@ -48,6 +52,15 @@
   padding: 0 14px;
   border-radius: 7px;
   cursor: inherit;
+}
+
+.topbar-logo {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
+  user-select: none;
 }
 
 .topbar-center span {

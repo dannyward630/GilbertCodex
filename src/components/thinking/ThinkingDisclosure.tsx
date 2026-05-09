@@ -3,20 +3,24 @@ import { useEffect, useState } from "react";
 import { formatThinkingDuration } from "../../lib/thinkingActivity";
 
 interface ThinkingDisclosureProps {
+  activityMode?: "planning" | "thinking";
   completedAt?: string;
   content?: string;
   isPrivate?: boolean;
   isThinking?: boolean;
   onOpenActivity?: () => void;
+  progressLabel?: string;
   startedAt?: string;
 }
 
 export function ThinkingDisclosure({
+  activityMode = "thinking",
   completedAt,
   content,
   isPrivate = false,
   isThinking = false,
   onOpenActivity,
+  progressLabel,
   startedAt,
 }: ThinkingDisclosureProps) {
   const [now, setNow] = useState(Date.now());
@@ -36,8 +40,11 @@ export function ThinkingDisclosure({
     return null;
   }
 
-  const summary = isThinking ? "Thinking..." : `Thought for ${formatThinkingDuration(startedAt, completedAt, now)}`;
-  const traceLabel = hasTrace ? "Open thinking activity" : "Trace private";
+  const liveLabel = activityMode === "planning" ? "Planning..." : "Thinking...";
+  const doneLabel =
+    activityMode === "planning" ? `Planned for ${formatThinkingDuration(startedAt, completedAt, now)}` : `Thought for ${formatThinkingDuration(startedAt, completedAt, now)}`;
+  const summary = isThinking ? liveLabel : doneLabel;
+  const traceLabel = "Open activity";
 
   function handleSummaryClick() {
     onOpenActivity?.();
@@ -56,7 +63,7 @@ export function ThinkingDisclosure({
             <LoaderCircle size={15} />
           </span>
         ) : null}
-        <span className="thinking-inline-title">{summary}</span>
+        <span className="thinking-inline-title">{progressLabel && isThinking ? `${summary} ${progressLabel}` : summary}</span>
         <ChevronRight className="thinking-inline-chevron" size={15} aria-hidden="true" />
       </button>
     </section>

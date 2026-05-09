@@ -1,8 +1,11 @@
 import { createEmptyChat, DEFAULT_PROJECT } from "./chatUtils";
 import { DEFAULT_CHAT_MODEL } from "./models";
+import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
+import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment, ChatMessage, ChatSummary } from "../types/chat";
+import type { LocalPermissionMode, LocalWorkspaceIndexStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProjectSummary } from "../types/project";
-import type { AppearanceMode, ProviderSettings, ReasoningEffort, ThinkingSettings } from "../types/settings";
+import type { AppearanceMode, ProviderSettings, ReasoningEffort, ThinkingSettings, WebSearchSettings } from "../types/settings";
 
 const CHATS_KEY = "gilbert-codex.chats.v1";
 const PROJECTS_KEY = "gilbert-codex.projects.v1";
@@ -10,19 +13,31 @@ const SETTINGS_KEY = "gilbert-codex.provider-settings.v1";
 const THINKING_KEY = "gilbert-codex.thinking-settings.v1";
 const APPEARANCE_KEY = "gilbert-codex.appearance.v1";
 const ACTIVE_CHAT_KEY = "gilbert-codex.active-chat.v1";
+const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
+const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
+let storageNamespace = "legacy";
 
 export const defaultProviderSettings: ProviderSettings = {
-  maxTokens: 2048,
+  maxTokens: 4096,
   model: DEFAULT_CHAT_MODEL,
   openRouterApiKey: "",
   systemPrompt: "You are Gilbert Codex, a careful local coding assistant. Be concise, practical, and honest about limitations.",
   thinking: {
     effort: "high",
     enabled: true,
-    showReasoning: false,
   },
   temperature: 0.35,
+  tools: DEFAULT_TOOL_REGISTRY_SETTINGS,
+  webSearch: {
+    enabled: false,
+    maxResults: DEFAULT_WEB_SEARCH_MAX_RESULTS,
+    provider: "duckduckgo",
+  },
 };
+
+export function setStorageNamespace(userId: string | null) {
+  storageNamespace = userId ? `user.${sanitizeStorageScope(userId)}` : "legacy";
+}
 
 export function loadChats(): ChatSummary[] {
   const storedChats = readJson<ChatSummary[]>(CHATS_KEY);
@@ -55,6 +70,7 @@ export function loadProjects(): ProjectSummary[] {
     ...project,
     createdAt: project.createdAt || new Date().toISOString(),
     id: project.id || `project-${project.name}`,
+    localWorkspace: project.localWorkspace ? normalizeLocalWorkspaceSettings(project.localWorkspace) : undefined,
     name: project.name || DEFAULT_PROJECT,
     updatedAt: project.updatedAt || project.createdAt || new Date().toISOString(),
   }));
@@ -67,6 +83,7 @@ export function saveProjects(projects: ProjectSummary[]) {
 export function loadProviderSettings(): ProviderSettings {
   const storedSettings = readJson<Partial<ProviderSettings>>(SETTINGS_KEY);
   const storedThinking = readJson<Partial<ThinkingSettings>>(THINKING_KEY);
+  const storedTools = readJson(TOOL_REGISTRY_KEY);
 
   return {
     ...defaultProviderSettings,
@@ -75,6 +92,8 @@ export function loadProviderSettings(): ProviderSettings {
     model: normalizeModel(storedSettings?.model),
     thinking: normalizeThinkingSettings(storedThinking ?? storedSettings?.thinking),
     temperature: normalizeNumber(storedSettings?.temperature, defaultProviderSettings.temperature),
+    tools: normalizeToolRegistrySettings(storedTools ?? storedSettings?.tools),
+    webSearch: normalizeWebSearchSettings(storedSettings?.webSearch),
   };
 }
 
@@ -82,10 +101,15 @@ export function saveProviderSettings(settings: ProviderSettings) {
   const normalizedSettings = {
     ...settings,
     thinking: normalizeThinkingSettings(settings.thinking),
+    tools: normalizeToolRegistrySettings(settings.tools),
+    webSearch: normalizeWebSearchSettings(settings.webSearch),
   };
 
-  writeJson(SETTINGS_KEY, normalizedSettings);
+  const { tools, ...providerSettingsWithoutTools } = normalizedSettings;
+
+  writeJson(SETTINGS_KEY, providerSettingsWithoutTools);
   writeJson(THINKING_KEY, normalizedSettings.thinking);
+  writeJson(TOOL_REGISTRY_KEY, tools);
 }
 
 export function loadAppearanceMode(): AppearanceMode {
@@ -110,9 +134,17 @@ export function saveActiveChatId(chatId: string) {
   writeString(ACTIVE_CHAT_KEY, chatId);
 }
 
+export function loadLocalWorkspaceSettings(): LocalWorkspaceSettings {
+  return normalizeLocalWorkspaceSettings(readJson<Partial<LocalWorkspaceSettings>>(LOCAL_WORKSPACE_KEY));
+}
+
+export function saveLocalWorkspaceSettings(settings: LocalWorkspaceSettings) {
+  writeJson(LOCAL_WORKSPACE_KEY, normalizeLocalWorkspaceSettings(settings));
+}
+
 function readJson<T>(key: string): T | null {
   try {
-    const rawValue = window.localStorage.getItem(key);
+    const rawValue = readRawString(scopedStorageKey(key));
     return rawValue ? (JSON.parse(rawValue) as T) : null;
   } catch {
     return null;
@@ -125,7 +157,7 @@ function writeJson(key: string, value: unknown) {
 
 function readString(key: string) {
   try {
-    return window.localStorage.getItem(key);
+    return readRawString(scopedStorageKey(key));
   } catch {
     return null;
   }
@@ -133,10 +165,26 @@ function readString(key: string) {
 
 function writeString(key: string, value: string) {
   try {
-    window.localStorage.setItem(key, value);
+    window.localStorage.setItem(scopedStorageKey(key), value);
   } catch {
     return;
   }
+}
+
+function scopedStorageKey(key: string) {
+  if (storageNamespace === "legacy") {
+    return key;
+  }
+
+  return `${key}.${storageNamespace}`;
+}
+
+function readRawString(key: string) {
+  return window.localStorage.getItem(key);
+}
+
+function sanitizeStorageScope(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 80) || "local";
 }
 
 function normalizeNumber(value: unknown, fallback: number) {
@@ -231,7 +279,17 @@ function normalizeThinkingSettings(value: unknown): ThinkingSettings {
     ...storedThinking,
     effort: normalizeReasoningEffort(storedThinking.effort),
     enabled: typeof storedThinking.enabled === "boolean" ? storedThinking.enabled : defaultProviderSettings.thinking.enabled,
-    showReasoning: typeof storedThinking.showReasoning === "boolean" ? storedThinking.showReasoning : defaultProviderSettings.thinking.showReasoning,
+  };
+}
+
+function normalizeWebSearchSettings(value: unknown): WebSearchSettings {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<WebSearchSettings>) : {};
+  const maxResults = normalizeNumber(storedSettings.maxResults, defaultProviderSettings.webSearch.maxResults);
+
+  return {
+    enabled: typeof storedSettings.enabled === "boolean" ? storedSettings.enabled : defaultProviderSettings.webSearch.enabled,
+    maxResults: Math.min(Math.max(Math.round(maxResults), 1), MAX_WEB_SEARCH_RESULTS),
+    provider: storedSettings.provider === "duckduckgo" ? storedSettings.provider : "duckduckgo",
   };
 }
 
@@ -241,6 +299,45 @@ function normalizeReasoningEffort(value: unknown): ReasoningEffort {
   }
 
   return defaultProviderSettings.thinking.effort;
+}
+
+function normalizeLocalWorkspaceSettings(value: unknown): LocalWorkspaceSettings {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<LocalWorkspaceSettings>) : {};
+  const roots = Array.isArray(storedSettings.roots)
+    ? storedSettings.roots.filter((root): root is string => typeof root === "string" && Boolean(root.trim()))
+    : [];
+
+  return {
+    enabled: typeof storedSettings.enabled === "boolean" ? storedSettings.enabled : false,
+    indexReason: typeof storedSettings.indexReason === "string" ? storedSettings.indexReason : undefined,
+    indexSummary: storedSettings.indexSummary,
+    indexStatus: normalizeLocalWorkspaceIndexStatus(storedSettings.indexStatus),
+    indexUpdatedAt: typeof storedSettings.indexUpdatedAt === "string" ? storedSettings.indexUpdatedAt : undefined,
+    lastError: typeof storedSettings.lastError === "string" ? storedSettings.lastError : undefined,
+    permissionMode: normalizeLocalPermissionMode(storedSettings.permissionMode),
+    roots,
+    scope: normalizeLocalWorkspaceScope(storedSettings.scope),
+  };
+}
+
+function normalizeLocalWorkspaceIndexStatus(value: unknown): LocalWorkspaceIndexStatus {
+  return value === "error" ? "error" : "idle";
+}
+
+function normalizeLocalPermissionMode(value: unknown): LocalPermissionMode {
+  if (value === "ask-first" || value === "gilbert-review" || value === "full-workspace") {
+    return value;
+  }
+
+  return "gilbert-review";
+}
+
+function normalizeLocalWorkspaceScope(value: unknown): LocalWorkspaceScope {
+  if (value === "current-folder" || value === "selected-folder" || value === "full-computer") {
+    return value;
+  }
+
+  return "current-folder";
 }
 
 function createDefaultProject(): ProjectSummary {

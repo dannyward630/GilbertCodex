@@ -1,4 +1,4 @@
-import { Brain, Check, ChevronDown, Eye, Gauge, LockKeyhole, Power, Sparkles } from "lucide-react";
+import { Brain, ChevronDown, Eye, Gauge, Power, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReasoningEffort, ThinkingSettings } from "../../types/settings";
 
@@ -147,20 +147,13 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
         })}
       </div>
 
-      <button
-        className="thinking-trace-toggle"
-        type="button"
-        role="menuitemcheckbox"
-        aria-checked={settings.showReasoning}
-        onClick={() => onChange({ showReasoning: !settings.showReasoning })}
-      >
-        {settings.showReasoning ? <Eye size={18} aria-hidden="true" /> : <LockKeyhole size={18} aria-hidden="true" />}
+      <div className="thinking-trace-note" role="note">
+        <Eye size={18} aria-hidden="true" />
         <span>
-          <strong>{settings.showReasoning ? "Trace visible" : "Trace private"}</strong>
-          <small>{settings.showReasoning ? "Show reasoning under responses." : "Keep reasoning out of the thread."}</small>
+          <strong>Trace always visible</strong>
+          <small>When thinking is on, Gilbert always requests and shows reasoning.</small>
         </span>
-        {settings.showReasoning ? <Check size={18} aria-hidden="true" /> : null}
-      </button>
+      </div>
     </div>
   );
 }

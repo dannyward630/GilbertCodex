@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock3, Folder, FolderOpen, FolderPlus, MessageSquarePlus, Pin, Search, Settings, Trash2, Wrench } from "lucide-react";
+import { Clock3, Folder, FolderOpen, FolderPlus, LogOut, MessageSquarePlus, Pin, Search, Settings, Trash2, UserRound, Wrench } from "lucide-react";
 import { DEFAULT_PROJECT, formatChatAge, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SidebarSection } from "../sidebar/SidebarSection";
+import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
@@ -9,11 +10,13 @@ import type { ProjectSummary } from "../../types/project";
 interface ShellSidebarProps {
   activeChatId: string;
   activeRoute: PrimaryRoute;
+  authUser: AuthUser;
   chats: ChatSummary[];
   onCreateProject: () => void;
   onDeleteChat: (chatId: string) => void;
   onNewChat: (project?: string) => void;
   onOpenSearch: () => void;
+  onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onSelectChat: (chatId: string) => void;
   onSelectProject: (project: string) => void;
@@ -25,11 +28,13 @@ interface ShellSidebarProps {
 export function ShellSidebar({
   activeChatId,
   activeRoute,
+  authUser,
   chats,
   onCreateProject,
   onDeleteChat,
   onNewChat,
   onOpenSearch,
+  onLogout,
   onRouteChange,
   onSelectChat,
   onSelectProject,
@@ -195,12 +200,38 @@ export function ShellSidebar({
         />
       </div>
 
-      <button className="sidebar-settings" data-active={activeRoute === "settings"} type="button" onClick={() => onRouteChange("settings")}>
-        <Settings size={17} aria-hidden="true" />
-        <span>Settings</span>
-      </button>
+      <div className="sidebar-footer">
+        <div className="sidebar-account">
+          <div className="sidebar-account-avatar" aria-hidden="true">
+            {getUserInitials(authUser)}
+          </div>
+          <div className="sidebar-account-copy">
+            <strong>{authUser.displayName}</strong>
+            <span>@{authUser.username} - local</span>
+          </div>
+          <button className="sidebar-account-signout" type="button" aria-label="Sign out" title="Sign out" onClick={onLogout}>
+            <LogOut size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <button className="sidebar-settings" data-active={activeRoute === "settings"} type="button" onClick={() => onRouteChange("settings")}>
+          <Settings size={17} aria-hidden="true" />
+          <span>Settings</span>
+        </button>
+      </div>
     </aside>
   );
+}
+
+function getUserInitials(user: AuthUser) {
+  const initials = user.displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+
+  return initials || <UserRound size={16} aria-hidden="true" />;
 }
 
 function formatProjectChatCount(chatCount: number) {

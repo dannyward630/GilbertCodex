@@ -288,6 +288,76 @@
   background: rgba(196, 59, 50, 0.95);
 }
 
-.sidebar-settings {
+.sidebar-footer {
+  display: grid;
+  gap: 2px;
   margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--sidebar-border) 72%, transparent);
+}
+
+.sidebar-account {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.sidebar-account-avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text);
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sidebar) 76%, var(--sidebar-warm) 24%);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.sidebar-account-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-account-copy strong,
+.sidebar-account-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-account-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.sidebar-account-copy span {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.sidebar-account-signout {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-muted);
+  border-radius: 7px;
+  background: transparent;
+}
+
+.sidebar-account-signout:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }

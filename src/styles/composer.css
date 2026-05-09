@@ -304,6 +304,15 @@
   transform: translateY(-1px);
 }
 
+.send-button-stop {
+  color: #ffffff;
+  background: var(--danger);
+}
+
+.send-button-stop:hover {
+  background: color-mix(in srgb, var(--danger) 88%, white 12%);
+}
+
 .send-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
@@ -338,9 +347,30 @@
   min-width: 288px;
 }
 
+.composer-popover-attach {
+  width: min(340px, calc(100vw - 36px));
+}
+
+.composer-popover-context {
+  bottom: calc(100% + 8px);
+  width: min(326px, calc(100vw - 36px));
+  gap: 10px;
+  padding: 11px;
+}
+
+.composer-popover-local {
+  bottom: calc(100% + 8px);
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(620px, calc(100vh - 210px));
+  gap: 10px;
+  overflow: hidden;
+  padding: 11px;
+}
+
 .composer-popover-model {
   left: auto;
   right: 0;
+  width: min(380px, calc(100vw - 36px));
 }
 
 .conversation-body[data-right-rail-open="true"] .composer-shell {
@@ -490,6 +520,31 @@
   font-size: 12px;
 }
 
+.composer-menu-item-stacked small.model-option-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: normal;
+}
+
+.model-option-detail > span:first-child {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-context-size {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--popover-border) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--composer-control-hover) 68%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .composer-menu-item[data-selected="true"] svg:last-child {
   color: var(--blue);
 }
@@ -526,6 +581,101 @@
 
 .composer-switch[data-on="true"] span {
   transform: translateX(16px);
+}
+
+.composer-plan-inline {
+  display: grid;
+  gap: 9px;
+  margin: 4px 4px 7px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 38%, transparent), color-mix(in srgb, var(--gold) 10%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 44%, transparent);
+}
+
+.composer-plan-inline-header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-plan-inline-header > svg {
+  color: var(--gold);
+}
+
+.composer-plan-inline-header span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.composer-plan-inline-header strong,
+.composer-plan-inline-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-plan-inline-header strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.composer-plan-inline-header small {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.composer-plan-pass-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.composer-plan-pass-row button {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 10px;
+  background: var(--composer-control-bg);
+  text-align: left;
+}
+
+.composer-plan-pass-row button:hover,
+.composer-plan-pass-row button[data-selected="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 40%, var(--gold) 24%);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 58%, transparent), color-mix(in srgb, var(--gold) 11%, transparent)),
+    var(--composer-control-bg);
+}
+
+.composer-plan-pass-row strong,
+.composer-plan-pass-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-plan-pass-row strong {
+  font-size: 15px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.composer-plan-pass-row small {
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 .composer-menu-nested {
@@ -568,9 +718,11 @@
   gap: 10px;
   min-height: 24px;
   padding: 0 18px 9px;
+  flex-wrap: wrap;
 }
 
-.local-toggle {
+.local-toggle,
+.context-window-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -584,15 +736,596 @@
   line-height: 1;
 }
 
-.local-toggle:hover {
+.context-window-chip {
+  max-width: 210px;
+}
+
+.context-window-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-toggle:hover,
+.local-toggle[data-active="true"],
+.context-window-chip:hover,
+.context-window-chip[data-active="true"] {
   color: var(--text);
 }
 
-.local-toggle:disabled,
-.local-toggle:disabled:hover {
-  cursor: default;
-  color: var(--composer-muted);
-  opacity: 0.7;
+.composer-context-root {
+  z-index: 10;
+}
+
+.composer-local-root {
+  z-index: 12;
+}
+
+.local-popover-header,
+.local-permission-panel,
+.local-index-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.local-popover-header {
+  justify-content: space-between;
+}
+
+.local-popover-header > span,
+.local-permission-panel span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.local-popover-header strong,
+.local-permission-panel strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-popover-header small,
+.local-permission-panel small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-switch-button {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--composer-control-hover);
+}
+
+.local-switch-button span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  transition:
+    transform 140ms ease,
+    background 140ms ease;
+}
+
+.local-switch-button[data-on="true"] {
+  background: color-mix(in srgb, var(--blue) 52%, transparent);
+}
+
+.local-switch-button[data-on="true"] span {
+  background: #ffffff;
+  transform: translateX(18px);
+}
+
+.local-scope-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.local-scope-row button,
+.local-index-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  background: var(--composer-control-bg);
+}
+
+.local-scope-row button {
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 9px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.local-scope-row button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-scope-row button:hover,
+.local-scope-row button[data-selected="true"],
+.local-index-row button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 54%, transparent), transparent),
+    var(--composer-control-bg);
+}
+
+.local-permission-panel {
+  min-height: 52px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 54%, transparent);
+}
+
+.local-permission-panel > svg {
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+
+.local-danger-popup {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--danger) 16%, transparent), transparent),
+    color-mix(in srgb, var(--surface-raised) 74%, transparent);
+  box-shadow: 0 18px 48px color-mix(in srgb, black 30%, transparent);
+}
+
+.local-danger-popup > div:first-child {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.local-danger-popup > div:first-child > svg {
+  margin-top: 2px;
+  color: color-mix(in srgb, var(--danger) 78%, white 22%);
+}
+
+.local-danger-popup span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.local-danger-popup strong,
+.local-danger-popup small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.local-danger-popup strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.local-danger-popup small,
+.local-danger-popup p {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.local-danger-popup p {
+  margin: 0;
+}
+
+.local-danger-popup > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.local-danger-popup button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 9px;
+  background: var(--composer-control-bg);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.local-danger-popup button:hover {
+  color: var(--text);
+  background: var(--composer-control-hover);
+}
+
+.local-danger-popup button[data-danger="true"] {
+  color: color-mix(in srgb, var(--danger) 80%, white 20%);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--line));
+}
+
+.local-project-panel {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 48%, transparent);
+}
+
+.local-project-panel > svg:first-child {
+  color: var(--blue);
+}
+
+.local-project-panel > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.local-project-panel strong,
+.local-project-panel small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-project-panel strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 760;
+}
+
+.local-project-panel small {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.local-project-panel > svg:last-child {
+  color: var(--blue);
+  animation: thinking-spin 900ms linear infinite;
+}
+
+.local-drop-zone {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 58px;
+  padding: 9px;
+  color: var(--text-muted);
+  border: 1px dashed color-mix(in srgb, var(--line) 88%, var(--blue) 12%);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 28%, transparent), transparent),
+    color-mix(in srgb, var(--surface-raised) 38%, transparent);
+}
+
+.local-drop-zone[data-hovering="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 62%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 80%, transparent), transparent),
+    color-mix(in srgb, var(--surface-raised) 58%, transparent);
+}
+
+.local-drop-zone > svg {
+  color: var(--blue);
+}
+
+.local-drop-zone span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.local-drop-zone strong,
+.local-drop-zone small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-drop-zone strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.local-drop-zone small {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.local-drop-zone button,
+.local-path-row button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 9px;
+  background: var(--composer-control-bg);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.local-drop-zone button:hover,
+.local-path-row button:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+  background: var(--composer-control-hover);
+}
+
+.local-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.local-path-row input {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--field-bg) 84%, transparent);
+  font-size: 12px;
+}
+
+.local-index-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  justify-content: stretch;
+  gap: 7px;
+}
+
+.local-index-row button {
+  gap: 6px;
+  min-height: 31px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.local-index-row button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-index-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.local-index-row > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 680;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-index-progress {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--blue-soft) 36%, transparent);
+}
+
+.local-index-progress > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.local-index-progress strong,
+.local-index-progress small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-index-progress strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.local-index-progress small {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.local-index-progress-track {
+  position: relative;
+  overflow: hidden;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 64%, transparent);
+}
+
+.local-index-progress-track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--blue), transparent);
+  animation: local-index-progress-sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes local-index-progress-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.local-popover-note,
+.local-popover-error {
+  padding: 8px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.local-popover-note {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--surface-raised) 48%, transparent);
+}
+
+.local-popover-error {
+  color: color-mix(in srgb, var(--danger) 86%, white 14%);
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.context-window-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.context-window-header span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.context-window-header strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.context-window-header span strong,
+.context-window-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-window-header small {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.context-window-meter {
+  position: relative;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--composer-control-hover) 78%, transparent);
+}
+
+.context-window-meter span,
+.context-window-meter em,
+.context-window-meter i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+}
+
+.context-window-meter span {
+  background: linear-gradient(90deg, var(--blue), color-mix(in srgb, var(--green) 65%, var(--blue) 35%));
+}
+
+.context-window-meter em {
+  left: auto;
+  right: 0;
+  background: color-mix(in srgb, var(--gold) 58%, transparent);
+}
+
+.context-window-meter i {
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 78%, transparent);
+  opacity: 0.82;
+}
+
+.context-window-note {
+  margin: -2px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.context-window-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.context-window-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.context-window-list dt,
+.context-window-list dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.context-window-list dt {
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-window-list dd {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-weight: 700;
 }
 
 .composer-status {
@@ -604,13 +1337,13 @@
   color: var(--danger);
 }
 
-@media (max-width: 700px) {
-  .composer-shell {
+@media (max-width: 820px) {
+  .desktop-root[data-runtime="web"] .composer-shell {
     bottom: 14px;
     border-radius: 20px;
   }
 
-  .composer-actions {
+  .desktop-root[data-runtime="web"] .composer-actions {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "pinned right"
@@ -622,90 +1355,91 @@
     padding: 1px 10px 4px;
   }
 
-  .composer-pinned-actions,
-  .composer-actions-left {
+  .desktop-root[data-runtime="web"] .composer-pinned-actions,
+  .desktop-root[data-runtime="web"] .composer-actions-left {
     gap: 7px;
   }
 
-  .composer-pinned-actions {
+  .desktop-root[data-runtime="web"] .composer-pinned-actions {
     grid-area: pinned;
   }
 
-  .composer-actions-left {
+  .desktop-root[data-runtime="web"] .composer-actions-left {
     grid-area: modes;
     flex-wrap: wrap;
     overflow: visible;
   }
 
-  .composer-actions-right {
+  .desktop-root[data-runtime="web"] .composer-actions-right {
     grid-area: right;
   }
 
-  .mode-chip {
+  .desktop-root[data-runtime="web"] .mode-chip {
     max-width: 146px;
     min-height: 31px;
   }
 
-  .composer-popover {
+  .desktop-root[data-runtime="web"] .composer-popover {
     max-width: calc(100vw - 44px);
   }
 
-  .composer-popover-model {
+  .desktop-root[data-runtime="web"] .composer-popover-model {
     right: auto;
     left: 0;
   }
 
-  .composer-submenu {
+  .desktop-root[data-runtime="web"] .composer-submenu {
     left: 0;
     bottom: calc(100% + 8px);
   }
+
 }
 
 @media (max-width: 480px) {
-  .composer-shell {
+  .desktop-root[data-runtime="web"] .composer-shell {
     width: min(100% - 20px, 720px);
   }
 
-  .composer-input-wrap textarea {
+  .desktop-root[data-runtime="web"] .composer-input-wrap textarea {
     min-height: 62px;
     max-height: 110px;
     padding: 13px 14px 0;
   }
 
-  .composer-actions {
+  .desktop-root[data-runtime="web"] .composer-actions {
     gap: 7px;
     padding-inline: 9px;
   }
 
-  .composer-tool-primary {
+  .desktop-root[data-runtime="web"] .composer-tool-primary {
     width: 34px;
     height: 34px;
   }
 
-  .mode-chip {
+  .desktop-root[data-runtime="web"] .mode-chip {
     max-width: 126px;
     min-height: 30px;
     padding-inline: 8px;
   }
 
-  .mode-chip:not(.mode-chip-thinking) {
+  .desktop-root[data-runtime="web"] .mode-chip:not(.mode-chip-thinking) {
     max-width: 108px;
   }
 
-  .mode-chip-thinking {
+  .desktop-root[data-runtime="web"] .mode-chip-thinking {
     max-width: 120px;
   }
 
-  .composer-actions-right {
+  .desktop-root[data-runtime="web"] .composer-actions-right {
     gap: 5px;
   }
 
-  .composer-footer {
+  .desktop-root[data-runtime="web"] .composer-footer {
     min-height: 22px;
     padding: 0 14px 8px;
   }
 
-  .local-toggle {
+  .desktop-root[data-runtime="web"] .local-toggle {
     min-height: 20px;
     font-size: 12px;
   }

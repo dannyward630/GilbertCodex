@@ -4,15 +4,28 @@ node_modules/
 # Frontend output
 dist/
 dist-ssr/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
 
 # Rust and Tauri output
 target/
 src-tauri/target/
+src-tauri/.tauri/
 
 # Local secrets
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.db
+*.sqlite
+*.sqlite3
+*.local
 
 # Logs and diagnostics
 *.log

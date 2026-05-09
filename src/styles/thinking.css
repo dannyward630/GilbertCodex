@@ -177,7 +177,8 @@
   font-size: 11px;
 }
 
-.thinking-trace-toggle {
+.thinking-trace-toggle,
+.thinking-trace-note {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) 18px;
   align-items: center;
@@ -191,35 +192,45 @@
   text-align: left;
 }
 
+.thinking-trace-note {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
 .thinking-trace-toggle:hover,
 .thinking-trace-toggle:focus-visible {
   background: rgba(255, 255, 255, 0.075);
 }
 
-.thinking-trace-toggle span {
+.thinking-trace-toggle span,
+.thinking-trace-note span {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
 .thinking-trace-toggle strong,
-.thinking-trace-toggle small {
+.thinking-trace-toggle small,
+.thinking-trace-note strong,
+.thinking-trace-note small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.thinking-trace-toggle strong {
+.thinking-trace-toggle strong,
+.thinking-trace-note strong {
   font-size: 14px;
   font-weight: 750;
 }
 
-.thinking-trace-toggle small {
+.thinking-trace-toggle small,
+.thinking-trace-note small {
   color: #9ca4aa;
   font-size: 12px;
 }
 
-.thinking-trace-toggle svg:first-child {
+.thinking-trace-toggle svg:first-child,
+.thinking-trace-note svg:first-child {
   color: #8ecbff;
 }
 

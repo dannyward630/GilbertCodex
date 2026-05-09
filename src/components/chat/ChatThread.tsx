@@ -13,16 +13,27 @@ interface ChatThreadProps {
   hasApiKey: boolean;
   onHeaderBlurChange?: (active: boolean) => void;
   onOpenActivity?: () => void;
+  onRegenerateResponse?: (messageId: string) => void | Promise<void>;
+  onStopGeneration?: () => void;
 }
 
-export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity }: ChatThreadProps) {
+export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRegenerateResponse, onStopGeneration }: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
   const headerBlurActiveRef = useRef(false);
   const programmaticScrollRef = useRef(false);
+  const scrollFrameRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const streamMarker = chat.messages
     .map((message) => `${message.id}:${message.content.length}:${message.reasoning?.length ?? 0}:${message.isStreaming ? "1" : "0"}`)
     .join("|");
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
@@ -39,6 +50,17 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   }, [streamMarker]);
 
   function scrollToThreadBottom() {
+    if (scrollFrameRef.current !== null) {
+      return;
+    }
+
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      flushScrollToThreadBottom();
+    });
+  }
+
+  function flushScrollToThreadBottom() {
     const thread = threadRef.current;
 
     if (!thread) {
@@ -89,23 +111,61 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
 
   return (
     <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
-      {chat.messages.map((message) => (
-        <MessageBlock key={message.id} role={message.role} status={message.status} isStreaming={message.isStreaming}>
-          {message.role === "assistant" ? (
-            <ThinkingDisclosure
-              completedAt={message.thinking?.completedAt}
-              content={message.reasoning}
-              isPrivate={Boolean(message.thinking && !message.reasoning && !message.isStreaming)}
-              isThinking={Boolean(message.thinking && !message.thinking.completedAt)}
-              onOpenActivity={onOpenActivity}
-              startedAt={message.thinking?.startedAt}
+      {chat.messages.map((message, messageIndex) => {
+        const isPlanningMessage = message.role === "assistant" && (message.mode === "plan" || Boolean(message.planning));
+        const hasVisibleContent = message.content.trim().length > 0;
+
+        if (isPlanningMessage && !hasVisibleContent) {
+          return null;
+        }
+
+        return (
+          <MessageBlock key={message.id} role={message.role} status={message.status} isStreaming={message.isStreaming}>
+            {message.role === "assistant" && !isPlanningMessage ? (
+              <ThinkingDisclosure
+                activityMode={message.mode === "plan" || message.planning ? "planning" : "thinking"}
+                completedAt={message.thinking?.completedAt}
+                content={message.reasoning}
+                isPrivate={false}
+                isThinking={Boolean(message.thinking && !message.thinking.completedAt)}
+                onOpenActivity={onOpenActivity}
+                progressLabel={formatPlanningProgressLabel(message.planning?.passCount, message.planning?.maxPasses)}
+                startedAt={message.thinking?.startedAt}
+              />
+            ) : null}
+            <MessageAttachments attachments={message.attachments} />
+            {message.content.trim() || message.isStreaming ? <MarkdownMessage content={message.content} isStreaming={message.isStreaming} /> : null}
+            <MessageActions
+              canRegenerate={canRegenerateMessage(chat, messageIndex)}
+              message={message}
+              onRegenerateResponse={onRegenerateResponse}
+              onStopGeneration={onStopGeneration}
             />
-          ) : null}
-          <MessageAttachments attachments={message.attachments} />
-          {message.content.trim() || message.isStreaming ? <MarkdownMessage content={message.content} isStreaming={message.isStreaming} /> : null}
-          <MessageActions message={message} />
-        </MessageBlock>
-      ))}
+          </MessageBlock>
+        );
+      })}
     </div>
   );
+}
+
+function canRegenerateMessage(chat: ChatSummary, messageIndex: number) {
+  const message = chat.messages[messageIndex];
+
+  if (!message || message.role !== "assistant" || message.isStreaming) {
+    return false;
+  }
+
+  if (message.planning?.inputRequest && !message.planning.inputRequest.answeredAt) {
+    return false;
+  }
+
+  return chat.messages.slice(0, messageIndex).some((candidate) => candidate.role === "user");
+}
+
+function formatPlanningProgressLabel(passCount?: number, maxPasses?: number) {
+  if (!maxPasses) {
+    return undefined;
+  }
+
+  return `Pass ${Math.max(passCount ?? 0, 1)} of ${maxPasses}`;
 }

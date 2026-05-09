@@ -290,6 +290,12 @@
   line-height: 1.56;
 }
 
+.markdown-stream-text {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .markdown-message > :first-child {
   margin-top: 0;
 }
