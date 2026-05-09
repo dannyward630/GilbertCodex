@@ -7,7 +7,7 @@ import { normalizeToolRegistrySettings } from "../types/tools";
 import type { ToolRegistrySettings } from "../types/tools";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1";
-const STREAM_FLUSH_MS = 32;
+const STREAM_FLUSH_MS = 80;
 const MAX_STREAM_REASONING_CHARS = 80_000;
 const TRIMMED_REASONING_PREFIX = "[Earlier reasoning trimmed to keep the app responsive.]\n\n";
 

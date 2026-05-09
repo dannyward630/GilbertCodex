@@ -28,6 +28,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [shell, setShell] = useState<TerminalShellId>("powershell");
   const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
+  const [windowVisible, setWindowVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
   const localOutputIdRef = useRef(0);
   const autoStartedRef = useRef(false);
@@ -130,6 +131,19 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   );
 
   useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    function handleVisibilityChange() {
+      setWindowVisible(document.visibilityState !== "hidden");
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  useEffect(() => {
     if (!sessionId && workingDirectory) {
       setSessionWorkingDirectory(workingDirectory);
     }
@@ -145,7 +159,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   }, [desktopRuntime, open, sessionId, startSession]);
 
   useEffect(() => {
-    if (!open || !sessionId) {
+    if (!open || !sessionId || !windowVisible) {
       return;
     }
 
@@ -183,7 +197,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
       canceled = true;
       window.clearInterval(intervalId);
     };
-  }, [appendOutput, createLocalOutput, open, sessionId]);
+  }, [appendOutput, createLocalOutput, open, sessionId, windowVisible]);
 
   useEffect(() => {
     if (!open) {
@@ -282,10 +296,25 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
 
     const startY = event.clientY;
     const startHeight = height;
+    let resizeFrame: number | null = null;
+    let pendingClientY = event.clientY;
+
+    function commitHeight() {
+      const viewportMax = Math.max(MIN_TERMINAL_HEIGHT, Math.min(MAX_TERMINAL_HEIGHT, window.innerHeight - 156));
+      onHeightChange(clamp(startHeight + startY - pendingClientY, MIN_TERMINAL_HEIGHT, viewportMax));
+    }
 
     function updateHeight(clientY: number) {
-      const viewportMax = Math.max(MIN_TERMINAL_HEIGHT, Math.min(MAX_TERMINAL_HEIGHT, window.innerHeight - 156));
-      onHeightChange(clamp(startHeight + startY - clientY, MIN_TERMINAL_HEIGHT, viewportMax));
+      pendingClientY = clientY;
+
+      if (resizeFrame !== null) {
+        return;
+      }
+
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        commitHeight();
+      });
     }
 
     function handlePointerMove(moveEvent: PointerEvent) {
@@ -293,6 +322,12 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     }
 
     function stopResize() {
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+        commitHeight();
+      }
+
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopResize);
       window.removeEventListener("pointercancel", stopResize);

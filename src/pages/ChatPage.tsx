@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { BrowserPreviewPanel } from "../components/browser/BrowserPreviewPanel";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
@@ -83,8 +83,8 @@ export function ChatPage({
   const [browserPreviewExpanded, setBrowserPreviewExpanded] = useState(false);
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
-  const rightRailHasActivity = chatHasLiveRightRailActivity(chat);
-  const rightRailHasContent = chatHasRightRailContent(chat);
+  const rightRailHasActivity = useMemo(() => chatHasLiveRightRailActivity(chat), [chat]);
+  const rightRailHasContent = useMemo(() => chatHasRightRailContent(chat), [chat]);
   const conversationMainStyle = {
     "--composer-clearance": `${Math.max(composerHeight + 34, 178)}px`,
   } as CSSProperties;
@@ -140,12 +140,33 @@ export function ChatPage({
       event.currentTarget.setPointerCapture(event.pointerId);
       setBrowserPreviewResizing(true);
 
-      const updateWidth = (clientX: number) => {
+      let resizeFrame: number | null = null;
+      let pendingClientX = event.clientX;
+
+      const commitWidth = () => {
         const containerRect = container.getBoundingClientRect();
-        setBrowserPreviewWidth(clampBrowserPreviewWidth(containerRect.right - clientX));
+        setBrowserPreviewWidth(clampBrowserPreviewWidth(containerRect.right - pendingClientX));
+      };
+      const updateWidth = (clientX: number) => {
+        pendingClientX = clientX;
+
+        if (resizeFrame !== null) {
+          return;
+        }
+
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null;
+          commitWidth();
+        });
       };
       const handlePointerMove = (moveEvent: PointerEvent) => updateWidth(moveEvent.clientX);
       const stopResize = () => {
+        if (resizeFrame !== null) {
+          window.cancelAnimationFrame(resizeFrame);
+          resizeFrame = null;
+          commitWidth();
+        }
+
         setBrowserPreviewResizing(false);
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", stopResize);

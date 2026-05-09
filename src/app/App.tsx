@@ -99,6 +99,7 @@ interface ActiveGeneration {
 const MAX_PLANNING_INPUT_ROUNDS = 3;
 const PINNED_MODEL_IDS = CHAT_MODEL_OPTIONS.map((option) => option.value);
 const LOCAL_TOOL_FINAL_MIN_TOKENS = 4096;
+const CHAT_PERSIST_DEBOUNCE_MS = 700;
 
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
@@ -113,6 +114,10 @@ export function App() {
       .then((state) => {
         if (!mounted) {
           return;
+        }
+
+        if (state.session) {
+          setStorageNamespace(state.session.user.id);
         }
 
         setAuthSession(state.session);
@@ -151,6 +156,7 @@ export function App() {
         initialError={authError}
         loading={authLoading}
         onAuthenticated={(session) => {
+          setStorageNamespace(session.user.id);
           setAuthSession(session);
           setAuthHasAccounts(true);
           setAuthError(null);
@@ -168,7 +174,6 @@ interface WorkspaceAppProps {
 }
 
 function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
-  setStorageNamespace(authSession.user.id);
   const [activeRoute, setActiveRoute] = useState<PrimaryRoute>("chat");
   const [chats, setChats] = useState<ChatSummary[]>(() => sortChatsByUpdatedAt(loadChats()));
   const [projects, setProjects] = useState<ProjectSummary[]>(() => mergeProjectsWithChats(loadProjects(), loadChats()));
@@ -206,6 +211,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const toolSettings = normalizeToolRegistrySettings(providerSettings.tools);
   const activeSendRef = useRef(0);
   const activeGenerationRef = useRef<ActiveGeneration | null>(null);
+  const pendingChatsRef = useRef<ChatSummary[]>(chats);
   const sendingRequestRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -213,8 +219,39 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, []);
 
   useEffect(() => {
-    saveChats(chats);
-  }, [chats]);
+    pendingChatsRef.current = chats;
+
+    if (!sendingChatId) {
+      saveChats(chats);
+      return;
+    }
+
+    const saveTimer = window.setTimeout(() => {
+      saveChats(pendingChatsRef.current);
+    }, CHAT_PERSIST_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [chats, sendingChatId]);
+
+  useEffect(() => {
+    function savePendingChats() {
+      saveChats(pendingChatsRef.current);
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        savePendingChats();
+      }
+    }
+
+    window.addEventListener("pagehide", savePendingChats);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", savePendingChats);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     saveProjects(projects);

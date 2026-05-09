@@ -20,17 +20,23 @@ interface ChatThreadProps {
 export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRegenerateResponse, onStopGeneration }: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
   const headerBlurActiveRef = useRef(false);
+  const programmaticScrollFrameRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
-  const streamMarker = chat.messages
-    .map((message) => `${message.id}:${message.content.length}:${message.reasoning?.length ?? 0}:${message.isStreaming ? "1" : "0"}`)
-    .join("|");
+  const scrollAnchorMessage = getScrollAnchorMessage(chat);
+  const streamMarker = scrollAnchorMessage
+    ? `${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    : "empty";
 
   useEffect(() => {
     return () => {
       if (scrollFrameRef.current !== null) {
         window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+
+      if (programmaticScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(programmaticScrollFrameRef.current);
       }
     };
   }, []);
@@ -69,7 +75,13 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
 
     programmaticScrollRef.current = true;
     thread.scrollTo({ top: thread.scrollHeight });
-    window.requestAnimationFrame(() => {
+
+    if (programmaticScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(programmaticScrollFrameRef.current);
+    }
+
+    programmaticScrollFrameRef.current = window.requestAnimationFrame(() => {
+      programmaticScrollFrameRef.current = null;
       programmaticScrollRef.current = false;
     });
   }
@@ -146,6 +158,18 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
       })}
     </div>
   );
+}
+
+function getScrollAnchorMessage(chat: ChatSummary) {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index];
+
+    if (message?.isStreaming) {
+      return message;
+    }
+  }
+
+  return chat.messages[chat.messages.length - 1];
 }
 
 function canRegenerateMessage(chat: ChatSummary, messageIndex: number) {
