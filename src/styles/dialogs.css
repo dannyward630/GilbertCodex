@@ -1,0 +1,241 @@
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.app-dialog {
+  display: grid;
+  gap: 18px;
+  width: min(460px, 100%);
+  max-height: min(680px, calc(100vh - 48px));
+  overflow: auto;
+  color: var(--text);
+  border: 1px solid var(--popover-border);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--popover-bg) 95%, white 5%), var(--popover-bg)),
+    var(--popover-bg);
+  box-shadow: var(--shadow-popover);
+}
+
+.app-dialog:focus {
+  outline: 0;
+}
+
+.dialog-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 13px;
+  min-width: 0;
+  padding: 20px 20px 0;
+}
+
+.dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--blue);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.app-dialog[data-tone="danger"] .dialog-icon {
+  color: var(--danger);
+}
+
+.dialog-header h2,
+.dialog-header p,
+.dialog-content p {
+  margin: 0;
+}
+
+.dialog-header h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.dialog-header p {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dialog-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-dim);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.dialog-close:hover,
+.dialog-close:focus-visible {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.dialog-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dialog-detail-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.dialog-detail-list div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.dialog-detail-list dt,
+.dialog-detail-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-detail-list dt {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.dialog-detail-list dd {
+  color: var(--text);
+}
+
+.dialog-form {
+  display: grid;
+  gap: 10px;
+}
+
+.dialog-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.dialog-form label span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dialog-form input {
+  width: 100%;
+  min-height: 42px;
+  min-width: 0;
+  padding: 0 12px;
+  color: var(--text);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.dialog-form input:focus {
+  border-color: var(--composer-focus-border);
+  outline: 0;
+}
+
+.dialog-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 20px 20px;
+}
+
+.dialog-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  min-width: 92px;
+  padding: 0 14px;
+  color: var(--text);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.dialog-button:hover,
+.dialog-button:focus-visible {
+  background: var(--surface-raised);
+}
+
+.dialog-button-primary {
+  color: var(--app-bg);
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.dialog-button-primary:hover,
+.dialog-button-primary:focus-visible {
+  background: color-mix(in srgb, var(--text) 88%, white 12%);
+}
+
+.dialog-button-primary[data-tone="danger"] {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.dialog-button-primary[data-tone="danger"]:hover,
+.dialog-button-primary[data-tone="danger"]:focus-visible {
+  background: color-mix(in srgb, var(--danger) 86%, white 14%);
+}
+
+@media (max-width: 520px) {
+  .dialog-backdrop {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .app-dialog {
+    width: 100%;
+  }
+
+  .dialog-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-button {
+    width: 100%;
+  }
+}

@@ -1,0 +1,123 @@
+@media (max-width: 1180px) {
+  .workspace-shell {
+    grid-template-columns: 274px minmax(0, 1fr);
+  }
+
+  .conversation-body,
+  .conversation-body[data-right-rail-open="true"],
+  .conversation-body[data-side-layout="rail"],
+  .conversation-body[data-side-layout="preview"],
+  .conversation-body[data-side-layout="split"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation-body .right-rail,
+  .conversation-body .browser-preview-panel {
+    display: none;
+  }
+
+  .conversation-tool-desktop-only {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  body {
+    overflow: auto;
+  }
+
+  .desktop-root {
+    min-height: 100%;
+  }
+
+  .app-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .topbar-center {
+    display: none;
+  }
+
+  .topbar-menus {
+    display: none;
+  }
+
+  .workspace-shell {
+    grid-template-columns: 1fr;
+    padding: 0;
+    position: relative;
+  }
+
+  .workspace-shell .shell-sidebar {
+    position: fixed;
+    top: 56px;
+    bottom: 10px;
+    left: 10px;
+    z-index: 62;
+    display: grid;
+    width: min(318px, calc(100vw - 20px));
+    max-height: calc(100vh - 66px);
+    transform: translateX(-112%);
+    transition:
+      transform 180ms ease,
+      opacity 180ms ease;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-popover);
+  }
+
+  .workspace-shell .shell-sidebar[data-open="true"] {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .workspace-shell .shell-sidebar[data-open="false"] {
+    display: grid;
+  }
+
+  .sidebar-mobile-backdrop {
+    position: fixed;
+    inset: 48px 0 0;
+    z-index: 58;
+    display: block;
+    background: rgba(0, 0, 0, 0.38);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+
+  .sidebar-mobile-backdrop[data-open="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .conversation-frame,
+  .settings-page,
+  .utility-page {
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .composer-shell {
+    width: min(100% - 28px, 720px);
+  }
+
+  .chat-thread {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .search-backdrop {
+    padding-top: 52px;
+  }
+
+  .search-dialog {
+    width: calc(100vw - 24px);
+  }
+
+  .search-result {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 20px;
+  }
+}

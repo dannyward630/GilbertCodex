@@ -1,0 +1,422 @@
+.thinking-mode-root {
+  z-index: 8;
+}
+
+.mode-chip-thinking {
+  color: #dfe7ee;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#202327, #202327) padding-box,
+    linear-gradient(135deg, rgba(117, 199, 255, 0.5), rgba(218, 188, 109, 0.36), rgba(167, 141, 255, 0.42)) border-box;
+}
+
+.mode-chip-thinking[data-active="true"] {
+  color: #f6f8f8;
+  background:
+    linear-gradient(180deg, rgba(39, 45, 52, 0.98), rgba(31, 33, 35, 0.98)) padding-box,
+    linear-gradient(135deg, rgba(117, 199, 255, 0.68), rgba(218, 188, 109, 0.48), rgba(167, 141, 255, 0.54)) border-box;
+}
+
+.thinking-popover {
+  width: min(376px, calc(100vw - 36px));
+  padding: 10px;
+  border-radius: 16px;
+}
+
+.thinking-options {
+  display: grid;
+  gap: 10px;
+}
+
+.thinking-popover-header {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(93, 178, 255, 0.12), rgba(198, 162, 86, 0.08)),
+    rgba(255, 255, 255, 0.035);
+}
+
+.thinking-popover-orb,
+.thinking-glyph {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #e8f6ff;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.35), transparent 34%),
+    linear-gradient(135deg, #2c8fd4, #7469d2 56%, #b8953d);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.thinking-popover-orb {
+  width: 36px;
+  height: 36px;
+}
+
+.thinking-popover-header span:not(.thinking-popover-orb),
+.thinking-summary-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.thinking-popover-header strong,
+.thinking-summary-copy strong {
+  overflow: hidden;
+  color: #f5f6f4;
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-popover-header small,
+.thinking-summary-copy small {
+  overflow: hidden;
+  color: #9ea7ad;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-power {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: #aeb5bb;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.thinking-power:hover,
+.thinking-power[data-on="true"] {
+  color: #f9f7ed;
+  background: rgba(218, 188, 109, 0.18);
+}
+
+.thinking-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+  color: #b9c0c5;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.thinking-field-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-field-row small {
+  color: #757d83;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.thinking-effort-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.thinking-effort-grid button {
+  display: grid;
+  gap: 4px;
+  min-height: 62px;
+  min-width: 0;
+  padding: 9px 8px;
+  color: #d9dedf;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+  text-align: left;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.thinking-effort-grid button:hover {
+  background: rgba(255, 255, 255, 0.075);
+  transform: translateY(-1px);
+}
+
+.thinking-effort-grid button[data-selected="true"] {
+  color: #ffffff;
+  border-color: rgba(117, 199, 255, 0.42);
+  background:
+    linear-gradient(135deg, rgba(117, 199, 255, 0.18), rgba(218, 188, 109, 0.1)),
+    rgba(255, 255, 255, 0.045);
+}
+
+.thinking-effort-grid strong,
+.thinking-effort-grid small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-effort-grid strong {
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.thinking-effort-grid small {
+  color: #98a0a6;
+  font-size: 11px;
+}
+
+.thinking-trace-toggle {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px;
+  color: #edf0ed;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: left;
+}
+
+.thinking-trace-toggle:hover,
+.thinking-trace-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.thinking-trace-toggle span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.thinking-trace-toggle strong,
+.thinking-trace-toggle small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-trace-toggle strong {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.thinking-trace-toggle small {
+  color: #9ca4aa;
+  font-size: 12px;
+}
+
+.thinking-trace-toggle svg:first-child {
+  color: #8ecbff;
+}
+
+.thinking-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.thinking-disclosure {
+  display: grid;
+  gap: 9px;
+  max-width: min(780px, 100%);
+  margin: 0 0 14px;
+  color: var(--text-muted);
+}
+
+.thinking-compact-summary {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 2px 8px 2px 3px;
+  color: color-mix(in srgb, var(--text-muted) 88%, var(--text) 12%);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 560;
+  letter-spacing: 0;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.thinking-compact-summary:hover,
+.thinking-compact-summary:focus-visible {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.thinking-inline-status {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 74%, transparent);
+}
+
+.thinking-disclosure[data-live="true"] .thinking-inline-status {
+  color: var(--blue);
+}
+
+.thinking-disclosure[data-private="true"] .thinking-inline-status {
+  color: var(--text-dim);
+}
+
+.thinking-disclosure[data-live="true"] .thinking-inline-status svg {
+  animation: thinking-spin 900ms linear infinite;
+}
+
+.thinking-inline-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-inline-chevron {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  transition: transform 140ms ease;
+}
+
+.thinking-disclosure[data-open="true"] .thinking-inline-chevron {
+  transform: rotate(90deg);
+}
+
+.thinking-disclosure-body {
+  position: relative;
+  margin-left: 2px;
+  padding: 2px 0 2px 16px;
+  border-left: 1px solid color-mix(in srgb, var(--text-dim) 34%, transparent);
+}
+
+.thinking-disclosure-body::before {
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 1px;
+  height: 54px;
+  content: "";
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 78%, transparent), color-mix(in srgb, var(--blue) 0%, transparent));
+}
+
+.thinking-trace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.thinking-trace-item {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.thinking-trace-item p {
+  min-width: 0;
+  margin: 0;
+  color: color-mix(in srgb, var(--text-muted) 92%, var(--text) 8%);
+  font-size: 14px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+.activity-live-lines,
+.thinking-live-bars {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.activity-live-lines span,
+.thinking-live-bars span {
+  height: 7px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--blue) 8%, transparent), color-mix(in srgb, var(--blue) 46%, transparent), color-mix(in srgb, var(--gold) 16%, transparent));
+  animation: thinking-bar 1180ms infinite ease-in-out;
+}
+
+.activity-live-lines span:nth-child(2),
+.thinking-live-bars span:nth-child(2) {
+  width: 82%;
+  animation-delay: 120ms;
+}
+
+.activity-live-lines span:nth-child(3),
+.thinking-live-bars span:nth-child(3) {
+  width: 58%;
+  animation-delay: 240ms;
+}
+
+@keyframes thinking-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes thinking-bar {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleX(0.96);
+    transform-origin: left;
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (max-width: 520px) {
+  .thinking-popover {
+    width: min(330px, calc(100vw - 28px));
+  }
+
+  .thinking-mode-root .thinking-popover {
+    left: -54px;
+  }
+
+  .thinking-effort-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .thinking-effort-grid button {
+    min-height: 48px;
+  }
+
+  .thinking-compact-summary {
+    max-width: 100%;
+  }
+
+  .thinking-disclosure-body {
+    margin-left: 8px;
+    padding-left: 12px;
+  }
+
+  .thinking-trace-item {
+    display: block;
+  }
+}

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Frontend output
+dist/
+dist-ssr/
+
+# Rust and Tauri output
+target/
+src-tauri/target/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Logs and diagnostics
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

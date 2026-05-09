@@ -1,0 +1,226 @@
+.desktop-root {
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--workspace-bg);
+}
+
+.app-topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  height: 48px;
+  padding-left: 10px;
+  color: #e5e2dc;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  cursor: grab;
+  user-select: none;
+  z-index: 20;
+}
+
+.app-topbar:active {
+  cursor: grabbing;
+}
+
+.topbar-left,
+.topbar-center,
+.window-controls,
+.topbar-menus {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-left {
+  gap: 5px;
+  min-width: 0;
+}
+
+.topbar-center {
+  gap: 8px;
+  min-height: 28px;
+  color: #c9c3ba;
+  font-size: 12.5px;
+  font-weight: 520;
+  min-width: 0;
+  padding: 0 14px;
+  border-radius: 7px;
+  cursor: inherit;
+}
+
+.topbar-center span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-menus {
+  gap: 1px;
+  margin-left: 10px;
+  position: relative;
+  z-index: 30;
+}
+
+.topbar-menu {
+  position: relative;
+}
+
+.topbar-menu-button {
+  height: 32px;
+  padding: 0 11px;
+  color: #cfc8bf;
+  border-radius: 6px;
+  background: transparent;
+  cursor: default;
+  letter-spacing: 0;
+}
+
+.topbar-menu-button:hover,
+.topbar-menu-button[data-active="true"],
+.icon-button:hover,
+.window-controls button:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
+.topbar-menu-panel {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  width: 238px;
+  padding: 6px;
+  border: 1px solid #34373b;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0) 100%),
+    #1d1f22;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.topbar-menu-item {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 9px;
+  color: #ddd7ce;
+  border-radius: 6px;
+  background: transparent;
+  cursor: default;
+  font-size: 13px;
+  text-align: left;
+}
+
+.topbar-menu-item[data-separator-before="true"] {
+  margin-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  padding-top: 6px;
+}
+
+.topbar-menu-item:hover,
+.topbar-menu-item:focus-visible {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.topbar-menu-item[data-danger="true"]:hover,
+.topbar-menu-item[data-danger="true"]:focus-visible {
+  background: rgba(196, 59, 50, 0.95);
+}
+
+.menu-check {
+  display: inline-grid;
+  place-items: center;
+  color: #80bfff;
+}
+
+.menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-shortcut {
+  color: #8e9298;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: #b8bdc3;
+  border-radius: 8px;
+  background: transparent;
+  cursor: default;
+}
+
+.icon-button[data-muted="true"] {
+  color: #555b63;
+}
+
+.icon-button:disabled,
+.icon-button:disabled:hover {
+  color: #555b63;
+  background: transparent;
+}
+
+.icon-button[data-pressed="true"] {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.window-controls {
+  justify-content: flex-end;
+  height: 48px;
+}
+
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: #f0efec;
+  background: transparent;
+  cursor: default;
+}
+
+.window-controls svg {
+  stroke-width: 2.25;
+}
+
+.window-controls .close-control:hover {
+  color: #ffffff;
+  background: #c42b1c;
+}
+
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px 10px 10px;
+  background: #0f0f10;
+}
+
+.workspace-shell[data-sidebar-open="false"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-main {
+  min-width: 0;
+  min-height: 0;
+  background: transparent;
+}

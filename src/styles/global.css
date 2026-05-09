@@ -1,0 +1,26 @@
+@import "./tokens.css";
+@import "./chrome.css";
+@import "./sidebar.css";
+@import "./conversation.css";
+@import "./chat.css";
+@import "./composer.css";
+@import "./thinking.css";
+@import "./inspector.css";
+@import "./browser-preview.css";
+@import "./search.css";
+@import "./dialogs.css";
+@import "./settings.css";
+@import "./utility-pages.css";
+@import "./responsive.css";
+@import "./theme.css";
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

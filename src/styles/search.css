@@ -1,0 +1,123 @@
+.search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding-top: 74px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.search-dialog {
+  width: min(780px, calc(100vw - 48px));
+  max-height: min(560px, calc(100vh - 110px));
+  overflow: auto;
+  padding: 14px 8px 18px;
+  color: var(--text);
+  border: 1px solid #3b3d40;
+  border-radius: 26px;
+  background: #2b2b2b;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
+}
+
+.search-input-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 14px;
+  color: #9a9c9f;
+}
+
+.search-input-row input {
+  width: 100%;
+  color: var(--text);
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+}
+
+.search-input-row input::placeholder {
+  color: #a5a5a5;
+}
+
+.search-input-row button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.search-input-row button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.search-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.search-group h2 {
+  margin: 0;
+  padding: 0 28px;
+  color: #a2a2a0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.search-results {
+  display: grid;
+  gap: 1px;
+}
+
+.search-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 0 20px 0 54px;
+  color: #d6d6d2;
+  border-radius: 18px;
+  background: transparent;
+  text-align: left;
+}
+
+.search-result:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.search-result span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: #8f9092;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.search-result-meta kbd {
+  min-width: 54px;
+  padding: 2px 9px;
+  color: #d6d6d2;
+  border-radius: 999px;
+  background: #444444;
+  font: inherit;
+  font-size: 14px;
+  text-align: center;
+}

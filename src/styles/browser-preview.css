@@ -1,0 +1,426 @@
+.browser-preview-panel {
+  --browser-preview-window-bg: #0d0f11;
+  --browser-preview-tabbar-bg: #111418;
+  --browser-preview-toolbar-bg: #101214;
+  --browser-preview-content-bg: #090a0c;
+  --browser-preview-tab-bg: #1a1d22;
+  --browser-preview-address-bg: #171a1e;
+  --browser-preview-text: #edf0f4;
+  --browser-preview-strong-text: #f3f4f6;
+  --browser-preview-muted: #aeb4bc;
+  --browser-preview-subtle: #7f8791;
+  --browser-preview-line: rgba(255, 255, 255, 0.075);
+  --browser-preview-line-strong: rgba(255, 255, 255, 0.1);
+  --browser-preview-line-focus: rgba(57, 167, 255, 0.55);
+  --browser-preview-grid-line: rgba(255, 255, 255, 0.025);
+  --browser-preview-grid-row: rgba(255, 255, 255, 0.02);
+  --browser-preview-empty-line: rgba(255, 255, 255, 0.045);
+  --browser-preview-empty-bg: rgba(255, 255, 255, 0.012);
+  --browser-preview-glow: rgba(57, 167, 255, 0.08);
+  --browser-preview-button-hover: rgba(255, 255, 255, 0.09);
+  --browser-preview-invalid: rgba(255, 107, 95, 0.7);
+  position: relative;
+  display: grid;
+  height: calc(100% - var(--conversation-header-height, 54px) - 24px);
+  min-width: 0;
+  min-height: 0;
+  margin: calc(var(--conversation-header-height, 54px) + 12px) 12px 12px 0;
+  overflow: visible;
+  container-type: inline-size;
+}
+
+.browser-preview-resize-handle {
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 0;
+  z-index: 5;
+  display: grid;
+  width: 14px;
+  place-items: center;
+  color: var(--browser-preview-muted);
+  border-radius: 999px;
+  cursor: ew-resize;
+  opacity: 0.72;
+  transform: translateX(-7px);
+  transition:
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+.browser-preview-resize-handle::before {
+  content: "";
+  position: absolute;
+  width: 2px;
+  height: 72px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--browser-preview-line-strong) 86%, transparent);
+}
+
+.browser-preview-resize-handle svg {
+  position: relative;
+  width: 22px;
+  height: 34px;
+  padding: 5px 3px;
+  color: inherit;
+  border: 1px solid var(--browser-preview-line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--browser-preview-window-bg) 92%, transparent);
+  opacity: 0;
+  box-sizing: border-box;
+}
+
+.browser-preview-resize-handle:hover,
+.browser-preview-resize-handle:focus-visible {
+  color: var(--browser-preview-strong-text);
+  opacity: 1;
+  outline: 0;
+}
+
+.browser-preview-resize-handle:hover svg,
+.browser-preview-resize-handle:focus-visible svg {
+  opacity: 1;
+}
+
+.browser-preview-panel[data-expanded="true"] .browser-preview-resize-handle {
+  display: none;
+}
+
+.browser-preview-window {
+  display: grid;
+  grid-template-rows: 44px 46px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--browser-preview-text);
+  border: 1px solid var(--browser-preview-line-strong);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--browser-preview-text) 5%, transparent), transparent 82px),
+    var(--browser-preview-window-bg);
+}
+
+.browser-preview-tabbar,
+.browser-preview-toolbar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.browser-preview-tabbar {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px 0 8px;
+  border-bottom: 1px solid var(--browser-preview-line);
+  background: var(--browser-preview-tabbar-bg);
+}
+
+.browser-preview-tab-strip,
+.browser-preview-badge,
+.browser-preview-tabs,
+.browser-preview-window-actions,
+.browser-preview-nav,
+.browser-preview-tools {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.browser-preview-tab-strip {
+  flex: 1 1 auto;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.browser-preview-badge {
+  flex: 0 0 auto;
+  gap: 6px;
+  height: 30px;
+  padding: 0 9px;
+  color: var(--browser-preview-muted);
+  border: 1px solid var(--browser-preview-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--browser-preview-tab-bg) 82%, transparent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.browser-preview-badge svg {
+  color: var(--blue);
+}
+
+.browser-preview-tabs {
+  flex: 1 1 auto;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.browser-preview-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.browser-preview-tab {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 min(216px, 58%);
+  min-width: 124px;
+  height: 34px;
+  padding: 0 5px 0 0;
+  color: var(--browser-preview-strong-text);
+  border: 1px solid var(--browser-preview-line);
+  border-bottom-color: color-mix(in srgb, var(--browser-preview-line) 70%, var(--browser-preview-text) 12%);
+  border-radius: 10px 10px 0 0;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--browser-preview-text) 8%, transparent), transparent),
+    var(--browser-preview-tab-bg);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.browser-preview-tab[data-selected="false"] {
+  color: var(--browser-preview-muted);
+  background: color-mix(in srgb, var(--browser-preview-tab-bg) 72%, transparent);
+  opacity: 0.86;
+}
+
+.browser-preview-tab-select {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 12px;
+  color: inherit;
+  border-radius: 10px 0 0 0;
+  background: transparent;
+  font-size: inherit;
+  font-weight: inherit;
+  text-align: left;
+}
+
+.browser-preview-tab-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-preview-tab-select svg {
+  color: var(--blue);
+}
+
+.browser-preview-tab-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--browser-preview-muted);
+  border-radius: 7px;
+  background: transparent;
+  opacity: 0.78;
+}
+
+.browser-preview-tab-close:hover,
+.browser-preview-tab-close:focus-visible {
+  color: var(--browser-preview-strong-text);
+  background: var(--browser-preview-button-hover);
+  opacity: 1;
+}
+
+.browser-preview-window-actions {
+  flex: 0 0 auto;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+.browser-preview-icon-button,
+.browser-preview-window-actions button,
+.browser-preview-nav button,
+.browser-preview-tools button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--browser-preview-muted);
+  border-radius: 8px;
+  background: transparent;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+
+.browser-preview-icon-button:hover:not(:disabled),
+.browser-preview-window-actions button:hover:not(:disabled),
+.browser-preview-nav button:hover:not(:disabled),
+.browser-preview-tools button:hover:not(:disabled) {
+  color: var(--browser-preview-strong-text);
+  background: var(--browser-preview-button-hover);
+}
+
+.browser-preview-icon-button:disabled,
+.browser-preview-nav button:disabled,
+.browser-preview-tools button:disabled,
+.browser-preview-window-actions button:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.browser-preview-toolbar {
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--browser-preview-line);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--browser-preview-text) 4%, transparent), transparent),
+    var(--browser-preview-toolbar-bg);
+}
+
+.browser-preview-nav,
+.browser-preview-tools {
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.browser-preview-address {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  color: var(--browser-preview-text);
+  border: 1px solid var(--browser-preview-line);
+  border-radius: 10px;
+  background: var(--browser-preview-address-bg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--browser-preview-text) 4%, transparent);
+  font-size: 13px;
+}
+
+.browser-preview-address:focus-within {
+  border-color: var(--browser-preview-line-focus);
+}
+
+.browser-preview-address[data-invalid="true"] {
+  border-color: var(--browser-preview-invalid);
+}
+
+.browser-preview-address svg {
+  color: var(--browser-preview-subtle);
+}
+
+.browser-preview-address input {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-preview-address input:focus-visible {
+  outline: 0;
+}
+
+.browser-preview-content {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, var(--browser-preview-grid-line) 1px, transparent 1px),
+    linear-gradient(180deg, var(--browser-preview-grid-row) 1px, transparent 1px),
+    var(--browser-preview-content-bg);
+  background-size:
+    32px 32px,
+    32px 32px,
+    auto;
+}
+
+.browser-preview-content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 22%, var(--browser-preview-glow), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--browser-preview-text) 3%, transparent), transparent 28%);
+  pointer-events: none;
+}
+
+.browser-preview-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--browser-preview-content-bg);
+}
+
+:root[data-theme="light"] .browser-preview-panel {
+  --browser-preview-window-bg: #f8fafc;
+  --browser-preview-tabbar-bg: #e8ecf2;
+  --browser-preview-toolbar-bg: #f3f5f8;
+  --browser-preview-content-bg: #ffffff;
+  --browser-preview-tab-bg: #ffffff;
+  --browser-preview-address-bg: #ffffff;
+  --browser-preview-text: #1e242d;
+  --browser-preview-strong-text: #121821;
+  --browser-preview-muted: #5f6875;
+  --browser-preview-subtle: #7e8794;
+  --browser-preview-line: rgba(26, 36, 50, 0.12);
+  --browser-preview-line-strong: rgba(26, 36, 50, 0.16);
+  --browser-preview-line-focus: rgba(20, 120, 200, 0.55);
+  --browser-preview-grid-line: rgba(26, 36, 50, 0.045);
+  --browser-preview-grid-row: rgba(26, 36, 50, 0.035);
+  --browser-preview-empty-line: rgba(26, 36, 50, 0.08);
+  --browser-preview-empty-bg: rgba(20, 28, 36, 0.018);
+  --browser-preview-glow: rgba(20, 120, 200, 0.08);
+  --browser-preview-button-hover: rgba(23, 30, 39, 0.075);
+}
+
+@container (max-width: 520px) {
+  .browser-preview-tabbar {
+    gap: 6px;
+    padding-left: 6px;
+  }
+
+  .browser-preview-badge {
+    padding-inline: 8px;
+  }
+
+  .browser-preview-tab {
+    flex-basis: min(184px, 64%);
+    min-width: 112px;
+  }
+
+  .browser-preview-toolbar {
+    gap: 7px;
+    padding-inline: 8px;
+  }
+
+  .browser-preview-nav {
+    gap: 0;
+  }
+
+  .browser-preview-nav button,
+  .browser-preview-tools button {
+    width: 28px;
+  }
+
+  .browser-preview-tools {
+    display: none;
+  }
+
+  .browser-preview-address {
+    padding-inline: 10px;
+  }
+}
