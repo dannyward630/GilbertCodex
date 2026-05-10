@@ -56,14 +56,14 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       : "",
     tools.fileCreation ? "Use create_files for multi-file batches with files_json instead of emitting many separate write_file calls." : "",
     tools.terminal
-      ? "run_terminal executes local PowerShell or cmd inside an enabled local workspace root. Use it for tests, builds, package installs, formatters, setup checks, and command evidence. Set cwd instead of prepending cd/chdir."
+      ? "run_terminal executes the local platform shell inside an enabled local workspace root: PowerShell/cmd on Windows, or Bash/Zsh/sh on macOS and Linux. Use it for tests, builds, package installs, formatters, setup checks, and command evidence. Set cwd instead of prepending cd/chdir."
       : "",
     tools.terminal
       ? "Do not use terminal here-strings, Set-Content, Out-File, redirection, or replacement scripts for source edits while edit_file/write_file/create_files are enabled."
       : "",
     tools.browserPreview ? "open_browser_preview opens an HTTP(S) URL in the in-app browser preview. Use it after starting a dev server or when visual verification matters." : "",
     tools.terminal && tools.codeEdit
-      ? "create_tool can write a reusable PowerShell or cmd script under .gilbert/tools in the workspace; run_tool executes it. Use this only when a reusable helper materially helps."
+      ? "create_tool can write a reusable platform shell script under .gilbert/tools in the workspace; run_tool executes it. Use this only when a reusable helper materially helps."
       : "",
     createRelevantToolExamples(settings, latestUserPrompt),
     "After tool results arrive, continue from the evidence and do not print raw tool calls.",

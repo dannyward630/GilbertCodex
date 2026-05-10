@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { PanelBottomClose, Play, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { createTerminalSession, drainTerminalSession, killTerminalSession, writeTerminalSession } from "../../app/tauriClient";
+import { getAvailableTerminalShells, getDefaultTerminalShell, terminalPrompt, terminalShellLabel } from "../../lib/terminalShells";
 import type { TerminalOutputChunk, TerminalShellId } from "../../types/terminal";
 
 interface TerminalPanelProps {
@@ -27,10 +28,11 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   const [, setHistoryIndex] = useState<number | null>(null);
   const [output, setOutput] = useState<TerminalOutputChunk[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [shell, setShell] = useState<TerminalShellId>("powershell");
+  const [shell, setShell] = useState<TerminalShellId>(() => getDefaultTerminalShell());
   const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
   const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
   const [sessionCommandRunning, setSessionCommandRunning] = useState(false);
+  const shellOptions = useMemo(() => getAvailableTerminalShells(), []);
   const localOutputIdRef = useRef(0);
   const autoStartedRef = useRef(false);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -233,7 +235,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     setCommand("");
     setHistoryIndex(null);
     setHistory((currentHistory) => [...currentHistory.filter((item) => item !== nextCommand), nextCommand].slice(-100));
-    appendOutput([createLocalOutput("stdin", `${shell === "powershell" ? "PS" : "CMD"}> ${nextCommand}\n`)]);
+    appendOutput([createLocalOutput("stdin", `${terminalPrompt(shell)}> ${nextCommand}\n`)]);
 
     if (nextCommand.toLowerCase() === "clear" || nextCommand.toLowerCase() === "cls") {
       setOutput([]);
@@ -379,8 +381,11 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
         <label className="terminal-shell-select">
           <span className="sr-only">Shell</span>
           <select value={shell} onChange={(event) => setShell(event.target.value as TerminalShellId)} disabled={Boolean(sessionId)}>
-            <option value="powershell">PowerShell</option>
-            <option value="cmd">cmd</option>
+            {shellOptions.map((option) => (
+              <option value={option} key={option}>
+                {terminalShellLabel(option)}
+              </option>
+            ))}
           </select>
         </label>
         <label className="terminal-cwd-field">
@@ -421,7 +426,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           void submitCommand();
         }}
       >
-        <span className="terminal-prompt">{shell === "powershell" ? "PS" : "CMD"}</span>
+        <span className="terminal-prompt">{terminalPrompt(shell)}</span>
         <input
           aria-label="Terminal command"
           value={command}

@@ -9,6 +9,7 @@ import {
   normalizeTopK,
   normalizeTopP,
 } from "./generationSettings";
+import { isTerminalShellId } from "./terminalShells";
 import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_PROVIDER_ID,
@@ -539,7 +540,7 @@ function normalizeToolCallTerminal(value: unknown): ChatToolCall["terminal"] {
   }
 
   const terminal = value as NonNullable<ChatToolCall["terminal"]>;
-  const shell = terminal.shell === "cmd" || terminal.shell === "powershell" ? terminal.shell : undefined;
+  const shell = isTerminalShellId(terminal.shell) ? terminal.shell : undefined;
 
   return {
     command: typeof terminal.command === "string" ? terminal.command : undefined,

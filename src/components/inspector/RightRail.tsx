@@ -1,6 +1,7 @@
 import { Ban, Check, ChevronDown, ChevronRight, Circle, CircleCheck, FileCode2, FileText, Globe2, Image, LoaderCircle, PencilLine, Pin, SendHorizontal, Sparkles, TerminalSquare, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { terminalShellLabel } from "../../lib/terminalShells";
 import { formatThinkingDuration, splitThinkingContent } from "../../lib/thinkingActivity";
 import { formatReasoningEffort } from "../../types/settings";
 import type { AgentApproval, AgentApprovalDecision } from "../../types/agentRun";
@@ -382,7 +383,7 @@ function ToolCallTextBlock({ content, expanded, label, live = false }: { content
 }
 
 function isTerminalToolCall(toolCall: ChatToolCall) {
-  return Boolean(toolCall.terminal) || /\b(terminal|cmd|powershell|tests?|typescript|custom tool)\b/i.test(`${toolCall.label} ${toolCall.detail ?? ""}`);
+  return Boolean(toolCall.terminal) || /\b(terminal|cmd|powershell|bash|zsh|shell|tests?|typescript|custom tool)\b/i.test(`${toolCall.label} ${toolCall.detail ?? ""}`);
 }
 
 function formatTerminalToolDetail(toolCall: ChatToolCall) {
@@ -390,7 +391,7 @@ function formatTerminalToolDetail(toolCall: ChatToolCall) {
     return "";
   }
 
-  const shell = toolCall.terminal.shell === "cmd" ? "cmd" : toolCall.terminal.shell === "powershell" ? "PowerShell" : "";
+  const shell = toolCall.terminal.shell ? terminalShellLabel(toolCall.terminal.shell) : "";
   const status = toolCall.terminal.timedOut
     ? "timed out"
     : typeof toolCall.terminal.exitCode === "number"

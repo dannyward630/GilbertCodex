@@ -332,7 +332,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
               <span>ngrok executable</span>
               <input autoComplete="off" placeholder="ngrok" value={settings.ngrokPath} onChange={(event) => patchSettings({ ngrokPath: event.target.value })} />
               <small className="settings-field-note">
-                If `ngrok` is not on PATH, paste the full path to `ngrok.exe` or install ngrok first.
+                If `ngrok` is not on PATH, paste the full path to the ngrok executable or install ngrok first.
               </small>
             </label>
 

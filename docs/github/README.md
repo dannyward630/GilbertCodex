@@ -4,6 +4,8 @@ This guide explains how to connect GitHub to Gilbert Codex for repository browsi
 
 Last verified: May 10, 2026.
 
+Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
+
 ## What Gilbert Uses
 
 Gilbert Codex uses a GitHub OAuth App with device-flow browser login. The desktop app stores the resulting GitHub access token locally and sends GitHub operations through the Tauri command layer.
@@ -82,8 +84,8 @@ Do not copy or commit the client secret. Gilbert Codex does not need it for devi
 
 1. Start the desktop app:
 
-   ```powershell
-   npm.cmd run app:dev
+   ```bash
+   npm run app:dev
    ```
 
 2. Open Settings > GitHub.

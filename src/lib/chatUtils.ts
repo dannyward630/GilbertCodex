@@ -1,12 +1,11 @@
 import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
 
 export const DEFAULT_PROJECT = "No project";
-export const LEGACY_DEFAULT_PROJECT = "GilbertCodex";
 
 export function isNoProjectName(project?: string | null) {
   const normalized = project?.trim().toLowerCase();
 
-  return !normalized || normalized === DEFAULT_PROJECT.toLowerCase() || normalized === LEGACY_DEFAULT_PROJECT.toLowerCase();
+  return !normalized || normalized === DEFAULT_PROJECT.toLowerCase();
 }
 
 export function normalizeProjectName(project?: string | null) {

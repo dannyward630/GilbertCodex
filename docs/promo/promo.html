@@ -655,7 +655,7 @@
           reader.readAsDataURL(blob);
         });
 
-        return { dataUrl, mimeType: blob.type || "video/webm" };
+        return { dataUrl, durationMs: DURATION_MS, mimeType: blob.type || "video/webm" };
       }
 
       function renderGilbertPromoPoster(ms = 16000) {

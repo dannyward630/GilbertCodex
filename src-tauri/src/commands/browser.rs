@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 GilbertCodex/0.1";
+const APP_USER_AGENT: &str = "GilbertCodex/0.1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +42,7 @@ pub async fn browser_automation(
     }
 
     let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent(browser_user_agent())
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::limited(8))
         .build()
@@ -84,6 +83,18 @@ pub async fn browser_automation(
         title,
         url: final_url,
     })
+}
+
+fn browser_user_agent() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 GilbertCodex/0.1"
+    } else if cfg!(target_os = "macos") {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 GilbertCodex/0.1"
+    } else if cfg!(target_os = "linux") {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 GilbertCodex/0.1"
+    } else {
+        APP_USER_AGENT
+    }
 }
 
 fn extract_title(html: &str) -> String {

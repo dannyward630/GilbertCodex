@@ -1,6 +1,7 @@
 import type { ChatProgressItem, ChatSource, ChatToolCall } from "../../types/chat";
 import type { AgentApproval, AgentApprovalDecision } from "../../types/agentRun";
 import { createTerminalSession, drainTerminalSession, isTauriDesktopRuntime, killTerminalSession, runBrowserAutomation, runTerminalCommand, writeTerminalSession } from "../../app/tauriClient";
+import { getDefaultTerminalShell, getHostPlatform, isPosixTerminalShell, terminalScriptExtension, terminalShellLabel } from "../../lib/terminalShells";
 import type { TerminalOutputChunk, TerminalRunCommandResponse, TerminalShellId } from "../../types/terminal";
 import { normalizeToolRegistrySettings } from "../../types/tools";
 import type { ToolRegistrySettings } from "../../types/tools";
@@ -1543,7 +1544,7 @@ async function createCustomTerminalTool(call: ParsedLocalComputerToolCall, setti
   return {
     content: [
       `Tool: ${toolName}`,
-      `Shell: ${shell === "cmd" ? "cmd" : "PowerShell"}`,
+      `Shell: ${terminalShellLabel(shell)}`,
       `Path: ${result.path}`,
       `Bytes written: ${result.bytesWritten}`,
       `Created: ${result.created ? "yes" : "no"}`,
@@ -1571,7 +1572,7 @@ async function runCustomTerminalTool(
     };
   }
 
-  const shell = toolPath.toLowerCase().endsWith(".cmd") ? "cmd" : shellFromArgs;
+  const shell = terminalShellForCustomToolPath(toolPath, shellFromArgs);
   const workingDirectory = resolveTerminalWorkingDirectory(call.args, roots);
   const policy = getTerminalRunPolicy(settings, roots, workingDirectory);
 
@@ -1585,7 +1586,7 @@ async function runCustomTerminalTool(
   assertReadablePath(toolPath, roots);
 
   const args = argValue(call.args, ["args", "arguments", "tool_args"]) ?? "";
-  const command = shell === "cmd" ? `${quoteCmd(toolPath)} ${args}`.trim() : `& ${quotePowerShell(toolPath)} ${args}`.trim();
+  const command = createCustomToolCommand(shell, toolPath, args);
   const timeoutMs = terminalTimeoutFromArgs(call.args);
   const result = onTerminalProgress
     ? await runTerminalCommandWithProgress({
@@ -2985,7 +2986,7 @@ function formatTerminalLiveOutput({
 }) {
   return [
     `Command: ${command}`,
-    `Shell: ${shell === "cmd" ? "cmd" : "PowerShell"}`,
+    `Shell: ${terminalShellLabel(shell)}`,
     `Working directory: ${workingDirectory}`,
     outputTruncated ? "Output truncated: yes" : "",
     timedOut ? "Timed out: yes" : "",
@@ -3027,7 +3028,7 @@ function sleep(ms: number) {
 function formatTerminalRunResult(command: string, result: TerminalRunCommandResponse, extraDetail?: string) {
   return [
     `Command: ${command}`,
-    `Shell: ${result.shell === "cmd" ? "cmd" : "PowerShell"}`,
+    `Shell: ${terminalShellLabel(result.shell)}`,
     `Working directory: ${result.workingDirectory}`,
     `Exit code: ${result.exitCode ?? "none"}`,
     `Timed out: ${result.timedOut ? "yes" : "no"}`,
@@ -3054,7 +3055,27 @@ function formatTerminalStream(label: string, content: string) {
 function terminalShellFromArgs(args: Record<string, string>): TerminalShellId {
   const shell = (firstArg(args, ["shell", "terminal_shell"]) ?? "").toLowerCase();
 
-  return shell.includes("cmd") ? "cmd" : "powershell";
+  if (shell.includes("cmd")) {
+    return "cmd";
+  }
+
+  if (shell.includes("pwsh") || shell.includes("powershell")) {
+    return "powershell";
+  }
+
+  if (shell.includes("zsh")) {
+    return "zsh";
+  }
+
+  if (shell.includes("bash")) {
+    return "bash";
+  }
+
+  if (shell === "sh" || shell.includes("/sh")) {
+    return "sh";
+  }
+
+  return getDefaultTerminalShell();
 }
 
 function terminalTimeoutFromArgs(args: Record<string, string>) {
@@ -3230,7 +3251,7 @@ function sanitizeCustomToolName(value?: string) {
 }
 
 function customToolPath(root: string, toolName: string, shell: TerminalShellId) {
-  return joinLocalPath(root, [".gilbert", "tools", `${toolName}.${shell === "cmd" ? "cmd" : "ps1"}`]);
+  return joinLocalPath(root, [".gilbert", "tools", `${toolName}.${terminalScriptExtension(shell)}`]);
 }
 
 async function resolveCustomToolPath(args: Record<string, string>, roots: string[], shell: TerminalShellId) {
@@ -3246,7 +3267,7 @@ async function resolveCustomToolPath(args: Record<string, string>, roots: string
     return "";
   }
 
-  const candidateShells: TerminalShellId[] = shell === "cmd" ? ["cmd", "powershell"] : ["powershell", "cmd"];
+  const candidateShells = orderedTerminalShellCandidates(shell);
 
   for (const root of roots) {
     for (const candidateShell of candidateShells) {
@@ -3264,6 +3285,53 @@ async function resolveCustomToolPath(args: Record<string, string>, roots: string
   return "";
 }
 
+function orderedTerminalShellCandidates(shell: TerminalShellId): TerminalShellId[] {
+  const platform = getHostPlatform();
+  const platformShells: TerminalShellId[] =
+    platform === "macos" ? ["zsh", "bash", "sh"] : platform === "linux" ? ["bash", "sh", "zsh"] : ["powershell", "cmd"];
+
+  return uniqueTerminalShells([shell, ...platformShells, "powershell", "cmd", "bash", "zsh", "sh"]);
+}
+
+function uniqueTerminalShells(shells: TerminalShellId[]) {
+  return shells.filter((shell, index) => shells.indexOf(shell) === index);
+}
+
+function terminalShellForCustomToolPath(toolPath: string, requestedShell: TerminalShellId): TerminalShellId {
+  const lowerPath = toolPath.toLowerCase();
+
+  if (lowerPath.endsWith(".cmd")) {
+    return "cmd";
+  }
+
+  if (lowerPath.endsWith(".ps1")) {
+    return "powershell";
+  }
+
+  if (lowerPath.endsWith(".sh")) {
+    if (isPosixTerminalShell(requestedShell)) {
+      return requestedShell;
+    }
+
+    const defaultShell = getDefaultTerminalShell();
+    return isPosixTerminalShell(defaultShell) ? defaultShell : "bash";
+  }
+
+  return requestedShell;
+}
+
+function createCustomToolCommand(shell: TerminalShellId, toolPath: string, args: string) {
+  if (shell === "cmd") {
+    return `${quoteCmd(toolPath)} ${args}`.trim();
+  }
+
+  if (shell === "powershell") {
+    return `& ${quotePowerShell(toolPath)} ${args}`.trim();
+  }
+
+  return `${shell} ${quotePosix(toolPath)} ${args}`.trim();
+}
+
 function normalizeScriptText(script: string) {
   return script.replace(/\r\n/g, "\n").replace(/\n?$/, "\n");
 }
@@ -3274,6 +3342,10 @@ function quotePowerShell(value: string) {
 
 function quoteCmd(value: string) {
   return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function quotePosix(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function joinLocalPath(root: string, parts: string[]) {
@@ -3416,15 +3488,23 @@ async function inferTestCommand(root: string) {
   const packageJson = await readPackageJson(root);
 
   if (packageJson?.scripts?.test && !packageJson.scripts.test.includes("no test specified")) {
-    return "npm.cmd test";
+    return packageManagerCommand("test");
   }
 
   if (packageJson?.scripts?.["test:unit"]) {
-    return "npm.cmd run test:unit";
+    return packageManagerCommand("run test:unit");
   }
 
   if (await textFileExists(joinLocalPath(root, ["Cargo.toml"]))) {
     return "cargo test";
+  }
+
+  if (getHostPlatform() === "windows" && await textFileExists(joinLocalPath(root, ["gradlew.bat"]))) {
+    return ".\\gradlew.bat test";
+  }
+
+  if (await textFileExists(joinLocalPath(root, ["gradlew"]))) {
+    return "./gradlew test";
   }
 
   if (await textFileExists(joinLocalPath(root, ["gradlew.bat"]))) {
@@ -3438,18 +3518,27 @@ async function inferTypeScriptCommand(root: string) {
   const packageJson = await readPackageJson(root);
 
   if (packageJson?.scripts?.typecheck) {
-    return "npm.cmd run typecheck";
+    return packageManagerCommand("run typecheck");
   }
 
   if (packageJson?.scripts?.["tsc"]) {
-    return "npm.cmd run tsc";
+    return packageManagerCommand("run tsc");
   }
 
   if (await textFileExists(joinLocalPath(root, ["tsconfig.json"]))) {
-    return "node_modules\\.bin\\tsc.cmd --noEmit";
+    return packageBinCommand("tsc", "--noEmit");
   }
 
   return "";
+}
+
+function packageManagerCommand(args: string) {
+  return `${getHostPlatform() === "windows" ? "npm.cmd" : "npm"} ${args}`;
+}
+
+function packageBinCommand(binaryName: string, args: string) {
+  const command = getHostPlatform() === "windows" ? `node_modules\\.bin\\${binaryName}.cmd` : `./node_modules/.bin/${binaryName}`;
+  return `${command} ${args}`.trim();
 }
 
 async function readPackageJson(root: string) {

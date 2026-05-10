@@ -1121,17 +1121,19 @@ function ProjectPopover({
   const normalizedQuery = projectSearch.trim().toLowerCase();
   const activeProject = normalizeProjectName(activeProjectName);
   const noProjectSelected = isNoProjectName(activeProject);
-  const filteredProjects = projects.filter((project) => {
-    if (isNoProjectName(project.name)) {
-      return false;
-    }
+  const filteredProjects = sortProjectOptions(
+    projects.filter((project) => {
+      if (isNoProjectName(project.name)) {
+        return false;
+      }
 
-    if (!normalizedQuery) {
-      return true;
-    }
+      if (!normalizedQuery) {
+        return true;
+      }
 
-    return project.name.toLowerCase().includes(normalizedQuery) || (project.localWorkspace?.roots ?? []).some((root) => root.toLowerCase().includes(normalizedQuery));
-  });
+      return project.name.toLowerCase().includes(normalizedQuery) || (project.localWorkspace?.roots ?? []).some((root) => root.toLowerCase().includes(normalizedQuery));
+    }),
+  );
 
   async function handleCreateProject() {
     const createdProjectName = await onCreateProject();
@@ -1181,6 +1183,25 @@ function ProjectPopover({
       </div>
     </div>
   );
+}
+
+function sortProjectOptions(projects: ProjectSummary[]) {
+  return [...projects].sort((left, right) => {
+    const leftCreatedAt = parseProjectOptionDate(left.createdAt);
+    const rightCreatedAt = parseProjectOptionDate(right.createdAt);
+
+    if (leftCreatedAt !== rightCreatedAt) {
+      return rightCreatedAt - leftCreatedAt;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function parseProjectOptionDate(value: string) {
+  const timestamp = Date.parse(value);
+
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function GitStatusPopover({ loading, root, status }: { loading: boolean; root: string; status: ComputerGitStatus | null }) {
@@ -1392,19 +1413,19 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
     }
 
     if (scope === "current-folder") {
+      if (settings.roots.length > 0) {
+        return settings.roots;
+      }
+
       const defaultWorkspace = await getDefaultComputerWorkspace();
       return defaultWorkspace ? [defaultWorkspace] : settings.roots;
-    }
-
-    if (browserPath) {
-      return [browserPath];
     }
 
     if (settings.roots.length > 0) {
       return settings.roots;
     }
 
-    const selectedFolder = await pickComputerFolder(settings.roots[0]);
+    const selectedFolder = await pickComputerFolder(browserPath || settings.roots[0]);
     return selectedFolder ? [selectedFolder] : [];
   }
 
@@ -1501,7 +1522,7 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
     }
   }
 
-  const selectedRoots = settings.roots.length > 0 ? settings.roots : browserPath ? [browserPath] : [];
+  const selectedRoots = settings.roots.length > 0 ? settings.roots : [];
   const liveIndexProgress = indexing && indexProgress?.requestId === indexRequestRef.current ? indexProgress : null;
 
   return (

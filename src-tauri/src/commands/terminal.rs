@@ -119,6 +119,12 @@ pub enum TerminalShell {
     PowerShell,
     #[serde(rename = "cmd")]
     Cmd,
+    #[serde(rename = "bash")]
+    Bash,
+    #[serde(rename = "zsh")]
+    Zsh,
+    #[serde(rename = "sh")]
+    Sh,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -145,7 +151,7 @@ pub fn terminal_create_session(
     state: tauri::State<'_, TerminalState>,
     request: TerminalCreateSessionRequest,
 ) -> Result<TerminalCreateSessionResponse, String> {
-    let shell = request.shell.unwrap_or(TerminalShell::PowerShell);
+    let shell = normalize_terminal_shell(request.shell.unwrap_or_else(default_terminal_shell));
     let working_directory = resolve_working_directory(request.working_directory)?;
     let output = Arc::new(Mutex::new(VecDeque::new()));
 
@@ -371,7 +377,7 @@ pub fn terminal_kill_session(
 fn run_command_blocking(
     request: TerminalRunCommandRequest,
 ) -> Result<TerminalRunCommandResponse, String> {
-    let shell = request.shell.unwrap_or(TerminalShell::PowerShell);
+    let shell = normalize_terminal_shell(request.shell.unwrap_or_else(default_terminal_shell));
     let working_directory = resolve_working_directory(request.working_directory)?;
     let input = request.command.trim();
 
@@ -526,15 +532,86 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
                 command.args(["/Q", "/C", input]);
                 command
             }
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = Command::new(unix_shell_program(shell));
+                command.creation_flags(CREATE_NO_WINDOW);
+                command.args(["-lc", input]);
+                command
+            }
         }
     }
 
     #[cfg(not(windows))]
     {
-        let shell_path = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut command = Command::new(shell_path);
-        command.args(["-lc", input]);
-        command
+        match shell {
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = Command::new(unix_shell_program(shell));
+                command.args(["-lc", input]);
+                command
+            }
+            TerminalShell::PowerShell | TerminalShell::Cmd => {
+                let mut command = Command::new(default_unix_shell_path());
+                command.args(["-lc", input]);
+                command
+            }
+        }
+    }
+}
+
+fn default_terminal_shell() -> TerminalShell {
+    #[cfg(windows)]
+    {
+        TerminalShell::PowerShell
+    }
+
+    #[cfg(not(windows))]
+    {
+        default_unix_shell()
+    }
+}
+
+fn normalize_terminal_shell(shell: TerminalShell) -> TerminalShell {
+    #[cfg(windows)]
+    {
+        shell
+    }
+
+    #[cfg(not(windows))]
+    {
+        match shell {
+            TerminalShell::PowerShell | TerminalShell::Cmd => default_unix_shell(),
+            _ => shell,
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn default_unix_shell() -> TerminalShell {
+    let shell = default_unix_shell_path();
+    let shell_name = Path::new(&shell)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match shell_name.as_str() {
+        "zsh" => TerminalShell::Zsh,
+        "bash" => TerminalShell::Bash,
+        _ => TerminalShell::Sh,
+    }
+}
+
+#[cfg(not(windows))]
+fn default_unix_shell_path() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+fn unix_shell_program(shell: &TerminalShell) -> &'static str {
+    match shell {
+        TerminalShell::Bash => "bash",
+        TerminalShell::Zsh => "zsh",
+        TerminalShell::Sh => "sh",
+        TerminalShell::PowerShell => "pwsh",
+        TerminalShell::Cmd => "cmd",
     }
 }
 
@@ -793,6 +870,9 @@ fn shell_label(shell: &TerminalShell) -> &'static str {
     match shell {
         TerminalShell::PowerShell => "PowerShell",
         TerminalShell::Cmd => "Command Prompt",
+        TerminalShell::Bash => "Bash",
+        TerminalShell::Zsh => "Zsh",
+        TerminalShell::Sh => "sh",
     }
 }
 

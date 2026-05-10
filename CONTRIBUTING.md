@@ -4,32 +4,36 @@ Thanks for helping make Gilbert Codex better. This project is early, so the best
 
 ## Local Setup
 
-```powershell
-npm.cmd install
-npm.cmd run dev
+Windows is the verified alpha platform. macOS and Linux have partial source support and need contributors on those operating systems to test and finish the port. Read [docs/platform/README.md](docs/platform/README.md) before submitting platform-specific changes.
+
+```bash
+npm install
+npm run dev
 ```
 
 For the full desktop app:
 
-```powershell
-npm.cmd run app:dev
+```bash
+npm run app:dev
 ```
+
+On Windows PowerShell, `npm.cmd` can be used in place of `npm` if script execution policy blocks the shim.
 
 ## Checks
 
 Run the full check before submitting changes:
 
-```powershell
-npm.cmd run check
+```bash
+npm run check
 git diff --check
 ```
 
 The full check expands to:
 
-```powershell
-npm.cmd run build
-npm.cmd run rust:fmt:check
-npm.cmd run rust:check
+```bash
+npm run build
+npm run rust:fmt:check
+npm run rust:check
 ```
 
 ## Project Standards
@@ -54,3 +58,5 @@ Use a short title and include:
 - Any product, security, or local-data tradeoffs.
 
 If a change touches auth, local files, terminal commands, provider credentials, or tool execution, call that out in the PR description.
+
+If a change claims macOS or Linux support, include the OS version, CPU architecture, packaging result, and the checklist items from [docs/platform/README.md](docs/platform/README.md) that were actually verified.

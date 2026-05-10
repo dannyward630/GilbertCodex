@@ -7,9 +7,23 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Preview
+
+![Gilbert Codex animated desktop preview](docs/assets/readme/gilbert-codex-readme-demo.gif)
+
+| Focused chat workspace | Live activity, tools, and sources |
+| --- | --- |
+| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex chat with activity rail, tool calls, artifacts, and sources](docs/assets/readme/gilbert-codex-activity.png) |
+
+| Tool registry | Local settings |
+| --- | --- |
+| ![Gilbert Codex toolbox showing enabled web search, GitHub, local workspace, file, and coding tools](docs/assets/readme/gilbert-codex-toolbox.png) | ![Gilbert Codex settings page showing app metadata, model, and permissions](docs/assets/readme/gilbert-codex-settings.png) |
+
 ## Current Status
 
 Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
+
+Platform status: Windows x64 is the verified alpha target. macOS and Linux now have partial source support, but they still need contributors on those operating systems to run the app, package it, and finish any native port issues. See [Platform Support And Porting Notes](docs/platform/README.md).
 
 The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, runtime clients, tools, types, and Rust commands without reverse-engineering the whole app.
 
@@ -18,6 +32,8 @@ The repository is kept open-source ready by default: dependencies, build output,
 The first public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.0.1-alpha).
 
 Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
+
+macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
 See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included capabilities, setup notes, known limitations, and checksum details.
 
@@ -37,6 +53,7 @@ See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included cap
 .
 |-- public/                 Static app assets
 |-- docs/                   Project docs, tool contracts, and publishing checklists
+|   |-- platform/           Platform support matrix and macOS/Linux port checklist
 |-- src/                    React frontend
 |   |-- app/                App composition, auth, runtime helpers, Tauri clients
 |   |-- components/         Reusable UI grouped by product area
@@ -60,49 +77,54 @@ See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included cap
 
 ## Getting Started
 
+For platform-specific status and porting work, start with [docs/platform/README.md](docs/platform/README.md). Windows is verified; macOS and Linux are partial until tested on real machines.
+
 Prerequisites:
 
 - Node.js 18 or newer.
 - Rust and Cargo.
 - Microsoft WebView2 Runtime on Windows.
+- WebKitGTK runtime/development packages on Linux when running or building the Tauri desktop shell.
 
 Install dependencies:
 
-```powershell
-npm.cmd install
+```bash
+npm install
 ```
 
 Run the frontend preview:
 
-```powershell
-npm.cmd run dev
+```bash
+npm run dev
 ```
 
 Run the full desktop app:
 
-```powershell
-npm.cmd run app:dev
+```bash
+npm run app:dev
 ```
 
 Run the full repository check:
 
-```powershell
-npm.cmd run check
+```bash
+npm run check
 ```
 
 Optional production dependency audit:
 
-```powershell
-npm.cmd run audit:prod
+```bash
+npm run audit:prod
 ```
 
 Individual checks:
 
-```powershell
-npm.cmd run build
-npm.cmd run rust:fmt:check
-npm.cmd run rust:check
+```bash
+npm run build
+npm run rust:fmt:check
+npm run rust:check
 ```
+
+On Windows PowerShell, `npm.cmd` is also supported if local script execution policy blocks the `npm` shim.
 
 ## Local Data And Secrets
 
@@ -116,6 +138,7 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 
 ## Integration Setup
 
+- [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux partial support, and the native testing checklist.
 - [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, incoming webhooks, and GitHub-to-Discord notifications.
 - [GitHub integration setup](docs/github/README.md): GitHub OAuth App device-flow setup, requested scopes, Settings sign-in, repository tools, and webhook troubleshooting.
 
@@ -123,9 +146,9 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 
 Before opening a pull request, run:
 
-```powershell
-npm.cmd run check
-npm.cmd run audit:prod
+```bash
+npm run check
+npm run audit:prod
 git diff --check
 ```
 

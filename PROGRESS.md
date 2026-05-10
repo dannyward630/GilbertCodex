@@ -4,7 +4,7 @@ This file tracks the product state so collaborators can see what has actually be
 
 ## Current Phase: First Public Alpha
 
-Status: public alpha release packaged and ready for focused collaboration.
+Status: Windows public alpha release packaged and ready for focused collaboration. macOS and Linux have partial source support, but still need contributors on those operating systems to test, package, and finish the port before they are official release targets.
 
 Delivered:
 
@@ -22,7 +22,7 @@ Delivered:
 - Local computer workspace context with folder selection, browser folder fallback, file indexing, file search, read, and write helpers.
 - Typed file creation tools for TXT, Markdown, code, React, HTML, PDF, notes, duplicate-safe writes, delete-file safety, and multi-file batches.
 - Coding tool pack for chat PDF generation, inline edits, vectors, tests, TypeScript checks, SQL files, React Native screens, unit tests, API routes, dependency reports, and codebase health scans.
-- Terminal panel for desktop PowerShell or cmd sessions.
+- Terminal panel for desktop PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
 - Toolbox feature toggles for provider, planning, thinking, web search, GitHub source control, local computer, terminal, browser preview, and future tools.
 - Confirmation dialogs for destructive chat deletion and settings reset flows.
 - Right-side activity rail for reasoning, tool calls, sources, and thinking-state visibility.
@@ -32,6 +32,7 @@ Delivered:
 - Rust host commands for auth, app info, computer files, Discord interactions, GitHub API operations, terminal, and web search.
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.
+- macOS/Linux port groundwork documented in `docs/platform/README.md`, with native verification still outstanding.
 
 ## UI Completed So Far
 
@@ -58,6 +59,7 @@ Delivered:
 - Add model/provider profiles for local, OpenRouter, and future backends.
 - Add exportable conversation and task summaries.
 - Add code signing, automatic updates, and multi-platform release artifacts.
+- Finish macOS and Linux native verification, packaging, and any required platform-specific fixes.
 
 ## Open Questions
 

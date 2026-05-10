@@ -125,9 +125,10 @@ export function AppShell({
           chats={chats}
           open={sidebarOpen}
           projects={projects}
-          onCreateProject={() => {
-            onCreateProject();
+          onCreateProject={async () => {
+            const createdProjectName = await onCreateProject();
             closeSidebarOnSmallScreens();
+            return createdProjectName;
           }}
           onDeleteChat={(chatId) => {
             onDeleteChat(chatId);

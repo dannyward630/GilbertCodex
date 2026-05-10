@@ -1027,7 +1027,7 @@ fn start_ngrok_tunnel(
 
     let mut child = command.spawn().map_err(|error| {
         format!(
-            "Could not start ngrok from `{}`. Install ngrok, paste your ngrok auth token in Settings > Discord, or set the full ngrok.exe path. Detail: {}",
+            "Could not start ngrok from `{}`. Install ngrok, paste your ngrok auth token in Settings > Discord, or set the full ngrok path. Detail: {}",
             executable,
             error
         )
@@ -1058,7 +1058,7 @@ fn check_ngrok_config(executable: &str) -> Result<(), String> {
 
     let output = command.output().map_err(|error| {
         format!(
-            "Could not run `{}`. Install ngrok, paste the full ngrok.exe path, or place ngrok.exe at `.tools\\ngrok\\ngrok.exe`. Detail: {}",
+            "Could not run `{}`. Install ngrok, paste the full ngrok path, or place the ngrok executable under `.tools/ngrok/`. Detail: {}",
             executable, error
         )
     })?;
@@ -1108,18 +1108,30 @@ fn ngrok_path_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join(".tools").join("ngrok").join("ngrok.exe"));
-        candidates.push(current_dir.join("tools").join("ngrok").join("ngrok.exe"));
+        push_ngrok_candidates(&mut candidates, current_dir.join(".tools").join("ngrok"));
+        push_ngrok_candidates(&mut candidates, current_dir.join("tools").join("ngrok"));
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     if let Some(repo_root) = manifest_dir.parent() {
-        candidates.push(repo_root.join(".tools").join("ngrok").join("ngrok.exe"));
-        candidates.push(repo_root.join("tools").join("ngrok").join("ngrok.exe"));
+        push_ngrok_candidates(&mut candidates, repo_root.join(".tools").join("ngrok"));
+        push_ngrok_candidates(&mut candidates, repo_root.join("tools").join("ngrok"));
     }
 
     candidates
+}
+
+fn push_ngrok_candidates(candidates: &mut Vec<PathBuf>, directory: PathBuf) {
+    candidates.push(directory.join(ngrok_executable_name()));
+}
+
+fn ngrok_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "ngrok.exe"
+    } else {
+        "ngrok"
+    }
 }
 
 fn wait_for_ngrok_public_url(port: u16, child: &mut Child) -> Result<String, String> {

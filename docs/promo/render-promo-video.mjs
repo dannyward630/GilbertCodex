@@ -10,6 +10,7 @@ const outputDir = __dirname;
 const scenePath = path.join(__dirname, "promo.html");
 const videoPath = path.join(outputDir, "gilbert-codex-promo.webm");
 const posterPath = path.join(outputDir, "gilbert-codex-promo-poster.png");
+const durationFallbackMs = 20_000;
 
 function loadPlaywright() {
   try {
@@ -42,6 +43,130 @@ function formatBytes(bytes) {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function readElementId(buffer, offset) {
+  const firstByte = buffer[offset];
+  let length = 1;
+  let marker = 0x80;
+
+  while (length <= 4 && (firstByte & marker) === 0) {
+    length += 1;
+    marker >>= 1;
+  }
+
+  let value = 0;
+  for (let index = 0; index < length; index += 1) {
+    value = value * 256 + buffer[offset + index];
+  }
+
+  return { length, value };
+}
+
+function readVintSize(buffer, offset) {
+  const firstByte = buffer[offset];
+  let length = 1;
+  let marker = 0x80;
+
+  while (length <= 8 && (firstByte & marker) === 0) {
+    length += 1;
+    marker >>= 1;
+  }
+
+  let value = firstByte & (marker - 1);
+  for (let index = 1; index < length; index += 1) {
+    value = value * 256 + buffer[offset + index];
+  }
+
+  const unknown = value === 2 ** (7 * length) - 1;
+  return { length, unknown, value };
+}
+
+function encodeVintSize(value, length) {
+  if (value > 2 ** (7 * length) - 2) {
+    throw new Error(`EBML size ${value} does not fit in ${length} byte(s).`);
+  }
+
+  const bytes = Buffer.alloc(length);
+  let remaining = value;
+  for (let index = length - 1; index >= 0; index -= 1) {
+    bytes[index] = remaining & 0xff;
+    remaining = Math.floor(remaining / 256);
+  }
+  bytes[0] |= 1 << (8 - length);
+  return bytes;
+}
+
+function createDurationElement(durationMs) {
+  const payload = Buffer.alloc(8);
+  payload.writeDoubleBE(durationMs, 0);
+  return Buffer.concat([Buffer.from([0x44, 0x89, 0x88]), payload]);
+}
+
+function writeInfoSize(buffer, infoSizeOffset, infoSizeLength, nextInfoSize) {
+  encodeVintSize(nextInfoSize, infoSizeLength).copy(buffer, infoSizeOffset);
+}
+
+function replaceInfoChild(buffer, info, childStart, childEnd, replacement) {
+  const nextInfoSize = info.size.value + replacement.length - (childEnd - childStart);
+  const nextBuffer = Buffer.concat([
+    buffer.subarray(0, childStart),
+    replacement,
+    buffer.subarray(childEnd),
+  ]);
+  writeInfoSize(nextBuffer, info.sizeOffset, info.size.length, nextInfoSize);
+  return nextBuffer;
+}
+
+function fixWebmDuration(buffer, durationMs) {
+  const ebml = readElementId(buffer, 0);
+  const ebmlSize = readVintSize(buffer, ebml.length);
+  const segmentOffset = ebml.length + ebmlSize.length + ebmlSize.value;
+  const segment = readElementId(buffer, segmentOffset);
+
+  if (segment.value !== 0x18538067) {
+    return buffer;
+  }
+
+  const segmentSize = readVintSize(buffer, segmentOffset + segment.length);
+  let cursor = segmentOffset + segment.length + segmentSize.length;
+  const durationElement = createDurationElement(durationMs);
+
+  while (cursor < buffer.length) {
+    const element = readElementId(buffer, cursor);
+    const sizeOffset = cursor + element.length;
+    const size = readVintSize(buffer, sizeOffset);
+    const contentStart = sizeOffset + size.length;
+
+    if (element.value === 0x1549a966) {
+      const info = { size, sizeOffset };
+      const infoEnd = contentStart + size.value;
+      let childCursor = contentStart;
+
+      while (childCursor < infoEnd) {
+        const child = readElementId(buffer, childCursor);
+        const childSize = readVintSize(buffer, childCursor + child.length);
+        const childContentStart = childCursor + child.length + childSize.length;
+        const childEnd = childContentStart + childSize.value;
+
+        if (child.value === 0x4489) {
+          return replaceInfoChild(buffer, info, childCursor, childEnd, durationElement);
+        }
+
+        childCursor = childEnd;
+      }
+
+      return replaceInfoChild(buffer, info, infoEnd, infoEnd, durationElement);
+    }
+
+    if (size.unknown) {
+      break;
+    }
+
+    cursor = contentStart + size.value;
+  }
+
+  return buffer;
 }
 
 const { chromium } = loadPlaywright();
@@ -82,7 +207,8 @@ try {
   await writeFile(posterPath, dataUrlToBuffer(posterDataUrl));
 
   const video = await page.evaluate(() => window.renderGilbertPromoVideo({ fps: 30 }));
-  await writeFile(videoPath, dataUrlToBuffer(video.dataUrl));
+  const videoBuffer = fixWebmDuration(dataUrlToBuffer(video.dataUrl), video.durationMs ?? durationFallbackMs);
+  await writeFile(videoPath, videoBuffer);
 
   const videoStats = await stat(videoPath);
   const posterStats = await stat(posterPath);

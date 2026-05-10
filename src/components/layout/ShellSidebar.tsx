@@ -67,8 +67,8 @@ export function ShellSidebar({
     return groupedChats;
   }, [visibleChats]);
   const projectList = useMemo(
-    () => sortProjectsByLatestActivity(projects.filter((project) => !isNoProjectName(project.name)), chatsByProject),
-    [chatsByProject, projects],
+    () => sortProjectsForSidebar(projects.filter((project) => !isNoProjectName(project.name))),
+    [projects],
   );
   const initialExpandedProject = activeChat && !isNoProjectName(activeChat.project) ? normalizeProjectName(activeChat.project) : projectList[0]?.name;
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(initialExpandedProject ? [initialExpandedProject] : []));
@@ -314,29 +314,23 @@ function getProjectKey(projectName: string) {
   return projectName.toLowerCase();
 }
 
-function sortProjectsByLatestActivity(projects: ProjectSummary[], chatsByProject: Map<string, ChatSummary[]>) {
+function sortProjectsForSidebar(projects: ProjectSummary[]) {
   return [...projects].sort((left, right) => {
-    const leftUpdatedAt = getLatestProjectUpdatedAt(left, chatsByProject.get(left.name.toLowerCase()) ?? []);
-    const rightUpdatedAt = getLatestProjectUpdatedAt(right, chatsByProject.get(right.name.toLowerCase()) ?? []);
+    const leftCreatedAt = parseProjectDate(left.createdAt);
+    const rightCreatedAt = parseProjectDate(right.createdAt);
 
-    return Date.parse(rightUpdatedAt) - Date.parse(leftUpdatedAt);
+    if (leftCreatedAt !== rightCreatedAt) {
+      return rightCreatedAt - leftCreatedAt;
+    }
+
+    return left.name.localeCompare(right.name);
   });
 }
 
-function getLatestProjectUpdatedAt(project: ProjectSummary, projectChats: ChatSummary[]) {
-  let latestAt = project.updatedAt;
-  let latestTimestamp = Date.parse(project.updatedAt);
+function parseProjectDate(value: string) {
+  const timestamp = Date.parse(value);
 
-  for (const chat of projectChats) {
-    const chatTimestamp = Date.parse(chat.updatedAt);
-
-    if (!Number.isNaN(chatTimestamp) && (Number.isNaN(latestTimestamp) || chatTimestamp > latestTimestamp)) {
-      latestAt = chat.updatedAt;
-      latestTimestamp = chatTimestamp;
-    }
-  }
-
-  return latestAt;
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function getProjectActivity(projectChats: ChatSummary[]): SidebarItemActivity | undefined {

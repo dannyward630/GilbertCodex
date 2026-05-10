@@ -729,10 +729,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return projectWorkspace;
     }
 
-    if (workspaceLooksScopedToProject(fallback, normalizedProjectName)) {
-      return fallback;
-    }
-
     return createNoProjectWorkspace(fallback);
   }
 
@@ -1036,7 +1032,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const now = new Date().toISOString();
-    const projectName = createUniqueProjectName(projectNameFromPath(root), projectsRef.current);
+    const baseProjectName = createProjectBaseName(projectNameFromPath(root));
+    const reusableProject = projectsRef.current.find(
+      (project) => project.name.toLowerCase() === baseProjectName.toLowerCase() && (project.localWorkspace?.roots.length ?? 0) === 0,
+    );
+    const projectName = reusableProject?.name ?? createUniqueProjectName(baseProjectName, projectsRef.current);
     const indexingWorkspace: LocalWorkspaceSettings = {
       ...localWorkspaceRef.current,
       enabled: true,
@@ -1048,20 +1048,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       roots: [root],
       scope: "selected-folder",
     };
-    const nextProject: ProjectSummary = {
-      createdAt: now,
-      id: createId("project"),
-      localWorkspace: indexingWorkspace,
-      name: projectName,
-      updatedAt: now,
-    };
+    const nextProject: ProjectSummary = reusableProject
+      ? {
+          ...reusableProject,
+          localWorkspace: indexingWorkspace,
+          name: projectName,
+          updatedAt: now,
+        }
+      : {
+          createdAt: now,
+          id: createId("project"),
+          localWorkspace: indexingWorkspace,
+          name: projectName,
+          updatedAt: now,
+        };
     localWorkspaceRef.current = indexingWorkspace;
     setLocalWorkspace(indexingWorkspace);
-    setProjects((currentProjects) => {
-      const nextProjects = sortProjectsByUpdatedAt([nextProject, ...currentProjects]);
-      projectsRef.current = nextProjects;
-      return nextProjects;
-    });
+    const nextProjects = sortProjectsByUpdatedAt(
+      reusableProject ? projectsRef.current.map((project) => (project.id === reusableProject.id ? nextProject : project)) : [nextProject, ...projectsRef.current],
+    );
+    projectsRef.current = nextProjects;
+    setProjects(nextProjects);
     bindActiveChatToProject(projectName, indexingWorkspace);
 
     window.setTimeout(() => {
@@ -1107,13 +1114,57 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   function handleLocalWorkspaceChange(nextWorkspace: LocalWorkspaceSettings) {
     localWorkspaceRef.current = nextWorkspace;
     setLocalWorkspace(nextWorkspace);
-    saveWorkspaceForProject(activeChat.project, nextWorkspace);
+
+    const activeProjectName = normalizeProjectName(activeChat.project);
+
+    if (isNoProjectName(activeProjectName) && nextWorkspace.enabled && nextWorkspace.scope !== "full-computer" && nextWorkspace.roots[0]) {
+      const root = normalizeSelectedProjectPath(nextWorkspace.roots[0]);
+
+      if (root) {
+        const projectWorkspace: LocalWorkspaceSettings = {
+          ...nextWorkspace,
+          roots: [root],
+          scope: "selected-folder",
+        };
+        const existingProject = projectsRef.current.find((project) => samePathSet(project.localWorkspace?.roots ?? [], [root]));
+
+        if (existingProject) {
+          saveWorkspaceForProject(existingProject.name, projectWorkspace);
+          bindActiveChatToProject(existingProject.name, projectWorkspace);
+          return;
+        }
+
+        createProjectFromFolder(root);
+        return;
+      }
+    }
+
+    saveWorkspaceForProject(activeProjectName, nextWorkspace);
   }
 
   function bindActiveChatToProject(project: string, workspaceOverride?: LocalWorkspaceSettings) {
     const projectName = normalizeProjectName(project);
     const now = new Date().toISOString();
-    let targetChatId = activeChatIdRef.current;
+    const currentActiveChat = pendingChatsRef.current.find((chat) => chat.id === activeChatIdRef.current && !chat.archived);
+    const currentProjectName = normalizeProjectName(currentActiveChat?.project);
+    const sameProjectSelected = currentActiveChat && currentProjectName.toLowerCase() === projectName.toLowerCase();
+
+    if (sameProjectSelected) {
+      const projectWorkspace = isNoProjectName(projectName)
+        ? createNoProjectWorkspace(localWorkspaceRef.current)
+        : workspaceOverride ?? resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
+      localWorkspaceRef.current = projectWorkspace;
+      setLocalWorkspace(projectWorkspace);
+      setActiveRoute("chat");
+      setSearchOpen(false);
+      return;
+    }
+
+    const shouldStartFreshProjectChat =
+      currentActiveChat &&
+      currentActiveChat.messages.length > 0 &&
+      currentProjectName.toLowerCase() !== projectName.toLowerCase();
+    let targetChatId = shouldStartFreshProjectChat ? "" : activeChatIdRef.current;
     let updatedExistingChat = false;
     let nextChats = pendingChatsRef.current.map((chat) => {
       if (chat.id !== targetChatId || chat.archived) {
@@ -1148,7 +1199,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const projectWorkspace = workspaceOverride ?? resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
       localWorkspaceRef.current = projectWorkspace;
       setLocalWorkspace(projectWorkspace);
-      touchProject(projectName);
     }
 
     setActiveRoute("chat");
@@ -1850,6 +1900,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         "ACTIVE PROJECT BOUNDARY",
         `Project: ${normalizedProjectName}`,
         `Workspace roots for this request: ${roots}`,
+        workspaceSettings.enabled && workspaceSettings.roots.length > 0
+          ? "The workspace roots above are the authoritative selected folder context for this request."
+          : "No local folder is selected for this request; do not describe any other project as a substitute.",
         "Use only this active chat, these workspace roots, and this request's tool/web evidence when describing or changing a project.",
         "Treat prior file listings, terminal output, sources, or project descriptions from any other project as stale unless the user explicitly asks to compare projects.",
       ].join("\n"),
@@ -5447,7 +5500,7 @@ function closeUnclosedDiscordCodeFence(content: string) {
 }
 
 function createUniqueProjectName(baseName: string, projects: ProjectSummary[]) {
-  const fallbackName = baseName.trim() || DEFAULT_PROJECT;
+  const fallbackName = createProjectBaseName(baseName);
   const existingNames = new Set(projects.map((project) => project.name.toLowerCase()));
 
   if (!existingNames.has(fallbackName.toLowerCase())) {
@@ -5465,22 +5518,21 @@ function createUniqueProjectName(baseName: string, projects: ProjectSummary[]) {
   return `${fallbackName} ${Date.now()}`;
 }
 
+function createProjectBaseName(baseName: string) {
+  const trimmedBaseName = baseName.trim();
+
+  if (!trimmedBaseName) {
+    return "Folder project";
+  }
+
+  return isNoProjectName(trimmedBaseName) ? `${DEFAULT_PROJECT} folder` : trimmedBaseName;
+}
+
 function projectNameFromPath(path: string) {
   const normalized = path.trim().replace(/[\\/]+$/, "");
   const parts = normalized.split(/[\\/]+/).filter(Boolean);
 
-  return parts[parts.length - 1] || DEFAULT_PROJECT;
-}
-
-function workspaceLooksScopedToProject(workspace: LocalWorkspaceSettings, projectName: string) {
-  if (!workspace.enabled || workspace.scope !== "selected-folder" || workspace.roots.length !== 1) {
-    return false;
-  }
-
-  const rootProjectName = normalizeProjectName(projectNameFromPath(workspace.roots[0]));
-  const normalizedProjectName = normalizeProjectName(projectName);
-
-  return rootProjectName.toLowerCase() === normalizedProjectName.toLowerCase();
+  return parts[parts.length - 1] || "";
 }
 
 function normalizeSelectedProjectPath(path: string) {

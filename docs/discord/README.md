@@ -4,6 +4,8 @@ This guide explains how to prepare Discord so users can chat with Gilbert Codex 
 
 Last verified: May 10, 2026.
 
+Platform note: this bridge is verified on Windows. macOS and Linux have partial source support and need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
+
 ## What Works Today
 
 Gilbert Codex has a local Settings > Discord setup page and a desktop bridge runtime for Discord slash-command chat.
@@ -90,7 +92,7 @@ Use this path when users should type a slash command and get a response from Gil
    - Select Slash chat.
    - Keep Tunnel provider set to `ngrok`.
    - Keep Local port set to `8787` unless that port is already in use.
-   - Keep ngrok executable set to `ngrok`, or paste the full path to `ngrok.exe`.
+   - Keep ngrok executable set to `ngrok`, or paste the full path to the ngrok executable.
    - Set Response style to Channel or Ephemeral. Thread is reserved for a later richer Discord workflow.
    - Add Allowed guild IDs and Allowed channel IDs if you want to restrict where the bridge responds.
 
@@ -306,7 +308,7 @@ Discord supports a GitHub-compatible webhook endpoint by appending `/github` to 
 | Problem | Likely Cause | Fix |
 | --- | --- | --- |
 | Discord rejects the Interactions Endpoint URL | Endpoint does not answer `PING`, uses HTTP, ngrok stopped, or signature verification failed | Start the bridge in Settings > Discord, use the generated `https://.../discord/interactions` URL, then save again |
-| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, or paste the full `ngrok.exe` path |
+| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, or paste the full ngrok executable path |
 | Slash command does not appear | Command was not registered or app was not installed in the server | Register a guild command for fast testing, then reinstall the app if needed |
 | Slash command shows loading forever | Gilbert was closed, busy, or could not send the final edit to Discord | Keep Gilbert open, wait for the current run to finish, and try again |
 | Gateway bot connects but cannot read messages | Missing or unapproved `MESSAGE_CONTENT` privileged intent | Use slash commands or enable/request the privileged intent |

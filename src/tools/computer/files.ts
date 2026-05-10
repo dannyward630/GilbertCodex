@@ -798,7 +798,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
       "Edit syntax: read with view_code first, then use edit_file with old_text/new_text, start_line/end_line/content, insert_at_line/content, or start_char/end_char/content. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text when available so Gilbert can refuse the edit if the file changed.",
       tools.fileCreation ? describeFileCreationTools() : "",
       describeCodingTools(),
-      "For reusable one-off automation, create_tool writes a PowerShell or cmd script under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output.",
+      "For reusable one-off automation, create_tool writes a platform shell script under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output.",
     "If more file evidence is needed, request a compact <tool_call> for the app to execute. The app shows tool calls in Activity; final answers should explain the result clearly.",
     "Use the local context below as real computer file evidence. Do not claim you cannot access files when this tool context is present.",
     `Mode: ${localPermissionModeLabel(settings.permissionMode)}`,

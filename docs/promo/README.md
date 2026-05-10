@@ -4,20 +4,40 @@ This folder contains a lightweight promotional scene for sharing Gilbert Codex a
 
 ## Outputs
 
-- `gilbert-codex-promo.webm`: 1280x720 promo video, no audio, suitable for GitHub Releases, issue attachments, project pages, and social posts.
-- `gilbert-codex-promo-poster.png`: static frame for README previews and link cards.
-- `promo.html`: source scene. Open it in a browser to preview the animation.
+- `../assets/readme/gilbert-codex-readme-demo.gif`: short animated README preview that plays inline on GitHub when animated images are enabled.
+- `../assets/readme/gilbert-codex-overview.png`: focused chat workspace screenshot.
+- `../assets/readme/gilbert-codex-activity.png`: live activity rail, tool calls, artifacts, and sources screenshot.
+- `../assets/readme/gilbert-codex-toolbox.png`: Toolbox screenshot.
+- `../assets/readme/gilbert-codex-settings.png`: Settings screenshot.
+- `promo.html`: optional source scene for generating a longer standalone promo video outside release assets.
 
-## Refreshing The Video
+## Refreshing The README Screenshots
+
+Start the local app first:
+
+```powershell
+npm.cmd run dev -- --host 127.0.0.1 --port 1420
+```
+
+Then run:
+
+```powershell
+node docs/promo/capture-readme-assets.mjs
+```
+
+The capture script seeds a browser-only demo account and writes contributor-safe screenshots under `docs/assets/readme/`.
+It requires Playwright and a Chromium-based browser in the local tooling environment; they stay out of the production app dependencies.
+
+## Optional Standalone Video
 
 The renderer uses Playwright to open the HTML scene and record the canvas animation with the browser's built-in WebM encoder.
 
-```powershell
+```bash
 node docs/promo/render-promo-video.mjs
 ```
 
-If Playwright is not available in the local environment, install it outside the app runtime or run the scene manually in a Chromium-based browser and use a screen recorder. This promo tooling is intentionally kept out of the production dependency graph.
+If Playwright is not available in the local environment, install it outside the app runtime or run the scene manually in a Chromium-based browser and use a screen recorder. This promo tooling is intentionally kept out of the production dependency graph. The command is platform-neutral, but the generated video should still be checked locally after renderer or browser changes.
 
 ## GitHub Sharing Notes
 
-GitHub READMEs are friendlier to images than repo-hosted video tags. Use the poster image in README copy, and upload the WebM to a GitHub Release, discussion, issue, pull request, or social post when you want autoplay-style video sharing.
+GitHub READMEs are friendlier to images than repo-hosted video tags. Keep release assets focused on installable builds and checksums. Use the animated GIF plus screenshots in README copy, and only attach standalone video to issues, discussions, or social posts when needed.
