@@ -5,94 +5,138 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CloudOff,
+  CornerDownRight,
   FileUp,
+  FolderGit2,
   FolderOpen,
   Gauge,
+  GitBranch,
   Globe2,
-  Hand,
   HardDrive,
   Home,
   Image as ImageIcon,
+  Laptop,
   ListChecks,
   LoaderCircle,
   Mic,
   MicOff,
+  MoreHorizontal,
   Plus,
   RefreshCw,
-  Shield,
-  ShieldCheck,
+  Search,
   Sparkles,
   Square,
+  Trash2,
   Wand2,
   X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { ThinkingModeControls } from "../thinking/ThinkingModeControls";
 import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment } from "../../lib/chatAttachments";
+import { DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
 import {
   AUTO_COMPACT_CONTEXT_THRESHOLD,
   formatTokenCount,
   getFallbackModelContextWindow,
   type ContextWindowUsage,
+  type ContextCompactionNotice,
   type ModelContextWindow,
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
-import { CHAT_MODEL_OPTIONS, type ChatModelOption } from "../../lib/models";
-import { estimateOpenRouterContextWindowUsage } from "../../services/openRouterUsage";
+import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
+import { fetchProviderModels } from "../../services/modelProviderClient";
+import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
 import { DEFAULT_PLANNING_MAX_PASSES } from "../../services/planningClient";
 import {
   buildComputerFileIndex,
   createGilbertProjectMemoryTemplate,
+  getComputerGitStatus,
   formatLocalWorkspaceIndexStatus,
   getDefaultComputerWorkspace,
   GILBERT_PROJECT_MEMORY_FILE,
   listenForComputerFileIndexProgress,
-  listenForComputerFolderDrops,
-  listComputerDirectory,
   listComputerDrives,
-  localPermissionModeLabel,
   localWorkspaceScopeLabel,
+  localPermissionModeLabel,
   pickComputerFolder,
-  registerBrowserDroppedFolders,
   writeComputerTextFile,
 } from "../../tools/computer/files";
-import type { ChatAttachment, ChatComposerDraft, ChatSendInput, ChatSummary } from "../../types/chat";
-import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
+import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, ComputerGitStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ProjectSummary } from "../../types/project";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
-type ComposerMenu = "attach" | "context" | "local" | "model" | "review" | null;
-type VoiceState = "idle" | "listening" | "blocked" | "unsupported";
+type ComposerMenu = "attach" | "branch" | "context" | "local" | "model" | "project" | null;
+type LiveModelCatalogStatus = "error" | "idle" | "loading" | "ready";
+type VoiceState = "blocked" | "error" | "idle" | "listening" | "requesting" | "unsupported";
+
+interface BuiltInSpeechRecognitionAlternative {
+  transcript: string;
+}
+
+interface BuiltInSpeechRecognitionResult {
+  isFinal: boolean;
+  [index: number]: BuiltInSpeechRecognitionAlternative | undefined;
+}
+
+interface BuiltInSpeechRecognitionResultList {
+  length: number;
+  [index: number]: BuiltInSpeechRecognitionResult | undefined;
+}
+
+interface BuiltInSpeechRecognitionEvent extends Event {
+  results: BuiltInSpeechRecognitionResultList;
+}
+
+interface BuiltInSpeechRecognitionErrorEvent extends Event {
+  error?: string;
+}
+
+interface BuiltInSpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: (() => void) | null;
+  onerror: ((event: BuiltInSpeechRecognitionErrorEvent) => void) | null;
+  onresult: ((event: BuiltInSpeechRecognitionEvent) => void) | null;
+  abort: () => void;
+  start: () => void;
+  stop: () => void;
+}
+
+type BuiltInSpeechRecognitionConstructor = new () => BuiltInSpeechRecognition;
 
 interface ChatComposerProps {
   chat: ChatSummary;
-  contextWindowSource: "estimate" | "openrouter";
+  contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
-  disabled: boolean;
   draft?: ChatComposerDraft | null;
+  isGenerating: boolean;
+  lastContextCompaction?: ContextCompactionNotice | null;
+  layout?: "center" | "dock";
   localWorkspace: LocalWorkspaceSettings;
   lastProviderContextUsage?: ContextWindowUsage | null;
-  maxOutputTokens: number;
   model: string;
   modelContextWindows: ModelContextWindowMap;
+  onCreateProject: () => void | string | null | Promise<string | null | void>;
   onDraftApplied?: () => void;
+  onDeleteQueuedMessage: (messageId: string) => void;
   onHeightChange?: (height: number) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
-  onModelChange: (model: string) => void;
+  onModelChange: (model: string, provider: ChatModelOption["provider"]) => void;
+  onSelectProject: (project: string) => void;
   onStopGeneration?: () => void;
+  onSteerQueuedMessage: (messageId: string) => void;
   onSubmit: (input: ChatSendInput) => void | Promise<void>;
+  projects: ProjectSummary[];
   providerSettings: ProviderSettings;
+  queuedMessageCount?: number;
+  queuedMessages?: ChatMessage[];
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
-  systemPrompt: string;
   thinking: ThinkingSettings;
   webSearch: WebSearchSettings;
-}
-
-interface ReviewMode {
-  id: "guard" | "review" | "full";
-  label: string;
-  detail: string;
-  icon: LucideIcon;
 }
 
 interface ComposerAttachmentDraft {
@@ -110,34 +154,11 @@ interface PlanningModeSettings {
   maxPasses: number;
 }
 
-const reviewModes: ReviewMode[] = [
-  {
-    id: "guard",
-    label: "Ask first",
-    detail: "Review sensitive edits before they run.",
-    icon: Hand,
-  },
-  {
-    id: "review",
-    label: "Gilbert review",
-    detail: "Inspect changes and call out risks.",
-    icon: ShieldCheck,
-  },
-  {
-    id: "full",
-    label: "Full workspace",
-    detail: "Allow broader edits when you are moving fast.",
-    icon: Shield,
-  },
-];
-
-const modelOptions = CHAT_MODEL_OPTIONS;
-
 const planningPassOptions = [3, 5, DEFAULT_PLANNING_MAX_PASSES];
 
-function modelFromValue(modelValue: string): ChatModelOption {
+function modelFromValue(modelValue: string, providerId: ChatModelOption["provider"], discoveredModels?: ProviderModelMetadata[]): ChatModelOption {
   const normalizedValue = modelValue.trim();
-  const matchingOption = modelOptions.find((option) => option.value === normalizedValue);
+  const matchingOption = buildProviderModelOptions(providerId, discoveredModels, normalizedValue).find((option) => option.value === normalizedValue);
 
   if (matchingOption) {
     return matchingOption;
@@ -145,51 +166,121 @@ function modelFromValue(modelValue: string): ChatModelOption {
 
   return {
     id: "custom",
-    label: "Custom model",
+    label: normalizedValue || "Choose model",
     detail: normalizedValue || "No model selected",
+    provider: providerId,
     value: normalizedValue,
   };
 }
 
 function formatModelContextWindow(contextWindow: ModelContextWindow) {
-  const suffix = contextWindow.source === "openrouter" ? "" : " est.";
+  const suffix = contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "" : " est.";
 
   return `${formatTokenCount(contextWindow.tokens)} context${suffix}`;
 }
 
 function modelContextWindowTitle(contextWindow: ModelContextWindow) {
-  return contextWindow.source === "openrouter" ? "Context window reported by OpenRouter" : "Estimated context window until OpenRouter metadata is available";
+  return contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "Context window reported by the selected provider" : "Estimated context window until provider metadata is available";
+}
+
+function formatLiveCatalogHeading(status: LiveModelCatalogStatus, modelCount: number) {
+  if (status === "loading") {
+    return "loading";
+  }
+
+  if (status === "ready") {
+    return `${modelCount} live`;
+  }
+
+  if (status === "error") {
+    return modelCount > 0 ? `${modelCount} cached` : "offline";
+  }
+
+  return "live";
+}
+
+function isOfflineCatalogError(error: string | null | undefined) {
+  const normalizedError = error?.toLowerCase().trim();
+
+  if (!normalizedError) {
+    return true;
+  }
+
+  return [
+    "failed to fetch",
+    "fetch failed",
+    "networkerror",
+    "load failed",
+    "connection refused",
+    "err_connection",
+    "err_network",
+  ].some((offlineSignal) => normalizedError.includes(offlineSignal));
+}
+
+function formatOfflineCatalogNote(providerLabel: string, baseUrl: string) {
+  return `Offline. Start ${providerLabel} and check ${baseUrl.replace(/\/+$/, "")}.`;
+}
+
+function createLiveCatalogNote(providerLabel: string, baseUrl: string, status: LiveModelCatalogStatus, error: string | undefined, modelCount: number) {
+  const modelsUrl = `${baseUrl.replace(/\/+$/, "")}/models`;
+
+  if (status === "loading") {
+    return `Loading real models from ${modelsUrl}`;
+  }
+
+  if (status === "error") {
+    return isOfflineCatalogError(error) ? formatOfflineCatalogNote(providerLabel, baseUrl) : error || `No model list from ${modelsUrl}. Start ${providerLabel} or check the host and port.`;
+  }
+
+  if (status === "ready" && modelCount === 0) {
+    return `${providerLabel} is reachable but returned no loaded models.`;
+  }
+
+  if (status === "idle") {
+    return `Open this menu with ${providerLabel} running to load its real model list.`;
+  }
+
+  return "";
 }
 
 export function ChatComposer({
   chat,
   contextWindowSource,
   contextWindowTokens,
-  disabled,
   draft,
+  isGenerating,
+  lastContextCompaction,
+  layout = "dock",
   localWorkspace,
   lastProviderContextUsage,
-  maxOutputTokens,
   model,
   modelContextWindows,
+  onCreateProject,
   onDraftApplied,
+  onDeleteQueuedMessage,
   onHeightChange,
   onLocalWorkspaceChange,
   onModelChange,
+  onSelectProject,
   onStopGeneration,
+  onSteerQueuedMessage,
   onSubmit,
+  projects,
   providerSettings,
+  queuedMessageCount,
+  queuedMessages = [],
   onThinkingChange,
   onWebSearchChange,
-  systemPrompt,
   thinking,
   webSearch,
 }: ChatComposerProps) {
   const composerRef = useRef<HTMLFormElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mountedRef = useRef(true);
+  const visibleQueuedMessageCount = queuedMessageCount ?? queuedMessages.length;
+  const voiceBaseMessageRef = useRef("");
+  const voiceRecognitionRef = useRef<BuiltInSpeechRecognition | null>(null);
   const voiceRequestRef = useRef(0);
-  const voiceStreamRef = useRef<MediaStream | null>(null);
   const [message, setMessage] = useState("");
   const [openMenu, setOpenMenu] = useState<ComposerMenu>(null);
   const [planMode, setPlanMode] = useState<PlanningModeSettings>({
@@ -197,14 +288,22 @@ export function ChatComposer({
     maxPasses: DEFAULT_PLANNING_MAX_PASSES,
   });
   const [attachments, setAttachments] = useState<ComposerAttachmentDraft[]>([]);
+  const [liveModelCatalogs, setLiveModelCatalogs] = useState<Partial<Record<ProviderSettings["provider"], ProviderModelMetadata[]>>>({});
+  const [liveModelCatalogErrors, setLiveModelCatalogErrors] = useState<Partial<Record<ProviderSettings["provider"], string>>>({});
+  const [liveModelCatalogStatus, setLiveModelCatalogStatus] = useState<Partial<Record<ProviderSettings["provider"], LiveModelCatalogStatus>>>({});
+  const [gitStatus, setGitStatus] = useState<ComputerGitStatus | null>(null);
+  const [gitStatusLoading, setGitStatusLoading] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const readyAttachments = attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : []));
   const hasImageAttachment = readyAttachments.some(isImageAttachment);
   const hasPendingAttachments = attachments.some((attachment) => attachment.status === "loading");
   const hasFailedAttachments = attachments.some((attachment) => attachment.status === "error");
-  const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !disabled && !hasPendingAttachments && !hasFailedAttachments;
-  const selectedModel = modelFromValue(model);
-  const estimatedContextUsage = estimateOpenRouterContextWindowUsage({
+  const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
+  const selectedProvider = getModelProvider(providerSettings.provider);
+  const selectedModel = modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]);
+  const estimatedContextUsage = estimateModelProviderContextWindowUsage({
     chat,
     contextWindowTokens,
     draftAttachments: readyAttachments,
@@ -213,10 +312,14 @@ export function ChatComposer({
     source: contextWindowSource,
   });
   const hasDraftContext = Boolean(message.trim()) || readyAttachments.length > 0;
-  const contextUsage = hasDraftContext ? estimatedContextUsage : lastProviderContextUsage ?? estimatedContextUsage;
-  const contextUsagePercent = Math.min(Math.round((contextUsage.totalTokens / contextUsage.contextWindowTokens) * 100), 100);
-  const reviewMode = reviewModeFromPermissionMode(localWorkspace.permissionMode);
-  const ReviewIcon = reviewMode.icon;
+  const contextUsage = hasDraftContext && lastProviderContextUsage ? projectDraftOntoProviderUsage(lastProviderContextUsage, estimatedContextUsage) : lastProviderContextUsage ?? estimatedContextUsage;
+  const contextUsagePercent = Math.min(Math.round((contextUsage.inputTokens / contextUsage.contextWindowTokens) * 100), 100);
+  const activeRoot = localWorkspace.roots[0] ?? "";
+  const activeProjectName = normalizeProjectName(chat.project);
+  const activeProject = projects.find((project) => project.name.toLowerCase() === activeProjectName.toLowerCase());
+  const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
+  const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
+  const hasGitChanges = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -238,13 +341,43 @@ export function ChatComposer({
 
     return () => {
       mountedRef.current = false;
-      voiceRequestRef.current += 1;
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
-      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
-      voiceStreamRef.current = null;
+      cancelVoiceInput(false);
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeRoot || localWorkspace.scope === "full-computer") {
+      setGitStatus(null);
+      setGitStatusLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    setGitStatusLoading(true);
+
+    void getComputerGitStatus(activeRoot)
+      .then((status) => {
+        if (!disposed) {
+          setGitStatus(status);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setGitStatus(createUnavailableGitStatus(readErrorMessage(error, "Git status unavailable.")));
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setGitStatusLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeRoot, localWorkspace.indexUpdatedAt, localWorkspace.scope]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -275,6 +408,64 @@ export function ChatComposer({
     onDraftApplied?.();
   }, [draft, onDraftApplied]);
 
+  useEffect(() => {
+    if (openMenu !== "model") {
+      return;
+    }
+
+    const liveProviders = MODEL_PROVIDERS.filter((provider) => usesLiveModelCatalog(provider.id));
+    const controllers = liveProviders.map((provider) => ({ controller: new AbortController(), provider }));
+
+    controllers.forEach(({ controller, provider }) => {
+      setLiveModelCatalogStatus((current) => ({
+        ...current,
+        [provider.id]: "loading",
+      }));
+
+      const settingsForProvider: ProviderSettings = {
+        ...providerSettings,
+        model: providerSettings.providerModels[provider.id] || provider.defaultModel,
+        provider: provider.id,
+      };
+
+      void fetchProviderModels(settingsForProvider, { signal: controller.signal })
+        .then((models) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setLiveModelCatalogs((current) => ({
+            ...current,
+            [provider.id]: models,
+          }));
+          setLiveModelCatalogErrors((current) => ({
+            ...current,
+            [provider.id]: undefined,
+          }));
+          setLiveModelCatalogStatus((current) => ({
+            ...current,
+            [provider.id]: "ready",
+          }));
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setLiveModelCatalogErrors((current) => ({
+            ...current,
+            [provider.id]: readErrorMessage(error, `Could not load ${provider.label} models.`),
+          }));
+          setLiveModelCatalogStatus((current) => ({
+            ...current,
+            [provider.id]: "error",
+          }));
+        });
+    });
+
+    return () => controllers.forEach(({ controller }) => controller.abort());
+  }, [openMenu, providerSettings]);
+
   function toggleMenu(menu: Exclude<ComposerMenu, null>) {
     setOpenMenu((currentMenu) => (currentMenu === menu ? null : menu));
   }
@@ -300,22 +491,6 @@ export function ChatComposer({
       enabled: !webSearch.enabled,
       provider: "duckduckgo",
     });
-  }
-
-  function selectReviewMode(mode: ReviewMode) {
-    const permissionMode = permissionModeFromReviewMode(mode.id);
-    const nextWorkspace: LocalWorkspaceSettings = {
-      ...localWorkspace,
-      permissionMode,
-    };
-
-    if (mode.id === "full") {
-      nextWorkspace.enabled = true;
-      nextWorkspace.scope = nextWorkspace.scope || "current-folder";
-    }
-
-    onLocalWorkspaceChange(nextWorkspace);
-    setOpenMenu(null);
   }
 
   function handleFileSelect(event: ChangeEvent<HTMLInputElement>) {
@@ -427,60 +602,131 @@ export function ChatComposer({
     }
   }
 
-  function stopVoiceInput() {
+  function cancelVoiceInput(updateState = true) {
     voiceRequestRef.current += 1;
-    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
-    voiceStreamRef.current = null;
+    const recognition = voiceRecognitionRef.current;
+    voiceRecognitionRef.current = null;
 
-    if (mountedRef.current) {
+    if (recognition) {
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      recognition.abort();
+    }
+
+    if (updateState && mountedRef.current) {
+      setVoiceStatus(null);
       setVoiceState("idle");
     }
   }
 
-  async function handleVoiceToggle() {
-    if (voiceState === "listening") {
-      stopVoiceInput();
+  function finishVoiceInput() {
+    const recognition = voiceRecognitionRef.current;
+
+    if (!recognition) {
+      cancelVoiceInput();
       return;
     }
 
-    if (!navigator.mediaDevices?.getUserMedia) {
+    recognition.stop();
+    setVoiceStatus("Finishing dictation");
+  }
+
+  function handleVoiceToggle() {
+    if (voiceState === "listening") {
+      finishVoiceInput();
+      return;
+    }
+
+    if (voiceState === "requesting") {
+      cancelVoiceInput();
+      return;
+    }
+
+    const SpeechRecognitionConstructor = getBuiltInSpeechRecognition();
+    if (!SpeechRecognitionConstructor) {
+      setVoiceStatus(null);
       setVoiceState("unsupported");
       return;
     }
 
     const requestId = voiceRequestRef.current + 1;
     voiceRequestRef.current = requestId;
+    setVoiceStatus("Opening microphone");
+    setVoiceState("requesting");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recognition = new SpeechRecognitionConstructor();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || "en-US";
+      recognition.maxAlternatives = 1;
+      voiceBaseMessageRef.current = message;
+      voiceRecognitionRef.current = recognition;
 
-      if (!mountedRef.current || voiceRequestRef.current !== requestId) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
+      recognition.onresult = (event) => {
+        if (voiceRequestRef.current !== requestId) {
+          return;
+        }
 
-      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
-      voiceStreamRef.current = stream;
+        setMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results));
+        setVoiceStatus("Listening");
+      };
+
+      recognition.onerror = (event) => {
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        recognition.onend = null;
+        recognition.onerror = null;
+        recognition.onresult = null;
+        voiceRecognitionRef.current = null;
+        voiceRequestRef.current += 1;
+
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          setVoiceStatus(null);
+          setVoiceState("blocked");
+          return;
+        }
+
+        if (event.error === "no-speech") {
+          setVoiceStatus("No speech detected");
+        } else {
+          setVoiceStatus(formatSpeechRecognitionError(event.error));
+        }
+        setVoiceState("error");
+      };
+
+      recognition.onend = () => {
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        voiceRecognitionRef.current = null;
+        setVoiceStatus(null);
+        setVoiceState("idle");
+      };
+
+      recognition.start();
+      setVoiceStatus("Listening");
       setVoiceState("listening");
-    } catch {
+    } catch (error) {
       if (mountedRef.current && voiceRequestRef.current === requestId) {
-        setVoiceState("blocked");
+        voiceRecognitionRef.current = null;
+        setVoiceStatus(readErrorMessage(error, "Voice dictation could not start."));
+        setVoiceState("error");
       }
     }
   }
 
-  const voiceLabel =
-    voiceState === "listening"
-      ? "Stop voice input"
-      : voiceState === "blocked"
-        ? "Microphone blocked"
-        : voiceState === "unsupported"
-          ? "Voice input unavailable"
-          : "Start voice input";
+  const voiceBusy = voiceState === "requesting";
+  const voiceLabel = formatVoiceLabel(voiceState);
 
   return (
     <form
       className="composer-shell"
+      data-layout={layout}
       ref={composerRef}
       onSubmit={(event) => {
         event.preventDefault();
@@ -495,15 +741,36 @@ export function ChatComposer({
         accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.rs,.kt,.java,.py"
         onChange={handleFileSelect}
       />
+      {queuedMessages.length > 0 ? (
+        <div className="composer-queue-tray" aria-label="Queued follow-up messages">
+          {queuedMessages.map((queuedMessage) => (
+            <div className="composer-queue-row" key={queuedMessage.id}>
+              <CornerDownRight size={15} aria-hidden="true" />
+              <span title={queuedMessage.content}>{formatQueuedMessagePreview(queuedMessage)}</span>
+              <button type="button" className="composer-queue-steer" onClick={() => onSteerQueuedMessage(queuedMessage.id)}>
+                <CornerDownRight size={14} aria-hidden="true" />
+                <span>Steer</span>
+              </button>
+              <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => onDeleteQueuedMessage(queuedMessage.id)}>
+                <Trash2 size={14} aria-hidden="true" />
+              </button>
+              <button type="button" className="composer-queue-icon" aria-label="More queued message actions" title="More" disabled>
+                <MoreHorizontal size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <label className="composer-input-wrap">
         <span className="sr-only">Message Gilbert Codex</span>
         <textarea
-          disabled={disabled}
           placeholder={
-            disabled
-              ? "Generating response..."
+            isGenerating
+              ? "Add a follow-up or steer the next turn"
+              : voiceState === "requesting"
+                ? "Opening microphone..."
               : voiceState === "listening"
-                ? "Listening... speak when ready"
+                ? "Listening... click the mic again when finished"
                 : planMode.enabled
                   ? "Ask for a plan before Gilbert Codex starts coding"
                   : "Ask Gilbert Codex to build, inspect, or change this project"
@@ -555,6 +822,22 @@ export function ChatComposer({
                   className="composer-menu-item composer-menu-item-stacked"
                   type="button"
                   role="menuitemcheckbox"
+                  aria-checked={webSearch.enabled}
+                  onClick={toggleWebSearch}
+                >
+                  <Globe2 size={18} aria-hidden="true" />
+                  <span>
+                    <strong>Web search</strong>
+                    <small>{webSearch.enabled ? `DuckDuckGo up to ${webSearch.maxResults} sources` : "Use DuckDuckGo when this message needs sources"}</small>
+                  </span>
+                  <span className="composer-switch" data-on={webSearch.enabled}>
+                    <span />
+                  </span>
+                </button>
+                <button
+                  className="composer-menu-item composer-menu-item-stacked"
+                  type="button"
+                  role="menuitemcheckbox"
                   aria-checked={planMode.enabled}
                   onClick={togglePlanMode}
                 >
@@ -593,6 +876,10 @@ export function ChatComposer({
                     </div>
                   </div>
                 ) : null}
+                <div className="composer-menu-separator" />
+                <div className="composer-menu-panel">
+                  <ThinkingModeControls settings={thinking} onChange={onThinkingChange} variant="panel" />
+                </div>
                 <div className="composer-menu-nested">
                   <button className="composer-menu-item" type="button" role="menuitem" aria-haspopup="menu">
                     <Boxes size={18} aria-hidden="true" />
@@ -614,60 +901,8 @@ export function ChatComposer({
               </div>
             ) : null}
           </div>
-          <button
-            className="composer-tool composer-tool-web"
-            type="button"
-            aria-label={webSearch.enabled ? "Disable DuckDuckGo web search" : "Enable DuckDuckGo web search"}
-            aria-pressed={webSearch.enabled}
-            title={webSearch.enabled ? "DuckDuckGo web search on" : "Search the web with DuckDuckGo"}
-            data-active={webSearch.enabled}
-            onClick={toggleWebSearch}
-          >
-            <Globe2 size={18} aria-hidden="true" />
-          </button>
-          <ThinkingModeControls settings={thinking} onChange={onThinkingChange} />
         </div>
         <div className="composer-actions-left">
-          <div className="composer-menu-anchor">
-            <button
-              className="mode-chip"
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={openMenu === "review"}
-              data-active={openMenu === "review"}
-              onClick={() => toggleMenu("review")}
-            >
-              <ReviewIcon size={16} aria-hidden="true" />
-              <span>{reviewMode.label}</span>
-              <ChevronDown size={15} aria-hidden="true" />
-            </button>
-            {openMenu === "review" ? (
-              <div className="composer-popover composer-popover-review" role="menu" aria-label="Review mode">
-                {reviewModes.map((mode) => {
-                  const Icon = mode.icon;
-                  const selected = mode.id === reviewMode.id;
-                  return (
-                    <button
-                      key={mode.id}
-                      className="composer-menu-item composer-menu-item-stacked"
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={selected}
-                      data-selected={selected}
-                      onClick={() => selectReviewMode(mode)}
-                    >
-                      <Icon size={18} aria-hidden="true" />
-                      <span>
-                        <strong>{mode.label}</strong>
-                        <small>{mode.detail}</small>
-                      </span>
-                      {selected ? <Check size={18} aria-hidden="true" /> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
           <div className="composer-menu-anchor">
             <button
               className="mode-chip mode-chip-model"
@@ -683,34 +918,69 @@ export function ChatComposer({
             </button>
             {openMenu === "model" ? (
               <div className="composer-popover composer-popover-model" role="menu" aria-label="Model selector">
-                {modelOptions.map((option) => {
-                  const selected = option.value === selectedModel.value;
-                  const optionContextWindow = modelContextWindows[option.value] ?? getFallbackModelContextWindow(option.value);
+                <div className="model-provider-current">
+                  <strong>{selectedProvider.label}</strong>
+                  <small>{selectedProvider.detail}</small>
+                </div>
+                {MODEL_PROVIDERS.map((provider) => {
+                  const providerModel = provider.id === providerSettings.provider ? model : providerSettings.providerModels[provider.id] || provider.defaultModel;
+                  const providerOptions = buildProviderModelOptions(provider.id, liveModelCatalogs[provider.id], providerModel);
+                  const isLiveCatalogProvider = usesLiveModelCatalog(provider.id);
+                  const liveCatalogModelCount = liveModelCatalogs[provider.id]?.length ?? 0;
+                  const liveCatalogStatus = liveModelCatalogStatus[provider.id] ?? "idle";
+                  const liveCatalogNote = createLiveCatalogNote(
+                    provider.label,
+                    providerSettings.baseUrls[provider.id] || provider.defaultBaseUrl,
+                    liveCatalogStatus,
+                    liveModelCatalogErrors[provider.id],
+                    liveCatalogModelCount,
+                  );
+
                   return (
-                    <button
-                      key={option.id}
-                      className="composer-menu-item composer-menu-item-stacked"
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={selected}
-                      data-selected={selected}
-                      onClick={() => {
-                        onModelChange(option.value);
-                        setOpenMenu(null);
-                      }}
-                    >
-                      <Sparkles size={18} aria-hidden="true" />
-                      <span>
-                        <strong>{option.label}</strong>
-                        <small className="model-option-detail">
-                          <span>{option.detail}</span>
-                          <span className="model-context-size" title={modelContextWindowTitle(optionContextWindow)}>
-                            {formatModelContextWindow(optionContextWindow)}
+                    <div className="model-provider-group" key={provider.id}>
+                      <div className="model-provider-heading">
+                        <span>{provider.label}</span>
+                        <small>{isLiveCatalogProvider ? formatLiveCatalogHeading(liveCatalogStatus, liveCatalogModelCount) : providerOptions.length}</small>
+                      </div>
+                      {isLiveCatalogProvider && liveCatalogNote ? <div className="model-provider-note">{liveCatalogNote}</div> : null}
+                      {providerOptions.map((option) => {
+                      const selected = option.value === selectedModel.value && option.provider === providerSettings.provider;
+                      const optionContextWindow =
+                        modelContextWindows[option.value] ??
+                        (option.contextWindowTokens
+                          ? {
+                              source: "provider" as const,
+                              tokens: option.contextWindowTokens,
+                            }
+                          : getFallbackModelContextWindow(option.value));
+                      return (
+                        <button
+                          key={option.id}
+                          className="composer-menu-item composer-menu-item-stacked"
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          data-selected={selected}
+                          onClick={() => {
+                            onModelChange(option.value, option.provider);
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <Sparkles size={18} aria-hidden="true" />
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small className="model-option-detail">
+                              <span>{option.detail}</span>
+                              <span className="model-context-size" title={modelContextWindowTitle(optionContextWindow)}>
+                                {formatModelContextWindow(optionContextWindow)}
+                              </span>
+                            </small>
                           </span>
-                        </small>
-                      </span>
-                      {selected ? <Check size={18} aria-hidden="true" /> : null}
-                    </button>
+                          {selected ? <Check size={18} aria-hidden="true" /> : null}
+                        </button>
+                      );
+                      })}
+                    </div>
                   );
                 })}
               </div>
@@ -723,24 +993,51 @@ export function ChatComposer({
             type="button"
             aria-label={voiceLabel}
             title={voiceLabel}
-            data-active={voiceState === "listening"}
-            data-warning={voiceState === "blocked" || voiceState === "unsupported"}
+            data-active={voiceState === "listening" || voiceBusy}
+            data-busy={voiceBusy}
+            data-warning={voiceState === "blocked" || voiceState === "unsupported" || voiceState === "error"}
             onClick={handleVoiceToggle}
           >
-            {voiceState === "listening" ? <MicOff size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
+            {voiceBusy ? <LoaderCircle size={18} aria-hidden="true" /> : voiceState === "listening" ? <MicOff size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
           </button>
-          {disabled && onStopGeneration ? (
+          {isGenerating && onStopGeneration ? (
             <button className="send-button send-button-stop" type="button" aria-label="Stop response" title="Stop response" onClick={onStopGeneration}>
               <Square size={14} aria-hidden="true" />
             </button>
-          ) : (
-            <button className="send-button" type="submit" aria-label="Send message" disabled={!canSend}>
-              <ArrowUp size={19} aria-hidden="true" />
-            </button>
-          )}
+          ) : null}
+          <button className="send-button" type="submit" aria-label={isGenerating ? "Queue message" : "Send message"} title={isGenerating ? "Queue message" : "Send message"} disabled={!canSend}>
+            <ArrowUp size={19} aria-hidden="true" />
+          </button>
         </div>
       </div>
       <div className="composer-footer">
+        <div className="composer-menu-anchor composer-project-root">
+          <button
+            className="project-toggle"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={openMenu === "project"}
+            data-active={openMenu === "project"}
+            onClick={() => toggleMenu("project")}
+          >
+            <FolderGit2 size={14} aria-hidden="true" />
+            <span>{projectLabel}</span>
+            <ChevronDown size={13} aria-hidden="true" />
+          </button>
+          {openMenu === "project" ? (
+            <ProjectPopover
+              activeProjectName={chat.project}
+              onCreateProject={onCreateProject}
+              onSelectProject={(projectName) => {
+                onSelectProject(projectName);
+                setOpenMenu(null);
+              }}
+              projectSearch={projectSearch}
+              projects={projects}
+              setProjectSearch={setProjectSearch}
+            />
+          ) : null}
+        </div>
         <div className="composer-menu-anchor composer-local-root">
           <button
             className="local-toggle"
@@ -750,11 +1047,28 @@ export function ChatComposer({
             data-active={openMenu === "local" || localWorkspace.enabled}
             onClick={() => toggleMenu("local")}
           >
-            <HardDrive size={13} aria-hidden="true" />
-            <span>{localWorkspace.enabled ? localWorkspaceScopeLabel(localWorkspace.scope) : "Work locally"}</span>
-            <ChevronDown size={14} aria-hidden="true" />
+            <Laptop size={14} aria-hidden="true" />
+            <span>{localWorkspace.enabled ? "Work locally" : "Local off"}</span>
+            <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "local" ? <LocalWorkspacePopover settings={localWorkspace} onChange={onLocalWorkspaceChange} /> : null}
+          {openMenu === "local" ? <LocalWorkspacePopover providerLabel={selectedProvider.label} settings={localWorkspace} onChange={onLocalWorkspaceChange} /> : null}
+        </div>
+        <div className="composer-menu-anchor composer-branch-root">
+          <button
+            className="branch-toggle"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={openMenu === "branch"}
+            data-active={openMenu === "branch"}
+            data-git={gitStatus?.available ? "true" : "false"}
+            onClick={() => toggleMenu("branch")}
+          >
+            <GitBranch size={14} aria-hidden="true" />
+            <span>{gitBranchLabel}</span>
+            {hasGitChanges ? <strong>{formatGitInlineChanges(gitStatus)}</strong> : null}
+            <ChevronDown size={13} aria-hidden="true" />
+          </button>
+          {openMenu === "branch" ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
         </div>
         <div className="composer-menu-anchor composer-context-root">
           <button
@@ -767,44 +1081,182 @@ export function ChatComposer({
           >
             <Gauge size={13} aria-hidden="true" />
             <span>
-              Context {formatTokenCount(contextUsage.totalTokens)} / {formatTokenCount(contextUsage.contextWindowTokens)}
+              Context {formatTokenCount(contextUsage.inputTokens)} / {formatTokenCount(contextUsage.contextWindowTokens)}
             </span>
             <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "context" ? <ContextWindowPopover usage={contextUsage} usagePercent={contextUsagePercent} /> : null}
+          {openMenu === "context" ? <ContextWindowPopover compaction={lastContextCompaction} usage={contextUsage} usagePercent={contextUsagePercent} /> : null}
         </div>
-        {voiceState === "blocked" ? <span className="composer-status">Mic permission is blocked</span> : null}
-        {voiceState === "unsupported" ? <span className="composer-status">Mic is not available in this preview</span> : null}
+        {voiceState === "blocked" ? <span className="composer-status composer-status-warning">Mic permission is blocked</span> : null}
+        {voiceState === "unsupported" ? <span className="composer-status composer-status-warning">Mic is not available in this preview</span> : null}
+        {voiceState === "error" && voiceStatus ? <span className="composer-status composer-status-warning">{voiceStatus}</span> : null}
+        {voiceState !== "blocked" && voiceState !== "unsupported" && voiceState !== "error" && voiceStatus ? <span className="composer-status">{voiceStatus}</span> : null}
         {hasPendingAttachments ? <span className="composer-status">Preparing attachments</span> : null}
         {hasImageAttachment ? <span className="composer-status">Image uploads use Nemotron Omni</span> : null}
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
-        {disabled ? <span className="composer-status">Generating response</span> : null}
+        {isGenerating ? <span className="composer-status">Generating response</span> : null}
+        {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
         {webSearch.enabled ? <span className="composer-status composer-status-web">DuckDuckGo web on</span> : null}
         {planMode.enabled ? <span className="composer-status">Plan mode - up to {planMode.maxPasses} passes</span> : null}
-        {localWorkspace.enabled ? <span className="composer-status">Local - {formatLocalWorkspaceIndexStatus(localWorkspace)}</span> : null}
       </div>
     </form>
   );
 }
 
-function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: LocalWorkspaceSettings) => void; settings: LocalWorkspaceSettings }) {
+function ProjectPopover({
+  activeProjectName,
+  onCreateProject,
+  onSelectProject,
+  projectSearch,
+  projects,
+  setProjectSearch,
+}: {
+  activeProjectName: string;
+  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onSelectProject: (projectName: string) => void;
+  projectSearch: string;
+  projects: ProjectSummary[];
+  setProjectSearch: (value: string) => void;
+}) {
+  const normalizedQuery = projectSearch.trim().toLowerCase();
+  const activeProject = normalizeProjectName(activeProjectName);
+  const noProjectSelected = isNoProjectName(activeProject);
+  const filteredProjects = projects.filter((project) => {
+    if (isNoProjectName(project.name)) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return project.name.toLowerCase().includes(normalizedQuery) || (project.localWorkspace?.roots ?? []).some((root) => root.toLowerCase().includes(normalizedQuery));
+  });
+
+  async function handleCreateProject() {
+    const createdProjectName = await onCreateProject();
+
+    if (typeof createdProjectName === "string" && createdProjectName.trim()) {
+      onSelectProject(createdProjectName);
+    }
+  }
+
+  return (
+    <div className="composer-popover composer-popover-project" role="dialog" aria-label="Projects">
+      <label className="project-search">
+        <Search size={16} aria-hidden="true" />
+        <span className="sr-only">Search projects</span>
+        <input autoFocus placeholder="Search projects" value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} />
+      </label>
+      <div className="project-list" role="listbox" aria-label="Project folders">
+        <button type="button" role="option" aria-selected={noProjectSelected} data-selected={noProjectSelected} onClick={() => onSelectProject(DEFAULT_PROJECT)}>
+          <CloudOff size={18} aria-hidden="true" />
+          <span>
+            <strong>{DEFAULT_PROJECT}</strong>
+            <small>No folder, project memory, or local file context</small>
+          </span>
+          {noProjectSelected ? <Check size={18} aria-hidden="true" /> : null}
+        </button>
+        {filteredProjects.map((project) => {
+          const selected = project.name.toLowerCase() === activeProject.toLowerCase();
+          const root = project.localWorkspace?.roots[0];
+
+          return (
+            <button key={project.id} type="button" role="option" aria-selected={selected} data-selected={selected} onClick={() => onSelectProject(project.name)}>
+              <FolderGit2 size={18} aria-hidden="true" />
+              <span>
+                <strong>{project.name}</strong>
+                <small>{root ? formatCompactPath(root) : "Choose a folder to make this project local"}</small>
+              </span>
+              {selected ? <Check size={18} aria-hidden="true" /> : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="project-menu-actions">
+        <button type="button" onClick={() => void handleCreateProject()}>
+          <FolderOpen size={18} aria-hidden="true" />
+          <span>Add project folder</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GitStatusPopover({ loading, root, status }: { loading: boolean; root: string; status: ComputerGitStatus | null }) {
+  if (loading) {
+    return (
+      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
+        <div className="git-status-loading">
+          <LoaderCircle size={16} aria-hidden="true" />
+          <span>Checking local Git status</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!status?.available) {
+    return (
+      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
+        <div className="git-status-empty">
+          <GitBranch size={18} aria-hidden="true" />
+          <span>
+            <strong>No Git repository detected</strong>
+            <small>{formatNoGitDetail(status, root)}</small>
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
+      <div className="git-status-header">
+        <GitBranch size={18} aria-hidden="true" />
+        <span>
+          <strong>{status.branch || "Git repository"}</strong>
+          <small>{status.githubOwner && status.githubRepo ? `${status.githubOwner}/${status.githubRepo}` : status.remoteUrl || "Local repository"}</small>
+        </span>
+      </div>
+      <dl className="git-status-list">
+        <div>
+          <dt>Files changed</dt>
+          <dd>{status.changedFiles}</dd>
+        </div>
+        <div>
+          <dt>Additions</dt>
+          <dd className="git-additions">+{status.additions}</dd>
+        </div>
+        <div>
+          <dt>Deletions</dt>
+          <dd className="git-deletions">-{status.deletions}</dd>
+        </div>
+        <div>
+          <dt>Upstream</dt>
+          <dd>{status.ahead || status.behind ? `${status.ahead} ahead / ${status.behind} behind` : "Synced or no upstream"}</dd>
+        </div>
+      </dl>
+      <div className="git-status-root" title={status.repositoryRoot || root}>
+        {formatCompactPath(status.repositoryRoot || root)}
+      </div>
+    </div>
+  );
+}
+
+function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange: (settings: LocalWorkspaceSettings) => void; providerLabel: string; settings: LocalWorkspaceSettings }) {
   const activeIndexRequestRef = useRef<number | null>(null);
   const indexRequestRef = useRef(0);
   const [drives, setDrives] = useState<ComputerDrive[]>([]);
   const [browserPath, setBrowserPath] = useState(settings.roots[0] ?? "");
-  const [dropHovering, setDropHovering] = useState(false);
   const [error, setError] = useState<string | null>(settings.lastError ?? null);
   const [indexProgress, setIndexProgress] = useState<ComputerFileIndexProgress | null>(null);
-  const [loading, setLoading] = useState(false);
   const [indexing, setIndexing] = useState(false);
-  const [pathDraft, setPathDraft] = useState(settings.roots[0] ?? "");
   const [fullComputerWarningOpen, setFullComputerWarningOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
 
     async function bootstrap() {
-      setLoading(true);
       setError(null);
 
       try {
@@ -817,14 +1269,9 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
         const startPath = settings.roots[0] || defaultWorkspace || driveList[0]?.path || "";
         setDrives(driveList);
         setBrowserPath(startPath);
-        setPathDraft(startPath);
       } catch (caughtError) {
         if (!disposed) {
           setError(readErrorMessage(caughtError, "Could not open local computer files."));
-        }
-      } finally {
-        if (!disposed) {
-          setLoading(false);
         }
       }
     }
@@ -860,36 +1307,6 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
       unlisten?.();
     };
   }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    void listenForComputerFolderDrops(
-      (paths) => {
-        if (!disposed) {
-          void useDroppedPaths(paths);
-        }
-      },
-      (hovering) => {
-        if (!disposed) {
-          setDropHovering(hovering);
-        }
-      },
-    ).then((nextUnlisten) => {
-      if (disposed) {
-        nextUnlisten();
-        return;
-      }
-
-      unlisten = nextUnlisten;
-    });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [settings]);
 
   function commit(patch: Partial<LocalWorkspaceSettings>) {
     onChange({
@@ -956,7 +1373,6 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
 
       if (scope !== "full-computer" && roots[0]) {
         setBrowserPath(roots[0]);
-        setPathDraft(roots[0]);
       }
     } catch (caughtError) {
       setError(readErrorMessage(caughtError, "Could not switch local workspace scope."));
@@ -980,89 +1396,16 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
       return defaultWorkspace ? [defaultWorkspace] : settings.roots;
     }
 
-    return browserPath ? [browserPath] : settings.roots;
-  }
-
-  async function openFolderPicker() {
-    setError(null);
-
-    try {
-      const selectedPath = await pickComputerFolder(browserPath || settings.roots[0]);
-
-      if (!selectedPath) {
-        return;
-      }
-
-      await useSelectedFolder(selectedPath);
-    } catch (caughtError) {
-      setError(readErrorMessage(caughtError, "Could not open the folder picker."));
-    }
-  }
-
-  async function openTypedPath() {
-    const nextPath = pathDraft.trim();
-
-    if (!nextPath) {
-      return;
+    if (browserPath) {
+      return [browserPath];
     }
 
-    try {
-      await useSelectedFolder(nextPath);
-    } catch (caughtError) {
-      setError(readErrorMessage(caughtError, "Could not open that folder."));
-    }
-  }
-
-  async function useDroppedPaths(paths: string[]) {
-    setDropHovering(false);
-
-    if (paths.length === 0) {
-      setError("Drop a folder from your computer, or use Open folder.");
-      return;
+    if (settings.roots.length > 0) {
+      return settings.roots;
     }
 
-    for (const path of paths) {
-      try {
-        await useSelectedFolder(path);
-        return;
-      } catch {
-        const parentPath = parentLocalPath(path);
-
-        if (parentPath && parentPath !== path) {
-          try {
-            await useSelectedFolder(parentPath);
-            return;
-          } catch {
-            continue;
-          }
-        }
-      }
-    }
-
-    setError("That drop did not include a readable folder path. Use Open folder or type the folder path.");
-  }
-
-  async function useSelectedFolder(path: string) {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const nextListing = await listComputerDirectory(path, 1);
-      setBrowserPath(nextListing.path);
-      setPathDraft(nextListing.path);
-      const nextSettings: LocalWorkspaceSettings = {
-        ...settings,
-        enabled: true,
-        lastError: undefined,
-        roots: [nextListing.path],
-        scope: "selected-folder",
-      };
-
-      commitSettings(nextSettings);
-      void rebuildIndex(nextSettings, "Auto-indexing selected folder");
-    } finally {
-      setLoading(false);
-    }
+    const selectedFolder = await pickComputerFolder(settings.roots[0]);
+    return selectedFolder ? [selectedFolder] : [];
   }
 
   async function rebuildIndex(settingsOverride: LocalWorkspaceSettings = settings, reason = "Indexing workspace") {
@@ -1159,12 +1502,7 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
   }
 
   const selectedRoots = settings.roots.length > 0 ? settings.roots : browserPath ? [browserPath] : [];
-  const activeRoot = selectedRoots[0] ?? "";
   const liveIndexProgress = indexing && indexProgress?.requestId === indexRequestRef.current ? indexProgress : null;
-  const rootDetail =
-    settings.scope === "full-computer"
-      ? "Full computer mode is enabled; the file browser stays hidden here."
-      : activeRoot || "Choose or drop the project folder to use.";
 
   return (
     <div className="composer-popover composer-popover-local" role="dialog" aria-label="Local computer workspace">
@@ -1175,6 +1513,27 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
         </span>
         <button className="local-switch-button" type="button" role="switch" aria-checked={settings.enabled} data-on={settings.enabled} onClick={() => void setEnabled(!settings.enabled)}>
           <span />
+        </button>
+      </div>
+
+      <div className="local-mode-menu" aria-label="Start in">
+        <small>Start in</small>
+        <button type="button" data-selected={settings.enabled} onClick={() => void setEnabled(true)}>
+          <Laptop size={18} aria-hidden="true" />
+          <span>Work locally</span>
+          {settings.enabled ? <Check size={18} aria-hidden="true" /> : null}
+        </button>
+        <button type="button" disabled title="New worktree support is coming after folder projects settle.">
+          <CornerDownRight size={18} aria-hidden="true" />
+          <span>New worktree</span>
+        </button>
+        <button type="button" disabled>
+          <Gauge size={18} aria-hidden="true" />
+          <span>
+            Rate limits remaining
+            <small>{providerLabel} usage view coming soon</small>
+          </span>
+          <ChevronRight size={17} aria-hidden="true" />
         </button>
       </div>
 
@@ -1201,7 +1560,7 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
               <small>Gilbert can see all readable drives and index file names, paths, and text previews. This is powerful and can expose private files.</small>
             </span>
           </div>
-          <p>Full computer mode stays read-only, but use it only when you really want the whole device visible to the AI.</p>
+          <p>Full computer mode enables read/write file tools across readable drive roots when write tools are on. Use it only when you want the whole device available to the AI.</p>
           <div>
             <button type="button" onClick={() => setFullComputerWarningOpen(false)}>
               Cancel
@@ -1212,71 +1571,6 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
           </div>
         </div>
       ) : null}
-
-      <div className="local-permission-panel">
-        <ShieldCheck size={15} aria-hidden="true" />
-        <span>
-          <strong>{localPermissionModeLabel(settings.permissionMode)}</strong>
-          <small>{permissionModeDetail(settings.permissionMode)}</small>
-        </span>
-      </div>
-
-      <div className="local-project-panel" aria-label="Project folder in use">
-        <FolderOpen size={16} aria-hidden="true" />
-        <span>
-          <strong>{settings.scope === "full-computer" ? "Full computer scope" : "Project folder in use"}</strong>
-          <small>{rootDetail}</small>
-        </span>
-        {loading ? <LoaderCircle size={15} aria-hidden="true" /> : null}
-      </div>
-
-      <div
-        className="local-drop-zone"
-        data-hovering={dropHovering}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          setDropHovering(true);
-        }}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDropHovering(true);
-        }}
-        onDragLeave={() => setDropHovering(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          const paths = Array.from(event.dataTransfer.files)
-            .map((file) => (file as File & { path?: string }).path || file.webkitRelativePath || file.name)
-            .filter(Boolean);
-          void registerBrowserDroppedFolders(event.dataTransfer).then((browserPaths) => useDroppedPaths([...browserPaths, ...paths]));
-        }}
-      >
-        <FolderOpen size={16} aria-hidden="true" />
-        <span>
-          <strong>Drop a folder here</strong>
-          <small>Desktop drops use the real folder path.</small>
-        </span>
-        <button type="button" onClick={() => void openFolderPicker()}>
-          Open folder
-        </button>
-      </div>
-
-      <div className="local-path-row">
-        <input
-          aria-label="Folder path"
-          placeholder="C:\\Users\\You\\Documents"
-          value={pathDraft}
-          onChange={(event) => setPathDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void openTypedPath();
-            }
-          }}
-        />
-        <button type="button" onClick={() => void openTypedPath()}>
-          Open
-        </button>
-      </div>
 
       <div className="local-index-row">
         <button type="button" disabled={indexing || selectedRoots.length === 0} onClick={() => void rebuildIndex(settings, "Indexing workspace")}>
@@ -1309,11 +1603,12 @@ function LocalWorkspacePopover({ onChange, settings }: { onChange: (settings: Lo
   );
 }
 
-function ContextWindowPopover({ usage, usagePercent }: { usage: ContextWindowUsage; usagePercent: number }) {
+function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?: ContextCompactionNotice | null; usage: ContextWindowUsage; usagePercent: number }) {
   const reservePercent = Math.min(Math.round((usage.maxOutputTokens / usage.contextWindowTokens) * 100), 100);
   const compactPercent = Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100);
   const compactTokenLimit = Math.floor(usage.contextWindowTokens * AUTO_COMPACT_CONTEXT_THRESHOLD);
-  const isOpenRouterUsage = usage.tokenSource === "openrouter";
+  const isProviderUsage = usage.tokenSource === "openrouter" || usage.tokenSource === "provider";
+  const isProjectedUsage = usage.tokenSource === "projected";
 
   return (
     <div className="composer-popover composer-popover-context" role="dialog" aria-label="Context window">
@@ -1321,15 +1616,17 @@ function ContextWindowPopover({ usage, usagePercent }: { usage: ContextWindowUsa
         <span>
           <strong>Context window</strong>
           <small>
-            {isOpenRouterUsage
-              ? "OpenRouter usage from last request"
-              : usage.source === "openrouter"
-                ? "Estimated full payload against model limit"
-                : "Estimated full payload against estimated limit"}
+            {isProjectedUsage
+              ? "Projected next request from last provider payload"
+              : isProviderUsage
+                ? "Provider usage from last request"
+                : usage.source === "openrouter" || usage.source === "provider"
+                  ? "Estimated prompt payload against model limit"
+                : "Estimated prompt payload against estimated limit"}
           </small>
         </span>
         <strong>
-          {formatTokenCount(usage.totalTokens)} / {formatTokenCount(usage.contextWindowTokens)}
+          {formatTokenCount(usage.inputTokens)} / {formatTokenCount(usage.contextWindowTokens)}
         </strong>
       </div>
       <div className="context-window-meter" aria-hidden="true">
@@ -1338,30 +1635,45 @@ function ContextWindowPopover({ usage, usagePercent }: { usage: ContextWindowUsa
         <i style={{ left: `${compactPercent}%` }} />
       </div>
       <p className="context-window-note">
-        {isOpenRouterUsage
-          ? "Prompt and completion use OpenRouter returned usage. Section rows are the app's normalized split of that exact prompt total."
-          : "Estimated from the serialized OpenRouter request body plus the response reserve."}{" "}
+        {isProjectedUsage
+          ? "Uses the last provider prompt as a baseline and adds the current draft estimate, so typing does not hide transient tool context."
+          : isProviderUsage
+            ? "Prompt and completion use provider returned usage. Section rows are the app's normalized split of that exact prompt total."
+            : "Estimated from the serialized provider request body. The response cap is tracked separately."}{" "}
         Auto compacts at {compactPercent}% ({formatTokenCount(compactTokenLimit)}).
       </p>
       <dl className="context-window-list">
+        {compaction ? (
+          <div className="context-window-compaction-row">
+            <dt>
+              Last auto compact
+              <small>
+                {compaction.forcedByProviderUsage ? "Provider usage crossed the limit" : "Payload crossed the limit"} - {compaction.compactedMessageCount} older messages
+              </small>
+            </dt>
+            <dd>
+              {formatTokenCount(compaction.afterTokens)} / {formatTokenCount(compaction.contextWindowTokens)}
+            </dd>
+          </div>
+        ) : null}
         <div>
-          <dt>{isOpenRouterUsage ? "OpenRouter prompt" : "Prompt payload estimate"}</dt>
+          <dt>{isProjectedUsage ? "Projected prompt" : isProviderUsage ? "Provider prompt" : "Prompt payload estimate"}</dt>
           <dd>{formatTokenCount(usage.inputTokens)}</dd>
         </div>
         {typeof usage.openRouterCompletionTokens === "number" ? (
           <div>
-            <dt>OpenRouter completion</dt>
+            <dt>Provider completion</dt>
             <dd>{formatTokenCount(usage.openRouterCompletionTokens)}</dd>
           </div>
         ) : null}
         {typeof usage.openRouterTotalTokens === "number" ? (
           <div>
-            <dt>OpenRouter actual total</dt>
+            <dt>Provider actual total</dt>
             <dd>{formatTokenCount(usage.openRouterTotalTokens)}</dd>
           </div>
         ) : null}
         <div>
-          <dt>{isOpenRouterUsage ? "Chat, tools, sources split" : "Chat, tools, sources"}</dt>
+          <dt>{isProviderUsage ? "Chat, tools, sources split" : "Chat, tools, sources"}</dt>
           <dd>{formatTokenCount(usage.messageTokens)}</dd>
         </div>
         <div>
@@ -1369,19 +1681,19 @@ function ContextWindowPopover({ usage, usagePercent }: { usage: ContextWindowUsa
           <dd>{formatTokenCount(usage.draftTokens)}</dd>
         </div>
         <div>
-          <dt>{isOpenRouterUsage ? "System, runtime split" : "System, runtime tools"}</dt>
+          <dt>{isProviderUsage ? "System, runtime split" : "System, runtime tools"}</dt>
           <dd>{formatTokenCount(usage.systemTokens)}</dd>
         </div>
         <div>
-          <dt>{isOpenRouterUsage ? "OpenRouter envelope split" : "OpenRouter envelope"}</dt>
+          <dt>{isProviderUsage ? "Provider envelope split" : "Provider envelope"}</dt>
           <dd>{formatTokenCount(usage.requestOverheadTokens)}</dd>
         </div>
         <div>
-          <dt>Response reserve</dt>
+          <dt>Response cap</dt>
           <dd>{formatTokenCount(usage.maxOutputTokens)}</dd>
         </div>
         <div>
-          <dt>Available</dt>
+          <dt>Available if cap is used</dt>
           <dd>{formatTokenCount(usage.availableTokens)}</dd>
         </div>
       </dl>
@@ -1389,47 +1701,109 @@ function ContextWindowPopover({ usage, usagePercent }: { usage: ContextWindowUsa
   );
 }
 
-function reviewModeFromPermissionMode(permissionMode: LocalPermissionMode) {
-  const reviewModeId = permissionMode === "ask-first" ? "guard" : permissionMode === "full-workspace" ? "full" : "review";
-  return reviewModes.find((mode) => mode.id === reviewModeId) ?? reviewModes[1];
+function formatVoiceLabel(voiceState: VoiceState) {
+  if (voiceState === "listening") {
+    return "Stop voice input";
+  }
+
+  if (voiceState === "requesting") {
+    return "Cancel voice input";
+  }
+
+  if (voiceState === "blocked") {
+    return "Microphone blocked";
+  }
+
+  if (voiceState === "unsupported") {
+    return "Voice input unavailable";
+  }
+
+  if (voiceState === "error") {
+    return "Retry voice input";
+  }
+
+  return "Start voice input";
 }
 
-function permissionModeFromReviewMode(reviewModeId: ReviewMode["id"]): LocalPermissionMode {
-  if (reviewModeId === "guard") {
-    return "ask-first";
+function formatQueuedMessagePreview(message: ChatMessage) {
+  const content = message.content.trim();
+
+  if (content) {
+    return content;
   }
 
-  if (reviewModeId === "full") {
-    return "full-workspace";
+  const attachmentCount = message.attachments?.length ?? 0;
+
+  if (attachmentCount === 1) {
+    return message.attachments?.[0]?.name || "1 attachment";
   }
 
-  return "gilbert-review";
+  return `${attachmentCount} attachments`;
 }
 
-function permissionModeDetail(permissionMode: LocalPermissionMode) {
-  if (permissionMode === "ask-first") {
-    return "Every edit needs your confirmation.";
+function getBuiltInSpeechRecognition() {
+  const speechWindow = window as Window & {
+    SpeechRecognition?: BuiltInSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BuiltInSpeechRecognitionConstructor;
+  };
+
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+}
+
+function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecognitionResultList) {
+  const transcriptParts: string[] = [];
+
+  for (let index = 0; index < results.length; index += 1) {
+    const transcript = results[index]?.[0]?.transcript?.trim();
+
+    if (transcript) {
+      transcriptParts.push(transcript);
+    }
   }
 
-  if (permissionMode === "full-workspace") {
-    return "All available drives can be visible.";
+  const transcript = formatDictationTranscript(transcriptParts.join(" "));
+
+  if (!transcript) {
+    return baseMessage;
   }
 
-  return "Free inside the selected folder.";
+  if (!baseMessage.trim()) {
+    return transcript;
+  }
+
+  const separator = /[\s\n]$/.test(baseMessage) ? "" : " ";
+  return `${baseMessage}${separator}${transcript}`;
+}
+
+function formatDictationTranscript(text: string) {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+
+  if (!normalizedText) {
+    return "";
+  }
+
+  return `${normalizedText.charAt(0).toUpperCase()}${normalizedText.slice(1)}`;
+}
+
+function formatSpeechRecognitionError(error?: string) {
+  if (error === "audio-capture") {
+    return "No microphone was found.";
+  }
+
+  if (error === "network") {
+    return "Built-in speech recognition could not connect.";
+  }
+
+  if (error === "aborted") {
+    return "Voice dictation stopped.";
+  }
+
+  return "Voice dictation could not complete.";
 }
 
 function joinLocalPath(root: string, child: string) {
   const separator = root.includes("\\") ? "\\" : "/";
   return `${root.replace(/[\\/]+$/, "")}${separator}${child}`;
-}
-
-function parentLocalPath(path: string) {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  const lastBackslash = normalized.lastIndexOf("\\");
-  const lastSlash = normalized.lastIndexOf("/");
-  const index = Math.max(lastBackslash, lastSlash);
-
-  return index > 0 ? normalized.slice(0, index) : "";
 }
 
 function createIndexProgressFromRoots(requestId: number, roots: string[]): ComputerFileIndexProgress {
@@ -1492,6 +1866,59 @@ function formatIndexCurrentPath(path?: string) {
 
 function formatCompactCount(value: number) {
   return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? "compact" : "standard" }).format(value);
+}
+
+function formatCompactPath(path: string) {
+  const trimmed = path.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalized = trimmed.replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+
+  if (parts.length <= 3) {
+    return normalized;
+  }
+
+  return `...\\${parts.slice(-3).join("\\")}`;
+}
+
+function formatGitInlineChanges(status: ComputerGitStatus | null) {
+  if (!status?.available || status.changedFiles === 0) {
+    return "";
+  }
+
+  const additions = status.additions > 0 ? `+${status.additions}` : "";
+  const deletions = status.deletions > 0 ? `-${status.deletions}` : "";
+
+  return [status.changedFiles, additions, deletions].filter(Boolean).join(" ");
+}
+
+function formatNoGitDetail(status: ComputerGitStatus | null, root: string) {
+  if (!root) {
+    return "Choose a project folder to read branch state.";
+  }
+
+  if (status?.error && !status.error.toLowerCase().includes("not a git repository")) {
+    return "Git status is unavailable for this folder.";
+  }
+
+  return "This folder is not inside a Git repository.";
+}
+
+function createUnavailableGitStatus(error?: string): ComputerGitStatus {
+  return {
+    additions: 0,
+    ahead: 0,
+    available: false,
+    behind: 0,
+    changedFiles: 0,
+    clean: true,
+    deletions: 0,
+    error,
+  };
 }
 
 function readErrorMessage(error: unknown, fallback: string) {

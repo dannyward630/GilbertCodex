@@ -1,6 +1,8 @@
 import type { ReasoningEffort } from "./settings";
 import type { LocalWorkspaceSettings } from "./localWorkspace";
+import type { TerminalShellId } from "./terminal";
 import type { WebSearchProvider } from "./settings";
+import type { AgentApproval, AgentRunStatus } from "./agentRun";
 
 export type ChatRole = "assistant" | "user";
 
@@ -98,7 +100,17 @@ export interface ChatSource {
   url: string;
 }
 
-export type ChatToolCallStatus = "active" | "complete" | "error" | "skipped";
+export type ChatToolCallStatus = "active" | "complete" | "error" | "skipped" | "waiting_approval";
+
+export interface ChatToolCallTerminal {
+  command?: string;
+  exitCode?: number | null;
+  live?: boolean;
+  outputTruncated?: boolean;
+  shell?: TerminalShellId;
+  timedOut?: boolean;
+  workingDirectory?: string;
+}
 
 export interface ChatToolCall {
   detail?: string;
@@ -107,6 +119,7 @@ export interface ChatToolCall {
   label: string;
   output?: string;
   status: ChatToolCallStatus;
+  terminal?: ChatToolCallTerminal;
 }
 
 export type ChatWebSearchStatus = "active" | "complete" | "error";
@@ -122,10 +135,34 @@ export interface ChatWebSearch {
   status?: ChatWebSearchStatus;
 }
 
+export interface ChatContextCompaction {
+  afterTokens: number;
+  beforeTokens: number;
+  compactedAt: string;
+  compactedMessageCount: number;
+  contextWindowTokens?: number;
+  forcedByProviderUsage?: boolean;
+  thresholdTokens?: number;
+}
+
+export interface ChatMessageSource {
+  channelId?: string;
+  commandName?: string;
+  guildId?: string;
+  kind: "discord";
+  receivedAt?: string;
+  userId?: string;
+  username?: string;
+}
+
 export interface ChatMessage {
+  agentRunId?: string;
+  agentRunStatus?: AgentRunStatus;
+  approvals?: AgentApproval[];
   attachments?: ChatAttachment[];
   artifacts?: ChatArtifact[];
   content: string;
+  contextCompactions?: ChatContextCompaction[];
   createdAt: string;
   id: string;
   isStreaming?: boolean;
@@ -134,8 +171,9 @@ export interface ChatMessage {
   progress?: ChatProgressItem[];
   reasoning?: string;
   role: ChatRole;
+  source?: ChatMessageSource;
   sources?: ChatSource[];
-  status?: "error";
+  status?: "error" | "queued";
   thinking?: ChatThinking;
   toolCalls?: ChatToolCall[];
   webSearch?: ChatWebSearch;

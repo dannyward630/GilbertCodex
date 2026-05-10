@@ -1,4 +1,5 @@
 import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
+import { getChatModelOption } from "./models";
 
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 128000;
 const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
@@ -18,14 +19,25 @@ export interface ContextWindowUsage {
   openRouterCompletionTokens?: number;
   openRouterTotalTokens?: number;
   requestOverheadTokens: number;
-  source: "estimate" | "openrouter";
+  source: "estimate" | "openrouter" | "provider";
   systemTokens: number;
-  tokenSource: "estimate" | "openrouter";
+  tokenSource: "estimate" | "openrouter" | "provider" | "projected";
   totalTokens: number;
 }
 
+export interface ContextCompactionNotice {
+  afterTokens: number;
+  beforeTokens: number;
+  chatId: string;
+  compactedAt: string;
+  compactedMessageCount: number;
+  contextWindowTokens: number;
+  forcedByProviderUsage: boolean;
+  thresholdTokens: number;
+}
+
 export interface ModelContextWindow {
-  source: "estimate" | "openrouter";
+  source: "estimate" | "openrouter" | "provider";
   tokens: number;
 }
 
@@ -38,7 +50,7 @@ interface ContextWindowUsageInput {
   draftContent: string;
   maxOutputTokens: number;
   model: string;
-  source: "estimate" | "openrouter";
+  source: "estimate" | "openrouter" | "provider";
   systemPrompt: string;
 }
 
@@ -47,7 +59,7 @@ interface ProviderContextUsageInput {
   maxOutputTokens: number;
   messages: ChatMessage[];
   model: string;
-  source: "estimate" | "openrouter";
+  source: "estimate" | "openrouter" | "provider";
   systemPrompt: string;
 }
 
@@ -218,6 +230,12 @@ export function getFallbackContextWindowTokens(model: string) {
     return overrideTokens;
   }
 
+  const registryTokens = getChatModelOption(model)?.contextWindowTokens;
+
+  if (registryTokens) {
+    return registryTokens;
+  }
+
   if (normalizedModel.includes("ring-2.6") || normalizedModel.includes("nemotron-3")) {
     return DEFAULT_CONTEXT_WINDOW_TOKENS;
   }
@@ -369,15 +387,21 @@ function estimateAttachmentTokens(attachment: ChatAttachment) {
 function findProtectedSuffixStart(messages: ChatMessage[]) {
   let index = Math.max(messages.length - 1, 0);
 
-  while (index > 0 && isProtectedContextMessage(messages[index - 1])) {
+  while (index > 0 && shouldPreserveCompactionSuffix(messages[index - 1])) {
     index -= 1;
   }
 
   return index;
 }
 
+function shouldPreserveCompactionSuffix(message: ChatMessage) {
+  return isProtectedContextMessage(message) || hasRawToolCallRequest(message.content);
+}
+
 function isProtectedContextMessage(message: ChatMessage) {
   return (
+    message.content.includes("AUTO COMPACTION CONTINUATION") ||
+    message.content.includes("FINAL ANSWER REQUIRED") ||
     message.content.includes("LOCAL COMPUTER FILE TOOL") ||
     message.content.includes("LOCAL COMPUTER TOOL RESULTS") ||
     message.content.includes("AGENT TOOL RESULTS") ||
@@ -385,6 +409,12 @@ function isProtectedContextMessage(message: ChatMessage) {
     message.content.includes("WEB SEARCH CONTEXT - DuckDuckGo") ||
     message.content.includes("LOCAL TOOL BUDGET REACHED")
   );
+}
+
+function hasRawToolCallRequest(content: string) {
+  const normalizedContent = content.toLowerCase();
+
+  return normalizedContent.includes("<tool_call") || (normalizedContent.includes('"tool"') && normalizedContent.includes('"args"'));
 }
 
 function createCompactedContextMessage(messages: ChatMessage[], beforeUsage: ContextWindowUsage, contextWindowTokens: number): ChatMessage {
@@ -398,7 +428,7 @@ function createCompactedContextMessage(messages: ChatMessage[], beforeUsage: Con
       `Older conversation turns were automatically compacted because this chat crossed ${Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100)}% of the selected model context window.`,
       `Compacted messages: ${messages.length}`,
       `Before compaction estimate: ${formatTokenCount(beforeUsage.totalTokens)} / ${formatTokenCount(beforeUsage.contextWindowTokens)} tokens`,
-      "Use this summary as continuity for older context. Recent turns, active file-tool results, web results, and the current user request are preserved after this summary.",
+      "Use this summary as continuity for older context. Recent turns, active tool requests, file edits, tool results, web results, and the current user request are preserved after this summary so the response can continue without restarting.",
       "",
       summary,
     ].join("\n"),

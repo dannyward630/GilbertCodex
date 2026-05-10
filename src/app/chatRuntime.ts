@@ -1,5 +1,6 @@
 import { createPlanningAnswersMessage } from "../services/planningClient";
 import { createLocalComputerToolCallPreviews, hasLocalComputerToolCalls } from "../tools/computer/localToolExecutor";
+import type { LocalComputerToolExecutionPolicy } from "../tools/computer/localToolExecutor";
 import type {
   ChatMessage,
   ChatPlanning,
@@ -60,9 +61,60 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "Use the agent tool results already provided as the evidence for your answer.",
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
     "If more evidence is truly required, emit concrete tool calls now. Otherwise write the final answer now.",
+    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs.",
     "Cite web sources with Markdown links when the tool results include URLs.",
     "Do not output raw tool_call XML or JSON as prose.",
   ].join("\n\n");
+}
+
+export function createLocalToolBudgetFinalInstruction(prompt: string, detail: string) {
+  return [
+    "FINAL ANSWER REQUIRED FROM CURRENT TOOL RESULTS",
+    `Original user request: ${prompt}`,
+    detail,
+    "Use the tool results already provided as evidence and write the best final answer now.",
+    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs.",
+    "Do not emit more tool_call XML or JSON. Do not promise to keep inspecting unless the next step is impossible without user input.",
+  ].join("\n\n");
+}
+
+export function createMalformedToolCallRecoveryInstruction(prompt: string) {
+  return [
+    "CONTINUE AFTER UNREADABLE TOOL REQUEST",
+    `Original user request: ${prompt}`,
+    "The previous assistant response looked like it was trying to call a tool, but the app could not parse an executable tool request from it.",
+    "Continue the same response now. Either write a normal final answer from the existing evidence, or emit one valid compact tool_call block with complete arguments.",
+    "Do not leave the visible answer blank.",
+  ].join("\n\n");
+}
+
+export function createInterruptedResponseContinuationInstruction(prompt: string, message: ChatMessage) {
+  const toolCallCount = message.toolCalls?.length ?? 0;
+  const visibleContent = message.content.trim();
+
+  return [
+    "CONTINUE INTERRUPTED RESPONSE",
+    `Original user request: ${prompt}`,
+    "Continue from the exact saved state above instead of restarting the task.",
+    visibleContent ? "The previous partial visible response is included as assistant context. Do not repeat it unless needed for coherence." : "The previous response was interrupted before visible answer text was saved.",
+    toolCallCount > 0 ? `Saved tool/activity results available: ${toolCallCount}. Treat them as already completed evidence.` : "",
+    message.webSearch?.enabled ? "Saved web-search state is included above. If it failed, say that briefly and continue with non-current claims only when appropriate." : "",
+    "If the next step requires another available tool, request it. Otherwise finish the answer now.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function isInterruptedAssistantMessage(message: ChatMessage) {
+  if (message.role !== "assistant" || message.isStreaming) {
+    return false;
+  }
+
+  if (message.status === "error" || message.agentRunStatus === "failed" || message.agentRunStatus === "running" || message.agentRunStatus === "queued") {
+    return true;
+  }
+
+  return message.content.includes("I reached the agent tool budget for this run");
 }
 
 export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: number) {
@@ -72,17 +124,17 @@ export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: numb
   }));
 }
 
-export function createActiveLocalToolCalls(content: string, passIndex: number): ChatToolCall[] {
-  if (!hasLocalComputerToolCalls(content)) {
+export function createActiveLocalToolCalls(content: string, passIndex: number, executionPolicy?: LocalComputerToolExecutionPolicy): ChatToolCall[] {
+  if (!hasLocalComputerToolCalls(content, executionPolicy)) {
     return [];
   }
 
-  const previews = createLocalComputerToolCallPreviews(content);
+  const previews = createLocalComputerToolCallPreviews(content, executionPolicy);
 
   if (previews.length > 0) {
     return previews.map((toolCall, index) => ({
       ...toolCall,
-      id: `local-tool-${passIndex + 1}-active-${index + 1}`,
+      id: `local-tool-${passIndex + 1}-local-tool-${index + 1}`,
     }));
   }
 

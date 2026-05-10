@@ -4,7 +4,7 @@ interface MessageBlockProps {
   children: ReactNode;
   isStreaming?: boolean;
   role: "assistant" | "user";
-  status?: "error";
+  status?: "error" | "queued";
 }
 
 export function MessageBlock({ children, isStreaming, role, status }: MessageBlockProps) {

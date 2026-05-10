@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Clock3, Copy, MoreHorizontal, RefreshCcw, Square } from "lucide-react";
 import { copyTextToClipboard } from "../../lib/clipboard";
+import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import type { ChatMessage } from "../../types/chat";
 
 interface MessageActionsProps {
@@ -38,14 +39,16 @@ function formatMessageDateTime(createdAt: string) {
 
 export function MessageActions({ canRegenerate, message, onRegenerateResponse, onStopGeneration }: MessageActionsProps) {
   const actionRef = useRef<HTMLDivElement | null>(null);
-  const copiedTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const timeLabel = formatMessageTime(message.createdAt);
   const fullTimeLabel = formatMessageDateTime(message.createdAt);
   const copyDisabled = !message.content.trim();
   const showRegenerate = Boolean(canRegenerate && onRegenerateResponse && message.role === "assistant" && !message.isStreaming);
+  const regenerateLabel = isInterruptedAssistantMessage(message) ? "Continue response" : "Regenerate response";
   const showStop = Boolean(onStopGeneration && message.role === "assistant" && message.isStreaming);
+  const statusLabel = message.status === "queued" ? "Queued" : null;
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
@@ -127,13 +130,14 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
           {timeLabel}
         </time>
       ) : null}
+      {statusLabel ? <span className="message-state">{statusLabel}</span> : null}
       {showStop ? (
         <button className="message-action" type="button" aria-label="Stop response" title="Stop response" onClick={stopGeneration}>
           <Square size={12} aria-hidden="true" />
         </button>
       ) : null}
       {showRegenerate ? (
-        <button className="message-action" type="button" aria-label="Regenerate response" title="Regenerate response" onClick={regenerateResponse}>
+        <button className="message-action" type="button" aria-label={regenerateLabel} title={regenerateLabel} onClick={regenerateResponse}>
           <RefreshCcw size={14} aria-hidden="true" />
         </button>
       ) : null}
@@ -163,7 +167,7 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
             {showRegenerate ? (
               <button type="button" role="menuitem" onClick={regenerateResponse}>
                 <RefreshCcw size={14} aria-hidden="true" />
-                <span>Regenerate response</span>
+                <span>{regenerateLabel}</span>
               </button>
             ) : null}
             <button type="button" role="menuitem" disabled={copyDisabled} onClick={copyMessage}>

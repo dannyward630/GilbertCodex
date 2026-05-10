@@ -1,5 +1,6 @@
 import { Brain, ChevronDown, Eye, Gauge, Power, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { DEEP_RESEARCH_REASONING_EFFORT, formatReasoningEffort } from "../../types/settings";
 import type { ReasoningEffort, ThinkingSettings } from "../../types/settings";
 
 interface ThinkingModeControlsProps {
@@ -12,10 +13,19 @@ const effortOptions: Array<{ detail: string; label: string; value: ReasoningEffo
   { detail: "Fast passes", label: "Low", value: "low" },
   { detail: "Adaptive", label: "Medium", value: "medium" },
   { detail: "Deep work", label: "High", value: "high" },
+  { detail: "Broad tool use", label: "Deep Research", value: "xhigh" },
 ];
 
-function formatEffort(effort: ReasoningEffort) {
-  return effort.charAt(0).toUpperCase() + effort.slice(1);
+function formatThinkingChipLabel(settings: ThinkingSettings) {
+  if (!settings.enabled) {
+    return "Think";
+  }
+
+  if (settings.effort === DEEP_RESEARCH_REASONING_EFFORT) {
+    return "Research";
+  }
+
+  return formatReasoningEffort(settings.effort);
 }
 
 export function ThinkingModeControls({ onChange, settings, variant = "chip" }: ThinkingModeControlsProps) {
@@ -62,18 +72,23 @@ export function ThinkingModeControls({ onChange, settings, variant = "chip" }: T
     );
   }
 
+  const chipFullLabel = settings.enabled ? formatReasoningEffort(settings.effort) : "Thinking off";
+  const chipLabel = formatThinkingChipLabel(settings);
+
   return (
     <div ref={rootRef} className="composer-menu-anchor thinking-mode-root">
       <button
         className="mode-chip mode-chip-thinking"
         type="button"
+        aria-label={`Thinking mode: ${chipFullLabel}`}
         aria-haspopup="menu"
         aria-expanded={open}
         data-active={open || settings.enabled}
+        title={chipFullLabel}
         onClick={() => setOpen((current) => !current)}
       >
         <Sparkles size={16} aria-hidden="true" />
-        <span>{settings.enabled ? "Thinking" : "Thinking off"}</span>
+        <span>{chipLabel}</span>
         <ChevronDown size={15} aria-hidden="true" />
       </button>
       {open ? (
@@ -104,7 +119,7 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
         </span>
         <span>
           <strong>Thinking</strong>
-          <small>{settings.enabled ? `${formatEffort(settings.effort)} depth selected` : "Off for the next message"}</small>
+          <small>{settings.enabled ? `${formatReasoningEffort(settings.effort)} depth selected` : "Off for the next message"}</small>
         </span>
         <button
           className="thinking-power"
@@ -124,7 +139,7 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
           <Gauge size={14} aria-hidden="true" />
           Depth
         </span>
-        <small>{settings.enabled ? "Dynamic budget" : "Paused"}</small>
+        <small>{settings.enabled ? "Adaptive tools" : "Paused"}</small>
       </div>
 
       <div className="thinking-effort-grid" role="radiogroup" aria-label="Reasoning effort">
@@ -150,8 +165,8 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
       <div className="thinking-trace-note" role="note">
         <Eye size={18} aria-hidden="true" />
         <span>
-          <strong>Trace always visible</strong>
-          <small>When thinking is on, Gilbert always requests and shows reasoning.</small>
+          <strong>Trace when available</strong>
+          <small>Gilbert requests provider reasoning and shows it when the provider streams or returns it.</small>
         </span>
       </div>
     </div>

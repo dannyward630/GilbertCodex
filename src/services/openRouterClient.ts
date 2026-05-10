@@ -2,9 +2,9 @@ import type { ChatMessage } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
 import { attachmentSummary, isImageAttachment } from "../lib/chatAttachments";
 import { createMessageContextSurface } from "../lib/contextWindow";
-import { IMAGE_REASONING_MODEL } from "../lib/models";
-import { normalizeToolRegistrySettings } from "../types/tools";
-import type { ToolRegistrySettings } from "../types/tools";
+import { IMAGE_REASONING_MODEL, isOpenRouterRouterModel, normalizeProviderModelId } from "../lib/models";
+import { buildAgentSystemPrompt } from "../prompts/agent";
+import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1";
 const STREAM_FLUSH_MS = 80;
@@ -95,6 +95,11 @@ type OpenRouterMessageContent =
         }
     >;
 
+type OpenRouterRequestBody = Record<string, unknown> & {
+  messages: unknown[];
+  model?: string;
+};
+
 export class OpenRouterEmptyResponseError extends Error {
   constructor(message = "OpenRouter returned an empty response.") {
     super(message);
@@ -173,7 +178,7 @@ export async function streamOpenRouterMessage(
   let reasoning = "";
   let reasoningTrimmed = false;
   let usage: OpenRouterUsage | undefined;
-  let flushTimer: ReturnType<typeof window.setTimeout> | null = null;
+  let flushTimer: number | null = null;
   let lastFlushedContent = "";
   let lastFlushedReasoning = "";
 
@@ -229,12 +234,16 @@ export async function streamOpenRouterMessage(
         }
 
         const reasoningDelta = settings.thinking.enabled ? delta.reasoningDelta : "";
-        usage = delta.usage ?? usage;
-        content += delta.contentDelta;
-        reasoningTrimmed = reasoningTrimmed || reasoning.length + reasoningDelta.length > MAX_STREAM_REASONING_CHARS;
-        reasoning = appendReasoningDelta(reasoning, reasoningDelta);
+        const nextContent = appendStreamText(content, delta.contentDelta);
+        const rawNextReasoning = appendStreamText(reasoning, reasoningDelta);
+        const nextReasoning = limitReasoningText(rawNextReasoning);
 
-        if (delta.contentDelta || reasoningDelta) {
+        usage = delta.usage ?? usage;
+        reasoningTrimmed = reasoningTrimmed || rawNextReasoning.length > MAX_STREAM_REASONING_CHARS;
+
+        if (nextContent !== content || nextReasoning !== reasoning) {
+          content = nextContent;
+          reasoning = nextReasoning;
           scheduleSnapshot();
         }
       }
@@ -243,11 +252,11 @@ export async function streamOpenRouterMessage(
     const finalDelta = parseStreamLine(buffer);
 
     if (finalDelta) {
-      content += finalDelta.contentDelta;
+      content = appendStreamText(content, finalDelta.contentDelta);
       usage = finalDelta.usage ?? usage;
       const finalReasoningDelta = settings.thinking.enabled ? finalDelta.reasoningDelta : "";
-      reasoningTrimmed = reasoningTrimmed || reasoning.length + finalReasoningDelta.length > MAX_STREAM_REASONING_CHARS;
       reasoning = appendReasoningDelta(reasoning, finalReasoningDelta);
+      reasoningTrimmed = reasoningTrimmed || reasoning.length > MAX_STREAM_REASONING_CHARS;
     }
 
     flushSnapshot(true);
@@ -277,12 +286,31 @@ export async function streamOpenRouterMessage(
 }
 
 function appendReasoningDelta(reasoning: string, delta: string) {
-  if (!delta) {
-    return reasoning;
+  return limitReasoningText(appendStreamText(reasoning, delta));
+}
+
+function appendStreamText(currentText: string, nextChunk: string) {
+  if (!nextChunk) {
+    return currentText;
   }
 
-  const nextReasoning = reasoning + delta;
-  return limitReasoningText(nextReasoning);
+  if (nextChunk === currentText || currentText.endsWith(nextChunk)) {
+    return currentText;
+  }
+
+  if (nextChunk.startsWith(currentText)) {
+    return nextChunk;
+  }
+
+  const maxOverlap = Math.min(currentText.length, nextChunk.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (currentText.endsWith(nextChunk.slice(0, overlap))) {
+      return currentText + nextChunk.slice(overlap);
+    }
+  }
+
+  return currentText + nextChunk;
 }
 
 function limitReasoningText(reasoning: string) {
@@ -321,8 +349,8 @@ export async function validateOpenRouterSettings(settings: ProviderSettings) {
     throw new Error(payload.error?.message || `OpenRouter models check failed with HTTP ${response.status}.`);
   }
 
-  const model = settings.model.trim();
-  const modelExists = Boolean(model && payload.data?.some((entry) => entry.id === model));
+  const model = normalizeProviderModelId("openrouter", settings.model.trim());
+  const modelExists = isOpenRouterRouterModel(model) || Boolean(model && payload.data?.some((entry) => entry.id === model));
 
   return modelExists ? `Connected. ${model} is available.` : "Connected. The key works, but this model was not listed.";
 }
@@ -366,32 +394,9 @@ export async function fetchOpenRouterModelContextLengths(settings: ProviderSetti
 }
 
 export function createOpenRouterChatRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages)) {
-  const systemPrompt = [
-    settings.systemPrompt,
-    createRuntimeToolSystemPrompt(settings.tools),
-    messages.some(hasWebSearchContext)
-      ? "A DuckDuckGo web-search context message is present. For this response, use those web results as the authority for current factual claims, cite relevant sources with Markdown links, and do not answer from memory when the web context is missing or insufficient."
-      : "",
-    messages.some(hasWebToolResults)
-      ? "A web_search tool result is present. Use those sources as live web evidence and cite relevant URLs with Markdown links."
-      : "",
-    messages.some(hasLocalComputerContext)
-      ? [
-          "A local computer file tool context is present. Treat it as real filesystem access supplied by the app.",
-          "Available local tools: view_code, read_file, list_directory, search_files, build_index, edit_file, write_file.",
-          "search_files uses the local vector index to find relevant code and documents before reading or editing.",
-          "When you need more local file evidence, request one or more compact <tool_call> blocks and wait for tool results. Do not tell the user to run shell commands for basic file viewing when local tools are enabled.",
-          "The app shows requested tool calls in Activity. Do not paste raw tool XML as the final answer; after tool results arrive, answer directly from them.",
-          "When an AGENT TOOL RESULTS or LOCAL COMPUTER TOOL RESULTS message is present, produce a normal final answer from those results instead of replying only that you will read, inspect, check, or analyze more files.",
-          "Never end the response with only a promise to read more files after local tool results have already been provided.",
-          "Full computer scope is read-only. Edits and writes are allowed only inside the selected/current folder workspace and never in Ask first mode without user confirmation.",
-        ].join("\n")
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const systemPrompt = buildAgentSystemPrompt({ messages, settings });
 
-  return {
+  const body: OpenRouterRequestBody = {
     max_tokens: settings.maxTokens,
     messages: [
       { role: "system", content: systemPrompt },
@@ -409,9 +414,12 @@ export function createOpenRouterChatRequestBody(settings: ProviderSettings, mess
       : {
           effort: "none",
           exclude: true,
-        },
-    temperature: settings.temperature,
+    },
   };
+
+  applyOpenRouterFreeModelRouting(body, model, messages);
+
+  return body;
 }
 
 export function createOpenRouterStreamRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages)) {
@@ -424,51 +432,8 @@ export function createOpenRouterStreamRequestBody(settings: ProviderSettings, me
   };
 }
 
-function createRuntimeToolSystemPrompt(settings: ToolRegistrySettings) {
-  const tools = normalizeToolRegistrySettings(settings);
-  const localTools = [
-    tools.fileSearch ? "search_files" : "",
-    tools.codeView ? "view_code" : "",
-    tools.codeView ? "read_file" : "",
-    tools.fileBrowser ? "list_directory" : "",
-    tools.fileBrowser ? "build_index" : "",
-    tools.codeEdit ? "edit_file" : "",
-    tools.codeEdit ? "write_file" : "",
-  ].filter(Boolean);
-  const enabledTools = [tools.webSearch ? "web_search" : "", ...localTools].filter(Boolean);
-
-  if (enabledTools.length === 0) {
-    return "Runtime tool calling is disabled in Toolbox. Answer from the provided conversation and context only.";
-  }
-
-  return [
-    "Runtime tools are available through compact tool_call blocks. Use them when they materially improve correctness, especially for bug fixing, code edits, current facts, official docs, changelogs, APIs, errors, or source-backed answers.",
-    `Enabled runtime tools: ${enabledTools.join(", ")}.`,
-    tools.webSearch ? "web_search is available on demand; the user does not need to turn web on first." : "web_search is disabled in Toolbox.",
-    localTools.length > 0 ? `Local workspace tools enabled when local workspace context is available: ${localTools.join(", ")}.` : "Local workspace tools are disabled in Toolbox.",
-    tools.fileSearch ? "Prefer search_files before guessing file locations." : "",
-    tools.codeView ? "Prefer view_code with start_line/end_line or start_char/end_char before precise edits." : "",
-    tools.codeEdit ? "edit_file supports exact replacement with old_text/new_text, line-range replacement with start_line/end_line/content, and single-character edits with start_char/end_char/content. It can change one letter or punctuation mark." : "",
-    tools.webSearch ? "Use this XML shape and then stop so the app can run the tool: <tool_call>\nweb_search\n<arg_key>query</arg_key><arg_value>latest React release notes</arg_value>\n</tool_call>" : "",
-    tools.codeEdit ? "For code edits, use a focused edit_file call rather than rewriting whole files when a small patch is enough." : "",
-    "After tool results arrive, continue from the evidence and do not print raw tool calls.",
-  ].filter(Boolean).join("\n");
-}
-
-function hasWebSearchContext(message: ChatMessage) {
-  return message.id.startsWith("web-context") || message.content.includes("WEB SEARCH CONTEXT - DuckDuckGo");
-}
-
-function hasWebToolResults(message: ChatMessage) {
-  return message.content.includes("WEB TOOL RESULTS");
-}
-
-function hasLocalComputerContext(message: ChatMessage) {
-  return message.content.includes("LOCAL COMPUTER FILE TOOL") || message.content.includes("LOCAL COMPUTER TOOL RESULTS") || message.content.includes("AGENT TOOL RESULTS");
-}
-
 export function modelForMessages(settings: ProviderSettings, messages: ChatMessage[]) {
-  const configuredModel = settings.model.trim();
+  const configuredModel = normalizeProviderModelId("openrouter", settings.model.trim());
   const hasImages = messages.some((message) => message.attachments?.some(isImageAttachment));
 
   return hasImages ? IMAGE_REASONING_MODEL : configuredModel;
@@ -606,7 +571,7 @@ function extractReasoningText(
     return "";
   }
 
-  return [delta.reasoning, delta.reasoning_content, extractReasoningDetailsText(delta.reasoning_details)].filter(Boolean).join("");
+  return firstReasoningText(delta.reasoning, delta.reasoning_content, extractReasoningDetailsText(delta.reasoning_details));
 }
 
 function extractReasoningDetailsText(details: OpenRouterReasoningDetail[] | undefined) {
@@ -627,6 +592,10 @@ function extractReasoningDetailsText(details: OpenRouterReasoningDetail[] | unde
       return "";
     })
     .join("");
+}
+
+function firstReasoningText(...parts: Array<string | undefined>) {
+  return parts.find((part) => typeof part === "string" && part.length > 0) ?? "";
 }
 
 async function readJson(response: Response) {

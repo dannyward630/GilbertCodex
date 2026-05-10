@@ -12,6 +12,10 @@ export default defineConfig({
             return undefined;
           }
 
+          if (id.includes("node_modules/color-name-list")) {
+            return "color-name-list";
+          }
+
           return "vendor";
         },
       },

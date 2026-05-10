@@ -22,7 +22,7 @@ function getCodeText(children: ReactNode) {
 }
 
 function CodeBlock({ className, code, language }: CodeBlockProps) {
-  const copiedTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const displayLanguage = language || "code";
 
@@ -76,6 +76,13 @@ const markdownComponents: Components = {
 
     return <OpenableImage alt={alt || "Assistant image"} className="markdown-image-button" src={src} />;
   },
+  table({ children }) {
+    return (
+      <div className="markdown-table-scroll" role="region" aria-label="Markdown table" tabIndex={0}>
+        <table>{children}</table>
+      </div>
+    );
+  },
   pre({ children }) {
     const child = Children.toArray(children)[0];
 
@@ -103,16 +110,8 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
     return null;
   }
 
-  if (isStreaming) {
-    return (
-      <div className="markdown-message markdown-message-streaming" data-streaming="true">
-        <span className="markdown-stream-text">{content}</span>
-      </div>
-    );
-  }
-
   return (
-    <div className="markdown-message" data-streaming={false}>
+    <div className={isStreaming ? "markdown-message markdown-message-streaming" : "markdown-message"} data-streaming={Boolean(isStreaming)}>
       <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
         {content}
       </ReactMarkdown>

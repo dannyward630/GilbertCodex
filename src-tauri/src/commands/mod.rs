@@ -1,5 +1,10 @@
+pub mod agent_runs;
 pub mod app_info;
 pub mod auth;
+pub mod browser;
 pub mod computer;
+pub mod discord;
+pub mod github;
+pub mod settings;
 pub mod terminal;
 pub mod web;

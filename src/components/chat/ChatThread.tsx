@@ -1,11 +1,23 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageAttachments } from "./MessageAttachments";
 import { MessageActions } from "./MessageActions";
 import { MessageBlock } from "./MessageBlock";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { ThinkingDisclosure } from "../thinking/ThinkingDisclosure";
 import type { AppInfo } from "../../types/app";
-import type { ChatSummary } from "../../types/chat";
+import type { AgentApprovalDecision } from "../../types/agentRun";
+import type { ChatContextCompaction, ChatMessageSource, ChatSummary } from "../../types/chat";
+
+const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
+const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
+const INLINE_THINKING_OPEN_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>`, "i");
+const INLINE_THINKING_CLOSE_PATTERN = new RegExp(`<\\/(${INLINE_THINKING_TAGS})>`, "gi");
+const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
+  "Reading tool results...",
+  "Using agent tools...",
+  "Writing final answer from local tool results...",
+]);
 
 interface ChatThreadProps {
   appInfo: AppInfo;
@@ -13,11 +25,13 @@ interface ChatThreadProps {
   hasApiKey: boolean;
   onHeaderBlurChange?: (active: boolean) => void;
   onOpenActivity?: () => void;
+  onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onStopGeneration?: () => void;
 }
 
-export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRegenerateResponse, onStopGeneration }: ChatThreadProps) {
+export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRequestPlanRevision, onRegenerateResponse, onResolveToolApproval, onStopGeneration }: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
   const headerBlurActiveRef = useRef(false);
   const programmaticScrollFrameRef = useRef<number | null>(null);
@@ -26,8 +40,8 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   const shouldStickToBottomRef = useRef(true);
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
   const streamMarker = scrollAnchorMessage
-    ? `${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
-    : "empty";
+    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    : `empty:${chat.messages.length}`;
 
   useEffect(() => {
     return () => {
@@ -115,7 +129,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
     return (
       <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
         <MessageBlock role="assistant">
-          <MarkdownMessage content={hasApiKey ? `${appInfo.name} is ready.` : "Add your OpenRouter API key in Settings, then send a message to start testing."} />
+          <MarkdownMessage content={hasApiKey ? `${appInfo.name} is ready.` : "Add a provider API key in Settings, then send a message to start testing."} />
         </MessageBlock>
       </div>
     );
@@ -124,40 +138,140 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   return (
     <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
       {chat.messages.map((message, messageIndex) => {
-        const isPlanningMessage = message.role === "assistant" && (message.mode === "plan" || Boolean(message.planning));
-        const hasVisibleContent = message.content.trim().length > 0;
-
-        if (isPlanningMessage && !hasVisibleContent) {
+        if (message.status === "queued") {
           return null;
         }
 
+        const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, message.reasoning) : { content: message.content, reasoning: message.reasoning };
+        const hasVisibleContent = displayMessage.content.trim().length > 0;
+        const hasVisibleAttachment = Boolean(message.attachments?.length);
+        const hasThinkingIndicator = message.role === "assistant" && Boolean(message.thinking || displayMessage.reasoning?.trim());
+        const showPlanReview = shouldShowPlanReviewCard(message);
+
+        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasThinkingIndicator && !showPlanReview) {
+          return null;
+        }
+
+        const actionMessage = message.role === "assistant" ? { ...message, content: displayMessage.content } : message;
+
         return (
-          <MessageBlock key={message.id} role={message.role} status={message.status} isStreaming={message.isStreaming}>
-            {message.role === "assistant" && !isPlanningMessage ? (
-              <ThinkingDisclosure
-                activityMode={message.mode === "plan" || message.planning ? "planning" : "thinking"}
-                completedAt={message.thinking?.completedAt}
-                content={message.reasoning}
-                isPrivate={false}
-                isThinking={Boolean(message.thinking && !message.thinking.completedAt)}
-                onOpenActivity={onOpenActivity}
-                progressLabel={formatPlanningProgressLabel(message.planning?.passCount, message.planning?.maxPasses)}
-                startedAt={message.thinking?.startedAt}
+          <Fragment key={message.id}>
+            {message.contextCompactions?.map((compaction) => (
+              <ContextCompactionDivider key={`${message.id}-${compaction.compactedAt}`} compaction={compaction} />
+            ))}
+            <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
+              {hasThinkingIndicator ? (
+                <ThinkingDisclosure
+                  activityMode={message.mode === "plan" || message.planning ? "planning" : "thinking"}
+                  completedAt={message.thinking?.completedAt}
+                  content={displayMessage.reasoning}
+                  isPrivate
+                  isThinking={Boolean(message.thinking && !message.thinking.completedAt)}
+                  onOpenActivity={onOpenActivity}
+                  startedAt={message.thinking?.startedAt}
+                />
+              ) : null}
+              <MessageAttachments attachments={message.attachments} />
+              {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
+              {showPlanReview ? (
+                <PlanReviewCard
+                  content={displayMessage.content}
+                  isStreaming={message.isStreaming}
+                  message={actionMessage}
+                  onOpenActivity={onOpenActivity}
+                  onRequestRevision={onRequestPlanRevision}
+                  onResolvePlanApproval={onResolveToolApproval}
+                />
+              ) : displayMessage.content.trim() || message.isStreaming ? (
+                <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
+              ) : null}
+              <MessageActions
+                canRegenerate={canRegenerateMessage(chat, messageIndex)}
+                message={actionMessage}
+                onRegenerateResponse={onRegenerateResponse}
+                onStopGeneration={onStopGeneration}
               />
-            ) : null}
-            <MessageAttachments attachments={message.attachments} />
-            {message.content.trim() || message.isStreaming ? <MarkdownMessage content={message.content} isStreaming={message.isStreaming} /> : null}
-            <MessageActions
-              canRegenerate={canRegenerateMessage(chat, messageIndex)}
-              message={message}
-              onRegenerateResponse={onRegenerateResponse}
-              onStopGeneration={onStopGeneration}
-            />
-          </MessageBlock>
+            </MessageBlock>
+          </Fragment>
         );
       })}
     </div>
   );
+}
+
+function DiscordMessageSource({ source }: { source: ChatMessageSource }) {
+  const title = [source.guildId ? `Guild ${source.guildId}` : "", source.channelId ? `Channel ${source.channelId}` : "", source.userId ? `User ${source.userId}` : ""].filter(Boolean).join(" | ");
+  const command = source.commandName ? `/${source.commandName}` : "slash command";
+
+  return (
+    <div className="message-source-strip" title={title || "Discord"}>
+      <span className="message-source-dot" aria-hidden="true" />
+      <strong>Discord</strong>
+      <small>
+        {command}
+        {source.username ? ` from ${source.username}` : ""}
+      </small>
+    </div>
+  );
+}
+
+function shouldShowPlanReviewCard(message: ChatSummary["messages"][number]) {
+  if (message.role !== "assistant" || !(message.mode === "plan" || message.planning)) {
+    return false;
+  }
+
+  const hasPendingPlanningApproval = message.approvals?.some((approval) => approval.tool === "planning_handoff" && approval.status === "pending");
+  const hasAcceptedPlanningApproval = message.approvals?.some((approval) => approval.tool === "planning_handoff" && (approval.status === "approved" || approval.status === "edited"));
+  const isPlanningOnly = !message.toolCalls?.length && !message.artifacts?.length;
+
+  return Boolean((message.isStreaming && isPlanningOnly) || hasPendingPlanningApproval || (isPlanningOnly && message.planning && !hasAcceptedPlanningApproval && message.agentRunStatus !== "completed"));
+}
+
+function ContextCompactionDivider({ compaction }: { compaction: ChatContextCompaction }) {
+  const detail = `${formatCompactTokenCount(compaction.beforeTokens)} -> ${formatCompactTokenCount(compaction.afterTokens)}`;
+
+  return (
+    <div className="context-compaction-divider" title={`${detail}, ${compaction.compactedMessageCount} older messages compacted`}>
+      <span>Automatically compacting context</span>
+    </div>
+  );
+}
+
+function formatCompactTokenCount(tokens: number) {
+  if (tokens >= 1000) {
+    return `${Number((tokens / 1000).toFixed(tokens >= 100000 ? 0 : 1))}k`;
+  }
+
+  return String(tokens);
+}
+
+function separateDisplayThinking(content: string, existingReasoning?: string) {
+  const reasoningParts: string[] = [];
+  let visibleContent = content.replace(INLINE_THINKING_BLOCK_PATTERN, (_match, _tag: string, thinking: string) => {
+    reasoningParts.push(thinking);
+    return "";
+  });
+  const openThinkingMatch = INLINE_THINKING_OPEN_PATTERN.exec(visibleContent);
+
+  if (openThinkingMatch && typeof openThinkingMatch.index === "number") {
+    const openThinkingIndex = openThinkingMatch.index;
+    const beforeThinking = visibleContent.slice(0, openThinkingIndex);
+    const afterThinking = visibleContent.slice(openThinkingIndex + openThinkingMatch[0].length);
+
+    reasoningParts.push(afterThinking.replace(INLINE_THINKING_CLOSE_PATTERN, ""));
+    visibleContent = beforeThinking;
+  }
+
+  const inlineReasoning = reasoningParts.join("").trim();
+
+  return {
+    content: removeInternalAssistantStatusMessage(visibleContent.replace(INLINE_THINKING_CLOSE_PATTERN, "").trimStart()),
+    reasoning: [existingReasoning, inlineReasoning].filter(Boolean).join("\n\n"),
+  };
+}
+
+function removeInternalAssistantStatusMessage(content: string) {
+  return INTERNAL_ASSISTANT_STATUS_MESSAGES.has(content.trim()) ? "" : content;
 }
 
 function getScrollAnchorMessage(chat: ChatSummary) {
@@ -184,12 +298,4 @@ function canRegenerateMessage(chat: ChatSummary, messageIndex: number) {
   }
 
   return chat.messages.slice(0, messageIndex).some((candidate) => candidate.role === "user");
-}
-
-function formatPlanningProgressLabel(passCount?: number, maxPasses?: number) {
-  if (!maxPasses) {
-    return undefined;
-  }
-
-  return `Pass ${Math.max(passCount ?? 0, 1)} of ${maxPasses}`;
 }

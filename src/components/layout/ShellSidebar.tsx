@@ -1,25 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock3, Folder, FolderOpen, FolderPlus, LogOut, MessageSquarePlus, Pin, Search, Settings, Trash2, UserRound, Wrench } from "lucide-react";
-import { DEFAULT_PROJECT, formatChatAge, sortChatsByUpdatedAt } from "../../lib/chatUtils";
+import { Clock3, Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Search, Settings, Trash2, UserRound, Wrench } from "lucide-react";
+import { formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
+import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
 import type { AuthUser } from "../../types/auth";
-import type { ChatSummary } from "../../types/chat";
+import type { ChatMessage, ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
+import type { SettingsSectionId } from "../../pages/settings/types";
+import type { SidebarItemActivity } from "../sidebar/SidebarSection";
 
 interface ShellSidebarProps {
   activeChatId: string;
   activeRoute: PrimaryRoute;
+  activeSettingsSection: SettingsSectionId;
   authUser: AuthUser;
   chats: ChatSummary[];
-  onCreateProject: () => void;
+  onCreateProject: () => void | string | null | Promise<string | null | void>;
   onDeleteChat: (chatId: string) => void;
+  onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
   onOpenSearch: () => void;
   onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onSelectChat: (chatId: string) => void;
   onSelectProject: (project: string) => void;
+  onSettingsSectionChange: (section: SettingsSectionId) => void;
   onTogglePin: (chatId: string) => void;
   open: boolean;
   projects: ProjectSummary[];
@@ -28,37 +34,45 @@ interface ShellSidebarProps {
 export function ShellSidebar({
   activeChatId,
   activeRoute,
+  activeSettingsSection,
   authUser,
   chats,
   onCreateProject,
   onDeleteChat,
+  onDeleteProject,
   onNewChat,
   onOpenSearch,
   onLogout,
   onRouteChange,
   onSelectChat,
   onSelectProject,
+  onSettingsSectionChange,
   onTogglePin,
   open,
   projects,
 }: ShellSidebarProps) {
+  const PROJECT_CHAT_PREVIEW_LIMIT = 6;
   const visibleChats = useMemo(() => sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived)), [chats]);
   const activeChat = visibleChats.find((chat) => chat.id === activeChatId);
   const pinnedChats = visibleChats.filter((chat) => chat.pinned);
-  const recentChats = visibleChats.filter((chat) => chat.project === DEFAULT_PROJECT && !chat.pinned);
-  const projectList = projects.filter((project) => project.name !== DEFAULT_PROJECT);
-  const initialExpandedProject = activeChat?.project ?? projects[0]?.name;
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(initialExpandedProject ? [initialExpandedProject] : []));
+  const recentChats = visibleChats.filter((chat) => isNoProjectName(chat.project) && !chat.pinned);
   const chatsByProject = useMemo(() => {
     const groupedChats = new Map<string, ChatSummary[]>();
 
     for (const chat of visibleChats) {
-      const projectKey = chat.project.toLowerCase();
+      const projectKey = normalizeProjectName(chat.project).toLowerCase();
       groupedChats.set(projectKey, [...(groupedChats.get(projectKey) ?? []), chat]);
     }
 
     return groupedChats;
   }, [visibleChats]);
+  const projectList = useMemo(
+    () => sortProjectsByLatestActivity(projects.filter((project) => !isNoProjectName(project.name)), chatsByProject),
+    [chatsByProject, projects],
+  );
+  const initialExpandedProject = activeChat && !isNoProjectName(activeChat.project) ? normalizeProjectName(activeChat.project) : projectList[0]?.name;
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(initialExpandedProject ? [initialExpandedProject] : []));
+  const [projectChatLimits, setProjectChatLimits] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!activeChat?.project) {
@@ -66,12 +80,14 @@ export function ShellSidebar({
     }
 
     setExpandedProjects((currentProjects) => {
-      if (currentProjects.has(activeChat.project)) {
+      const activeProjectName = normalizeProjectName(activeChat.project);
+
+      if (isNoProjectName(activeProjectName) || currentProjects.has(activeProjectName)) {
         return currentProjects;
       }
 
       const nextProjects = new Set(currentProjects);
-      nextProjects.add(activeChat.project);
+      nextProjects.add(activeProjectName);
       return nextProjects;
     });
   }, [activeChat?.project, activeChatId]);
@@ -90,9 +106,34 @@ export function ShellSidebar({
     },
   ];
 
+  const projectOptions = (projectName: string) => [
+    {
+      danger: true,
+      icon: Trash2,
+      label: "Delete project",
+      onSelect: () => onDeleteProject(projectName),
+    },
+  ];
+
+  if (activeRoute === "settings") {
+    return (
+      <SettingsSideMenu
+        activeSection={activeSettingsSection}
+        open={open}
+        onRouteChange={onRouteChange}
+        onSectionChange={onSettingsSectionChange}
+      />
+    );
+  }
+
+  function getProjectChatLimit(projectName: string) {
+    return projectChatLimits[getProjectKey(projectName)] ?? PROJECT_CHAT_PREVIEW_LIMIT;
+  }
+
   function handleToggleProject(projectName: string) {
+    onSelectProject(projectName);
+
     if (!chatsByProject.get(projectName.toLowerCase())?.length) {
-      onSelectProject(projectName);
       return;
     }
 
@@ -109,6 +150,14 @@ export function ShellSidebar({
     });
   }
 
+  async function handleCreateProject() {
+    const createdProjectName = await onCreateProject();
+
+    if (typeof createdProjectName === "string" && createdProjectName.trim()) {
+      onSelectProject(createdProjectName);
+    }
+  }
+
   function handleNewProjectChat(projectName: string) {
     setExpandedProjects((currentProjects) => {
       if (currentProjects.has(projectName)) {
@@ -120,6 +169,33 @@ export function ShellSidebar({
       return nextProjects;
     });
     onNewChat(projectName);
+  }
+
+  function handleLoadMoreProjectChats(projectName: string) {
+    setProjectChatLimits((currentLimits) => {
+      const projectKey = getProjectKey(projectName);
+      const currentLimit = currentLimits[projectKey] ?? PROJECT_CHAT_PREVIEW_LIMIT;
+
+      return {
+        ...currentLimits,
+        [projectKey]: currentLimit + PROJECT_CHAT_PREVIEW_LIMIT,
+      };
+    });
+  }
+
+  function createChatItem(chat: ChatSummary) {
+    const activity = getChatActivity(chat);
+
+    return {
+      active: chat.id === activeChatId && activeRoute === "chat",
+      activity,
+      activityLabel: activity ? formatActivityLabel(activity) : undefined,
+      id: chat.id,
+      label: chat.title,
+      menuItems: chatOptions(chat),
+      meta: formatChatAge(chat.updatedAt),
+      onSelect: onSelectChat,
+    };
   }
 
   return (
@@ -147,39 +223,46 @@ export function ShellSidebar({
         <SidebarSection
           title="Pinned chats"
           items={pinnedChats.map((chat) => ({
-            active: chat.id === activeChatId && activeRoute === "chat",
+            ...createChatItem(chat),
             icon: Pin,
-            id: chat.id,
-            label: chat.title,
-            menuItems: chatOptions(chat),
-            meta: formatChatAge(chat.updatedAt),
-            onSelect: onSelectChat,
           }))}
         />
         <SidebarSection
           title="Projects"
           actionIcon={FolderPlus}
-          actionLabel="New project"
-          onAction={onCreateProject}
+          actionLabel="Add project folder"
+          onAction={() => void handleCreateProject()}
           items={projectList.map((project) => {
             const projectChats = chatsByProject.get(project.name.toLowerCase()) ?? [];
             const expanded = expandedProjects.has(project.name);
+            const visibleChatLimit = getProjectChatLimit(project.name);
+            const visibleProjectChats = projectChats.slice(0, visibleChatLimit);
+            const hiddenChatCount = Math.max(projectChats.length - visibleProjectChats.length, 0);
+            const activity = getProjectActivity(projectChats);
 
             return {
-              active: activeChat?.project === project.name && activeRoute === "chat",
-              children: projectChats.map((chat) => ({
-                active: chat.id === activeChatId && activeRoute === "chat",
-                id: chat.id,
-                label: chat.title,
-                menuItems: chatOptions(chat),
-                meta: formatChatAge(chat.updatedAt),
-                onSelect: onSelectChat,
-              })),
+              active: sameProjectName(activeChat?.project, project.name) && activeRoute === "chat",
+              activity,
+              activityLabel: activity ? `${formatActivityLabel(activity)} in ${project.name}` : undefined,
+              children: [
+                ...visibleProjectChats.map(createChatItem),
+                ...(hiddenChatCount > 0
+                  ? [
+                      {
+                        icon: ListPlus,
+                        id: `${project.name}-load-more`,
+                        label: "Load more",
+                        meta: `${hiddenChatCount} more`,
+                        onSelect: () => handleLoadMoreProjectChats(project.name),
+                      },
+                    ]
+                  : []),
+              ],
               expanded,
               icon: expanded ? FolderOpen : Folder,
               id: project.name,
               label: project.name,
-              meta: formatProjectChatCount(projectChats.length),
+              menuItems: projectOptions(project.name),
               onQuickAction: handleNewProjectChat,
               onSelect: handleToggleProject,
               quickActionIcon: MessageSquarePlus,
@@ -189,14 +272,7 @@ export function ShellSidebar({
         />
         <SidebarSection
           title="Recent chats"
-          items={recentChats.map((chat) => ({
-            active: chat.id === activeChatId && activeRoute === "chat",
-            id: chat.id,
-            label: chat.title,
-            menuItems: chatOptions(chat),
-            meta: formatChatAge(chat.updatedAt),
-            onSelect: onSelectChat,
-          }))}
+          items={recentChats.map(createChatItem)}
         />
       </div>
 
@@ -214,7 +290,7 @@ export function ShellSidebar({
           </button>
         </div>
 
-        <button className="sidebar-settings" data-active={activeRoute === "settings"} type="button" onClick={() => onRouteChange("settings")}>
+        <button className="sidebar-settings" data-active={false} type="button" onClick={() => onRouteChange("settings")}>
           <Settings size={17} aria-hidden="true" />
           <span>Settings</span>
         </button>
@@ -234,6 +310,113 @@ function getUserInitials(user: AuthUser) {
   return initials || <UserRound size={16} aria-hidden="true" />;
 }
 
-function formatProjectChatCount(chatCount: number) {
-  return chatCount === 1 ? "1 chat" : `${chatCount} chats`;
+function getProjectKey(projectName: string) {
+  return projectName.toLowerCase();
+}
+
+function sortProjectsByLatestActivity(projects: ProjectSummary[], chatsByProject: Map<string, ChatSummary[]>) {
+  return [...projects].sort((left, right) => {
+    const leftUpdatedAt = getLatestProjectUpdatedAt(left, chatsByProject.get(left.name.toLowerCase()) ?? []);
+    const rightUpdatedAt = getLatestProjectUpdatedAt(right, chatsByProject.get(right.name.toLowerCase()) ?? []);
+
+    return Date.parse(rightUpdatedAt) - Date.parse(leftUpdatedAt);
+  });
+}
+
+function getLatestProjectUpdatedAt(project: ProjectSummary, projectChats: ChatSummary[]) {
+  let latestAt = project.updatedAt;
+  let latestTimestamp = Date.parse(project.updatedAt);
+
+  for (const chat of projectChats) {
+    const chatTimestamp = Date.parse(chat.updatedAt);
+
+    if (!Number.isNaN(chatTimestamp) && (Number.isNaN(latestTimestamp) || chatTimestamp > latestTimestamp)) {
+      latestAt = chat.updatedAt;
+      latestTimestamp = chatTimestamp;
+    }
+  }
+
+  return latestAt;
+}
+
+function getProjectActivity(projectChats: ChatSummary[]): SidebarItemActivity | undefined {
+  return projectChats.reduce<SidebarItemActivity | undefined>((currentActivity, chat) => pickHigherActivity(currentActivity, getChatActivity(chat)), undefined);
+}
+
+function getChatActivity(chat: ChatSummary): SidebarItemActivity | undefined {
+  return chat.messages.reduce<SidebarItemActivity | undefined>((currentActivity, message) => pickHigherActivity(currentActivity, getMessageActivity(message)), undefined);
+}
+
+function getMessageActivity(message: ChatMessage): SidebarItemActivity | undefined {
+  const needsReview =
+    message.agentRunStatus === "waiting_for_approval" ||
+    message.approvals?.some((approval) => approval.status === "pending") ||
+    message.toolCalls?.some((toolCall) => toolCall.status === "waiting_approval") ||
+    hasPendingPlanningInput(message);
+
+  if (needsReview) {
+    return "waiting";
+  }
+
+  const isWorking =
+    message.isStreaming ||
+    message.progress?.some((progressItem) => progressItem.status === "active") ||
+    message.toolCalls?.some((toolCall) => toolCall.status === "active") ||
+    message.webSearch?.status === "active";
+
+  if (isWorking) {
+    return "working";
+  }
+
+  if (message.status === "queued") {
+    return "queued";
+  }
+
+  return undefined;
+}
+
+function hasPendingPlanningInput(message: ChatMessage) {
+  const planningRequests = message.planning?.inputRequests ?? (message.planning?.inputRequest ? [message.planning.inputRequest] : []);
+
+  return planningRequests.some((request) => !request.answeredAt);
+}
+
+function pickHigherActivity(currentActivity: SidebarItemActivity | undefined, nextActivity: SidebarItemActivity | undefined) {
+  if (!nextActivity) {
+    return currentActivity;
+  }
+
+  if (!currentActivity || getActivityPriority(nextActivity) > getActivityPriority(currentActivity)) {
+    return nextActivity;
+  }
+
+  return currentActivity;
+}
+
+function getActivityPriority(activity: SidebarItemActivity) {
+  if (activity === "waiting") {
+    return 3;
+  }
+
+  if (activity === "working") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function formatActivityLabel(activity: SidebarItemActivity) {
+  if (activity === "waiting") {
+    return "Needs review";
+  }
+
+  if (activity === "queued") {
+    return "Queued";
+  }
+
+  return "Working";
+}
+
+function sameProjectName(left?: string | null, right?: string | null) {
+  return normalizeProjectName(left).toLowerCase() === normalizeProjectName(right).toLowerCase();
 }

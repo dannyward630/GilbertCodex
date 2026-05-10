@@ -14,6 +14,13 @@ export interface TerminalCreateSessionRequest {
   workingDirectory?: string;
 }
 
+export interface TerminalRunCommandRequest {
+  command: string;
+  shell?: TerminalShellId;
+  timeoutMs?: number;
+  workingDirectory?: string;
+}
+
 export interface TerminalCreateSessionResponse {
   initialOutput: TerminalOutputChunk[];
   sessionId: string;
@@ -22,7 +29,23 @@ export interface TerminalCreateSessionResponse {
   workingDirectory: string;
 }
 
-export interface TerminalDrainResponse {
-  chunks: TerminalOutputChunk[];
+export interface TerminalRunCommandResponse {
+  durationMs: number;
   exitCode?: number | null;
+  outputTruncated: boolean;
+  sessionId?: string;
+  shell: TerminalShellId;
+  stderr: string;
+  stdout: string;
+  timedOut: boolean;
+  workingDirectory: string;
+}
+
+export interface TerminalDrainResponse {
+  activeCommand?: string | null;
+  chunks: TerminalOutputChunk[];
+  commandRunning?: boolean;
+  exitCode?: number | null;
+  lastCommandCompleted?: boolean;
+  lastCommandExitCode?: number | null;
 }

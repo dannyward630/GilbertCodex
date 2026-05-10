@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gilbert Codex Promo</title>
+    <style>
+      :root {
+        color: #f3f0e8;
+        background: #101113;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          linear-gradient(135deg, rgba(120, 196, 151, 0.12), transparent 26%),
+          linear-gradient(315deg, rgba(200, 166, 86, 0.13), transparent 32%),
+          #101113;
+      }
+
+      main {
+        width: min(1280px, 100%);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 18px;
+        background: #101113;
+        box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+        color: rgba(243, 240, 232, 0.7);
+        font-size: 13px;
+      }
+
+      .meta strong {
+        color: #f3f0e8;
+        font-weight: 750;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <canvas id="promo-canvas" width="1280" height="720" aria-label="Gilbert Codex promo animation"></canvas>
+      <div class="meta">
+        <span><strong>Gilbert Codex</strong> promo scene</span>
+        <span>1280x720 | 20 seconds | no audio</span>
+      </div>
+    </main>
+
+    <script>
+      const WIDTH = 1280;
+      const HEIGHT = 720;
+      const DURATION_MS = 20000;
+      const canvas = document.getElementById("promo-canvas");
+      const ctx = canvas.getContext("2d");
+
+      const colors = {
+        bg: "#101113",
+        bg2: "#151719",
+        panel: "#171a20",
+        panel2: "#20242b",
+        panel3: "#252a31",
+        line: "rgba(255, 255, 255, 0.10)",
+        lineSoft: "rgba(255, 255, 255, 0.055)",
+        text: "#f5f0e7",
+        muted: "#aab0ad",
+        dim: "#757b7c",
+        green: "#80dfb8",
+        greenDeep: "#285846",
+        gold: "#d1ad62",
+        goldDeep: "#5a4724",
+        blue: "#4da9ff",
+        blueDeep: "#214a70",
+        coral: "#ff8a73",
+        purple: "#b99dff",
+      };
+
+      const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+      const lerp = (from, to, amount) => from + (to - from) * amount;
+      const ease = (value) => {
+        const t = clamp(value);
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      };
+      const out = (value) => 1 - Math.pow(1 - clamp(value), 3);
+      const between = (time, start, end) => clamp((time - start) / (end - start));
+      const fade = (time, start, inEnd, outStart, end) => {
+        if (time < start || time > end) return 0;
+        return Math.min(out(between(time, start, inEnd)), 1 - out(between(time, outStart, end)));
+      };
+
+      function withAlpha(alpha, draw) {
+        if (alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha *= clamp(alpha);
+        draw();
+        ctx.restore();
+      }
+
+      function roundedPath(x, y, width, height, radius) {
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + width - r, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+        ctx.lineTo(x + width, y + height - r);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+        ctx.lineTo(x + r, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+      }
+
+      function fillRound(x, y, width, height, radius, fillStyle) {
+        ctx.save();
+        roundedPath(x, y, width, height, radius);
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function strokeRound(x, y, width, height, radius, strokeStyle, lineWidth = 1) {
+        ctx.save();
+        roundedPath(x, y, width, height, radius);
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawText(text, x, y, size, color = colors.text, weight = 650, align = "left") {
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.font = `${weight} ${size}px Inter, ui-sans-serif, system-ui, Segoe UI, sans-serif`;
+        ctx.textAlign = align;
+        ctx.textBaseline = "top";
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+
+      function drawWrappedText(text, x, y, maxWidth, lineHeight, size, color, weight = 500, maxLines = 3) {
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.font = `${weight} ${size}px Inter, ui-sans-serif, system-ui, Segoe UI, sans-serif`;
+        ctx.textBaseline = "top";
+        const words = text.split(" ");
+        const lines = [];
+        let line = "";
+        for (const word of words) {
+          const next = line ? `${line} ${word}` : word;
+          if (ctx.measureText(next).width > maxWidth && line) {
+            lines.push(line);
+            line = word;
+          } else {
+            line = next;
+          }
+        }
+        if (line) lines.push(line);
+        for (let i = 0; i < Math.min(lines.length, maxLines); i += 1) {
+          ctx.fillText(lines[i], x, y + i * lineHeight);
+        }
+        ctx.restore();
+      }
+
+      function drawBackground(ms) {
+        const t = ms / 1000;
+        const gradient = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
+        gradient.addColorStop(0, "#171b20");
+        gradient.addColorStop(0.42, "#101113");
+        gradient.addColorStop(0.72, "#181713");
+        gradient.addColorStop(1, "#101617");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        ctx.save();
+        ctx.globalAlpha = 0.2;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+        ctx.lineWidth = 1;
+        for (let i = -HEIGHT; i < WIDTH; i += 58) {
+          ctx.beginPath();
+          ctx.moveTo(i + Math.sin(t * 0.35) * 8, HEIGHT);
+          ctx.lineTo(i + HEIGHT + Math.sin(t * 0.35) * 8, 0);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        const topBand = ctx.createLinearGradient(0, 0, WIDTH, 0);
+        topBand.addColorStop(0, "rgba(128, 223, 184, 0.20)");
+        topBand.addColorStop(0.38, "rgba(77, 169, 255, 0.12)");
+        topBand.addColorStop(0.74, "rgba(209, 173, 98, 0.18)");
+        topBand.addColorStop(1, "rgba(255, 255, 255, 0.04)");
+        ctx.fillStyle = topBand;
+        ctx.fillRect(0, 0, WIDTH, 4);
+        ctx.restore();
+      }
+
+      function drawLogo(cx, cy, size, alpha = 1) {
+        withAlpha(alpha, () => {
+          const x = cx - size / 2;
+          const y = cy - size / 2;
+          const bg = ctx.createLinearGradient(x, y, x + size, y + size);
+          bg.addColorStop(0, "#202832");
+          bg.addColorStop(0.55, "#101113");
+          bg.addColorStop(1, "#2a2118");
+          fillRound(x, y, size, size, size * 0.22, bg);
+          strokeRound(x + 1, y + 1, size - 2, size - 2, size * 0.21, "rgba(255, 255, 255, 0.13)", 2);
+
+          ctx.save();
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.lineWidth = size * 0.09;
+          const stroke = ctx.createLinearGradient(x + size * 0.24, y + size * 0.22, x + size * 0.78, y + size * 0.8);
+          stroke.addColorStop(0, colors.green);
+          stroke.addColorStop(0.45, colors.text);
+          stroke.addColorStop(1, colors.gold);
+          ctx.strokeStyle = stroke;
+          ctx.beginPath();
+          ctx.arc(cx, cy, size * 0.27, Math.PI * 1.62, Math.PI * 0.27, true);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(cx + size * 0.03, cy + size * 0.04);
+          ctx.lineTo(cx + size * 0.27, cy + size * 0.04);
+          ctx.lineTo(cx + size * 0.27, cy + size * 0.17);
+          ctx.stroke();
+
+          fillRound(cx - size * 0.17, cy - size * 0.03, size * 0.34, size * 0.25, size * 0.08, "#0c0e10");
+          strokeRound(cx - size * 0.17, cy - size * 0.03, size * 0.34, size * 0.25, size * 0.08, "rgba(255,255,255,0.12)", 1.5);
+          ctx.lineWidth = size * 0.025;
+          ctx.strokeStyle = colors.green;
+          ctx.beginPath();
+          ctx.moveTo(cx - size * 0.09, cy + size * 0.025);
+          ctx.lineTo(cx - size * 0.04, cy + size * 0.08);
+          ctx.lineTo(cx - size * 0.09, cy + size * 0.135);
+          ctx.stroke();
+          ctx.strokeStyle = colors.text;
+          ctx.beginPath();
+          ctx.moveTo(cx + size * 0.005, cy + size * 0.135);
+          ctx.lineTo(cx + size * 0.095, cy + size * 0.135);
+          ctx.stroke();
+          ctx.restore();
+        });
+      }
+
+      function drawPill(label, x, y, accent, width = undefined, active = true) {
+        const measured = Math.ceil(ctx.measureText(label).width) + 32;
+        const w = width ?? Math.max(88, measured);
+        fillRound(x, y, w, 34, 17, active ? "rgba(255, 255, 255, 0.065)" : "rgba(255, 255, 255, 0.035)");
+        strokeRound(x, y, w, 34, 17, "rgba(255, 255, 255, 0.10)");
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(x + 18, y + 17, 4, 0, Math.PI * 2);
+        ctx.fill();
+        drawText(label, x + 30, y + 8, 12, active ? colors.text : colors.muted, 720);
+      }
+
+      function drawTopBrand(ms) {
+        const reveal = out(between(ms, 350, 1500));
+        withAlpha(reveal, () => {
+          drawLogo(70, 58, 48, 1);
+          drawText("Gilbert Codex", 106, 40, 22, colors.text, 800);
+          drawText("local desktop agent workspace", 106, 68, 13, colors.muted, 650);
+          drawPill("MIT", 1126, 38, colors.gold, 70);
+          drawPill("open source", 1020, 38, colors.green, 96);
+        });
+      }
+
+      function drawHero(ms, alpha) {
+        const lift = out(between(ms, 0, 2600));
+        const yOffset = lerp(18, 0, lift);
+        withAlpha(alpha, () => {
+          drawLogo(WIDTH / 2, 188 + yOffset, 140, 1);
+          drawText("Gilbert Codex", WIDTH / 2, 286 + yOffset, 62, colors.text, 850, "center");
+          drawText("A GUI-first desktop agent workspace for building in the open.", WIDTH / 2, 365 + yOffset, 24, colors.muted, 520, "center");
+          drawPill("React", 433, 436 + yOffset, colors.blue, 94);
+          drawPill("Tauri 2", 540, 436 + yOffset, colors.green, 108);
+          drawPill("Rust", 663, 436 + yOffset, colors.gold, 86);
+          drawPill("local-first", 762, 436 + yOffset, colors.purple, 118);
+        });
+      }
+
+      function drawAppWindow(ms, alpha, mode = "chat") {
+        withAlpha(alpha, () => {
+          const progress = out(between(ms, 2300, 4200));
+          const x = lerp(128, 102, progress);
+          const y = lerp(168, 126, progress);
+          const w = lerp(1024, 1076, progress);
+          const h = lerp(454, 514, progress);
+
+          ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+          ctx.shadowBlur = 34;
+          ctx.shadowOffsetY = 18;
+          fillRound(x, y, w, h, 22, "#121417");
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+          strokeRound(x, y, w, h, 22, "rgba(255, 255, 255, 0.12)", 1.2);
+
+          fillRound(x + 1, y + 1, w - 2, 52, 21, "#171a1f");
+          ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+          ctx.fillRect(x + 1, y + 51, w - 2, 1);
+          drawLogo(x + 31, y + 27, 28, 1);
+          drawText("Gilbert Codex", x + 54, y + 18, 16, colors.text, 760);
+          drawText("Workspace: public-roadmap", x + w / 2 - 92, y + 19, 14, colors.muted, 620);
+          drawPill("web", x + w - 244, y + 10, colors.blue, 70);
+          drawPill("tools", x + w - 164, y + 10, colors.green, 82);
+          drawPill("review", x + w - 72, y + 10, colors.gold, 86);
+
+          const sidebarW = 214;
+          fillRound(x + 14, y + 68, sidebarW, h - 84, 16, "#181c22");
+          strokeRound(x + 14, y + 68, sidebarW, h - 84, 16, "rgba(255, 255, 255, 0.08)");
+          drawText("Chats", x + 36, y + 92, 14, colors.muted, 750);
+          drawSidebarRow(x + 32, y + 126, "Launch video", colors.green, true);
+          drawSidebarRow(x + 32, y + 168, "Open source push", colors.gold, false);
+          drawSidebarRow(x + 32, y + 210, "Terminal tools", colors.blue, false);
+          drawSidebarRow(x + 32, y + 252, "Browser preview", colors.purple, false);
+          fillRound(x + 34, y + h - 74, sidebarW - 40, 42, 12, "rgba(255, 255, 255, 0.055)");
+          drawText("Toolbox enabled", x + 52, y + h - 62, 13, colors.text, 720);
+          drawText("9 tools visible", x + 52, y + h - 43, 11, colors.muted, 620);
+
+          const railW = 242;
+          const mainX = x + sidebarW + 30;
+          const railX = x + w - railW - 16;
+          const mainW = railX - mainX - 16;
+          fillRound(mainX, y + 68, mainW, h - 84, 16, "#15181d");
+          strokeRound(mainX, y + 68, mainW, h - 84, 16, "rgba(255, 255, 255, 0.075)");
+          fillRound(railX, y + 68, railW, h - 84, 16, "#171b20");
+          strokeRound(railX, y + 68, railW, h - 84, 16, "rgba(255, 255, 255, 0.075)");
+
+          if (mode === "opensource") {
+            drawOpenSourceContent(ms, mainX, y + 68, mainW, h - 84, railX, railW);
+          } else {
+            drawChatContent(ms, mainX, y + 68, mainW, h - 84, railX, railW, mode);
+          }
+        });
+      }
+
+      function drawSidebarRow(x, y, label, accent, active) {
+        fillRound(x - 10, y - 9, 176, 34, 10, active ? "rgba(255, 255, 255, 0.08)" : "transparent");
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(x, y + 8, 5, 0, Math.PI * 2);
+        ctx.fill();
+        drawText(label, x + 16, y, 13, active ? colors.text : colors.muted, 680);
+      }
+
+      function drawMessageBubble(x, y, width, height, sender, accent, delay, ms, lines) {
+        const reveal = out(between(ms, delay, delay + 650));
+        if (reveal <= 0) return;
+        withAlpha(reveal, () => {
+          const drawY = y + lerp(18, 0, reveal);
+          const fill = sender === "user" ? "#262b31" : "rgba(255, 255, 255, 0.035)";
+          fillRound(x, drawY, width, height, 18, fill);
+          strokeRound(x, drawY, width, height, 18, "rgba(255, 255, 255, 0.075)");
+          ctx.fillStyle = accent;
+          ctx.beginPath();
+          ctx.arc(x + 22, drawY + 24, 5, 0, Math.PI * 2);
+          ctx.fill();
+          drawText(sender === "user" ? "You" : "Gilbert", x + 38, drawY + 15, 13, colors.muted, 750);
+          lines.forEach((line, index) => {
+            const lineReveal = clamp((ms - delay - 260 - index * 150) / 450);
+            const lineWidth = lerp(34, line.width, out(lineReveal));
+            fillRound(x + 22, drawY + 48 + index * 22, lineWidth, 8, 4, line.color ?? "rgba(245, 240, 231, 0.74)");
+          });
+        });
+      }
+
+      function drawChatContent(ms, x, y, w, h, railX, railW, mode) {
+        drawText("Chat workspace", x + 24, y + 22, 17, colors.text, 780);
+        drawText("Steer long-running work while files, tools, and sources stay visible.", x + 24, y + 48, 13, colors.muted, 560);
+
+        drawMessageBubble(x + w - 318, y + 82, 288, 82, "user", colors.blue, 3600, ms, [
+          { width: 196, color: "rgba(255,255,255,0.72)" },
+          { width: 232, color: "rgba(255,255,255,0.52)" },
+        ]);
+
+        drawMessageBubble(x + 24, y + 190, w - 58, 150, "assistant", colors.green, 4600, ms, [
+          { width: w - 132 },
+          { width: w - 188 },
+          { width: w - 104 },
+          { width: w - 230 },
+        ]);
+
+        const composerY = y + h - 78;
+        fillRound(x + 24, composerY, w - 48, 54, 17, "#202329");
+        strokeRound(x + 24, composerY, w - 48, 54, 17, "rgba(255, 255, 255, 0.12)");
+        drawText("Ask, steer, attach files, or queue the next instruction", x + 48, composerY + 18, 14, colors.muted, 570);
+        fillRound(x + w - 94, composerY + 10, 44, 34, 13, colors.greenDeep);
+        drawText("go", x + w - 80, composerY + 17, 13, colors.green, 820);
+
+        drawRightRail(ms, railX, y, railW, h, mode);
+      }
+
+      function drawRightRail(ms, x, y, w, h, mode) {
+        drawText("Activity", x + 20, y + 22, 17, colors.text, 780);
+        drawText(mode === "tools" ? "Tools stay inspectable." : "Live progress, no black box.", x + 20, y + 48, 12, colors.muted, 560);
+        const rows = mode === "tools"
+          ? [
+              ["terminal", colors.green, "PowerShell session active"],
+              ["browser", colors.blue, "Preview opened"],
+              ["files", colors.gold, "Workspace context indexed"],
+              ["sources", colors.purple, "DuckDuckGo cards attached"],
+            ]
+          : [
+              ["thinking", colors.purple, "Plan generated"],
+              ["web", colors.blue, "6 source cap respected"],
+              ["files", colors.gold, "Read/write guarded"],
+              ["review", colors.green, "Awaiting approval"],
+            ];
+        rows.forEach((row, index) => {
+          const reveal = out(between(ms, 5200 + index * 260, 6000 + index * 260));
+          withAlpha(reveal, () => {
+            const rowY = y + 88 + index * 70;
+            fillRound(x + 18, rowY, w - 36, 54, 13, "rgba(255, 255, 255, 0.046)");
+            strokeRound(x + 18, rowY, w - 36, 54, 13, "rgba(255, 255, 255, 0.08)");
+            ctx.fillStyle = row[1];
+            ctx.beginPath();
+            ctx.arc(x + 38, rowY + 26, 6, 0, Math.PI * 2);
+            ctx.fill();
+            drawText(row[0], x + 54, rowY + 11, 13, colors.text, 760);
+            drawText(row[2], x + 54, rowY + 31, 11, colors.muted, 540);
+          });
+        });
+
+        const meter = clamp((ms - 6500) / 4000);
+        fillRound(x + 18, y + h - 80, w - 36, 44, 14, "rgba(255, 255, 255, 0.045)");
+        fillRound(x + 34, y + h - 50, (w - 68) * meter, 6, 3, colors.green);
+        drawText("visible tool run", x + 34, y + h - 70, 11, colors.muted, 720);
+      }
+
+      function drawOpenSourceContent(ms, x, y, w, h, railX, railW) {
+        drawText("Collaboration-ready by default", x + 24, y + 22, 17, colors.text, 780);
+        drawText("Docs, hygiene, security notes, and progress tracking ship with the repo.", x + 24, y + 48, 13, colors.muted, 560);
+
+        const docs = [
+          ["README.md", "product shape and local setup", colors.green],
+          ["PROGRESS.md", "delivered work and next hardening", colors.gold],
+          ["SECURITY.md", "local-data and disclosure posture", colors.blue],
+          ["CONTRIBUTING.md", "review and validation standards", colors.purple],
+        ];
+        docs.forEach((doc, index) => {
+          const reveal = out(between(ms, 12300 + index * 220, 13000 + index * 220));
+          withAlpha(reveal, () => {
+            const rowY = y + 88 + index * 58;
+            fillRound(x + 24, rowY, w - 54, 44, 12, "rgba(255, 255, 255, 0.045)");
+            strokeRound(x + 24, rowY, w - 54, 44, 12, "rgba(255, 255, 255, 0.075)");
+            ctx.fillStyle = doc[2];
+            ctx.beginPath();
+            ctx.arc(x + 46, rowY + 22, 5, 0, Math.PI * 2);
+            ctx.fill();
+            drawText(doc[0], x + 62, rowY + 9, 13, colors.text, 780);
+            drawText(doc[1], x + 182, rowY + 10, 12, colors.muted, 560);
+          });
+        });
+
+        fillRound(x + 24, y + h - 112, w - 54, 78, 15, "rgba(128, 223, 184, 0.075)");
+        strokeRound(x + 24, y + h - 112, w - 54, 78, 15, "rgba(128, 223, 184, 0.16)");
+        drawText("Open-source posture", x + 48, y + h - 92, 15, colors.green, 790);
+        drawText("Generated output, local logs, databases, and secrets stay out of Git.", x + 48, y + h - 64, 13, colors.text, 560);
+
+        drawText("Repo checks", railX + 20, y + 22, 17, colors.text, 780);
+        const checks = [
+          ["npm run check", colors.green],
+          ["git diff --check", colors.blue],
+          ["audit prod deps", colors.gold],
+          ["MIT license", colors.purple],
+        ];
+        checks.forEach((check, index) => {
+          const rowY = y + 84 + index * 62;
+          fillRound(railX + 18, rowY, railW - 36, 46, 13, "rgba(255, 255, 255, 0.046)");
+          ctx.fillStyle = check[1];
+          ctx.beginPath();
+          ctx.arc(railX + 40, rowY + 23, 6, 0, Math.PI * 2);
+          ctx.fill();
+          drawText(check[0], railX + 56, rowY + 14, 12, colors.text, 740);
+        });
+      }
+
+      function drawCaption(ms) {
+        const captions = [
+          {
+            start: 2850,
+            end: 7700,
+            title: "Build with the agent in one focused desktop surface.",
+            body: "Chat, planning, model routing, workspace files, terminal output, and browser preview live together.",
+          },
+          {
+            start: 7600,
+            end: 12150,
+            title: "Tool calls stay visible and governable.",
+            body: "Sources, thinking state, review gates, and local computer access are part of the product surface.",
+          },
+          {
+            start: 11900,
+            end: 16500,
+            title: "Open-source ready before the first public milestone.",
+            body: "The repo is organized for contributors: setup docs, progress notes, security guidance, and clean local-data boundaries.",
+          },
+        ];
+        captions.forEach((caption) => {
+          const alpha = fade(ms, caption.start, caption.start + 450, caption.end - 550, caption.end);
+          withAlpha(alpha, () => {
+            fillRound(112, 608, 1056, 72, 18, "rgba(16, 17, 19, 0.74)");
+            strokeRound(112, 608, 1056, 72, 18, "rgba(255, 255, 255, 0.10)");
+            drawText(caption.title, 138, 625, 22, colors.text, 800);
+            drawText(caption.body, 138, 654, 14, colors.muted, 550);
+          });
+        });
+      }
+
+      function drawFeatureSweep(ms) {
+        const alpha = fade(ms, 8000, 8700, 11800, 12400);
+        withAlpha(alpha, () => {
+          const y = 98;
+          const labels = [
+            ["web search", colors.blue],
+            ["GitHub source control", colors.green],
+            ["terminal sessions", colors.gold],
+            ["browser preview", colors.purple],
+            ["review gates", colors.coral],
+          ];
+          let x = 156;
+          labels.forEach((item, index) => {
+            const local = out(between(ms, 8500 + index * 180, 9150 + index * 180));
+            const width = [116, 184, 154, 150, 126][index];
+            withAlpha(local, () => drawPill(item[0], x, y, item[1], width));
+            x += width + 14;
+          });
+        });
+      }
+
+      function drawFinal(ms, alpha) {
+        withAlpha(alpha, () => {
+          const p = out(between(ms, 16400, 17800));
+          const cardY = lerp(174, 150, p);
+          drawLogo(WIDTH / 2, cardY, 104, 1);
+          drawText("Build with us", WIDTH / 2, cardY + 86, 58, colors.text, 850, "center");
+          drawText("github.com/UrbanWafflezz/GilbertCodex", WIDTH / 2, cardY + 158, 28, colors.green, 760, "center");
+          drawText("MIT | local-first | React + Tauri + Rust | collaboration-ready", WIDTH / 2, cardY + 204, 18, colors.muted, 600, "center");
+
+          const x = 318;
+          const y = cardY + 268;
+          fillRound(x, y, 644, 76, 20, "rgba(255, 255, 255, 0.055)");
+          strokeRound(x, y, 644, 76, 20, "rgba(255, 255, 255, 0.11)");
+          drawText("Star the repo, open an issue, or build a capability.", x + 34, y + 18, 20, colors.text, 760);
+          drawText("Gilbert Codex is early, practical, and ready for focused contributors.", x + 34, y + 47, 14, colors.muted, 560);
+        });
+      }
+
+      function drawTimeline(ms) {
+        const margin = 112;
+        const y = 696;
+        const w = WIDTH - margin * 2;
+        fillRound(margin, y, w, 4, 2, "rgba(255, 255, 255, 0.10)");
+        fillRound(margin, y, w * clamp(ms / DURATION_MS), 4, 2, colors.green);
+      }
+
+      function renderAt(ms) {
+        const t = clamp(ms, 0, DURATION_MS);
+        ctx.clearRect(0, 0, WIDTH, HEIGHT);
+        drawBackground(t);
+        drawTopBrand(t);
+
+        const heroAlpha = fade(t, 0, 700, 2500, 3500);
+        drawHero(t, heroAlpha);
+
+        const appAlpha = fade(t, 2450, 3600, 15700, 16800);
+        const mode = t > 12000 ? "opensource" : t > 8000 ? "tools" : "chat";
+        drawAppWindow(t, appAlpha, mode);
+        drawFeatureSweep(t);
+        drawCaption(t);
+
+        const finalAlpha = out(between(t, 16400, 17600));
+        drawFinal(t, finalAlpha);
+        drawTimeline(t);
+      }
+
+      async function renderGilbertPromoVideo(options = {}) {
+        const fps = options.fps ?? 30;
+        if (!("MediaRecorder" in window)) {
+          throw new Error("MediaRecorder is not available in this browser.");
+        }
+
+        const preferredTypes = [
+          "video/webm;codecs=vp9",
+          "video/webm;codecs=vp8",
+          "video/webm",
+        ];
+        const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+        const stream = canvas.captureStream(fps);
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        const chunks = [];
+        recorder.addEventListener("dataavailable", (event) => {
+          if (event.data.size > 0) chunks.push(event.data);
+        });
+
+        const stopPromise = new Promise((resolve, reject) => {
+          recorder.addEventListener("stop", resolve, { once: true });
+          recorder.addEventListener("error", () => reject(recorder.error), { once: true });
+        });
+
+        recorder.start(250);
+        const start = performance.now();
+        await new Promise((resolve) => {
+          const tick = () => {
+            const elapsed = performance.now() - start;
+            renderAt(elapsed);
+            if (elapsed >= DURATION_MS) {
+              renderAt(DURATION_MS);
+              resolve();
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          tick();
+        });
+        recorder.stop();
+        await stopPromise;
+        stream.getTracks().forEach((track) => track.stop());
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.addEventListener("loadend", () => resolve(reader.result));
+          reader.addEventListener("error", () => reject(reader.error));
+          reader.readAsDataURL(blob);
+        });
+
+        return { dataUrl, mimeType: blob.type || "video/webm" };
+      }
+
+      function renderGilbertPromoPoster(ms = 16000) {
+        renderAt(ms);
+        return canvas.toDataURL("image/png");
+      }
+
+      window.renderGilbertPromoVideo = renderGilbertPromoVideo;
+      window.renderGilbertPromoPoster = renderGilbertPromoPoster;
+      window.renderGilbertPromoFrame = renderAt;
+
+      let previewStart = performance.now();
+      function previewLoop(now) {
+        const elapsed = (now - previewStart) % DURATION_MS;
+        renderAt(elapsed);
+        requestAnimationFrame(previewLoop);
+      }
+      requestAnimationFrame(previewLoop);
+    </script>
+  </body>
+</html>

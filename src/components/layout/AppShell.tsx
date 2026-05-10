@@ -9,18 +9,21 @@ import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
+import type { SettingsSectionId } from "../../pages/settings/types";
 
 interface AppShellProps {
   activeRoute: PrimaryRoute;
+  activeSettingsSection: SettingsSectionId;
   appInfo: AppInfo;
   authUser: AuthUser;
   chats: ChatSummary[];
   children: ReactNode;
   desktopRuntime: boolean;
   activeChatId: string;
-  onCreateProject: () => void;
+  onCreateProject: () => void | string | null | Promise<string | null | void>;
   onCloseSearch: () => void;
   onDeleteChat: (chatId: string) => void;
+  onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
   onOpenSearch: () => void;
   onLogout: () => void;
@@ -30,6 +33,7 @@ interface AppShellProps {
   onTerminalHeightChange: (height: number) => void;
   onSelectChat: (chatId: string) => void;
   onSelectProject: (project: string) => void;
+  onSettingsSectionChange: (section: SettingsSectionId) => void;
   onToggleTerminal: () => void;
   onTogglePin: (chatId: string) => void;
   onToggleSidebar: () => void;
@@ -44,6 +48,7 @@ interface AppShellProps {
 export function AppShell({
   activeChatId,
   activeRoute,
+  activeSettingsSection,
   appInfo,
   authUser,
   chats,
@@ -52,6 +57,7 @@ export function AppShell({
   onCreateProject,
   onCloseSearch,
   onDeleteChat,
+  onDeleteProject,
   onNewChat,
   onOpenSearch,
   onLogout,
@@ -61,6 +67,7 @@ export function AppShell({
   onTerminalHeightChange,
   onSelectChat,
   onSelectProject,
+  onSettingsSectionChange,
   onToggleTerminal,
   onTogglePin,
   onToggleSidebar,
@@ -113,6 +120,7 @@ export function AppShell({
         <ShellSidebar
           activeChatId={activeChatId}
           activeRoute={activeRoute}
+          activeSettingsSection={activeSettingsSection}
           authUser={authUser}
           chats={chats}
           open={sidebarOpen}
@@ -123,6 +131,10 @@ export function AppShell({
           }}
           onDeleteChat={(chatId) => {
             onDeleteChat(chatId);
+            closeSidebarOnSmallScreens();
+          }}
+          onDeleteProject={(projectName) => {
+            onDeleteProject(projectName);
             closeSidebarOnSmallScreens();
           }}
           onNewChat={(project) => {
@@ -144,6 +156,10 @@ export function AppShell({
           }}
           onSelectProject={(project) => {
             onSelectProject(project);
+            closeSidebarOnSmallScreens();
+          }}
+          onSettingsSectionChange={(section) => {
+            onSettingsSectionChange(section);
             closeSidebarOnSmallScreens();
           }}
           onTogglePin={onTogglePin}

@@ -1,6 +1,19 @@
 import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
 
-export const DEFAULT_PROJECT = "GilbertCodex";
+export const DEFAULT_PROJECT = "No project";
+export const LEGACY_DEFAULT_PROJECT = "GilbertCodex";
+
+export function isNoProjectName(project?: string | null) {
+  const normalized = project?.trim().toLowerCase();
+
+  return !normalized || normalized === DEFAULT_PROJECT.toLowerCase() || normalized === LEGACY_DEFAULT_PROJECT.toLowerCase();
+}
+
+export function normalizeProjectName(project?: string | null) {
+  const trimmed = project?.trim();
+
+  return isNoProjectName(trimmed) ? DEFAULT_PROJECT : trimmed || DEFAULT_PROJECT;
+}
 
 export function createId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -16,7 +29,7 @@ export function createEmptyChat(project = DEFAULT_PROJECT): ChatSummary {
   return {
     id: createId("chat"),
     messages: [],
-    project,
+    project: normalizeProjectName(project),
     title: "New chat",
     updatedAt: now,
   };
@@ -85,25 +98,25 @@ export function formatChatAge(updatedAt: string) {
   }
 
   if (minutes < 60) {
-    return `${minutes}m`;
+    return `${minutes} ${minutes === 1 ? "min" : "mins"} ago`;
   }
 
   const hours = Math.floor(minutes / 60);
 
   if (hours < 24) {
-    return `${hours}h`;
+    return `${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
   }
 
   const days = Math.floor(hours / 24);
 
   if (days < 7) {
-    return `${days}d`;
+    return `${days} ${days === 1 ? "day" : "days"} ago`;
   }
 
   const weeks = Math.floor(days / 7);
 
   if (weeks < 5) {
-    return `${weeks}w`;
+    return `${weeks} ${weeks === 1 ? "week" : "weeks"} ago`;
   }
 
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));

@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatPlanningInputAnswer, ChatPlanningInputRequest, ChatPlanningQuestion, ChatPlanningQuestionOption, ChatProgressItem } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
-import { sendOpenRouterMessage } from "./openRouterClient";
+import { sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
 
 export const DEFAULT_PLANNING_MAX_PASSES = 10;
 const MIN_PLANNING_PASSES = 2;
@@ -30,6 +30,7 @@ interface PlanningRequestOptions {
 }
 
 export interface PlanningSnapshot {
+  content?: string;
   passCount: number;
   progress: ChatProgressItem[];
   trace?: string;
@@ -133,7 +134,7 @@ export async function createPlanningInputRequest(
   messages: ChatMessage[],
   options: PlanningRequestOptions = {},
 ): Promise<ChatPlanningInputRequest | null> {
-  const response = await sendOpenRouterMessage(createPlanningInputSettings(settings), createPlanningInputMessages(messages), {
+  const response = await sendProviderMessage(createPlanningInputSettings(settings), createPlanningInputMessages(messages), {
     signal: options.signal,
   });
   const payload = parsePlanningInputDecision(response.content);
@@ -172,7 +173,7 @@ export async function runPlanningMode({ maxPasses, messages, onUpdate, signal, s
       trace: createPlanningTrace(passNotes),
     });
 
-    const response = await sendOpenRouterMessage(createPlanningSettings(settings), createPlanningMessages(messages, passNotes, batchStages, boundedMaxPasses), {
+    const response = await sendProviderMessage(createPlanningSettings(settings), createPlanningMessages(messages, passNotes, batchStages, boundedMaxPasses), {
       signal,
     });
     const parsedBatch = parsePlanningBatchResponse(response.content, batchStages);
@@ -204,15 +205,26 @@ export async function runPlanningMode({ maxPasses, messages, onUpdate, signal, s
     trace: createPlanningTrace(passNotes),
   });
 
-  const finalResponse = await sendOpenRouterMessage(
+  let finalContent = "";
+
+  const finalResponse = await streamProviderMessage(
     createFinalAnswerSettings(settings),
     createFinalAnswerMessages(messages, passNotes, completedPasses, boundedMaxPasses),
+    (snapshot) => {
+      finalContent = snapshot.content;
+      onUpdate({
+        content: cleanFinalAnswerContent(finalContent),
+        passCount: completedPasses,
+        progress: createPlanningProgress(completedPasses, boundedMaxPasses, "finalizing"),
+        trace: createPlanningTrace(passNotes),
+      });
+    },
     {
       signal,
     },
   );
   const planningBrief = createPlanningTrace(passNotes) ?? "";
-  const content = cleanFinalAnswerContent(finalResponse.content) || planningBrief || "I could not produce a finished answer from the model response.";
+  const content = cleanFinalAnswerContent(finalResponse.content || finalContent) || planningBrief || "I could not produce a finished answer from the model response.";
 
   return {
     content,
@@ -256,10 +268,10 @@ export function createPlanningProgress(currentPass: number, maxPasses: number, p
       status: phase === "input" ? "pending" : phase === "active" ? "active" : "complete",
     },
     {
-      detail: phase === "between" ? "Preparing next stage" : "Cross-check notes",
+      detail: phase === "between" ? "Preparing next stage" : phase === "finalizing" || phase === "complete" ? "Coverage checked" : "Cross-check notes",
       id: "plan-review",
       label: "Check coverage",
-      status: phase === "between" || phase === "finalizing" ? "active" : phase === "complete" ? "complete" : boundedCurrentPass > 0 ? "complete" : "pending",
+      status: phase === "between" ? "active" : phase === "finalizing" || phase === "complete" || boundedCurrentPass > 0 ? "complete" : "pending",
     },
     {
       detail: phase === "complete" ? "Ready" : phase === "finalizing" ? "Preparing answer" : "Waiting",
@@ -306,8 +318,8 @@ function createFinalAnswerSettings(settings: ProviderSettings): ProviderSettings
     temperature: Math.min(settings.temperature, 0.25),
     thinking: {
       ...settings.thinking,
-      effort: "medium",
-      enabled: settings.tools.thinking,
+      effort: "low",
+      enabled: false,
     },
   };
 }

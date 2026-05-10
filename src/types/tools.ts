@@ -1,16 +1,26 @@
 export type ToolRegistryId =
   | "browserPreview"
   | "codeEdit"
+  | "codeGeneration"
   | "codeView"
+  | "colorTools"
   | "desktopComputer"
+  | "fileSafety"
+  | "fileCreation"
   | "fileBrowser"
   | "fileSearch"
+  | "pdfTools"
   | "permissions"
   | "planning"
   | "provider"
+  | "reactNativeTools"
   | "sourceControl"
+  | "sqlTools"
   | "terminal"
   | "thinking"
+  | "testingTools"
+  | "typescriptTools"
+  | "vectorTools"
   | "webSearch"
   | "workflowAutomation";
 
@@ -19,16 +29,26 @@ export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
 export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   browserPreview: true,
   codeEdit: true,
+  codeGeneration: true,
   codeView: true,
+  colorTools: true,
   desktopComputer: true,
+  fileSafety: true,
+  fileCreation: true,
   fileBrowser: true,
   fileSearch: true,
+  pdfTools: true,
   permissions: true,
   planning: true,
   provider: true,
+  reactNativeTools: true,
   sourceControl: true,
+  sqlTools: true,
   terminal: true,
   thinking: true,
+  testingTools: true,
+  typescriptTools: true,
+  vectorTools: true,
   webSearch: true,
   workflowAutomation: true,
 };

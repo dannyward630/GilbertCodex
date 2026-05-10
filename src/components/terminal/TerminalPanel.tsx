@@ -16,20 +16,21 @@ type TerminalStatus = "connected" | "error" | "exited" | "starting" | "stopped" 
 
 const MIN_TERMINAL_HEIGHT = 184;
 const MAX_TERMINAL_HEIGHT = 640;
-const OUTPUT_CHUNK_LIMIT = 1_200;
-const POLL_INTERVAL_MS = 320;
+const OUTPUT_CHUNK_LIMIT = 8_000;
+const ACTIVE_POLL_INTERVAL_MS = 120;
+const IDLE_POLL_INTERVAL_MS = 650;
 const RESIZE_STEP = 28;
 
 export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
   const [command, setCommand] = useState("");
   const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [, setHistoryIndex] = useState<number | null>(null);
   const [output, setOutput] = useState<TerminalOutputChunk[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [shell, setShell] = useState<TerminalShellId>("powershell");
   const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
-  const [windowVisible, setWindowVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
+  const [sessionCommandRunning, setSessionCommandRunning] = useState(false);
   const localOutputIdRef = useRef(0);
   const autoStartedRef = useRef(false);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -42,6 +43,10 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
 
     if (status === "starting") {
       return "Starting";
+    }
+
+    if (status === "connected" && sessionCommandRunning) {
+      return "Running";
     }
 
     if (status === "connected") {
@@ -57,7 +62,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     }
 
     return "Stopped";
-  }, [desktopRuntime, status]);
+  }, [desktopRuntime, sessionCommandRunning, status]);
 
   const appendOutput = useCallback((chunks: TerminalOutputChunk[]) => {
     if (!chunks.length) {
@@ -131,19 +136,6 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   );
 
   useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    function handleVisibilityChange() {
-      setWindowVisible(document.visibilityState !== "hidden");
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
-
-  useEffect(() => {
     if (!sessionId && workingDirectory) {
       setSessionWorkingDirectory(workingDirectory);
     }
@@ -159,14 +151,17 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   }, [desktopRuntime, open, sessionId, startSession]);
 
   useEffect(() => {
-    if (!open || !sessionId || !windowVisible) {
+    if (!open || !sessionId) {
       return;
     }
 
     let canceled = false;
     const activeSessionId = sessionId;
+    let timeoutId: number | undefined;
 
     async function drain() {
+      let nextPollIntervalMs = IDLE_POLL_INTERVAL_MS;
+
       try {
         const response = await drainTerminalSession(activeSessionId);
 
@@ -174,10 +169,15 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           return;
         }
 
+        const commandRunning = Boolean(response.commandRunning);
+        nextPollIntervalMs = commandRunning ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
         appendOutput(response.chunks);
+        setSessionCommandRunning(commandRunning);
 
         if (response.exitCode !== null && response.exitCode !== undefined) {
           setStatus("exited");
+        } else if (response.commandRunning || response.lastCommandCompleted) {
+          setStatus("connected");
         }
       } catch (error) {
         if (canceled) {
@@ -188,16 +188,21 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
         setStatus("error");
         appendOutput([createLocalOutput("system", `Terminal disconnected: ${detail}\n`)]);
       }
+
+      if (!canceled) {
+        timeoutId = window.setTimeout(drain, nextPollIntervalMs);
+      }
     }
 
     void drain();
-    const intervalId = window.setInterval(drain, POLL_INTERVAL_MS);
 
     return () => {
       canceled = true;
-      window.clearInterval(intervalId);
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
     };
-  }, [appendOutput, createLocalOutput, open, sessionId, windowVisible]);
+  }, [appendOutput, createLocalOutput, open, sessionId]);
 
   useEffect(() => {
     if (!open) {

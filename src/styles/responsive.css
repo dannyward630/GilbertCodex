@@ -19,6 +19,19 @@
   .desktop-root[data-runtime="web"] .conversation-tool-desktop-only {
     display: none;
   }
+
+  .conversation-body,
+  .conversation-body[data-right-rail-open="true"],
+  .conversation-body[data-side-layout="rail"],
+  .conversation-body[data-side-layout="preview"],
+  .conversation-body[data-side-layout="split"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation-body .right-rail,
+  .conversation-body .browser-preview-panel {
+    display: none;
+  }
 }
 
 @media (max-width: 820px) {
@@ -158,5 +171,68 @@
   .desktop-root[data-runtime="web"] .search-result {
     grid-template-columns: minmax(0, 1fr);
     padding-left: 20px;
+  }
+
+  .desktop-root[data-runtime="desktop"] .workspace-shell {
+    grid-template-columns: 1fr;
+    position: relative;
+    padding: 0 8px 8px;
+  }
+
+  .desktop-root[data-runtime="desktop"] .workspace-shell .shell-sidebar {
+    position: fixed;
+    top: 58px;
+    bottom: 8px;
+    left: 8px;
+    z-index: 62;
+    display: grid;
+    width: min(318px, calc(100vw - 16px));
+    max-height: calc(100vh - 66px);
+    transform: translateX(-112%);
+    transition:
+      transform 180ms ease,
+      opacity 180ms ease;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-popover);
+  }
+
+  .desktop-root[data-runtime="desktop"] .workspace-shell .shell-sidebar[data-open="true"] {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .desktop-root[data-runtime="desktop"] .workspace-shell .shell-sidebar[data-open="false"] {
+    display: grid;
+  }
+
+  .desktop-root[data-runtime="desktop"] .sidebar-mobile-backdrop {
+    position: fixed;
+    inset: 48px 0 0;
+    z-index: 58;
+    display: block;
+    background: rgba(0, 0, 0, 0.38);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+
+  .desktop-root[data-runtime="desktop"] .sidebar-mobile-backdrop[data-open="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .desktop-root[data-runtime="desktop"] .workspace-shell {
+    padding: 0;
+  }
+
+  .desktop-root[data-runtime="desktop"] .conversation-frame,
+  .desktop-root[data-runtime="desktop"] .settings-page,
+  .desktop-root[data-runtime="desktop"] .utility-page {
+    border-left: 0;
+    border-radius: 0;
   }
 }

@@ -1,0 +1,217 @@
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 GilbertCodex/0.1";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAutomationRequest {
+    pub action: String,
+    pub text: Option<String>,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAutomationLink {
+    pub href: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAutomationResponse {
+    pub action: String,
+    pub links: Vec<BrowserAutomationLink>,
+    pub matched: bool,
+    pub status: u16,
+    pub target_url: Option<String>,
+    pub text_snippet: String,
+    pub title: String,
+    pub url: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn browser_automation(
+    request: BrowserAutomationRequest,
+) -> Result<BrowserAutomationResponse, String> {
+    let url = request.url.trim();
+
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("browser automation needs an http(s) URL.".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .build()
+        .map_err(|error| format!("Could not create browser automation client: {error}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("Browser automation request failed: {error}"))?;
+    let final_url = response.url().to_string();
+    let status = response.status().as_u16();
+    let html = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read browser automation response: {error}"))?;
+    let title = extract_title(&html);
+    let text = html_to_text(&html);
+    let links = extract_links(&html, &final_url);
+    let needle = request.text.unwrap_or_default();
+    let needle_lower = needle.to_lowercase();
+    let matched = !needle_lower.is_empty() && text.to_lowercase().contains(&needle_lower);
+    let target_url = if request.action == "click_link" && !needle_lower.is_empty() {
+        links
+            .iter()
+            .find(|link| link.text.to_lowercase().contains(&needle_lower))
+            .map(|link| link.href.clone())
+    } else {
+        None
+    };
+
+    Ok(BrowserAutomationResponse {
+        action: request.action,
+        links: links.into_iter().take(24).collect(),
+        matched,
+        status,
+        target_url,
+        text_snippet: text.chars().take(6000).collect(),
+        title,
+        url: final_url,
+    })
+}
+
+fn extract_title(html: &str) -> String {
+    let lower = html.to_lowercase();
+    let Some(start) = lower.find("<title") else {
+        return String::new();
+    };
+    let Some(open_end) = lower[start..].find('>') else {
+        return String::new();
+    };
+    let content_start = start + open_end + 1;
+    let Some(close_start) = lower[content_start..].find("</title>") else {
+        return String::new();
+    };
+
+    decode_html_entities(&html[content_start..content_start + close_start])
+        .trim()
+        .to_string()
+}
+
+fn extract_links(html: &str, base_url: &str) -> Vec<BrowserAutomationLink> {
+    let lower = html.to_lowercase();
+    let mut links = Vec::new();
+    let mut offset = 0;
+
+    while let Some(anchor_start) = lower[offset..].find("<a") {
+        let start = offset + anchor_start;
+        let Some(tag_end) = lower[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..start + tag_end + 1];
+        let href = extract_attribute(tag, "href");
+        let content_start = start + tag_end + 1;
+        let Some(anchor_end) = lower[content_start..].find("</a>") else {
+            offset = content_start;
+            continue;
+        };
+        let label = html_to_text(&html[content_start..content_start + anchor_end]);
+
+        if let Some(href) = href {
+            if !label.trim().is_empty() {
+                links.push(BrowserAutomationLink {
+                    href: absolutize_url(base_url, href.trim()),
+                    text: label.trim().chars().take(240).collect(),
+                });
+            }
+        }
+
+        offset = content_start + anchor_end + "</a>".len();
+    }
+
+    links
+}
+
+fn extract_attribute(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_lowercase();
+    let pattern = format!("{name}=");
+    let start = lower.find(&pattern)? + pattern.len();
+    let value = tag[start..].trim_start();
+    let quote = value.chars().next()?;
+
+    if quote == '"' || quote == '\'' {
+        let end = value[1..].find(quote)?;
+        return Some(decode_html_entities(&value[1..1 + end]));
+    }
+
+    let end = value
+        .find(|character: char| character.is_whitespace() || character == '>')
+        .unwrap_or(value.len());
+    Some(decode_html_entities(&value[..end]))
+}
+
+fn html_to_text(html: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                text.push(' ');
+            }
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+
+    decode_html_entities(&text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn decode_html_entities(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+}
+
+fn absolutize_url(base_url: &str, href: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        return href.to_string();
+    }
+
+    if href.starts_with("//") {
+        return format!("https:{href}");
+    }
+
+    let origin_end = base_url
+        .find("://")
+        .and_then(|scheme_end| {
+            base_url[scheme_end + 3..]
+                .find('/')
+                .map(|path_start| scheme_end + 3 + path_start)
+        })
+        .unwrap_or(base_url.len());
+    let origin = &base_url[..origin_end];
+
+    if href.starts_with('/') {
+        format!("{origin}{href}")
+    } else {
+        let directory_end = base_url.rfind('/').unwrap_or(origin_end);
+        format!("{}/{}", &base_url[..directory_end], href)
+    }
+}

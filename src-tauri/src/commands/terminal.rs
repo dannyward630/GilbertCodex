@@ -1,19 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
-    io::{BufRead, BufReader},
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const MAX_BUFFERED_CHUNKS: usize = 1_500;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
+const STREAM_READ_BYTES: usize = 8 * 1024;
+const DEFAULT_RUN_TIMEOUT_MS: u64 = 45_000;
+const MAX_RUN_TIMEOUT_MS: u64 = 180_000;
+const MAX_RUN_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct TerminalState {
@@ -25,6 +35,8 @@ struct TerminalSession {
     active_child: Option<Child>,
     active_command: Option<String>,
     exited: Option<i32>,
+    last_command_completed: bool,
+    last_command_exit_code: Option<i32>,
     output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
     shell: TerminalShell,
     working_directory: PathBuf,
@@ -54,6 +66,15 @@ pub struct TerminalWriteSessionRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TerminalRunCommandRequest {
+    pub command: String,
+    pub shell: Option<TerminalShell>,
+    pub timeout_ms: Option<u64>,
+    pub working_directory: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalSessionRequest {
     pub session_id: String,
 }
@@ -71,8 +92,25 @@ pub struct TerminalCreateSessionResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalDrainResponse {
+    pub active_command: Option<String>,
     pub chunks: Vec<TerminalOutputChunk>,
+    pub command_running: bool,
     pub exit_code: Option<i32>,
+    pub last_command_completed: bool,
+    pub last_command_exit_code: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalRunCommandResponse {
+    pub duration_ms: u64,
+    pub exit_code: Option<i32>,
+    pub output_truncated: bool,
+    pub shell: TerminalShell,
+    pub stderr: String,
+    pub stdout: String,
+    pub timed_out: bool,
+    pub working_directory: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -134,6 +172,8 @@ pub fn terminal_create_session(
         active_child: None,
         active_command: None,
         exited: None,
+        last_command_completed: false,
+        last_command_exit_code: None,
         output: Arc::clone(&output),
         shell,
         working_directory,
@@ -220,6 +260,15 @@ pub fn terminal_write_session(
         return Ok(());
     }
 
+    session.last_command_completed = false;
+    session.last_command_exit_code = None;
+
+    push_output(
+        &session.output,
+        TerminalOutputStream::System,
+        format!("Running command: {input}\n"),
+    );
+
     let mut command = create_shell_command(&session.shell, input);
 
     command
@@ -260,6 +309,20 @@ pub fn terminal_write_session(
 }
 
 #[tauri::command]
+pub async fn terminal_run_command(
+    request: TerminalRunCommandRequest,
+) -> Result<TerminalRunCommandResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || run_command_blocking(request))
+        .await
+        .map_err(|error| {
+            format!(
+                "The terminal command worker stopped unexpectedly: {}",
+                error
+            )
+        })?
+}
+
+#[tauri::command]
 pub fn terminal_drain_session(
     state: tauri::State<'_, TerminalState>,
     request: TerminalSessionRequest,
@@ -275,8 +338,12 @@ pub fn terminal_drain_session(
     refresh_active_command(session)?;
 
     Ok(TerminalDrainResponse {
+        active_command: session.active_command.clone(),
         chunks: drain_output(&session.output),
+        command_running: session.active_child.is_some(),
         exit_code: session.exited,
+        last_command_completed: session.last_command_completed,
+        last_command_exit_code: session.last_command_exit_code,
     })
 }
 
@@ -301,6 +368,100 @@ pub fn terminal_kill_session(
         .ok_or_else(|| "That terminal session is already closed.".to_string())
 }
 
+fn run_command_blocking(
+    request: TerminalRunCommandRequest,
+) -> Result<TerminalRunCommandResponse, String> {
+    let shell = request.shell.unwrap_or(TerminalShell::PowerShell);
+    let working_directory = resolve_working_directory(request.working_directory)?;
+    let input = request.command.trim();
+
+    if input.is_empty() {
+        return Err("Terminal command cannot be empty.".to_string());
+    }
+
+    let timeout_ms = request
+        .timeout_ms
+        .unwrap_or(DEFAULT_RUN_TIMEOUT_MS)
+        .clamp(1_000, MAX_RUN_TIMEOUT_MS);
+    let started_at = Instant::now();
+    let mut command = create_shell_command(&shell, input);
+
+    command
+        .current_dir(&working_directory)
+        .env("GILBERT_CODEX_TERMINAL", "1")
+        .env("GILBERT_CODEX_AGENT_TOOL", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Could not run {} command: {}", shell_label(&shell), error))?;
+
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    let output_limit_reached = Arc::new(AtomicBool::new(false));
+    let mut readers = Vec::new();
+
+    if let Some(child_stdout) = child.stdout.take() {
+        readers.push(read_terminal_stream_to_buffer(
+            child_stdout,
+            Arc::clone(&stdout),
+            Arc::clone(&output_limit_reached),
+        ));
+    }
+
+    if let Some(child_stderr) = child.stderr.take() {
+        readers.push(read_terminal_stream_to_buffer(
+            child_stderr,
+            Arc::clone(&stderr),
+            Arc::clone(&output_limit_reached),
+        ));
+    }
+
+    let (exit_code, timed_out) = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Could not inspect terminal command: {}", error))?
+        {
+            break (status.code(), false);
+        }
+
+        if output_limit_reached.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let status = child.wait().map_err(|error| {
+                format!("Could not stop high-output terminal command: {}", error)
+            })?;
+            break (status.code(), false);
+        }
+
+        if started_at.elapsed() >= Duration::from_millis(timeout_ms) {
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .map_err(|error| format!("Could not stop timed-out terminal command: {}", error))?;
+            break (status.code(), true);
+        }
+
+        thread::sleep(Duration::from_millis(80));
+    };
+
+    for reader in readers {
+        let _ = reader.join();
+    }
+
+    Ok(TerminalRunCommandResponse {
+        duration_ms: started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        exit_code,
+        output_truncated: output_limit_reached.load(Ordering::Relaxed),
+        shell,
+        stderr: bytes_to_string(&stderr),
+        stdout: bytes_to_string(&stdout),
+        timed_out,
+        working_directory: path_to_string(&working_directory),
+    })
+}
+
 fn refresh_active_command(session: &mut TerminalSession) -> Result<(), String> {
     let exit_status = match session.active_child.as_mut() {
         Some(child) => child
@@ -311,6 +472,8 @@ fn refresh_active_command(session: &mut TerminalSession) -> Result<(), String> {
 
     if let Some(status) = exit_status {
         session.active_child.take();
+        session.last_command_completed = true;
+        session.last_command_exit_code = status.code();
         let command = session
             .active_command
             .take()
@@ -344,6 +507,8 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
         match shell {
             TerminalShell::PowerShell => {
                 let mut command = Command::new("powershell.exe");
+                let normalized_input = normalize_windows_powershell_command(input);
+                command.creation_flags(CREATE_NO_WINDOW);
                 command.args([
                     "-NoLogo",
                     "-NoProfile",
@@ -351,12 +516,13 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
                     "-ExecutionPolicy",
                     "Bypass",
                     "-Command",
-                    input,
+                    normalized_input.as_str(),
                 ]);
                 command
             }
             TerminalShell::Cmd => {
                 let mut command = Command::new("cmd.exe");
+                command.creation_flags(CREATE_NO_WINDOW);
                 command.args(["/Q", "/C", input]);
                 command
             }
@@ -380,24 +546,18 @@ fn read_terminal_stream<R>(
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let mut buffer = Vec::new();
+        let mut reader = reader;
+        let mut buffer = [0u8; STREAM_READ_BYTES];
 
         loop {
-            buffer.clear();
-
-            match reader.read_until(b'\n', &mut buffer) {
+            match reader.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(_) => {
-                    if buffer.len() > MAX_CHUNK_BYTES {
-                        buffer.truncate(MAX_CHUNK_BYTES);
-                        buffer.extend_from_slice(b"\n[output truncated]\n");
-                    }
-
+                Ok(read_count) => {
                     push_output(
                         &output,
                         stream.clone(),
-                        String::from_utf8_lossy(&buffer).to_string(),
+                        String::from_utf8_lossy(&buffer[..read_count.min(MAX_CHUNK_BYTES)])
+                            .to_string(),
                     );
                 }
                 Err(error) => {
@@ -411,6 +571,80 @@ fn read_terminal_stream<R>(
             }
         }
     });
+}
+
+#[cfg(windows)]
+fn normalize_windows_powershell_command(input: &str) -> String {
+    let trimmed = input.trim_start();
+    let leading_len = input.len().saturating_sub(trimmed.len());
+    let leading = &input[..leading_len];
+    let token_end = trimmed
+        .char_indices()
+        .find(|(_, character)| character.is_whitespace())
+        .map(|(index, _)| index)
+        .unwrap_or(trimmed.len());
+    let token = &trimmed[..token_end];
+    let rest = &trimmed[token_end..];
+    let replacement = match token.to_ascii_lowercase().as_str() {
+        "npm" => "npm.cmd",
+        "npx" => "npx.cmd",
+        "pnpm" => "pnpm.cmd",
+        "yarn" => "yarn.cmd",
+        _ => return input.to_string(),
+    };
+
+    format!("{leading}{replacement}{rest}")
+}
+
+fn read_terminal_stream_to_buffer<R>(
+    mut reader: R,
+    output: Arc<Mutex<Vec<u8>>>,
+    output_limit_reached: Arc<AtomicBool>,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut chunk = [0u8; 8 * 1024];
+
+        loop {
+            let read_count = match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read_count) => read_count,
+                Err(_) => break,
+            };
+            let mut should_stop = false;
+
+            if let Ok(mut output) = output.lock() {
+                let remaining = MAX_RUN_OUTPUT_BYTES.saturating_sub(output.len());
+
+                if remaining == 0 {
+                    mark_output_limit_reached(&mut output, &output_limit_reached);
+                    should_stop = true;
+                } else {
+                    let write_count = remaining.min(read_count);
+                    output.extend_from_slice(&chunk[..write_count]);
+
+                    if write_count < read_count {
+                        mark_output_limit_reached(&mut output, &output_limit_reached);
+                        should_stop = true;
+                    }
+                }
+            } else {
+                should_stop = true;
+            }
+
+            if should_stop {
+                break;
+            }
+        }
+    })
+}
+
+fn mark_output_limit_reached(output: &mut Vec<u8>, output_limit_reached: &AtomicBool) {
+    if !output_limit_reached.swap(true, Ordering::Relaxed) {
+        output.extend_from_slice(b"\n[output limit reached; command stopped]\n");
+    }
 }
 
 fn push_output(
@@ -571,4 +805,11 @@ fn now_millis() -> u64 {
 
 fn path_to_string(path: impl AsRef<Path>) -> String {
     path.as_ref().to_string_lossy().to_string()
+}
+
+fn bytes_to_string(output: &Arc<Mutex<Vec<u8>>>) -> String {
+    output
+        .lock()
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .unwrap_or_default()
 }

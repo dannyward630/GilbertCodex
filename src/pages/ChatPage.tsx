@@ -1,40 +1,52 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { GitBranch, Grid2X2, Sparkles } from "lucide-react";
 import { BrowserPreviewPanel } from "../components/browser/BrowserPreviewPanel";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
 import { RightRail, chatHasLiveRightRailActivity, chatHasRightRailContent } from "../components/inspector/RightRail";
-import type { ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
+import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
 import type { AppInfo } from "../types/app";
-import type { ChatComposerDraft, ChatPlanningInputAnswer, ChatSendInput, ChatSummary } from "../types/chat";
+import type { AgentApprovalDecision } from "../types/agentRun";
+import type { ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatSendInput, ChatSummary } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../types/settings";
+import type { ProjectSummary } from "../types/project";
 
 interface ChatPageProps {
   appInfo: AppInfo;
   browserPreviewEnabled: boolean;
+  browserPreviewRequestId?: number;
+  browserPreviewUrl?: string | null;
   chat: ChatSummary;
   composerDraft?: ChatComposerDraft | null;
-  contextWindowSource: "estimate" | "openrouter";
+  contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
   hasApiKey: boolean;
   isSending: boolean;
+  lastContextCompaction?: ContextCompactionNotice | null;
   localWorkspace: LocalWorkspaceSettings;
   lastProviderContextUsage?: ContextWindowUsage | null;
-  maxOutputTokens: number;
   model: string;
   modelContextWindows: ModelContextWindowMap;
   onComposerDraftApplied?: () => void;
+  onCreateProject: () => void | string | null | Promise<string | null | void>;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
-  onModelChange: (model: string) => void;
+  onModelChange: (model: string, provider: ProviderSettings["provider"]) => void;
+  onDeleteQueuedMessage: (messageId: string) => void;
+  onSelectProject: (project: string) => void;
+  onRequestPlanRevision: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse: (messageId: string) => void | Promise<void>;
   onSendMessage: (input: ChatSendInput) => void | Promise<void>;
+  onSteerQueuedMessage: (messageId: string) => void;
   onStopGeneration: () => void;
   onSubmitPlanningInput: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   providerSettings: ProviderSettings;
+  projects: ProjectSummary[];
+  queuedMessageCount?: number;
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
-  systemPrompt: string;
   thinking: ThinkingSettings;
   webSearch: WebSearchSettings;
   onTogglePin: () => void;
@@ -46,28 +58,37 @@ interface ChatPageProps {
 export function ChatPage({
   appInfo,
   browserPreviewEnabled,
+  browserPreviewRequestId = 0,
+  browserPreviewUrl,
   chat,
   composerDraft,
   contextWindowSource,
   contextWindowTokens,
   hasApiKey,
   isSending,
+  lastContextCompaction,
   localWorkspace,
   lastProviderContextUsage,
-  maxOutputTokens,
   model,
   modelContextWindows,
   onComposerDraftApplied,
+  onCreateProject,
   onLocalWorkspaceChange,
   onModelChange,
+  onDeleteQueuedMessage,
+  onSelectProject,
+  onRequestPlanRevision,
   onRegenerateResponse,
   onSendMessage,
+  onSteerQueuedMessage,
   onStopGeneration,
   onSubmitPlanningInput,
+  onResolveToolApproval,
   providerSettings,
+  projects,
+  queuedMessageCount = 0,
   onThinkingChange,
   onWebSearchChange,
-  systemPrompt,
   thinking,
   webSearch,
   onTogglePin,
@@ -85,6 +106,8 @@ export function ChatPage({
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
   const rightRailHasActivity = useMemo(() => chatHasLiveRightRailActivity(chat), [chat]);
   const rightRailHasContent = useMemo(() => chatHasRightRailContent(chat), [chat]);
+  const queuedMessages = useMemo(() => getQueuedMessages(chat.messages), [chat.messages]);
+  const emptyChat = chat.messages.length === 0;
   const conversationMainStyle = {
     "--composer-clearance": `${Math.max(composerHeight + 34, 178)}px`,
   } as CSSProperties;
@@ -247,6 +270,49 @@ export function ChatPage({
     }
   }, [browserPreviewEnabled, browserPreviewOpen]);
 
+  useEffect(() => {
+    if (!browserPreviewEnabled || !browserPreviewUrl) {
+      return;
+    }
+
+    setBrowserPreviewExpanded(false);
+    setBrowserPreviewOpen(true);
+  }, [browserPreviewEnabled, browserPreviewRequestId, browserPreviewUrl]);
+
+  const composer = (
+    <ChatComposer
+      chat={chat}
+      contextWindowSource={contextWindowSource}
+      contextWindowTokens={contextWindowTokens}
+      draft={composerDraft}
+      isGenerating={isSending}
+      lastContextCompaction={lastContextCompaction}
+      layout={emptyChat ? "center" : "dock"}
+      localWorkspace={localWorkspace}
+      lastProviderContextUsage={lastProviderContextUsage}
+      model={model}
+      modelContextWindows={modelContextWindows}
+      onCreateProject={onCreateProject}
+      onDraftApplied={onComposerDraftApplied}
+      onDeleteQueuedMessage={onDeleteQueuedMessage}
+      onHeightChange={setComposerHeight}
+      onLocalWorkspaceChange={onLocalWorkspaceChange}
+      onModelChange={onModelChange}
+      onSelectProject={onSelectProject}
+      onStopGeneration={onStopGeneration}
+      onSteerQueuedMessage={onSteerQueuedMessage}
+      onSubmit={onSendMessage}
+      projects={projects}
+      providerSettings={providerSettings}
+      queuedMessageCount={Math.max(queuedMessageCount, queuedMessages.length)}
+      queuedMessages={queuedMessages}
+      onThinkingChange={onThinkingChange}
+      onWebSearchChange={onWebSearchChange}
+      thinking={thinking}
+      webSearch={webSearch}
+    />
+  );
+
   return (
     <div className="conversation-frame" data-header-blur={headerBlurActive}>
       <ConversationHeader
@@ -272,45 +338,48 @@ export function ChatPage({
         ref={conversationBodyRef}
         style={conversationBodyStyle}
       >
-        <section className="conversation-main" aria-label="Chat thread" style={conversationMainStyle}>
-          <ChatThread
-            appInfo={appInfo}
-            chat={chat}
-            hasApiKey={hasApiKey}
-            onHeaderBlurChange={setHeaderBlurActive}
-            onOpenActivity={() => setRightRailOpen(true)}
-            onRegenerateResponse={onRegenerateResponse}
-            onStopGeneration={onStopGeneration}
-          />
-          <ChatComposer
-            chat={chat}
-            contextWindowSource={contextWindowSource}
-            contextWindowTokens={contextWindowTokens}
-            disabled={isSending}
-            draft={composerDraft}
-            localWorkspace={localWorkspace}
-            lastProviderContextUsage={lastProviderContextUsage}
-            maxOutputTokens={maxOutputTokens}
-            model={model}
-            modelContextWindows={modelContextWindows}
-            onDraftApplied={onComposerDraftApplied}
-            onHeightChange={setComposerHeight}
-            onLocalWorkspaceChange={onLocalWorkspaceChange}
-            onModelChange={onModelChange}
-            onStopGeneration={onStopGeneration}
-            onSubmit={onSendMessage}
-            providerSettings={providerSettings}
-            onThinkingChange={onThinkingChange}
-            onWebSearchChange={onWebSearchChange}
-            systemPrompt={systemPrompt}
-            thinking={thinking}
-            webSearch={webSearch}
-          />
+        <section className="conversation-main" aria-label="Chat thread" data-empty={emptyChat} style={conversationMainStyle}>
+          {emptyChat ? (
+            <EmptyChatStart
+              onSelectSuggestion={(content) =>
+                onSendMessage({
+                  attachments: [],
+                  content,
+                  localWorkspace,
+                  webSearch: webSearch.enabled
+                    ? {
+                        enabled: true,
+                        maxResults: webSearch.maxResults,
+                        provider: webSearch.provider,
+                      }
+                    : undefined,
+                })
+              }
+            >
+              {composer}
+            </EmptyChatStart>
+          ) : (
+            <>
+              <ChatThread
+                appInfo={appInfo}
+                chat={chat}
+                hasApiKey={hasApiKey}
+                onHeaderBlurChange={setHeaderBlurActive}
+                onOpenActivity={() => setRightRailOpen(true)}
+                onRequestPlanRevision={onRequestPlanRevision}
+                onRegenerateResponse={onRegenerateResponse}
+                onResolveToolApproval={onResolveToolApproval}
+                onStopGeneration={onStopGeneration}
+              />
+              {composer}
+            </>
+          )}
         </section>
-        {showRightRail ? <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
+        {showRightRail ? <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} onResolveToolApproval={onResolveToolApproval} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
         {showBrowserPreview ? (
           <BrowserPreviewPanel
             expanded={browserPreviewExpanded}
+            initialUrl={browserPreviewUrl ?? undefined}
             previewWidth={browserPreviewWidth}
             resizeMaxWidth={BROWSER_PREVIEW_MAX_WIDTH}
             resizeMinWidth={BROWSER_PREVIEW_MIN_WIDTH}
@@ -332,6 +401,42 @@ const BROWSER_PREVIEW_RESIZE_STEP = 40;
 const PREVIEW_ONLY_RESERVED_WIDTH = 320;
 const SPLIT_LAYOUT_RESERVED_WIDTH = 560;
 
+const starterSuggestions = [
+  {
+    icon: GitBranch,
+    label: "Think of a suitable starter task for me, implement it, and walk me through the solution",
+  },
+  {
+    icon: Sparkles,
+    label: "Explain this project to me",
+  },
+  {
+    icon: Grid2X2,
+    label: "Connect your favorite apps to Gilbert Codex",
+  },
+];
+
+function EmptyChatStart({ children, onSelectSuggestion }: { children: ReactNode; onSelectSuggestion: (content: string) => void }) {
+  return (
+    <div className="empty-chat-start">
+      <h2>What should we work on?</h2>
+      {children}
+      <div className="empty-chat-suggestions" aria-label="Starter prompts">
+        {starterSuggestions.map((suggestion) => {
+          const SuggestionIcon = suggestion.icon;
+
+          return (
+            <button key={suggestion.label} type="button" onClick={() => onSelectSuggestion(suggestion.label)}>
+              <SuggestionIcon size={19} aria-hidden="true" />
+              <span>{suggestion.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: number) {
   const reservedWidth = sideLayout === "split" ? SPLIT_LAYOUT_RESERVED_WIDTH : PREVIEW_ONLY_RESERVED_WIDTH;
   const availableWidth = Math.max(BROWSER_PREVIEW_MIN_WIDTH, containerWidth - reservedWidth);
@@ -345,4 +450,8 @@ function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: numbe
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getQueuedMessages(messages: ChatMessage[]) {
+  return messages.filter((message) => message.role === "user" && message.status === "queued");
 }

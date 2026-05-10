@@ -1,4 +1,4 @@
-export type LocalPermissionMode = "ask-first" | "gilbert-review" | "full-workspace";
+export type LocalPermissionMode = "ask-first" | "gilbert-review" | "full-workspace" | "read-only";
 
 export type LocalWorkspaceScope = "current-folder" | "selected-folder" | "full-computer";
 export type LocalWorkspaceIndexStatus = "idle" | "indexing" | "error";
@@ -62,9 +62,28 @@ export interface ComputerFileIndexProgress {
   truncated: boolean;
 }
 
+export interface ComputerGitStatus {
+  additions: number;
+  ahead: number;
+  available: boolean;
+  behind: number;
+  branch?: string;
+  changedFiles: number;
+  clean: boolean;
+  deletions: number;
+  error?: string;
+  githubOwner?: string;
+  githubRepo?: string;
+  remoteUrl?: string;
+  repositoryRoot?: string;
+}
+
 export interface ComputerSearchResult {
   extension?: string;
   kind: ComputerFileKind;
+  line?: number;
+  matchKind?: "content" | "memory" | "name" | "path" | "semantic";
+  matches?: string[];
   modifiedAt?: number;
   name: string;
   path: string;
@@ -87,5 +106,11 @@ export interface ComputerWriteFileResult {
   bytesWritten: number;
   created: boolean;
   modifiedAt?: number;
+  path: string;
+}
+
+export interface ComputerDeleteFileResult {
+  bytesDeleted: number;
+  deleted: boolean;
   path: string;
 }

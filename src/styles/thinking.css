@@ -3,6 +3,10 @@
 }
 
 .mode-chip-thinking {
+  gap: 5px;
+  max-width: 112px;
+  min-height: 30px;
+  padding-inline: 8px;
   color: #dfe7ee;
   border: 1px solid transparent;
   background:
@@ -11,14 +15,22 @@
 }
 
 .mode-chip-thinking[data-active="true"] {
+  max-width: 112px;
   color: #f6f8f8;
   background:
     linear-gradient(180deg, rgba(39, 45, 52, 0.98), rgba(31, 33, 35, 0.98)) padding-box,
     linear-gradient(135deg, rgba(117, 199, 255, 0.68), rgba(218, 188, 109, 0.48), rgba(167, 141, 255, 0.54)) border-box;
 }
 
+.conversation-body[data-right-rail-open="true"] .mode-chip-thinking,
+.conversation-body[data-side-layout="preview"] .mode-chip-thinking,
+.conversation-body[data-side-layout="split"] .mode-chip-thinking,
+.desktop-root[data-runtime="web"] .mode-chip-thinking {
+  max-width: 112px;
+}
+
 .thinking-popover {
-  width: min(376px, calc(100vw - 36px));
+  width: min(420px, calc(100vw - 36px));
   padding: 10px;
   border-radius: 16px;
 }
@@ -126,7 +138,7 @@
 
 .thinking-effort-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -237,6 +249,73 @@
 .thinking-panel {
   display: grid;
   gap: 10px;
+}
+
+.composer-popover-attach .thinking-panel,
+.composer-popover-attach .thinking-options {
+  gap: 7px;
+}
+
+.composer-popover-attach .thinking-popover-header {
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  min-height: 42px;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 10px;
+}
+
+.composer-popover-attach .thinking-popover-orb {
+  width: 28px;
+  height: 28px;
+}
+
+.composer-popover-attach .thinking-popover-header strong,
+.composer-popover-attach .thinking-trace-note strong {
+  font-size: 12px;
+}
+
+.composer-popover-attach .thinking-popover-header small,
+.composer-popover-attach .thinking-trace-note small {
+  font-size: 10.5px;
+}
+
+.composer-popover-attach .thinking-power {
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+}
+
+.composer-popover-attach .thinking-field-row {
+  padding: 0 2px;
+  font-size: 11px;
+}
+
+.composer-popover-attach .thinking-field-row small {
+  font-size: 11px;
+}
+
+.composer-popover-attach .thinking-effort-grid {
+  gap: 6px;
+}
+
+.composer-popover-attach .thinking-effort-grid button {
+  min-height: 48px;
+  padding: 7px;
+  border-radius: 9px;
+}
+
+.composer-popover-attach .thinking-effort-grid strong {
+  font-size: 12px;
+}
+
+.composer-popover-attach .thinking-effort-grid small {
+  font-size: 10.5px;
+}
+
+.composer-popover-attach .thinking-trace-note {
+  min-height: 42px;
+  padding: 7px;
+  border-radius: 10px;
 }
 
 .thinking-disclosure {

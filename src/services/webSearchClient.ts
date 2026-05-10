@@ -4,7 +4,7 @@ import { isTauriDesktopRuntime } from "../app/tauriClient";
 import type { ChatMessage, ChatSource } from "../types/chat";
 
 export const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
-export const MAX_WEB_SEARCH_RESULTS = 6;
+export const MAX_WEB_SEARCH_RESULTS = 12;
 
 export interface WebSearchResult {
   snippet?: string;
@@ -108,8 +108,9 @@ export function createWebSearchContextMessage(query: string, sources: ChatSource
     "WEB SEARCH CONTEXT - DuckDuckGo web search is enabled for the user's latest request.",
     normalizedQuery ? `Search query: ${normalizedQuery}` : "",
     sources.length > 0
-      ? "You must answer from the DuckDuckGo results below, not from memory. Cite useful sources with Markdown links in the answer."
-      : "DuckDuckGo did not return usable sources. Do not answer from memory; say the live web search did not return usable results.",
+      ? "Use the DuckDuckGo results below as the live web evidence for this answer. Do not fill gaps with memory. If the results are insufficient, say what could not be verified from the live results."
+      : "DuckDuckGo did not return usable sources. Do not answer current factual claims from memory; say the live web search did not return usable results.",
+    sources.length > 0 ? "Cite web-supported claims with Markdown links using only the URLs listed below." : "",
     error ? `Search error: ${error}` : "",
     resultLines.length > 0 ? "DuckDuckGo results:" : "",
     resultLines.join("\n\n"),

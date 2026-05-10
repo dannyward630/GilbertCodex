@@ -1,6 +1,6 @@
 [package]
 name = "gilbert-codex"
-version = "0.1.0"
+version = "0.0.1-alpha"
 description = "GUI-first local agent workspace."
 authors = ["Gilbert Codex Contributors"]
 edition = "2021"
@@ -14,8 +14,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-reqwest = "0.13.3"
+base64 = "0.22"
+ed25519-dalek = "2"
+reqwest = { version = "0.13.3", features = ["json"] }
+rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2.3.3"
 uuid = { version = "1", features = ["v4"] }

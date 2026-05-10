@@ -1,6 +1,6 @@
 {
   "name": "gilbert-codex",
-  "version": "0.1.0",
+  "version": "0.0.1-alpha",
   "description": "GUI-first local desktop agent workspace built with React, Tauri, and Rust.",
   "license": "MIT",
   "type": "module",
@@ -27,6 +27,7 @@
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "audit:prod": "npm audit --omit=dev",
     "check": "npm run build && npm run rust:fmt:check && npm run rust:check",
     "tauri": "tauri",
     "app:dev": "tauri dev",
@@ -37,6 +38,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-notification": "^2.3.3",
+    "color-name-list": "^14.36.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

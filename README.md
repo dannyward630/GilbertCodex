@@ -9,25 +9,34 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ## Current Status
 
-Gilbert Codex is in an early collaboration-ready desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, OpenRouter streaming, planning mode, web search, local computer file context, terminal sessions, browser preview, tool toggles, settings, and a Tauri command bridge.
+Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
 
 The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, runtime clients, tools, types, and Rust commands without reverse-engineering the whole app.
+
+## Download
+
+The first public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.0.1-alpha).
+
+Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
+
+See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included capabilities, setup notes, known limitations, and checksum details.
 
 ## Product Shape
 
 - Desktop shell: Tauri 2 window, custom chrome, local app metadata, and Rust commands.
 - Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
 - Chat workspace: searchable history, pinned chats, project grouping, markdown rendering, image/file attachments, regeneration, stop, and local persistence.
-- Model runtime: OpenRouter chat streaming, model context estimates, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Tools: web search, local file indexing, file read/write helpers, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
-- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, and visible activity/progress cards.
-- Settings: OpenRouter key entry, connection validation, appearance mode, model, generation, thinking, and web-search controls.
+- Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
+- Tools: web search, GitHub repository/source-control tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, vector helpers, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
+- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
+- Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and web-search controls.
 
 ## Repository Layout
 
 ```text
 .
 |-- public/                 Static app assets
+|-- docs/                   Project docs, tool contracts, and publishing checklists
 |-- src/                    React frontend
 |   |-- app/                App composition, auth, runtime helpers, Tauri clients
 |   |-- components/         Reusable UI grouped by product area
@@ -35,12 +44,12 @@ The repository is kept open-source ready by default: dependencies, build output,
 |   |-- pages/              Top-level app surfaces
 |   |-- services/           Provider, planning, usage, and web-search clients
 |   |-- styles/             CSS split by surface
-|   |-- tools/              Browser and local-computer tool executors
+|   |-- tools/              Browser, GitHub, and local-computer tool executors
 |   `-- types/              Shared TypeScript contracts
 |-- src-tauri/              Tauri 2 and Rust host layer
 |   |-- capabilities/       Window and runtime permissions
 |   |-- icons/              App icon assets generated from the project logo
-|   |-- src/commands/       Auth, app info, computer, terminal, and web commands
+|   |-- src/commands/       Auth, app info, computer, Discord, GitHub, terminal, and web commands
 |   |-- src/core/           Rust provider, job, storage, and agent scaffolding
 |   `-- tauri.conf.json     Desktop app configuration
 |-- CONTRIBUTING.md         Local setup and contribution rules
@@ -81,6 +90,12 @@ Run the full repository check:
 npm.cmd run check
 ```
 
+Optional production dependency audit:
+
+```powershell
+npm.cmd run audit:prod
+```
+
 Individual checks:
 
 ```powershell
@@ -91,9 +106,18 @@ npm.cmd run rust:check
 
 ## Local Data And Secrets
 
-Gilbert Codex is local-first. OpenRouter keys are entered through Settings and treated as local user data, not repository configuration. Desktop local accounts are stored in the app data area; the browser preview uses localStorage as a development fallback. Do not commit real API keys, local databases, logs, terminal output, private workspace data, or build artifacts.
+Gilbert Codex is local-first. Provider keys and local endpoint URLs are entered through Settings and treated as local user data, not repository configuration. Desktop local accounts are stored in the app data area; the browser preview uses localStorage as a development fallback. Do not commit real API keys, local databases, logs, terminal output, private workspace data, or build artifacts.
+
+GitHub browser login uses OAuth device flow. For local development, create a GitHub OAuth App with device flow enabled, copy `.env.example` to `.env`, set `VITE_GITHUB_OAUTH_CLIENT_ID` to the public client ID, and sign in from Settings. No client secret belongs in the desktop app. The app requests a broad GitHub OAuth scope bundle at sign-in so source-control, workflow-file, package, gist, organization, and repository-admin tools can work when the signed-in account is allowed to perform those actions.
+
+Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs; GitHub repository events can use Discord's GitHub-compatible webhook payload URL for channel notifications. Bot gateway chat is still future runtime work.
 
 See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, or provider errors.
+
+## Integration Setup
+
+- [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, incoming webhooks, and GitHub-to-Discord notifications.
+- [GitHub integration setup](docs/github/README.md): GitHub OAuth App device-flow setup, requested scopes, Settings sign-in, repository tools, and webhook troubleshooting.
 
 ## Collaboration
 
@@ -101,6 +125,7 @@ Before opening a pull request, run:
 
 ```powershell
 npm.cmd run check
+npm.cmd run audit:prod
 git diff --check
 ```
 

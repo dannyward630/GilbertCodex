@@ -14,17 +14,22 @@ use std::{
 };
 use tauri::Emitter;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 const DEFAULT_DIRECTORY_LIMIT: usize = 600;
 const DEFAULT_INDEX_LIMIT: usize = 12_000;
 const DEFAULT_INDEX_DEPTH: usize = 16;
 const EMBEDDING_DIMS: usize = 64;
 const MAX_PREVIEW_BYTES: usize = 8 * 1024;
-const MAX_READ_FILE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_READ_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INDEX_PREVIEW_BYTES: usize = 4 * 1024;
 const MAX_TEXT_INDEX_FILE_BYTES: u64 = 1_500_000;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
     ".cache",
     ".dart_tool",
@@ -173,6 +178,30 @@ pub struct ComputerFileIndexProgress {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComputerGitStatusRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitStatus {
+    pub additions: usize,
+    pub ahead: usize,
+    pub available: bool,
+    pub behind: usize,
+    pub branch: Option<String>,
+    pub changed_files: usize,
+    pub clean: bool,
+    pub deletions: usize,
+    pub error: Option<String>,
+    pub github_owner: Option<String>,
+    pub github_repo: Option<String>,
+    pub remote_url: Option<String>,
+    pub repository_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComputerSearchRequest {
     pub limit: Option<usize>,
     pub query: String,
@@ -183,6 +212,9 @@ pub struct ComputerSearchRequest {
 pub struct ComputerSearchResult {
     pub extension: Option<String>,
     pub kind: ComputerFileKind,
+    pub line: Option<usize>,
+    pub match_kind: String,
+    pub matches: Vec<String>,
     pub modified_at: Option<u64>,
     pub name: String,
     pub path: String,
@@ -208,6 +240,13 @@ pub struct ComputerWriteFileRequest {
     pub roots: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerDeleteFileRequest {
+    pub path: String,
+    pub roots: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerReadFileResult {
@@ -229,6 +268,14 @@ pub struct ComputerWriteFileResult {
     pub path: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerDeleteFileResult {
+    pub bytes_deleted: u64,
+    pub deleted: bool,
+    pub path: String,
+}
+
 #[tauri::command]
 pub fn computer_get_default_workspace() -> Option<String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -241,66 +288,24 @@ pub fn computer_list_drives() -> Vec<ComputerDrive> {
 }
 
 #[tauri::command]
-pub fn computer_pick_folder(start_path: Option<String>) -> Result<Option<String>, String> {
-    #[cfg(windows)]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Choose a folder for Gilbert Codex'
-$dialog.ShowNewFolderButton = $true
-$start = [Environment]::GetEnvironmentVariable('GILBERT_CODEX_START_PATH')
-if ($start -and (Test-Path -LiteralPath $start -PathType Container)) {
-  $dialog.SelectedPath = $start
+pub async fn computer_pick_folder(start_path: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || pick_folder_blocking(start_path))
+        .await
+        .map_err(|error| format!("The folder picker stopped unexpectedly: {}", error))?
 }
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-  Write-Output $dialog.SelectedPath
-}
-"#;
-        let mut command = Command::new("powershell.exe");
 
-        command
-            .arg("-NoLogo")
-            .arg("-NoProfile")
-            .arg("-STA")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg(script);
+fn pick_folder_blocking(start_path: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new().set_title("Choose a folder for Gilbert Codex");
 
-        if let Some(start_path) = start_path {
-            command.env("GILBERT_CODEX_START_PATH", start_path);
+    if let Some(start_path) = start_path {
+        let start = normalize_input_path(&start_path);
+
+        if start.is_dir() {
+            dialog = dialog.set_directory(start);
         }
-
-        let output = command
-            .output()
-            .map_err(|error| format!("Could not open the folder picker: {}", error))?;
-
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if detail.is_empty() {
-                "The folder picker closed unexpectedly.".to_string()
-            } else {
-                detail
-            });
-        }
-
-        let selected_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if selected_path.is_empty() {
-            None
-        } else {
-            Some(selected_path)
-        });
     }
 
-    #[cfg(not(windows))]
-    {
-        let _ = start_path;
-        Err("Folder picker is not available on this platform yet. Type or drop a folder path instead.".to_string())
-    }
+    Ok(dialog.pick_folder().map(path_to_string))
 }
 
 #[tauri::command]
@@ -518,6 +523,80 @@ pub fn computer_get_file_index_summary(
 }
 
 #[tauri::command]
+pub async fn computer_get_git_status(
+    request: ComputerGitStatusRequest,
+) -> Result<ComputerGitStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || get_git_status_blocking(request))
+        .await
+        .map_err(|error| format!("The Git status worker stopped unexpectedly: {}", error))?
+}
+
+fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<ComputerGitStatus, String> {
+    let path = normalize_input_path(&request.path);
+
+    if !path.exists() {
+        return Ok(create_unavailable_git_status(Some(format!(
+            "{} does not exist.",
+            path_to_string(&path)
+        ))));
+    }
+
+    let repository_path = match find_git_repository_root(&path) {
+        Some(root) => root,
+        None => return Ok(create_unavailable_git_status(None)),
+    };
+    let branch = run_git(&repository_path, &["branch", "--show-current"])
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            run_git(&repository_path, &["rev-parse", "--short", "HEAD"])
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|sha| format!("detached {}", sha))
+        });
+    let remote_url = run_git(&repository_path, &["remote", "get-url", "origin"])
+        .ok()
+        .filter(|value| !value.is_empty());
+    let (github_owner, github_repo) = remote_url
+        .as_deref()
+        .and_then(parse_github_remote_url)
+        .unwrap_or((None, None));
+    let status_output =
+        run_git(&repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
+    let changed_files = status_output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    let (additions, deletions) = parse_git_numstat(
+        &run_git(&repository_path, &["diff", "--numstat", "HEAD"]).unwrap_or_default(),
+    );
+    let (ahead, behind) = parse_git_ahead_behind(
+        &run_git(
+            &repository_path,
+            &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+        )
+        .unwrap_or_default(),
+    );
+    let repository_root = path_to_string(&repository_path);
+
+    Ok(ComputerGitStatus {
+        additions,
+        ahead,
+        available: true,
+        behind,
+        branch,
+        changed_files,
+        clean: changed_files == 0,
+        deletions,
+        error: None,
+        github_owner,
+        github_repo,
+        remote_url,
+        repository_root: Some(repository_root),
+    })
+}
+
+#[tauri::command]
 pub fn computer_search_file_index(
     state: tauri::State<'_, ComputerFileIndexState>,
     request: ComputerSearchRequest,
@@ -531,6 +610,7 @@ pub fn computer_search_file_index(
     let limit = request.limit.unwrap_or(24).clamp(1, 100);
     let query_embedding = create_embedding(query);
     let query_lower = query.to_lowercase();
+    let query_tokens = tokenize_search_query(query);
     let index = state
         .index
         .lock()
@@ -539,20 +619,23 @@ pub fn computer_search_file_index(
         .entries
         .iter()
         .filter_map(|entry| {
-            let score = score_entry(entry, &query_embedding, &query_lower);
+            let scored = score_entry(entry, &query_embedding, &query_lower, &query_tokens);
 
-            if score <= 0.0 {
+            if scored.score <= 0.0 {
                 return None;
             }
 
             Some(ComputerSearchResult {
                 extension: entry.extension.clone(),
                 kind: entry.kind.clone(),
+                line: scored.line,
+                match_kind: scored.match_kind,
+                matches: scored.matches,
                 modified_at: entry.modified_at,
                 name: entry.name.clone(),
                 path: entry.path.clone(),
-                preview: entry.preview.clone(),
-                score,
+                preview: scored.preview.or_else(|| entry.preview.clone()),
+                score: scored.score,
                 size: entry.size,
             })
         })
@@ -673,6 +756,46 @@ pub fn computer_write_text_file(
         bytes_written: request.content.len(),
         created,
         modified_at: modified_millis(&metadata),
+        path: path_to_string(&path),
+    })
+}
+
+#[tauri::command]
+pub fn computer_delete_file(
+    request: ComputerDeleteFileRequest,
+) -> Result<ComputerDeleteFileResult, String> {
+    let path = normalize_input_path(&request.path);
+    let roots = normalize_roots(request.roots);
+
+    if roots.is_empty() {
+        return Err("Choose a folder workspace before deleting files.".to_string());
+    }
+
+    if has_parent_dir_component(&path) {
+        return Err("Refusing to delete through a path that contains '..'.".to_string());
+    }
+
+    if !path_is_inside_roots(&path, &roots) {
+        return Err(
+            "Deletes are only allowed inside the selected or current workspace folder.".to_string(),
+        );
+    }
+
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Could not inspect {}: {}", path_to_string(&path), error))?;
+
+    if !metadata.is_file() {
+        return Err("delete_file only removes files, not folders.".to_string());
+    }
+
+    let bytes_deleted = metadata.len();
+
+    fs::remove_file(&path)
+        .map_err(|error| format!("Could not delete {}: {}", path_to_string(&path), error))?;
+
+    Ok(ComputerDeleteFileResult {
+        bytes_deleted,
+        deleted: true,
         path: path_to_string(&path),
     })
 }
@@ -907,13 +1030,16 @@ fn should_index_text_preview(path: &Path, size: u64) -> bool {
         file_extension(path).as_deref(),
         Some(
             "bat"
+                | "astro"
                 | "c"
                 | "cmd"
                 | "cpp"
                 | "cs"
                 | "css"
                 | "csv"
+                | "dart"
                 | "go"
+                | "graphql"
                 | "gradle"
                 | "h"
                 | "html"
@@ -924,16 +1050,22 @@ fn should_index_text_preview(path: &Path, size: u64) -> bool {
                 | "kt"
                 | "kts"
                 | "log"
+                | "lua"
                 | "md"
                 | "ps1"
+                | "php"
                 | "py"
+                | "rb"
                 | "rs"
                 | "scss"
                 | "sh"
                 | "sql"
+                | "svelte"
+                | "swift"
                 | "toml"
                 | "ts"
                 | "tsx"
+                | "vue"
                 | "txt"
                 | "xml"
                 | "yaml"
@@ -1009,8 +1141,57 @@ fn normalize_vector(vector: &mut [f32]) {
     }
 }
 
-fn score_entry(entry: &IndexedComputerFile, query_embedding: &[f32], query_lower: &str) -> f32 {
-    let mut score = entry
+#[derive(Debug)]
+struct SearchScore {
+    line: Option<usize>,
+    match_kind: String,
+    matches: Vec<String>,
+    preview: Option<String>,
+    score: f32,
+}
+
+fn tokenize_search_query(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for character in value.chars() {
+        if character.is_alphanumeric() || character == '_' || character == '-' {
+            current.push(character.to_ascii_lowercase());
+        } else {
+            push_search_token(&mut tokens, &current);
+            current.clear();
+        }
+    }
+
+    push_search_token(&mut tokens, &current);
+    tokens
+}
+
+fn push_search_token(tokens: &mut Vec<String>, token: &str) {
+    let cleaned = token.trim_matches(|character: char| character == '_' || character == '-');
+
+    if cleaned.len() < 2 {
+        return;
+    }
+
+    if !tokens.iter().any(|existing| existing == cleaned) {
+        tokens.push(cleaned.to_string());
+    }
+
+    for part in cleaned.split(['_', '-']) {
+        if part.len() > 1 && !tokens.iter().any(|existing| existing == part) {
+            tokens.push(part.to_string());
+        }
+    }
+}
+
+fn score_entry(
+    entry: &IndexedComputerFile,
+    query_embedding: &[f32],
+    query_lower: &str,
+    query_tokens: &[String],
+) -> SearchScore {
+    let semantic_score = entry
         .embedding
         .iter()
         .zip(query_embedding)
@@ -1018,16 +1199,151 @@ fn score_entry(entry: &IndexedComputerFile, query_embedding: &[f32], query_lower
         .sum::<f32>();
     let path_lower = entry.path.to_lowercase();
     let name_lower = entry.name.to_lowercase();
+    let extension_lower = entry.extension.clone().unwrap_or_default();
+    let preview_lower = entry.preview.as_deref().unwrap_or_default().to_lowercase();
+    let mut matches = Vec::new();
+    let mut name_score = 0f32;
+    let mut path_score = 0f32;
+    let mut content_score = 0f32;
 
-    if name_lower.contains(query_lower) {
-        score += 0.7;
+    if !query_lower.is_empty() && name_lower == query_lower {
+        name_score += 8.0;
+        push_match(&mut matches, query_lower);
+    } else if !query_lower.is_empty() && name_lower.contains(query_lower) {
+        name_score += 5.0;
+        push_match(&mut matches, query_lower);
     }
 
-    if path_lower.contains(query_lower) {
-        score += 0.35;
+    if !query_lower.is_empty() && path_lower.contains(query_lower) {
+        path_score += 2.5;
+        push_match(&mut matches, query_lower);
     }
 
-    score
+    if !query_lower.is_empty() && preview_lower.contains(query_lower) {
+        content_score += 1.4;
+        push_match(&mut matches, query_lower);
+    }
+
+    for token in query_tokens {
+        if name_lower.contains(token) {
+            name_score += 1.6;
+            push_match(&mut matches, token);
+        }
+
+        if path_lower.contains(token) {
+            path_score += 0.85;
+            push_match(&mut matches, token);
+        }
+
+        if extension_lower == *token {
+            path_score += 0.45;
+            push_match(&mut matches, token);
+        }
+
+        if preview_lower.contains(token) {
+            content_score += 0.35;
+            push_match(&mut matches, token);
+        }
+    }
+
+    let snippet = find_preview_snippet(
+        entry.preview.as_deref().unwrap_or_default(),
+        query_lower,
+        query_tokens,
+    );
+
+    if snippet.preview.is_some() {
+        content_score += 0.8;
+        for item in &snippet.matches {
+            push_match(&mut matches, item);
+        }
+    }
+
+    let strongest_lexical = name_score.max(path_score).max(content_score);
+    let match_kind = if name_score > 0.0 && name_score >= path_score && name_score >= content_score
+    {
+        "name"
+    } else if path_score > 0.0 && path_score >= content_score {
+        "path"
+    } else if content_score > 0.0 {
+        "content"
+    } else if semantic_score > 0.0 {
+        "semantic"
+    } else {
+        "semantic"
+    };
+
+    SearchScore {
+        line: snippet.line,
+        match_kind: match_kind.to_string(),
+        matches,
+        preview: snippet.preview,
+        score: strongest_lexical
+            + content_score / query_tokens.len().max(1) as f32
+            + semantic_score * 0.75,
+    }
+}
+
+#[derive(Default)]
+struct SearchSnippet {
+    line: Option<usize>,
+    matches: Vec<String>,
+    preview: Option<String>,
+}
+
+fn find_preview_snippet(
+    content: &str,
+    query_lower: &str,
+    query_tokens: &[String],
+) -> SearchSnippet {
+    if content.is_empty() {
+        return SearchSnippet::default();
+    }
+
+    for (index, line) in content.lines().enumerate() {
+        let line_lower = line.to_lowercase();
+        let mut matches = Vec::new();
+
+        if !query_lower.is_empty() && line_lower.contains(query_lower) {
+            push_match(&mut matches, query_lower);
+        }
+
+        for token in query_tokens {
+            if line_lower.contains(token) {
+                push_match(&mut matches, token);
+            }
+        }
+
+        if !matches.is_empty() {
+            return SearchSnippet {
+                line: Some(index + 1),
+                matches,
+                preview: Some(trim_search_preview(line)),
+            };
+        }
+    }
+
+    SearchSnippet::default()
+}
+
+fn trim_search_preview(line: &str) -> String {
+    let trimmed = line.trim();
+
+    if trimmed.chars().count() <= 420 {
+        return trimmed.to_string();
+    }
+
+    trimmed.chars().take(420).collect()
+}
+
+fn push_match(matches: &mut Vec<String>, value: &str) {
+    let cleaned = value.trim().to_ascii_lowercase();
+
+    if cleaned.is_empty() || matches.len() >= 10 || matches.iter().any(|item| item == &cleaned) {
+        return;
+    }
+
+    matches.push(cleaned);
 }
 
 fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
@@ -1042,6 +1358,132 @@ fn system_time_millis(time: SystemTime) -> Option<u64> {
     time.duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+}
+
+fn create_unavailable_git_status(error: Option<String>) -> ComputerGitStatus {
+    ComputerGitStatus {
+        additions: 0,
+        ahead: 0,
+        available: false,
+        behind: 0,
+        branch: None,
+        changed_files: 0,
+        clean: true,
+        deletions: 0,
+        error,
+        github_owner: None,
+        github_repo: None,
+        remote_url: None,
+        repository_root: None,
+    }
+}
+
+fn find_git_repository_root(path: &Path) -> Option<PathBuf> {
+    let mut current = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .map_err(|error| format!("Could not run git: {}", error))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+
+        return Err(if detail.is_empty() {
+            "Git did not return status for this folder.".to_string()
+        } else {
+            detail
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_git_numstat(output: &str) -> (usize, usize) {
+    output
+        .lines()
+        .fold((0usize, 0usize), |(additions, deletions), line| {
+            let mut columns = line.split('\t');
+            let added = columns
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let deleted = columns
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+
+            (additions + added, deletions + deleted)
+        })
+}
+
+fn parse_git_ahead_behind(output: &str) -> (usize, usize) {
+    let mut parts = output.split_whitespace();
+    let behind = parts
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let ahead = parts
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    (ahead, behind)
+}
+
+fn parse_github_remote_url(remote_url: &str) -> Option<(Option<String>, Option<String>)> {
+    let trimmed = remote_url.trim().trim_end_matches(".git");
+    let path = if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("http://github.com/") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
+        rest
+    } else {
+        return None;
+    };
+    let mut parts = path.split('/');
+    let owner = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let repo = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if owner.is_none() || repo.is_none() {
+        return None;
+    }
+
+    Some((owner, repo))
 }
 
 fn path_to_string(path: impl AsRef<Path>) -> String {

@@ -2,6 +2,8 @@ import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 
+export type SidebarItemActivity = "queued" | "waiting" | "working";
+
 interface SidebarMenuItem {
   danger?: boolean;
   icon: LucideIcon;
@@ -11,6 +13,8 @@ interface SidebarMenuItem {
 
 interface SidebarItem {
   active?: boolean;
+  activity?: SidebarItemActivity;
+  activityLabel?: string;
   children?: SidebarItem[];
   expanded?: boolean;
   icon?: LucideIcon;
@@ -81,13 +85,15 @@ export function SidebarSection({
     const hasChildren = childItems.length > 0;
     const hasMenu = Boolean(item.menuItems?.length);
     const hasQuickAction = Boolean(QuickActionIcon && item.onQuickAction);
+    const activityLabel = item.activityLabel ?? (item.activity ? formatActivityLabel(item.activity) : undefined);
 
     return (
       <div key={item.id} className="sidebar-list-group" data-depth={depth}>
-        <div className="sidebar-list-row" data-active={item.active} data-depth={depth} data-has-menu={hasMenu}>
+        <div className="sidebar-list-row" data-active={item.active} data-activity={item.activity} data-depth={depth} data-has-menu={hasMenu}>
           <button
             className="sidebar-list-item"
             type="button"
+            aria-label={activityLabel ? `${item.label}, ${activityLabel}` : undefined}
             aria-expanded={hasChildren ? item.expanded : undefined}
             onClick={() => item.onSelect?.(item.id)}
           >
@@ -96,6 +102,9 @@ export function SidebarSection({
                 <ChevronRight className="sidebar-disclosure-icon" data-open={item.expanded} size={14} aria-hidden="true" />
               ) : null}
               {Icon ? <Icon size={16} aria-hidden="true" /> : null}
+              {item.activity ? (
+                <span className="sidebar-activity-dot" data-activity={item.activity} title={activityLabel} aria-hidden="true" />
+              ) : null}
               <span>{item.label}</span>
             </span>
             {item.meta ? <span className="sidebar-meta">{item.meta}</span> : null}
@@ -183,4 +192,16 @@ export function SidebarSection({
       <div className="sidebar-list">{items.map((item) => renderItem(item))}</div>
     </section>
   );
+}
+
+function formatActivityLabel(activity: SidebarItemActivity) {
+  if (activity === "waiting") {
+    return "Needs review";
+  }
+
+  if (activity === "queued") {
+    return "Queued";
+  }
+
+  return "Working";
 }

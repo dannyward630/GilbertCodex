@@ -54,7 +54,7 @@ interface SearchEngine {
 const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
 const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
 const LOCAL_PROBE_TIMEOUT_MS = 900;
-const LOCAL_PREVIEW_PORTS = [3000, 3001, 4173, 4200, 4321, 5000, 5001, 5173, 5174, 5500, 8000, 8080, 8787];
+const LOCAL_PREVIEW_PORTS = [1420, 3000, 3001, 4173, 4200, 4321, 5000, 5001, 5173, 5174, 5500, 8000, 8080, 8787];
 const SEARCH_ENGINES: SearchEngine[] = [
   {
     homeUrl: "https://www.google.com/",
@@ -93,7 +93,10 @@ export function BrowserPreviewPanel({
   onResizeStart,
   onToggleExpanded,
 }: BrowserPreviewPanelProps) {
-  const normalizedInitialUrl = useMemo(() => normalizePreviewUrl(initialUrl), [initialUrl]);
+  const normalizedInitialUrl = useMemo(() => {
+    const url = normalizePreviewUrl(initialUrl);
+    return url && !isCurrentAppUrl(url) ? url : null;
+  }, [initialUrl]);
   const [session, setSession] = useState<BrowserPreviewSession>(() => loadBrowserPreviewSession(normalizedInitialUrl));
   const [searchEngineId, setSearchEngineId] = useState<SearchEngineId>("google");
   const [localPreview, setLocalPreview] = useState<{ status: LocalPreviewStatus; url?: string }>({ status: "checking" });

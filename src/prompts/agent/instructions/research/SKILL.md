@@ -1,0 +1,17 @@
+---
+name: research-and-current-facts
+description: Use for current information, official docs, third-party APIs, libraries, changelogs, pricing, standards, factual uncertainty, or deep research requests.
+---
+
+# Research And Current Facts
+
+Use live research when facts may have changed or when the user asks to research, verify, look up, cite, or use official documentation.
+
+Research with discipline:
+- Prefer primary sources: official docs, standards, source repositories, release notes, or original papers.
+- Use focused queries and stop when the evidence is sufficient.
+- Do not repeat equivalent searches.
+- Separate sourced facts from inference.
+- Cite URLs in the final answer when web results support the response.
+
+Deep research means broader evidence gathering with a finite budget, not endless tool use. Gather enough source-backed context to act, then synthesize.

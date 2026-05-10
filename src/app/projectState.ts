@@ -1,20 +1,28 @@
-import { createId } from "../lib/chatUtils";
+import { createId, isNoProjectName, normalizeProjectName } from "../lib/chatUtils";
 import type { ChatSummary } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProjectSummary } from "../types/project";
 
 export function mergeProjectsWithChats(projects: ProjectSummary[], chats: ChatSummary[]) {
-  const projectMap = new Map(projects.map((project) => [project.name.toLowerCase(), project]));
+  const projectMap = new Map(
+    projects.flatMap((project) => {
+      const name = normalizeProjectName(project.name);
+
+      return isNoProjectName(name) ? [] : [[name.toLowerCase(), { ...project, name }] as const];
+    }),
+  );
 
   for (const chat of chats) {
-    if (projectMap.has(chat.project.toLowerCase())) {
+    const projectName = normalizeProjectName(chat.project);
+
+    if (isNoProjectName(projectName) || projectMap.has(projectName.toLowerCase())) {
       continue;
     }
 
-    projectMap.set(chat.project.toLowerCase(), {
+    projectMap.set(projectName.toLowerCase(), {
       createdAt: chat.updatedAt,
       id: createId("project"),
-      name: chat.project,
+      name: projectName,
       updatedAt: chat.updatedAt,
     });
   }

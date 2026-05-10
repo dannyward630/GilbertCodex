@@ -1,8 +1,9 @@
 import type { ComputerReadFileResult, ComputerWriteFileResult } from "../../types/localWorkspace";
 import { readComputerTextFile, writeComputerTextFile } from "./files";
+import { collectTextQualityWarnings } from "./textQuality";
 
 const DEFAULT_READ_LINES = 260;
-const EDIT_READ_BYTES = 2 * 1024 * 1024;
+const EDIT_READ_BYTES = 16 * 1024 * 1024;
 const MAX_PREVIEW_LINES = 36;
 
 export interface InlineEditRequest {
@@ -15,6 +16,7 @@ export interface InlineEditResult extends ComputerWriteFileResult {
   changed: boolean;
   operation: string;
   preview: string;
+  qualityWarnings: string[];
   replacements: number;
 }
 
@@ -36,6 +38,7 @@ export async function editComputerTextFile({ args, path, roots }: InlineEditRequ
       operation: edit.operation,
       path: file.path,
       preview: formatEditPreview(file.path, file.content, edit.previewStartLine),
+      qualityWarnings: [],
       replacements: 0,
     };
   }
@@ -50,6 +53,7 @@ export async function editComputerTextFile({ args, path, roots }: InlineEditRequ
     changed: true,
     operation: edit.operation,
     preview: formatEditPreview(written.path, edit.content, edit.previewStartLine),
+    qualityWarnings: collectTextQualityWarnings(written.path, edit.content),
     replacements: edit.replacements,
   };
 }
@@ -132,7 +136,11 @@ function replaceExactText(content: string, oldText: string, newText: string, arg
     throw new Error(`edit_file found ${matches.length} matches. Provide occurrence or replace_all=true.`);
   }
 
-  const selectedMatches = replaceAll ? matches : [matches[clamp((occurrence ?? 1) - 1, 0, matches.length - 1)]];
+  if (occurrence !== undefined && (occurrence < 1 || occurrence > matches.length)) {
+    throw new Error(`edit_file occurrence must be between 1 and ${matches.length}. Received ${occurrence}.`);
+  }
+
+  const selectedMatches = replaceAll ? matches : [matches[(occurrence ?? 1) - 1]];
   let cursor = 0;
   let nextContent = "";
 
@@ -158,16 +166,24 @@ function replaceCharacterRange(content: string, args: Record<string, string>) {
   const insertAt = optionalNumberArg(args, ["insert_at_char", "insertAtChar"]);
   const start = insertAt ?? numberArg(args, ["start_char", "startChar", "char_start", "charStart"], 0);
   const end = insertAt ?? numberArg(args, ["end_char", "endChar", "char_end", "charEnd"], start + 1);
-  const safeStart = clamp(start, 0, characters.length);
-  const safeEnd = clamp(end, safeStart, characters.length);
+
+  assertCharacterIndex(start, characters.length, insertAt === undefined ? "start_char" : "insert_at_char");
+  assertCharacterIndex(end, characters.length, "end_char");
+
+  if (end < start) {
+    throw new Error(`edit_file end_char must be greater than or equal to start_char. Received ${start}-${end}.`);
+  }
+
+  assertExpectedSelection(characters.slice(start, end).join(""), args, `character range ${start}-${end}`);
+
   const replacement = argValue(args, ["new_text", "newText", "replacement", "content", "text"]) ?? "";
-  const nextContent = `${characters.slice(0, safeStart).join("")}${replacement}${characters.slice(safeEnd).join("")}`;
+  const nextContent = `${characters.slice(0, start).join("")}${replacement}${characters.slice(end).join("")}`;
 
   return {
     changed: nextContent !== content,
     content: nextContent,
-    operation: insertAt === undefined ? `character range ${safeStart}-${safeEnd}` : `insert at character ${safeStart}`,
-    previewStartLine: lineNumberAtOffset(content, offsetFromCharacterIndex(content, safeStart)),
+    operation: insertAt === undefined ? `character range ${start}-${end}` : `insert at character ${start}`,
+    previewStartLine: lineNumberAtOffset(content, offsetFromCharacterIndex(content, start)),
     replacements: 1,
   };
 }
@@ -178,13 +194,31 @@ function replaceLineRange(content: string, args: Record<string, string>) {
   const insertAt = optionalNumberArg(args, ["insert_at_line", "insertAtLine"]);
   const requestedStart = insertAt ?? optionalNumberArg(args, ["line"]) ?? numberArg(args, ["start_line", "startLine", "line_start", "lineStart"], 1);
   const requestedEnd = insertAt === undefined ? numberArg(args, ["end_line", "endLine", "line_end", "lineEnd"], requestedStart) : insertAt - 1;
-  const startLine = clamp(requestedStart, 1, Math.max(lines.length, 1));
-  const endLine = clamp(requestedEnd, insertAt === undefined ? startLine : startLine - 1, lines.length);
+  const lineCount = Math.max(lines.length, 1);
+  const startLine = requestedStart;
+  const endLine = requestedEnd;
+
+  if (insertAt === undefined) {
+    assertLineNumber(startLine, lineCount, "start_line");
+    assertLineNumber(endLine, lineCount, "end_line");
+
+    if (endLine < startLine) {
+      throw new Error(`edit_file end_line must be greater than or equal to start_line. Received ${startLine}-${endLine}.`);
+    }
+  } else {
+    assertInsertLine(startLine, lineCount);
+  }
+
+  if (insertAt === undefined) {
+    assertExpectedSelection(lines.slice(startLine - 1, endLine).join(newline), args, `line range ${startLine}-${endLine}`, newline);
+  }
+
   const replacement = argValue(args, ["content", "new_text", "newText", "replacement", "text"]) ?? "";
   const replacementLines = replacement.length ? replacement.replace(/\r\n/g, "\n").split("\n") : [];
   const nextLines = [...lines];
+  const deleteCount = insertAt === undefined ? endLine - startLine + 1 : 0;
 
-  nextLines.splice(startLine - 1, Math.max(endLine - startLine + 1, 0), ...replacementLines);
+  nextLines.splice(startLine - 1, deleteCount, ...replacementLines);
 
   let nextContent = nextLines.join(newline);
 
@@ -199,6 +233,38 @@ function replaceLineRange(content: string, args: Record<string, string>) {
     previewStartLine: startLine,
     replacements: 1,
   };
+}
+
+function assertCharacterIndex(value: number, characterCount: number, label: string) {
+  if (!Number.isInteger(value) || value < 0 || value > characterCount) {
+    throw new Error(`edit_file ${label} must be between 0 and ${characterCount}. Received ${value}.`);
+  }
+}
+
+function assertLineNumber(value: number, lineCount: number, label: string) {
+  if (!Number.isInteger(value) || value < 1 || value > lineCount) {
+    throw new Error(`edit_file ${label} must be between 1 and ${lineCount}. Received ${value}.`);
+  }
+}
+
+function assertInsertLine(value: number, lineCount: number) {
+  if (!Number.isInteger(value) || value < 1 || value > lineCount + 1) {
+    throw new Error(`edit_file insert_at_line must be between 1 and ${lineCount + 1}. Received ${value}.`);
+  }
+}
+
+function assertExpectedSelection(actual: string, args: Record<string, string>, description: string, newline = "\n") {
+  const expected = argValue(args, ["expected_text", "expectedText", "expected_content", "expectedContent", "expected_current", "expectedCurrent", "expected_lines", "expectedLines"]);
+
+  if (expected === undefined) {
+    return;
+  }
+
+  const normalizedExpected = expected.replace(/\r\n/g, "\n").replace(/\n/g, newline);
+
+  if (actual !== normalizedExpected) {
+    throw new Error(`edit_file expected_text did not match ${description}. Use view_code again and retry with current text.`);
+  }
 }
 
 function formatEditPreview(path: string, content: string, previewStartLine: number) {
@@ -296,7 +362,13 @@ function optionalNumberArg(args: Record<string, string>, names: string[]) {
     return undefined;
   }
 
-  const parsed = Number.parseInt(rawValue, 10);
+  const trimmed = rawValue.trim();
+
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(`Expected numeric ${names[0]}, but received "${rawValue}".`);
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

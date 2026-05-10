@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.tools/
 
 # Frontend output
 dist/
@@ -33,6 +34,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Generated promo media
+docs/promo/gilbert-codex-promo-poster.png
+docs/promo/gilbert-codex-promo.webm
 
 # OS and editor noise
 .DS_Store

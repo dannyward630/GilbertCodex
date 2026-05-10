@@ -1,7 +1,9 @@
-import { Circle, CircleCheck, FileCode2, FileText, Globe2, Image, LoaderCircle, Pin, SendHorizontal, Sparkles, X } from "lucide-react";
+import { Ban, Check, ChevronDown, ChevronRight, Circle, CircleCheck, FileCode2, FileText, Globe2, Image, LoaderCircle, PencilLine, Pin, SendHorizontal, Sparkles, TerminalSquare, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatThinkingDuration, splitThinkingContent } from "../../lib/thinkingActivity";
+import { formatReasoningEffort } from "../../types/settings";
+import type { AgentApproval, AgentApprovalDecision } from "../../types/agentRun";
 import type {
   ChatArtifactKind,
   ChatMessage,
@@ -15,12 +17,10 @@ import type {
 
 const MAX_RAIL_ITEMS = 12;
 const MAX_PROGRESS_ITEMS = 40;
-const MAX_ACTIVITY_TOOL_CALLS = 12;
 const MAX_ACTIVITY_TOOL_TEXT_CHARS = 2_400;
 const MAX_ACTIVITY_TRACE_CHARS = 24_000;
 const MAX_ACTIVITY_TRACE_SEGMENTS = 8;
 const MAX_LIVE_TRACE_CHARS = 8_000;
-const MAX_PLANNING_MINI_ITEMS = 8;
 const MAX_SOURCE_SCAN_CHARS = 80_000;
 const MAX_TASK_SCAN_CHARS = 60_000;
 
@@ -42,11 +42,13 @@ interface RightRailProps {
   chat: ChatSummary;
   hasActivity?: boolean;
   onClose?: () => void;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onSubmitPlanningInput?: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
 }
 
-export function RightRail({ chat, hasActivity = false, onClose, onSubmitPlanningInput }: RightRailProps) {
+export function RightRail({ chat, hasActivity = false, onClose, onResolveToolApproval, onSubmitPlanningInput }: RightRailProps) {
   const { activityMessage, artifactItems, progressItems, sourceItems } = useMemo(() => getRightRailContent(chat), [chat]);
+  const visibleProgressItems = activityMessage ? [] : progressItems;
   const isThinkingLive = Boolean(activityMessage?.thinking && !activityMessage.thinking.completedAt);
   const [now, setNow] = useState(Date.now());
 
@@ -61,8 +63,8 @@ export function RightRail({ chat, hasActivity = false, onClose, onSubmitPlanning
 
   return (
     <aside className="right-rail" data-active={hasActivity} data-mode={activityMessage ? "activity" : "inspector"} aria-label="Conversation details">
-      {activityMessage ? <ActivityCard message={activityMessage} now={now} onClose={onClose} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
-      {progressItems.length > 0 ? <ProgressSection items={progressItems} /> : null}
+      {activityMessage ? <ActivityCard message={activityMessage} now={now} onClose={onClose} onResolveToolApproval={onResolveToolApproval} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
+      {visibleProgressItems.length > 0 ? <ProgressSection items={visibleProgressItems} /> : null}
       <RailSection items={artifactItems} title="Artifacts" />
       <RailSection items={sourceItems} title="Sources" />
     </aside>
@@ -79,17 +81,17 @@ export function chatHasLiveRightRailActivity(chat: ChatSummary) {
   return chat.messages.some(
     (message) => {
       const hasPendingPlanningInput = getPlanningInputRequests(message).some((request) => !request.answeredAt);
+      const hasPendingApproval = message.approvals?.some((approval) => approval.status === "pending");
 
       return (
         message.role === "assistant" &&
         Boolean(
-            (message.isStreaming || hasPendingPlanningInput) &&
+            (message.isStreaming || hasPendingPlanningInput || hasPendingApproval) &&
             (message.planning?.startedAt ||
               message.thinking?.startedAt ||
               message.webSearch?.status === "active" ||
               message.reasoning?.trim() ||
-              message.progress?.length ||
-              parseTaskList(message.content).length),
+              message.toolCalls?.length),
         )
       );
     },
@@ -100,20 +102,23 @@ interface ActivityCardProps {
   message: ChatMessage;
   now: number;
   onClose?: () => void;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onSubmitPlanningInput?: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
 }
 
-function ActivityCard({ message, now, onClose, onSubmitPlanningInput }: ActivityCardProps) {
-  const isPlanning = message.mode === "plan" || Boolean(message.planning) || Boolean(message.progress?.some((item) => item.id?.startsWith("plan-")));
+function ActivityCard({ message, now, onClose, onResolveToolApproval, onSubmitPlanningInput }: ActivityCardProps) {
+  const isPlanning = message.mode === "plan" || Boolean(message.planning);
   const isWebSearch = !isPlanning && Boolean(message.webSearch?.enabled);
+  const hasPendingApproval = message.approvals?.some((approval) => approval.status === "pending");
   const isActivityLive = Boolean(
-    message.planning
+    hasPendingApproval ||
+      (message.planning
       ? !message.planning.completedAt
       : message.thinking
         ? !message.thinking.completedAt
         : message.webSearch?.status === "active"
           ? true
-          : message.isStreaming,
+          : message.isStreaming),
   );
   const isWritingResponse = Boolean(message.isStreaming && !isActivityLive);
   const startedAt = message.planning?.startedAt ?? message.thinking?.startedAt ?? message.createdAt;
@@ -121,13 +126,14 @@ function ActivityCard({ message, now, onClose, onSubmitPlanningInput }: Activity
   const duration = formatThinkingDuration(startedAt, completedAt, now);
   const { hiddenCount: hiddenTraceCount, segments: traceSegments, trimmed: traceTrimmed } = getVisibleThinkingTraceSegments(message.reasoning, isActivityLive);
   const hasTrace = traceSegments.length > 0;
-  const activityName = isPlanning ? "Planning" : isWebSearch ? "Web + thinking" : "Thinking";
-  const statusLabel = isActivityLive ? activityName : isPlanning ? `Planned for ${duration}` : isWebSearch ? `Searched web in ${duration}` : `Thought for ${duration}`;
+  const activityName = hasPendingApproval ? "Approval needed" : isPlanning ? "Planning" : isWebSearch ? "Web + thinking" : "Thinking";
+  const statusLabel = hasPendingApproval ? "Waiting for your decision" : isActivityLive ? activityName : isPlanning ? `Planned for ${duration}` : isWebSearch ? `Searched web in ${duration}` : `Thought for ${duration}`;
   const detailLabel = getActivityDetailLabel(message, isActivityLive, isWritingResponse, isPlanning);
   const inputRequests = getPlanningInputRequests(message);
   const inputRequest = inputRequests.find((request) => !request.answeredAt);
   const answeredInputRequests = inputRequests.filter((request) => request.answeredAt);
   const inputPending = Boolean(inputRequest && !inputRequest.answeredAt);
+  const pendingApprovals = (message.approvals ?? []).filter((approval) => approval.status === "pending");
 
   return (
     <section className="activity-card" aria-labelledby="activity-panel-title">
@@ -160,8 +166,6 @@ function ActivityCard({ message, now, onClose, onSubmitPlanningInput }: Activity
           </div>
         ) : null}
 
-        {isPlanning && message.progress?.length ? <PlanningProgressMini items={message.progress} /> : null}
-
         {inputRequest && inputPending && onSubmitPlanningInput ? (
           <PlanningInputPanel request={inputRequest} onSubmit={(answers) => onSubmitPlanningInput(message.id, answers)} />
         ) : null}
@@ -169,6 +173,13 @@ function ActivityCard({ message, now, onClose, onSubmitPlanningInput }: Activity
         {answeredInputRequests.map((answeredRequest) => (
           <PlanningInputSummary key={answeredRequest.id} request={answeredRequest} />
         ))}
+
+        {pendingApprovals.length > 0 && onResolveToolApproval ? (
+          <ApprovalPanel
+            approvals={pendingApprovals}
+            onResolve={(approvalId, decision) => onResolveToolApproval(message.id, approvalId, decision)}
+          />
+        ) : null}
 
         {message.toolCalls?.length ? <ToolCallList toolCalls={message.toolCalls} /> : null}
 
@@ -196,9 +207,130 @@ function ActivityCard({ message, now, onClose, onSubmitPlanningInput }: Activity
   );
 }
 
+function ApprovalPanel({
+  approvals,
+  onResolve,
+}: {
+  approvals: AgentApproval[];
+  onResolve: (approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
+}) {
+  const [editedArgsById, setEditedArgsById] = useState<Record<string, string>>(() =>
+    approvals.reduce<Record<string, string>>((drafts, approval) => {
+      drafts[approval.id] = JSON.stringify(approval.args ?? {}, null, 2);
+      return drafts;
+    }, {}),
+  );
+  const [errorById, setErrorById] = useState<Record<string, string>>({});
+
+  function updateEditedArgs(approvalId: string, value: string) {
+    setEditedArgsById((drafts) => ({ ...drafts, [approvalId]: value }));
+    setErrorById((errors) => ({ ...errors, [approvalId]: "" }));
+  }
+
+  async function approveEdited(approval: AgentApproval) {
+    try {
+      const parsedArgs = JSON.parse(editedArgsById[approval.id] ?? "{}");
+
+      if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+        throw new Error("Edited arguments must be a JSON object.");
+      }
+
+      await onResolve(approval.id, {
+        editedArgs: parsedArgs,
+        status: "edited",
+      });
+    } catch (error) {
+      setErrorById((errors) => ({
+        ...errors,
+        [approval.id]: error instanceof Error ? error.message : "Edited arguments must be valid JSON.",
+      }));
+    }
+  }
+
+  return (
+    <div className="approval-list" aria-label="Pending approvals">
+      <h4>
+        <span>Approvals</span>
+        <small>{approvals.length} pending</small>
+      </h4>
+      {approvals.map((approval) => (
+        <article className="approval-card" data-risk={approval.risk} key={approval.id}>
+          <div className="approval-card-header">
+            <span>
+              <strong>{approval.title}</strong>
+              <small>{approval.detail ?? approval.kind}</small>
+            </span>
+            <b>{approval.risk}</b>
+          </div>
+          {approval.preview ? <pre>{limitActivityText(approval.preview, 1600)}</pre> : null}
+          <label className="approval-edit-label" htmlFor={`approval-edit-${approval.id}`}>
+            Edit arguments
+          </label>
+          <textarea
+            id={`approval-edit-${approval.id}`}
+            value={editedArgsById[approval.id] ?? "{}"}
+            spellCheck={false}
+            onChange={(event) => updateEditedArgs(approval.id, event.currentTarget.value)}
+          />
+          {errorById[approval.id] ? <p className="approval-error">{errorById[approval.id]}</p> : null}
+          <div className="approval-actions">
+            <button type="button" onClick={() => onResolve(approval.id, { status: "approved" })}>
+              <Check size={14} aria-hidden="true" />
+              <span>Allow</span>
+            </button>
+            <button type="button" onClick={() => approveEdited(approval)}>
+              <PencilLine size={14} aria-hidden="true" />
+              <span>Approve edited</span>
+            </button>
+            <button type="button" onClick={() => onResolve(approval.id, { status: "denied" })}>
+              <Ban size={14} aria-hidden="true" />
+              <span>Deny</span>
+            </button>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function ToolCallList({ toolCalls }: { toolCalls: ChatToolCall[] }) {
-  const visibleToolCalls = toolCalls.slice(0, MAX_ACTIVITY_TOOL_CALLS);
-  const hiddenToolCount = toolCalls.length - visibleToolCalls.length;
+  const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const activeTerminalIds = toolCalls.filter((toolCall) => isTerminalToolCall(toolCall) && toolCall.status === "active").map((toolCall) => toolCall.id);
+
+    if (activeTerminalIds.length === 0) {
+      return;
+    }
+
+    setExpandedToolIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      let changed = false;
+
+      for (const id of activeTerminalIds) {
+        if (!nextIds.has(id)) {
+          nextIds.add(id);
+          changed = true;
+        }
+      }
+
+      return changed ? nextIds : currentIds;
+    });
+  }, [toolCalls]);
+
+  function toggleToolCall(toolCallId: string) {
+    setExpandedToolIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(toolCallId)) {
+        nextIds.delete(toolCallId);
+      } else {
+        nextIds.add(toolCallId);
+      }
+
+      return nextIds;
+    });
+  }
 
   return (
     <div className="activity-tool-list" aria-label="Tool calls">
@@ -206,32 +338,68 @@ function ToolCallList({ toolCalls }: { toolCalls: ChatToolCall[] }) {
         <span>Tool calls</span>
         <small>{formatToolCallCounts(toolCalls)}</small>
       </h4>
-      {visibleToolCalls.map((toolCall, index) => (
-        <article className="activity-tool-call" data-status={toolCall.status} key={`${toolCall.id}-${index}`}>
-          <div>
-            <ProgressIcon status={toolStatusToProgressStatus(toolCall.status)} />
-            <span>
-              <strong>{index + 1}. {toolCall.label}</strong>
-              {toolCall.detail ? <small>{toolCall.detail}</small> : null}
-            </span>
-          </div>
-          {toolCall.input ? <pre>{limitActivityText(toolCall.input)}</pre> : null}
-          {toolCall.output ? <pre>{limitActivityText(toolCall.output)}</pre> : null}
-        </article>
-      ))}
-      {hiddenToolCount > 0 ? (
-        <article className="activity-tool-call" data-status="skipped">
-          <div>
-            <ProgressIcon status="pending" />
-            <span>
-              <strong>{hiddenToolCount} more tool calls hidden</strong>
-              <small>Kept out of the live panel for responsiveness.</small>
-            </span>
-          </div>
-        </article>
-      ) : null}
+      {toolCalls.map((toolCall, index) => {
+        const expanded = expandedToolIds.has(toolCall.id) || (isTerminalToolCall(toolCall) && toolCall.status === "active");
+        const terminalDetail = formatTerminalToolDetail(toolCall);
+
+        return (
+          <article className="activity-tool-call" data-expanded={expanded} data-status={toolCall.status} data-terminal={isTerminalToolCall(toolCall)} key={`${toolCall.id}-${index}`}>
+            <button className="activity-tool-call-header" type="button" aria-expanded={expanded} onClick={() => toggleToolCall(toolCall.id)}>
+              <ProgressIcon status={toolStatusToProgressStatus(toolCall.status)} />
+              <span>
+                <strong>{index + 1}. {toolCall.label}</strong>
+                {toolCall.detail ? <small>{toolCall.detail}</small> : null}
+                {terminalDetail ? <small>{terminalDetail}</small> : null}
+              </span>
+              {isTerminalToolCall(toolCall) ? <TerminalSquare size={15} aria-hidden="true" /> : null}
+              {expanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+            </button>
+            {toolCall.input ? <ToolCallTextBlock content={toolCall.input} expanded={expanded} label="Input" /> : null}
+            {toolCall.output ? (
+              <ToolCallTextBlock
+                content={toolCall.output}
+                expanded={expanded}
+                label={isTerminalToolCall(toolCall) ? (toolCall.status === "active" ? "Live terminal output" : "Terminal output") : "Output"}
+                live={isTerminalToolCall(toolCall) && toolCall.status === "active"}
+              />
+            ) : isTerminalToolCall(toolCall) && expanded && toolCall.status === "active" ? (
+              <ToolCallTextBlock content="Waiting for terminal output..." expanded label="Live terminal output" live />
+            ) : null}
+          </article>
+        );
+      })}
     </div>
   );
+}
+
+function ToolCallTextBlock({ content, expanded, label, live = false }: { content: string; expanded: boolean; label: string; live?: boolean }) {
+  return (
+    <div className="activity-tool-text-block" data-expanded={expanded}>
+      <span>{label}</span>
+      <pre aria-atomic="false" aria-live={live ? "polite" : undefined}>{expanded ? content : limitActivityText(content)}</pre>
+    </div>
+  );
+}
+
+function isTerminalToolCall(toolCall: ChatToolCall) {
+  return Boolean(toolCall.terminal) || /\b(terminal|cmd|powershell|tests?|typescript|custom tool)\b/i.test(`${toolCall.label} ${toolCall.detail ?? ""}`);
+}
+
+function formatTerminalToolDetail(toolCall: ChatToolCall) {
+  if (!toolCall.terminal) {
+    return "";
+  }
+
+  const shell = toolCall.terminal.shell === "cmd" ? "cmd" : toolCall.terminal.shell === "powershell" ? "PowerShell" : "";
+  const status = toolCall.terminal.timedOut
+    ? "timed out"
+    : typeof toolCall.terminal.exitCode === "number"
+      ? `exit ${toolCall.terminal.exitCode}`
+      : toolCall.status === "active"
+        ? "streaming"
+        : "";
+
+  return [shell, toolCall.terminal.workingDirectory, status].filter(Boolean).join(" | ");
 }
 
 function toolStatusToProgressStatus(status: ChatToolCall["status"]): ChatProgressStatus {
@@ -283,12 +451,12 @@ function formatHiddenTraceLabel(hiddenCount: number, trimmed: boolean) {
   return `${parts.join("; ")}.`;
 }
 
-function limitActivityText(content: string) {
-  if (content.length <= MAX_ACTIVITY_TOOL_TEXT_CHARS) {
+function limitActivityText(content: string, maxChars = MAX_ACTIVITY_TOOL_TEXT_CHARS) {
+  if (content.length <= maxChars) {
     return content;
   }
 
-  return `${content.slice(0, MAX_ACTIVITY_TOOL_TEXT_CHARS)}\n[Trimmed in Activity for responsiveness.]`;
+  return `${content.slice(0, maxChars)}\n[Trimmed in Activity for responsiveness.]`;
 }
 
 function getActivityDetailLabel(message: ChatMessage, isActivityLive: boolean, isWritingResponse: boolean, isPlanning: boolean) {
@@ -298,7 +466,7 @@ function getActivityDetailLabel(message: ChatMessage, isActivityLive: boolean, i
     const inputRequest = getPlanningInputRequests(message).find((request) => !request.answeredAt) ?? message.planning?.inputRequest;
 
     if (message.status === "error") {
-      return "Stopped with an error";
+      return "Needs attention";
     }
 
     if (inputRequest && !inputRequest.answeredAt) {
@@ -306,12 +474,6 @@ function getActivityDetailLabel(message: ChatMessage, isActivityLive: boolean, i
     }
 
     if (isActivityLive) {
-      const activeProgress = message.progress?.find((item) => item.status === "active");
-
-      if (activeProgress?.detail) {
-        return `${activeProgress.label}: ${activeProgress.detail}`;
-      }
-
       return inputRequest?.answeredAt ? "Using your answers" : maxPasses ? `Pass ${Math.max(passCount, 1)} of ${maxPasses}` : "Building the plan";
     }
 
@@ -343,7 +505,7 @@ function getActivityDetailLabel(message: ChatMessage, isActivityLive: boolean, i
   }
 
   if (message.status === "error") {
-    return "Stopped with an error";
+    return "Needs attention";
   }
 
   if (message.toolCalls?.length) {
@@ -378,34 +540,6 @@ function getPlanningInputRequests(message: ChatMessage) {
   }
 
   return message.planning?.inputRequest ? [message.planning.inputRequest] : [];
-}
-
-function PlanningProgressMini({ items }: { items: NonNullable<ChatMessage["progress"]> }) {
-  const visibleItems = items.slice(0, MAX_PLANNING_MINI_ITEMS);
-  const hiddenCount = items.length - visibleItems.length;
-
-  return (
-    <div className="planning-mini-progress" aria-label="Planning progress">
-      {visibleItems.map((item) => (
-        <span data-status={item.status} key={item.id ?? `${item.label}-${item.detail}`}>
-          <ProgressIcon status={item.status} />
-          <span>
-            <strong>{item.label}</strong>
-            {item.detail ? <small>{item.detail}</small> : null}
-          </span>
-        </span>
-      ))}
-      {hiddenCount > 0 ? (
-        <span data-status="pending">
-          <ProgressIcon status="pending" />
-          <span>
-            <strong>{hiddenCount} more</strong>
-            <small>Hidden while live</small>
-          </span>
-        </span>
-      ) : null}
-    </div>
-  );
 }
 
 interface PlanningInputPanelProps {
@@ -657,13 +791,13 @@ function getLatestActivityMessage(chat: ChatSummary) {
         message.role === "assistant" &&
         Boolean(
             message.reasoning?.trim() ||
+            message.approvals?.some((approval) => approval.status === "pending") ||
             message.toolCalls?.length ||
             message.planning?.startedAt ||
             message.planning?.completedAt ||
             message.thinking?.startedAt ||
             message.thinking?.completedAt ||
             message.webSearch?.enabled ||
-            message.progress?.length ||
             message.isStreaming,
         ),
     );
@@ -677,10 +811,10 @@ function getProgressItems(chat: ChatSummary): ProgressRailItem[] {
     return createToolProgressItems(messageWithToolCalls);
   }
 
-  const messageWithProgress = assistantMessages.find((message) => message.progress?.length);
+  const messageWithProgress = assistantMessages.find((message) => message.progress?.some((item) => !isPlanningProgressItem(item)));
 
   if (messageWithProgress?.progress?.length) {
-    return messageWithProgress.progress.slice(0, MAX_PROGRESS_ITEMS).map((item, index) => ({
+    return messageWithProgress.progress.filter((item) => !isPlanningProgressItem(item)).slice(0, MAX_PROGRESS_ITEMS).map((item, index) => ({
       detail: item.detail,
       id: item.id ?? `progress-${messageWithProgress.id}-${index}`,
       label: cleanInlineText(item.label),
@@ -702,32 +836,21 @@ function getProgressItems(chat: ChatSummary): ProgressRailItem[] {
   return [];
 }
 
+function isPlanningProgressItem(item: NonNullable<ChatMessage["progress"]>[number]) {
+  return item.id?.startsWith("plan-") ?? false;
+}
+
 function createToolProgressItems(message: ChatMessage): ProgressRailItem[] {
   const toolCalls = message.toolCalls ?? [];
   const summary = createToolProgressSummary(message, toolCalls);
-  const visibleToolCount = Math.max(MAX_PROGRESS_ITEMS - 1, 0);
-  const toolItems = toolCalls.slice(0, visibleToolCount).map((toolCall, index) => ({
+  const toolItems = toolCalls.map((toolCall, index) => ({
     detail: formatToolProgressDetail(toolCall),
     id: `progress-${message.id}-${toolCall.id}-${index}`,
     label: `${index + 1}. ${toolCall.label}`,
     status: toolStatusToProgressStatus(toolCall.status),
   }));
-  const hiddenCount = toolCalls.length - toolItems.length;
 
-  if (hiddenCount <= 0) {
-    return [summary, ...toolItems];
-  }
-
-  return [
-    summary,
-    ...toolItems,
-    {
-      detail: `${hiddenCount} more tool calls are visible in Activity`,
-      id: `progress-${message.id}-tool-overflow`,
-      label: "More agent tools",
-      status: "pending",
-    },
-  ];
+  return [summary, ...toolItems];
 }
 
 function createToolProgressSummary(message: ChatMessage, toolCalls: ChatToolCall[]): ProgressRailItem {
@@ -735,11 +858,13 @@ function createToolProgressSummary(message: ChatMessage, toolCalls: ChatToolCall
   const completeCount = countToolCallsByStatus(toolCalls, "complete");
   const errorCount = countToolCallsByStatus(toolCalls, "error");
   const skippedCount = countToolCallsByStatus(toolCalls, "skipped");
+  const approvalCount = countToolCallsByStatus(toolCalls, "waiting_approval");
   const blockedCount = errorCount + skippedCount;
-  const status = activeCount > 0 ? "active" : completeCount > 0 ? "complete" : "pending";
+  const status = activeCount > 0 ? "active" : approvalCount > 0 ? "pending" : completeCount > 0 ? "complete" : "pending";
   const countParts = [
     `${toolCalls.length} total`,
     activeCount > 0 ? `${activeCount} running` : "",
+    approvalCount > 0 ? `${approvalCount} waiting approval` : "",
     completeCount > 0 ? `${completeCount} complete` : "",
     blockedCount > 0 ? `${blockedCount} blocked` : "",
   ].filter(Boolean);
@@ -753,7 +878,11 @@ function createToolProgressSummary(message: ChatMessage, toolCalls: ChatToolCall
 }
 
 function formatToolProgressDetail(toolCall: ChatToolCall) {
-  return [formatToolStatus(toolCall.status), toolCall.detail].filter(Boolean).join(" | ");
+  const outputDetail = toolCall.status === "error" || toolCall.status === "skipped" || toolCall.status === "waiting_approval"
+    ? cleanInlineText(toolCall.output ?? "")
+    : "";
+
+  return [formatToolStatus(toolCall.status), outputDetail || toolCall.detail].filter(Boolean).join(" | ");
 }
 
 function formatToolCallCounts(toolCalls: ChatToolCall[]) {
@@ -998,5 +1127,5 @@ function formatArtifactKind(kind?: ChatArtifactKind) {
 }
 
 function formatEffort(effort: string) {
-  return effort.charAt(0).toUpperCase() + effort.slice(1);
+  return formatReasoningEffort(effort);
 }

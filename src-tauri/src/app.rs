@@ -3,8 +3,11 @@ use tauri::Manager;
 
 pub fn builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(commands::auth::AuthState::default())
         .manage(commands::computer::files::ComputerFileIndexState::default())
+        .manage(commands::discord::DiscordBridgeState::default())
+        .manage(commands::github::GithubState::default())
         .manage(commands::terminal::TerminalState::default())
         .setup(|app| {
             if let Some(icon) = app.default_window_icon().cloned() {
@@ -16,24 +19,55 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::agent_runs::agent_run_delete,
+            commands::agent_runs::agent_run_save,
+            commands::agent_runs::agent_runs_list,
             commands::auth::auth_create_account,
             commands::auth::auth_get_login_challenge,
             commands::auth::auth_get_state,
             commands::auth::auth_login,
             commands::auth::auth_logout,
             commands::app_info::get_app_info,
+            commands::browser::browser_automation,
             commands::computer::files::computer_build_file_index,
+            commands::computer::files::computer_delete_file,
             commands::computer::files::computer_get_default_workspace,
             commands::computer::files::computer_get_file_index_summary,
+            commands::computer::files::computer_get_git_status,
             commands::computer::files::computer_list_directory,
             commands::computer::files::computer_list_drives,
             commands::computer::files::computer_pick_folder,
             commands::computer::files::computer_read_text_file,
             commands::computer::files::computer_search_file_index,
             commands::computer::files::computer_write_text_file,
+            commands::discord::discord_bridge_send_interaction_response,
+            commands::discord::discord_bridge_start,
+            commands::discord::discord_bridge_status,
+            commands::discord::discord_bridge_stop,
+            commands::discord::discord_register_slash_command,
+            commands::github::github_commit_files,
+            commands::github::github_begin_device_login,
+            commands::github::github_connect_token,
+            commands::github::github_create_branch,
+            commands::github::github_create_pull_request,
+            commands::github::github_disconnect,
+            commands::github::github_get_repository,
+            commands::github::github_get_state,
+            commands::github::github_list_branches,
+            commands::github::github_list_repositories,
+            commands::github::github_list_tree,
+            commands::github::github_open_device_login,
+            commands::github::github_poll_device_login,
+            commands::github::github_read_file,
+            commands::github::github_search_code,
+            commands::settings::settings_get_user_config,
+            commands::settings::settings_open_user_config,
+            commands::settings::workspace_dependencies_diagnose,
+            commands::settings::workspace_dependencies_reinstall,
             commands::terminal::terminal_create_session,
             commands::terminal::terminal_drain_session,
             commands::terminal::terminal_kill_session,
+            commands::terminal::terminal_run_command,
             commands::terminal::terminal_write_session,
             commands::web::duckduckgo_search
         ])

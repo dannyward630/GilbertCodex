@@ -75,12 +75,12 @@ function estimateOpenRouterUsageFromMessages({
 }): ContextWindowUsage {
   const model = modelForMessages(settings, messages);
   const body = createOpenRouterStreamRequestBody(settings, messages, model);
-  const bodyMessages = body.messages;
+  const bodyMessages = body.messages as unknown[];
   const systemTokens = estimateSerializedTokens(bodyMessages[0] ?? "");
   const chatBodyMessages = bodyMessages.slice(1, 1 + chatMessageCount);
   const draftBodyMessages = draftCount > 0 ? bodyMessages.slice(1 + chatMessageCount, 1 + chatMessageCount + draftCount) : [];
-  const messageTokens = chatBodyMessages.reduce((total, message) => total + estimateSerializedTokens(message), 0);
-  const draftTokens = draftBodyMessages.reduce((total, message) => total + estimateSerializedTokens(message), 0);
+  const messageTokens = chatBodyMessages.reduce<number>((total, message) => total + estimateSerializedTokens(message), 0);
+  const draftTokens = draftBodyMessages.reduce<number>((total, message) => total + estimateSerializedTokens(message), 0);
   const boundedContextWindow = Math.max(contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS, 1);
   const boundedMaxOutput = Math.max(Math.round(settings.maxTokens || 0), 0);
   const serializedBodyTokens = estimateSerializedTokens(body);

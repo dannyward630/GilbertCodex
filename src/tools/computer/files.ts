@@ -7,6 +7,8 @@ import type {
   ComputerDrive,
   ComputerFileIndexProgress,
   ComputerFileIndexSummary,
+  ComputerGitStatus,
+  ComputerDeleteFileResult,
   ComputerReadFileResult,
   ComputerSearchResult,
   ComputerWriteFileResult,
@@ -16,6 +18,8 @@ import type {
 } from "../../types/localWorkspace";
 import { normalizeToolRegistrySettings } from "../../types/tools";
 import type { ToolRegistrySettings } from "../../types/tools";
+import { describeCodingTools } from "../coding";
+import { describeFileCreationTools } from "../fileCreation";
 
 const DEFAULT_FOLDER_INDEX_LIMIT = 12_000;
 const DEFAULT_FULL_COMPUTER_INDEX_LIMIT = 25_000;
@@ -28,7 +32,7 @@ const MAX_SNIPPET_CHARS = 2_600;
 const COMPUTER_FILE_INDEX_PROGRESS_EVENT = "computer-file-index-progress";
 export const GILBERT_PROJECT_MEMORY_FILE = "GILBERT.md";
 
-interface GilbertProjectMemory {
+export interface GilbertProjectMemory {
   content: string;
   path: string;
 }
@@ -39,6 +43,7 @@ type BrowserDirectoryHandle = {
   getFileHandle?: (name: string, options?: { create?: boolean }) => Promise<BrowserFileHandle>;
   kind: "directory";
   name: string;
+  removeEntry?: (name: string, options?: { recursive?: boolean }) => Promise<void>;
   values?: () => AsyncIterable<BrowserFileSystemHandle>;
 };
 
@@ -208,20 +213,36 @@ export async function getComputerFileIndexSummary() {
   return await invoke<ComputerFileIndexSummary>("computer_get_file_index_summary");
 }
 
-export async function searchComputerFiles(query: string, limit = 24) {
-  if (!isTauriDesktopRuntime()) {
-    return searchBrowserFileIndex(query, limit);
+export async function getComputerGitStatus(path: string): Promise<ComputerGitStatus> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    return createUnavailableGitStatus(path ? "Git status is available in the desktop app for real folders." : "Choose a project folder first.");
   }
 
-  return await invoke<ComputerSearchResult[]>("computer_search_file_index", {
+  return await invoke<ComputerGitStatus>("computer_get_git_status", {
+    request: {
+      path,
+    },
+  });
+}
+
+export async function searchComputerFiles(query: string, limit = 24, roots: string[] = []) {
+  const filterToRoots = (results: ComputerSearchResult[]) => (roots.length > 0 ? results.filter((result) => roots.some((root) => isPathInsideRoot(result.path, root))) : results);
+
+  if (!isTauriDesktopRuntime()) {
+    return filterToRoots(searchBrowserFileIndex(query, limit));
+  }
+
+  const results = await invoke<ComputerSearchResult[]>("computer_search_file_index", {
     request: {
       limit,
       query,
     },
   });
+
+  return filterToRoots(results);
 }
 
-export async function readComputerTextFile(path: string, maxBytes = 32 * 1024) {
+export async function readComputerTextFile(path: string, maxBytes = 16 * 1024 * 1024) {
   if (isBrowserWorkspacePath(path)) {
     return await readBrowserTextFile(path, maxBytes);
   }
@@ -258,6 +279,23 @@ export async function writeComputerTextFile(path: string, content: string, roots
   });
 }
 
+export async function deleteComputerFile(path: string, roots: string[]) {
+  if (isBrowserWorkspacePath(path)) {
+    return await deleteBrowserFile(path, roots);
+  }
+
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Use the desktop app or open a browser folder before deleting files.");
+  }
+
+  return await invoke<ComputerDeleteFileResult>("computer_delete_file", {
+    request: {
+      path,
+      roots,
+    },
+  });
+}
+
 export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSettings) {
   if (!settings.enabled) {
     return [];
@@ -276,8 +314,7 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
     return settings.roots;
   }
 
-  const defaultWorkspace = await getDefaultComputerWorkspace();
-  return defaultWorkspace ? [defaultWorkspace] : [];
+  return [];
 }
 
 export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings) {
@@ -292,8 +329,9 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
   }
 
   const summary = await ensureComputerFileIndex(settings, roots);
+  const gitStatuses = await Promise.all(roots.slice(0, settings.scope === "full-computer" ? 4 : 2).map((root) => getComputerGitStatus(root).catch((error) => createUnavailableGitStatus(readErrorMessage(error, "Git status unavailable.")))));
   const projectMemories = await readGilbertProjectMemories(roots);
-  const searchResults = await searchComputerFiles(prompt, 18).catch(() => []);
+  const searchResults = await searchComputerFiles(prompt, 18, roots).catch(() => []);
   const hintedFolders = await resolvePromptFolders(prompt, roots);
   const listings = await Promise.all(
     uniquePaths([...hintedFolders, ...roots.slice(0, settings.scope === "full-computer" ? 6 : 3)]).map(async (root) => {
@@ -309,6 +347,7 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
   return limitContext(
     [
       createWorkspaceHeader(settings, roots, summary, undefined, toolSettings),
+      formatGitStatuses(gitStatuses),
       formatGilbertProjectMemories(projectMemories),
       formatRootListings(listings.flatMap((listing) => (listing ? [listing] : []))),
       formatSearchResults(searchResults),
@@ -320,6 +359,10 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
 }
 
 export function localPermissionModeLabel(mode: LocalPermissionMode) {
+  if (mode === "read-only") {
+    return "Read only";
+  }
+
   if (mode === "ask-first") {
     return "Ask first";
   }
@@ -538,7 +581,7 @@ function searchBrowserFileIndex(query: string, limit: number) {
   return browserIndexEntries
     .map((entry) => ({
       ...entry,
-      score: scoreBrowserEntry(entry, tokens),
+      ...scoreBrowserEntry(entry, query, tokens),
     }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score)
@@ -628,6 +671,43 @@ async function writeBrowserTextFile(
   };
 }
 
+async function deleteBrowserFile(path: string, roots: string[]): Promise<ComputerDeleteFileResult> {
+  if (!roots.some((root) => isPathInsideRoot(path, root))) {
+    throw new Error("Deletes are only allowed inside the selected browser folder.");
+  }
+
+  const { parts, root } = resolveBrowserRoot(path);
+
+  if (parts.length === 0) {
+    throw new Error("Choose a file path, not the folder root.");
+  }
+
+  const fileName = parts[parts.length - 1];
+  let directoryHandle = root.handle;
+
+  for (const part of parts.slice(0, -1)) {
+    if (!directoryHandle.getDirectoryHandle) {
+      throw new Error("This browser cannot open that folder.");
+    }
+
+    directoryHandle = await directoryHandle.getDirectoryHandle(part);
+  }
+
+  if (!directoryHandle.getFileHandle || !directoryHandle.removeEntry) {
+    throw new Error("This browser did not grant delete access to that folder.");
+  }
+
+  const handle = await directoryHandle.getFileHandle(fileName);
+  const file = await handle.getFile();
+  await directoryHandle.removeEntry(fileName, { recursive: false });
+
+  return {
+    bytesDeleted: file.size,
+    deleted: true,
+    path,
+  };
+}
+
 async function ensureComputerFileIndex(settings: LocalWorkspaceSettings, roots: string[]) {
   const currentSummary = await getComputerFileIndexSummary().catch(() => undefined);
 
@@ -655,19 +735,57 @@ async function collectTextSnippets(searchResults: ComputerSearchResult[]) {
 
 function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[], summary?: ComputerFileIndexSummary, issue?: string, toolSettings?: ToolRegistrySettings) {
   const tools = normalizeToolRegistrySettings(toolSettings);
+  const fileCreationTools = tools.fileCreation
+    ? [
+        "create_text_file",
+        "create_markdown_file",
+        "create_code_file",
+        "create_react_file",
+        "create_html_file",
+        "create_pdf_file",
+        "create_files",
+      ]
+    : [];
+  const codingTools = [
+    tools.fileSafety ? "delete_file" : "",
+    tools.fileSafety ? "check_duplicate_file" : "",
+    tools.fileSafety ? "prevent_duplicate_file_create" : "",
+    tools.pdfTools ? "create_chat_pdf" : "",
+    tools.codeEdit ? "inline_edit" : "",
+    tools.vectorTools ? "vector_embed_text" : "",
+    tools.vectorTools ? "vector_search" : "",
+    tools.testingTools ? "run_tests" : "",
+    tools.testingTools ? "create_unit_test" : "",
+    tools.typescriptTools ? "typescript_check" : "",
+    tools.sqlTools ? "create_sql_schema" : "",
+    tools.sqlTools ? "create_sql_migration" : "",
+    tools.reactNativeTools ? "create_react_native_screen" : "",
+    tools.reactNativeTools ? "react_native_setup_check" : "",
+    tools.codeGeneration ? "codebase_health_scan" : "",
+    tools.codeGeneration ? "dependency_audit" : "",
+    tools.codeGeneration ? "create_api_route" : "",
+  ];
   const runtimeTools = [
     tools.codeView ? "view_code" : "",
     tools.codeView ? "read_file" : "",
     tools.fileBrowser ? "list_directory" : "",
+    tools.fileSearch ? "recall_context" : "",
     tools.fileSearch ? "search_files" : "",
     tools.fileBrowser ? "build_index" : "",
     tools.codeEdit ? "edit_file" : "",
     tools.codeEdit ? "write_file" : "",
+    ...fileCreationTools,
+    ...codingTools,
+    tools.terminal ? "run_terminal" : "",
+    tools.browserPreview ? "open_browser_preview" : "",
+    tools.terminal && tools.codeEdit ? "create_tool" : "",
+    tools.terminal ? "run_tool" : "",
   ].filter(Boolean);
   const permissionRules = {
     "ask-first": "Ask before editing, deleting, moving, or running anything. Viewing and indexing are allowed.",
     "gilbert-review": "Read and review freely inside the selected workspace roots. File changes must stay inside those roots and should call out risk.",
-    "full-workspace": "Read/write is allowed inside the current or selected folder workspace. Full computer scope stays read-only.",
+    "full-workspace": "Read/write is allowed inside the enabled workspace roots. In full computer scope, those roots are the readable drive roots.",
+    "read-only": "Read, list, index, and search workspace files. File writes, deletes, custom tools, and terminal commands are blocked.",
   } satisfies Record<LocalPermissionMode, string>;
 
   return [
@@ -675,8 +793,12 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     "Tool access: Gilbert can view drives, open folders, read text files, use the local vector file index, and make precise workspace edits when local work is enabled.",
       `Runtime tools enabled from Toolbox: ${runtimeTools.length > 0 ? runtimeTools.join(", ") : "none"}.`,
       `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed up to ${MAX_GILBERT_MEMORY_IMPORT_DEPTH} levels.`,
-      "Full computer scope is read-only. File edits and writes are only allowed inside the current or selected folder workspace, and Ask first mode requires user confirmation before writes.",
-      "Use search_files to locate code through the vector index, view_code for exact line/character windows, and edit_file for focused replacements down to a single letter or punctuation mark.",
+      "Full computer scope expands the enabled roots to the readable computer drives. File edits, writes, custom tools, and terminal commands may run inside those roots when the user's permission mode allows it; Ask first mode still requires user confirmation before writes or terminal commands.",
+      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, run_terminal for local project commands when Terminal is enabled, and open_browser_preview to inspect a local app URL in the in-app browser.",
+      "Edit syntax: read with view_code first, then use edit_file with old_text/new_text, start_line/end_line/content, insert_at_line/content, or start_char/end_char/content. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text when available so Gilbert can refuse the edit if the file changed.",
+      tools.fileCreation ? describeFileCreationTools() : "",
+      describeCodingTools(),
+      "For reusable one-off automation, create_tool writes a PowerShell or cmd script under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output.",
     "If more file evidence is needed, request a compact <tool_call> for the app to execute. The app shows tool calls in Activity; final answers should explain the result clearly.",
     "Use the local context below as real computer file evidence. Do not claim you cannot access files when this tool context is present.",
     `Mode: ${localPermissionModeLabel(settings.permissionMode)}`,
@@ -688,6 +810,52 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function createUnavailableGitStatus(error?: string): ComputerGitStatus {
+  return {
+    additions: 0,
+    ahead: 0,
+    available: false,
+    behind: 0,
+    changedFiles: 0,
+    clean: true,
+    deletions: 0,
+    error,
+  };
+}
+
+function formatGitStatuses(statuses: ComputerGitStatus[]) {
+  const availableStatuses = statuses.filter((status) => status.available);
+
+  if (availableStatuses.length === 0) {
+    return "";
+  }
+
+  return [
+    "LOCAL GIT STATE",
+    ...availableStatuses.map((status) => {
+      const repository = status.githubOwner && status.githubRepo ? `${status.githubOwner}/${status.githubRepo}` : status.remoteUrl || "No GitHub remote detected";
+      const branch = status.branch || "unknown branch";
+      const changes = status.clean ? "working tree clean" : formatGitChangeSummary(status);
+      const upstream = status.ahead || status.behind ? `, ${status.ahead} ahead / ${status.behind} behind upstream` : "";
+
+      return `- ${status.repositoryRoot || "repository"}: ${repository}, branch ${branch}, ${changes}${upstream}.`;
+    }),
+    "Use this Git state when answering branch, GitHub repository, or changed-file questions for the selected project.",
+  ].join("\n");
+}
+
+function formatGitChangeSummary(status: ComputerGitStatus) {
+  const changed = status.changedFiles === 1 ? "1 file changed" : `${status.changedFiles} files changed`;
+  const additions = status.additions > 0 ? `+${status.additions}` : "";
+  const deletions = status.deletions > 0 ? `-${status.deletions}` : "";
+
+  return [changed, additions, deletions].filter(Boolean).join(" ");
+}
+
+function readErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : typeof error === "string" && error.trim() ? error : fallback;
 }
 
 export function createGilbertProjectMemoryTemplate() {
@@ -970,14 +1138,17 @@ function pushIfPresent(values: string[], value?: string) {
 
 function formatSearchResults(results: ComputerSearchResult[]) {
   if (results.length === 0) {
-    return "VECTOR SEARCH RESULTS\nNo local file matches were found for this request yet.";
+    return "HYBRID FILE SEARCH RESULTS\nNo local file matches were found for this request yet.";
   }
 
   return [
-    "VECTOR SEARCH RESULTS",
+    "HYBRID FILE SEARCH RESULTS",
     ...results.slice(0, 18).map((result, index) => {
+      const matchKind = result.matchKind ? `, ${result.matchKind}` : "";
+      const line = result.line ? `, line ${result.line}` : "";
+      const matches = result.matches?.length ? `, matches: ${result.matches.slice(0, 6).join(", ")}` : "";
       const preview = result.preview ? `\n  preview: ${result.preview.replace(/\s+/g, " ").slice(0, 260)}` : "";
-      return `${index + 1}. ${result.path} (${result.kind}, score ${result.score.toFixed(3)})${preview}`;
+      return `${index + 1}. ${result.path} (${result.kind}${matchKind}${line}, score ${result.score.toFixed(3)}${matches})${preview}`;
     }),
   ].join("\n");
 }
@@ -1128,24 +1299,107 @@ function tokenize(value: string) {
     .filter((token) => token.length > 1);
 }
 
-function scoreBrowserEntry(entry: BrowserIndexedEntry, tokens: string[]) {
-  let score = 0;
+function scoreBrowserEntry(entry: BrowserIndexedEntry, query: string, tokens: string[]) {
+  let contentScore = 0;
+  let nameScore = 0;
+  let pathScore = 0;
+  const matches = new Set<string>();
+  const nameLower = entry.name.toLowerCase();
+  const pathLower = entry.path.toLowerCase();
+  const haystackLower = entry.haystack.toLowerCase();
+  const queryLower = query.trim().toLowerCase();
+
+  if (queryLower && nameLower === queryLower) {
+    nameScore += 8;
+    matches.add(queryLower);
+  } else if (queryLower && nameLower.includes(queryLower)) {
+    nameScore += 5;
+    matches.add(queryLower);
+  }
+
+  if (queryLower && pathLower.includes(queryLower)) {
+    pathScore += 2.5;
+    matches.add(queryLower);
+  }
+
+  if (queryLower && entry.content?.toLowerCase().includes(queryLower)) {
+    contentScore += 1.4;
+    matches.add(queryLower);
+  }
 
   for (const token of tokens) {
-    if (entry.name.toLowerCase().includes(token)) {
-      score += 1.4;
+    if (nameLower.includes(token)) {
+      nameScore += 1.6;
+      matches.add(token);
     }
 
-    if (entry.path.toLowerCase().includes(token)) {
-      score += 0.9;
+    if (pathLower.includes(token)) {
+      pathScore += 0.85;
+      matches.add(token);
     }
 
-    if (entry.haystack.includes(token)) {
-      score += 0.45;
+    if (haystackLower.includes(token)) {
+      contentScore += 0.35;
     }
   }
 
-  return score / Math.max(tokens.length, 1);
+  const snippet = findBrowserContentSnippet(entry.preview ?? entry.content ?? "", queryLower, tokens);
+  if (snippet) {
+    contentScore += 0.8;
+    snippet.matches.forEach((match) => matches.add(match));
+  }
+
+  const score = nameScore + pathScore + contentScore / Math.max(tokens.length, 1);
+  const matchKind =
+    nameScore > 0 && nameScore >= pathScore && nameScore >= contentScore
+      ? "name"
+      : pathScore > 0 && pathScore >= contentScore
+        ? "path"
+        : contentScore > 0
+          ? "content"
+          : "semantic";
+
+  return {
+    line: snippet?.line,
+    matchKind,
+    matches: Array.from(matches).slice(0, 10),
+    preview: snippet?.preview ?? entry.preview,
+    score,
+  } satisfies Pick<ComputerSearchResult, "line" | "matchKind" | "matches" | "preview" | "score">;
+}
+
+function findBrowserContentSnippet(content: string, queryLower: string, tokens: string[]) {
+  if (!content) {
+    return undefined;
+  }
+
+  const usefulTokens = tokens.filter((token) => token.length > 1);
+  const lines = content.split(/\r?\n/);
+
+  for (const [index, line] of lines.entries()) {
+    const lineLower = line.toLowerCase();
+    const matches = new Set<string>();
+
+    if (queryLower && lineLower.includes(queryLower)) {
+      matches.add(queryLower);
+    }
+
+    for (const token of usefulTokens) {
+      if (lineLower.includes(token)) {
+        matches.add(token);
+      }
+    }
+
+    if (matches.size > 0) {
+      return {
+        line: index + 1,
+        matches: Array.from(matches).slice(0, 8),
+        preview: line.trim().slice(0, 420),
+      };
+    }
+  }
+
+  return undefined;
 }
 
 function sameRootSet(left: string[], right: string[]) {
@@ -1197,10 +1451,18 @@ function isProbablyTextExtension(extension?: string) {
   }
 
   return new Set([
+    "astro",
     "bat",
+    "c",
     "cmd",
+    "cpp",
+    "cs",
     "css",
     "csv",
+    "dart",
+    "go",
+    "graphql",
+    "h",
     "html",
     "java",
     "js",
@@ -1209,11 +1471,18 @@ function isProbablyTextExtension(extension?: string) {
     "kt",
     "kts",
     "log",
+    "lua",
     "md",
+    "php",
     "ps1",
     "py",
+    "rb",
     "rs",
+    "scss",
     "sh",
+    "sql",
+    "svelte",
+    "swift",
     "toml",
     "ts",
     "tsx",
