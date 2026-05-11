@@ -69,7 +69,7 @@ jobs:
         run: npm run installer:assets
 
       - name: Build signed Windows updater release
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -81,7 +81,6 @@ jobs:
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
           args: --bundles nsis --config src-tauri/tauri.updater.conf.json
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
-          releaseAssetNamePattern: Gilbert-Codex-[version]-[arch][setup][ext]
+          assetNamePattern: Gilbert-Codex-[version]-[arch][setup][ext]
