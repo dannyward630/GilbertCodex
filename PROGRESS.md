@@ -30,6 +30,7 @@ Delivered:
 - Settings page for appearance, provider configuration, GitHub account connection, Discord bridge setup, model, generation, thinking, and web-search controls.
 - Tauri security hardening with a configured CSP and least-privilege notification permissions.
 - Rust host commands for auth, app info, computer files, Discord interactions, GitHub API operations, terminal, and web search.
+- SQL-backed Gilbert Database for desktop auth, chats, settings, integrations, browser preview state, and agent runs, plus Settings inspection, legacy cleanup, and reset controls.
 - Source documentation standards plus JSDoc/Rust doc coverage for key runtime, tool, GitHub, web-search, and workspace APIs.
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.

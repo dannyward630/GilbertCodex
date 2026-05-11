@@ -4,7 +4,16 @@ import type { DiscordBridgeSettings } from "../../types/discord";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { AppearanceMode, ProviderSettings } from "../../types/settings";
 
-export type SettingsSectionId = "appearance" | "configuration" | "discord" | "general" | "github" | "model" | "personalization" | "providers";
+export type SettingsSectionId =
+  | "appearance"
+  | "configuration"
+  | "database"
+  | "discord"
+  | "general"
+  | "github"
+  | "model"
+  | "personalization"
+  | "providers";
 
 export interface SettingsNavItem {
   icon: LucideIcon;

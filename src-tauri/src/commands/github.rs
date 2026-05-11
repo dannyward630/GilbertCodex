@@ -2167,6 +2167,7 @@ fn encode_path_segment(segment: &str) -> String {
 fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
     if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY)?
     {
+        cleanup_legacy_database(app)?;
         return parse_database_content(&content, "Gilbert Database GitHub account store");
     }
 
@@ -2204,6 +2205,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
         GITHUB_DATABASE_STORAGE_KEY,
         &migrated_content,
     )?;
+    delete_legacy_file(&database_path, "GitHub account store")?;
 
     Ok(database)
 }
@@ -2236,6 +2238,11 @@ fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve the local app data folder: {error}"))
 }
 
+fn cleanup_legacy_database(app: &tauri::AppHandle) -> Result<(), String> {
+    let database_path = legacy_database_path(app)?;
+    delete_legacy_file(&database_path, "GitHub account store")
+}
+
 fn fresh_database() -> GithubDatabase {
     GithubDatabase {
         connected_at: None,
@@ -2255,4 +2262,29 @@ fn now_millis() -> u64 {
 
 fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
     path.as_ref().to_string_lossy().to_string()
+}
+
+fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|error| {
+        format!(
+            "Could not remove the old {label} at {}: {error}",
+            path_to_string(path)
+        )
+    })?;
+
+    if let Some(parent) = path.parent() {
+        let is_empty = fs::read_dir(parent)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+
+        if is_empty {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    Ok(())
 }

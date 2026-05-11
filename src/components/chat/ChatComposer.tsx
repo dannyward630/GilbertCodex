@@ -828,7 +828,7 @@ export function ChatComposer({
                   ? "Ask for a plan before Gilbert Codex starts coding"
                   : "Ask Gilbert Codex to build, inspect, or change this project"
           }
-          rows={3}
+          rows={2}
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={handleTextKeyDown}

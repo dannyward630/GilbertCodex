@@ -184,7 +184,6 @@ const MAX_DEEP_RESEARCH_TOOL_PASSES = 24;
 const MAX_DEEP_RESEARCH_TOOL_EXECUTIONS = 96;
 const MAX_TOOL_FINALIZATION_RETRIES = 3;
 const MAX_MALFORMED_TOOL_RECOVERY_RETRIES = 2;
-const CHAT_PERSIST_DEBOUNCE_MS = 700;
 const CONTEXT_COMPACTION_PROGRESS_ID = "context-compaction";
 const DISCORD_NEW_CHAT_COMMAND = "gilbertnewchat";
 const DISCORD_STREAM_UPDATE_INTERVAL_MS = 2_400;
@@ -388,7 +387,7 @@ export function App() {
           return;
         }
 
-        setAuthError(error instanceof Error ? error.message : "Local auth is not available yet.");
+        setAuthError(readErrorMessage(error, "Local auth is not available yet."));
       } finally {
         if (mounted) {
           setAuthLoading(false);
@@ -424,7 +423,7 @@ export function App() {
             setAuthHasAccounts(true);
             setAuthError(null);
           } catch (error) {
-            setAuthError(error instanceof Error ? error.message : "The local database is not available yet.");
+            setAuthError(readErrorMessage(error, "The local database is not available yet."));
             throw error;
           } finally {
             setAuthLoading(false);
@@ -541,18 +540,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     pendingChatsRef.current = chats;
-
-    if (!sendingChatId) {
-      saveChats(chats);
-      return;
-    }
-
-    const saveTimer = window.setTimeout(() => {
-      saveChats(pendingChatsRef.current);
-    }, CHAT_PERSIST_DEBOUNCE_MS);
-
-    return () => window.clearTimeout(saveTimer);
-  }, [chats, sendingChatId]);
+    saveChats(chats);
+  }, [chats]);
 
   useEffect(() => {
     queuedChatSendsRef.current = queuedChatSends;
@@ -2499,11 +2488,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       });
 
       const baseSynthesisSettings = createFinalOnlyProviderSettings();
-      const synthesisSettings = createEmptyResponseRetrySettings({
+      const synthesisSettings: ProviderSettings = {
         ...baseSynthesisSettings,
         maxTokens: Math.max(baseSynthesisSettings.maxTokens, deepResearch ? DEEP_RESEARCH_MIN_TOKENS : LOCAL_TOOL_FINAL_MIN_TOKENS),
+        thinking: {
+          ...baseSynthesisSettings.thinking,
+          enabled: false,
+          effort: "minimal",
+        },
         temperature: Math.min(baseSynthesisSettings.temperature, 0.25),
-      });
+      };
       const synthesisInstruction = createLocalToolBudgetFinalInstruction(
         prompt,
         [
@@ -3024,24 +3018,32 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const latestEvidence = [...toolCalls]
       .reverse()
       .filter((toolCall) => toolCall.output?.trim())
-      .slice(0, 4)
+      .slice(0, 8)
       .reverse()
       .map(formatFallbackToolEvidence);
 
     return [
-      "## Tool Results Preserved",
-      "Gilbert gathered evidence, but the final model response stopped before a polished answer was saved.",
+      "## Answer From Completed Tool Results",
+      "Gilbert completed the tool work, but the provider still did not return separate visible answer text. Instead of leaving the chat blank, here is the saved evidence from the completed run.",
+      [
+        `I ran ${executedToolCalls} tool call${executedToolCalls === 1 ? "" : "s"} for this request.`,
+        completedCalls.length > 0 ? `${completedCalls.length} completed successfully.` : "",
+        erroredCalls.length > 0 ? `${erroredCalls.length} errored.` : "",
+        skippedCalls.length > 0 ? `${skippedCalls.length} skipped.` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
       "### Original Request",
       prompt.trim() ? `> ${prompt.trim().replace(/\n/g, "\n> ")}` : "> No prompt text was saved.",
-      "### Tool Activity",
+      "### What Ran",
       [
         `- Executed: ${executedToolCalls}`,
         `- Completed: ${completedCalls.length}`,
         `- Errors: ${erroredCalls.length}`,
         `- Skipped: ${skippedCalls.length}`,
       ].join("\n"),
-      latestEvidence.length > 0 ? ["### Most Recent Evidence", ...latestEvidence].join("\n\n") : "### Most Recent Evidence\n\nNo readable tool output was saved with this response.",
-      "Send a follow-up if you want Gilbert to continue from this evidence.",
+      latestEvidence.length > 0 ? ["### Evidence", ...latestEvidence].join("\n\n") : "### Evidence\n\nNo readable tool output was saved with this response.",
+      "You can ask a follow-up and Gilbert will continue from this saved evidence.",
     ].join("\n\n");
   }
 

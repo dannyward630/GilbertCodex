@@ -66,7 +66,7 @@ export function AuthPage({ hasAccounts, initialError, loading = false, onAuthent
         await onAuthenticated(session);
       }
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "The local auth request failed.");
+      setError(readErrorMessage(submitError, "The local auth request failed."));
     } finally {
       setSubmitting(false);
     }
@@ -270,4 +270,8 @@ function getPasswordLabel(score: number) {
   }
 
   return "Use 8+ characters";
+}
+
+function readErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : typeof error === "string" && error.trim() ? error : fallback;
 }

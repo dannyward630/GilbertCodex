@@ -113,6 +113,7 @@ pub fn agent_run_delete(app: AppHandle, id: String) -> Result<(), String> {
 
 fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
     if let Some(raw) = storage::read_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY)? {
+        cleanup_legacy_agent_runs(app)?;
         return parse_agent_runs(&raw, "Gilbert Database agent runs");
     }
 
@@ -129,6 +130,7 @@ fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
         .map_err(|error| format!("Failed to serialize migrated agent runs: {error}"))?;
 
     storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, &migrated_raw)?;
+    delete_legacy_file(&path, "agent runs store")?;
 
     Ok(runs)
 }
@@ -152,4 +154,22 @@ fn legacy_agent_runs_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
 
     Ok(directory.join("agent-runs.json"))
+}
+
+fn cleanup_legacy_agent_runs(app: &AppHandle) -> Result<(), String> {
+    let path = legacy_agent_runs_path(app)?;
+    delete_legacy_file(&path, "agent runs store")
+}
+
+fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|error| {
+        format!(
+            "Could not remove the old {label} at {}: {error}",
+            path.to_string_lossy()
+        )
+    })
 }

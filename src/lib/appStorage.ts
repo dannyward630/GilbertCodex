@@ -23,7 +23,7 @@ import {
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
-import { isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
+import { cleanupLegacyDeviceStorage, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
 import type {
   ChatAttachment,
   ChatContextCompaction,
@@ -52,6 +52,8 @@ const GITHUB_OAUTH_CLIENT_ID_KEY = "gilbert-codex.github-oauth-client-id.v1";
 const DISCORD_BRIDGE_KEY = "gilbert-codex.discord-bridge.v1";
 const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
 const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
+const BROWSER_AUTH_DB_KEY = "gilbert-codex.local-auth-db.v1";
+const BROWSER_AGENT_RUNS_KEY = "gilbert-codex.agent-runs.v1";
 const PERSISTED_STORAGE_KEYS = [
   CHATS_KEY,
   PROJECTS_KEY,
@@ -66,11 +68,17 @@ const PERSISTED_STORAGE_KEYS = [
   BROWSER_PREVIEW_SESSION_KEY,
   LEGACY_BROWSER_PREVIEW_SESSION_KEY,
 ];
+const LEGACY_BROWSER_ONLY_KEYS = [
+  BROWSER_AUTH_DB_KEY,
+  BROWSER_AGENT_RUNS_KEY,
+];
 let storageNamespace = "legacy";
 let deviceDatabasePath: string | null = null;
 let deviceStorageInitialized = false;
 let deviceStorageValues = new Map<string, string>();
 let storageInitializationToken = 0;
+const deviceStorageWriteQueues = new Map<string, Promise<void>>();
+const deviceStoragePendingWrites = new Map<string, { key: string; namespace: string; value: string }>();
 
 export const defaultProviderSettings: ProviderSettings = {
   apiKeys: {},
@@ -127,7 +135,8 @@ export async function initializeDeviceStorage(userId: string | null) {
   deviceDatabasePath = snapshot?.databasePath ?? null;
   deviceStorageValues = new Map(Object.entries(snapshot?.values ?? {}));
   deviceStorageInitialized = true;
-  mirrorDeviceValuesToLocalStorage();
+  purgeLegacyBrowserStorage();
+  void cleanupLegacyDeviceStorage().catch(() => undefined);
 }
 
 export function getDeviceDatabasePath() {
@@ -339,16 +348,53 @@ function readString(key: string) {
 }
 
 function writeString(key: string, value: string) {
+  if (deviceStorageInitialized && isDeviceDatabaseAvailable()) {
+    deviceStorageValues.set(key, value);
+    queueDeviceStorageWrite(storageNamespace, key, value);
+    return;
+  }
+
   try {
     window.localStorage.setItem(scopedStorageKey(key), value);
   } catch {
-    // The SQLite database remains the durable desktop store even if the
-    // webview fallback storage is full or unavailable.
+    return;
+  }
+}
+
+function queueDeviceStorageWrite(namespace: string, key: string, value: string) {
+  const queueKey = `${namespace}\0${key}`;
+  deviceStoragePendingWrites.set(queueKey, { key, namespace, value });
+
+  if (deviceStorageWriteQueues.has(queueKey)) {
+    return;
   }
 
-  if (deviceStorageInitialized && isDeviceDatabaseAvailable()) {
-    deviceStorageValues.set(key, value);
-    void saveDeviceDatabaseValue(storageNamespace, key, value).catch(() => undefined);
+  const queuedWrite = drainDeviceStorageWriteQueue(queueKey).finally(() => {
+    deviceStorageWriteQueues.delete(queueKey);
+
+    if (deviceStoragePendingWrites.has(queueKey)) {
+      queueDeviceStorageWrite(namespace, key, deviceStoragePendingWrites.get(queueKey)?.value ?? value);
+    }
+  });
+
+  deviceStorageWriteQueues.set(queueKey, queuedWrite);
+  void queuedWrite.catch(() => undefined);
+}
+
+async function drainDeviceStorageWriteQueue(queueKey: string) {
+  while (deviceStoragePendingWrites.has(queueKey)) {
+    const pendingWrite = deviceStoragePendingWrites.get(queueKey);
+    deviceStoragePendingWrites.delete(queueKey);
+
+    if (!pendingWrite) {
+      return;
+    }
+
+    try {
+      await saveDeviceDatabaseValue(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
+    } catch {
+      return;
+    }
   }
 }
 
@@ -394,17 +440,33 @@ function collectLocalStorageSeeds(): DeviceDatabaseSeed[] {
   });
 }
 
-function mirrorDeviceValuesToLocalStorage() {
+function purgeLegacyBrowserStorage() {
   if (typeof window === "undefined") {
     return;
   }
 
-  for (const [key, value] of deviceStorageValues) {
-    try {
-      window.localStorage.setItem(scopedStorageKey(key), value);
-    } catch {
-      return;
+  const keysToRemove: string[] = [];
+  const allLegacyKeys = [...PERSISTED_STORAGE_KEYS, ...LEGACY_BROWSER_ONLY_KEYS];
+  const storageKeyPrefixes = allLegacyKeys.map((key) => `${key}.user.`);
+
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+
+      if (!key) {
+        continue;
+      }
+
+      if (allLegacyKeys.includes(key) || storageKeyPrefixes.some((prefix) => key.startsWith(prefix))) {
+        keysToRemove.push(key);
+      }
     }
+
+    for (const key of keysToRemove) {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    return;
   }
 }
 

@@ -422,7 +422,9 @@ fn normalize_password_material(
 
 fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, AUTH_DATABASE_STORAGE_KEY)? {
-        return parse_database_content(app, &content, "Gilbert Database auth record");
+        let database = parse_database_content(app, &content, "Gilbert Database auth record")?;
+        cleanup_legacy_database(app);
+        return Ok(database);
     }
 
     let database_path = legacy_database_path(app)?;
@@ -431,26 +433,33 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
         return Ok(fresh_database());
     }
 
-    let content = fs::read_to_string(&database_path).map_err(|error| {
-        format!(
-            "Could not read the local auth database at {}: {}",
-            path_to_string(&database_path),
-            error
-        )
-    })?;
+    let content = match fs::read_to_string(&database_path) {
+        Ok(content) => content,
+        Err(_) => {
+            let _ = delete_legacy_file(&database_path, "local auth database");
+            return Ok(fresh_database());
+        }
+    };
 
     if content.trim().is_empty() {
+        let _ = delete_legacy_file(&database_path, "local auth database");
         return Ok(fresh_database());
     }
 
-    let database = parse_database_content(
+    let database = match parse_database_content(
         app,
         &content,
         &format!(
             "legacy local auth database at {}",
             path_to_string(&database_path)
         ),
-    )?;
+    ) {
+        Ok(database) => database,
+        Err(_) => {
+            let _ = delete_legacy_file(&database_path, "local auth database");
+            return Ok(fresh_database());
+        }
+    };
     let migrated_content = serde_json::to_string_pretty(&database).map_err(|error| {
         format!("Could not serialize the migrated local auth database: {error}")
     })?;
@@ -460,6 +469,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
         AUTH_DATABASE_STORAGE_KEY,
         &migrated_content,
     )?;
+    let _ = delete_legacy_file(&database_path, "local auth database");
 
     Ok(database)
 }
@@ -498,6 +508,12 @@ fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve the local app data folder: {}", error))
 }
 
+fn cleanup_legacy_database(app: &tauri::AppHandle) {
+    if let Ok(database_path) = legacy_database_path(app) {
+        let _ = delete_legacy_file(&database_path, "local auth database");
+    }
+}
+
 fn fresh_database() -> AuthDatabase {
     AuthDatabase {
         current_session: None,
@@ -515,4 +531,29 @@ fn now_millis() -> u64 {
 
 fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
     path.as_ref().to_string_lossy().to_string()
+}
+
+fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|error| {
+        format!(
+            "Could not remove the old {label} at {}: {error}",
+            path_to_string(path)
+        )
+    })?;
+
+    if let Some(parent) = path.parent() {
+        let is_empty = fs::read_dir(parent)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+
+        if is_empty {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    Ok(())
 }

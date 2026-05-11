@@ -40,6 +40,7 @@ import type { LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings }
 import type { ModelProviderId, ProviderSettings } from "../../types/settings";
 import { AppearanceSettingsPage } from "./sections/AppearanceSettingsPage";
 import { ConfigurationSettingsPage } from "./sections/ConfigurationSettingsPage";
+import { DatabaseSettingsPage } from "./sections/DatabaseSettingsPage";
 import { DiscordSettingsPage } from "./sections/DiscordSettingsPage";
 import { GeneralSettingsPage } from "./sections/GeneralSettingsPage";
 import { GithubSettingsPage } from "./sections/GithubSettingsPage";
@@ -662,6 +663,10 @@ export function SettingsPage({
           onSettingsPatch={updateSettings}
         />
       );
+    }
+
+    if (activeSection === "database") {
+      return <DatabaseSettingsPage />;
     }
 
     if (activeSection === "github") {
