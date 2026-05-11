@@ -194,6 +194,14 @@ interface StreamSnapshot {
   usage?: ProviderUsage;
 }
 
+interface ProviderStreamDelta {
+  contentDelta: string;
+  contentSnapshot?: string;
+  reasoningDelta: string;
+  reasoningSnapshot?: string;
+  usage?: ProviderUsage;
+}
+
 export interface ProviderUsage {
   completion_tokens?: number;
   reasoning_tokens?: number;
@@ -401,14 +409,17 @@ export async function streamProviderMessage(
     }, STREAM_FLUSH_MS);
   }
 
-  function applyStreamDelta(delta: ReturnType<typeof parseProviderStreamLine>) {
+  function applyStreamDelta(delta: ProviderStreamDelta | null) {
     if (!delta) {
       return;
     }
 
     const reasoningDelta = settings.thinking.enabled ? delta.reasoningDelta : "";
-    const nextContent = appendStreamText(content, delta.contentDelta);
-    const rawNextReasoning = appendStreamText(reasoning, reasoningDelta);
+    const appendedContent = appendStreamText(content, delta.contentDelta);
+    const nextContent = shouldUseStreamSnapshot(appendedContent, delta.contentSnapshot) ? delta.contentSnapshot! : appendedContent;
+    const appendedReasoning = appendStreamText(reasoning, reasoningDelta);
+    const snapshotReasoning = settings.thinking.enabled ? delta.reasoningSnapshot : undefined;
+    const rawNextReasoning = shouldUseStreamSnapshot(appendedReasoning, snapshotReasoning) ? snapshotReasoning! : appendedReasoning;
     const nextReasoning = limitReasoningText(rawNextReasoning);
 
     usage = delta.usage ?? usage;
@@ -928,7 +939,7 @@ function assertProviderApiKey(providerId: ModelProviderId, apiKey: string) {
   }
 }
 
-function parseProviderStreamLine(providerId: ModelProviderId, line: string, useResponsesApi = false) {
+function parseProviderStreamLine(providerId: ModelProviderId, line: string, useResponsesApi = false): ProviderStreamDelta | null {
   const trimmedLine = line.trim();
 
   if (!trimmedLine || trimmedLine.startsWith(":") || !trimmedLine.startsWith("data:")) {
@@ -952,7 +963,7 @@ function parseProviderStreamLine(providerId: ModelProviderId, line: string, useR
   return parseOpenAiCompatibleStreamData(data);
 }
 
-function parseOpenAiCompatibleStreamData(data: string) {
+function parseOpenAiCompatibleStreamData(data: string): ProviderStreamDelta {
   let payload: ProviderStreamChunk;
 
   try {
@@ -976,7 +987,7 @@ function parseOpenAiCompatibleStreamData(data: string) {
   };
 }
 
-function parseResponsesStreamData(data: string) {
+function parseResponsesStreamData(data: string): ProviderStreamDelta {
   let payload: ResponsesStreamEvent;
 
   try {
@@ -992,15 +1003,18 @@ function parseResponsesStreamData(data: string) {
   const type = payload.type ?? "";
   const isTextDelta = type.includes("output_text.delta") || type.includes("text.delta");
   const isReasoningDelta = type.includes("reasoning") && type.includes("delta");
+  const responseSnapshot = payload.response ? extractResponsesOutput(payload.response) : undefined;
 
   return {
     contentDelta: isTextDelta ? payload.delta ?? payload.text ?? "" : "",
+    contentSnapshot: responseSnapshot?.content || undefined,
     reasoningDelta: isReasoningDelta ? payload.delta ?? payload.text ?? "" : "",
+    reasoningSnapshot: responseSnapshot?.reasoning || undefined,
     usage: normalizeResponsesUsage(payload.usage ?? payload.response?.usage),
   };
 }
 
-function parseAnthropicStreamData(data: string) {
+function parseAnthropicStreamData(data: string): ProviderStreamDelta {
   let payload: AnthropicStreamChunk;
 
   try {
@@ -1026,6 +1040,18 @@ function parseAnthropicStreamData(data: string) {
 
 function appendReasoningDelta(reasoning: string, delta: string) {
   return limitReasoningText(appendStreamText(reasoning, delta));
+}
+
+function shouldUseStreamSnapshot(currentText: string, snapshot: string | undefined) {
+  if (!snapshot) {
+    return false;
+  }
+
+  if (!currentText.trim()) {
+    return true;
+  }
+
+  return snapshot.length > currentText.length && snapshot.startsWith(currentText);
 }
 
 function appendStreamText(currentText: string, nextChunk: string) {

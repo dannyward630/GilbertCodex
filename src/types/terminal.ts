@@ -10,6 +10,7 @@ export interface TerminalOutputChunk {
 }
 
 export interface TerminalCreateSessionRequest {
+  mode?: "command" | "interactive";
   shell?: TerminalShellId;
   workingDirectory?: string;
 }
@@ -49,4 +50,10 @@ export interface TerminalDrainResponse {
   lastCommandCompleted?: boolean;
   lastCommandExitCode?: number | null;
   workingDirectory?: string;
+}
+
+export interface TerminalResizeSessionRequest {
+  cols: number;
+  rows: number;
+  sessionId: string;
 }

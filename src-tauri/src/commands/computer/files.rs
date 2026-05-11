@@ -32,6 +32,8 @@ const MAX_INDEX_PREVIEW_BYTES: usize = 4 * 1024;
 const MAX_TEXT_INDEX_FILE_BYTES: u64 = 1_500_000;
 const MAX_GIT_UNTRACKED_FILES_FOR_STATS: usize = 200;
 const MAX_GIT_UNTRACKED_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_GIT_DIFF_PREVIEW_FILES: usize = 80;
+const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = 96 * 1024;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
@@ -190,14 +192,55 @@ pub struct ComputerGitStatusRequest {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitCommitRequest {
+    pub message: String,
+    pub path: String,
+    pub stage_all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitCreateBranchRequest {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitPushRequest {
+    pub path: String,
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitActionResult {
+    pub message: String,
+    pub output: Option<String>,
+    pub status: ComputerGitStatus,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerGitChangedFile {
     pub additions: usize,
     pub deletions: usize,
+    pub diff_preview: Option<Vec<ComputerGitDiffLine>>,
+    pub diff_truncated: bool,
     pub old_path: Option<String>,
     pub path: String,
     pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitDiffLine {
+    pub content: String,
+    pub kind: String,
+    pub new_line: Option<usize>,
+    pub old_line: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -215,8 +258,10 @@ pub struct ComputerGitStatus {
     pub files: Vec<ComputerGitChangedFile>,
     pub github_owner: Option<String>,
     pub github_repo: Option<String>,
+    pub head_sha: Option<String>,
     pub remote_url: Option<String>,
     pub repository_root: Option<String>,
+    pub upstream: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -556,6 +601,36 @@ pub async fn computer_get_git_status(
         .map_err(|error| format!("The Git status worker stopped unexpectedly: {}", error))?
 }
 
+/// Stages and commits local Git changes for a workspace root.
+#[tauri::command]
+pub async fn computer_git_commit(
+    request: ComputerGitCommitRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_commit_blocking(request))
+        .await
+        .map_err(|error| format!("The Git commit worker stopped unexpectedly: {}", error))?
+}
+
+/// Creates and switches to a new local Git branch for a workspace root.
+#[tauri::command]
+pub async fn computer_git_create_branch(
+    request: ComputerGitCreateBranchRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_create_branch_blocking(request))
+        .await
+        .map_err(|error| format!("The Git branch worker stopped unexpectedly: {}", error))?
+}
+
+/// Pushes the current local Git branch, setting upstream when needed.
+#[tauri::command]
+pub async fn computer_git_push(
+    request: ComputerGitPushRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_push_blocking(request))
+        .await
+        .map_err(|error| format!("The Git push worker stopped unexpectedly: {}", error))?
+}
+
 fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<ComputerGitStatus, String> {
     let path = normalize_input_path(&request.path);
 
@@ -570,15 +645,29 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         Some(root) => root,
         None => return Ok(create_unavailable_git_status(None)),
     };
+    let head_sha = run_git(&repository_path, &["rev-parse", "--short", "HEAD"])
+        .ok()
+        .filter(|value| !value.is_empty());
     let branch = run_git(&repository_path, &["branch", "--show-current"])
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            run_git(&repository_path, &["rev-parse", "--short", "HEAD"])
-                .ok()
-                .filter(|value| !value.is_empty())
-                .map(|sha| format!("detached {}", sha))
-        });
+        .or_else(|| head_sha.as_ref().map(|sha| format!("detached {}", sha)));
+    let upstream = run_git(
+        &repository_path,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    )
+    .ok()
+    .filter(|value| !value.is_empty());
+    let (behind, ahead) = if upstream.is_some() {
+        get_git_ahead_behind(&repository_path).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
     let remote_url = run_git(&repository_path, &["remote", "get-url", "origin"])
         .ok()
         .filter(|value| !value.is_empty());
@@ -614,15 +703,20 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         count_untracked_git_additions_by_path(&repository_path, &untracked_output);
     let untracked_additions = untracked_additions_by_path.values().sum::<usize>();
     let additions = tracked_additions + untracked_additions;
-    let files =
-        parse_git_changed_files(&status_output, &tracked_stats, &untracked_additions_by_path);
+    let diff_previews = build_git_diff_previews(&repository_path, &status_output);
+    let files = parse_git_changed_files(
+        &status_output,
+        &tracked_stats,
+        &untracked_additions_by_path,
+        &diff_previews,
+    );
     let repository_root = path_to_string(&repository_path);
 
     Ok(ComputerGitStatus {
         additions,
-        ahead: 0,
+        ahead,
         available: true,
-        behind: 0,
+        behind,
         branch,
         changed_files,
         clean: changed_files == 0,
@@ -631,8 +725,109 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         files,
         github_owner,
         github_repo,
+        head_sha,
         remote_url,
         repository_root: Some(repository_root),
+        upstream,
+    })
+}
+
+fn git_commit_blocking(
+    request: ComputerGitCommitRequest,
+) -> Result<ComputerGitActionResult, String> {
+    let message = request.message.trim().to_string();
+
+    if message.is_empty() {
+        return Err("Enter a commit message before committing.".to_string());
+    }
+
+    let repository_path = resolve_git_repository_path(&request.path)?;
+
+    if request.stage_all.unwrap_or(true) {
+        run_git(&repository_path, &["add", "-A"])?;
+    }
+
+    let output = run_git(&repository_path, &["commit", "-m", &message])?;
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: "Committed local changes.".to_string(),
+        output: optional_git_output(output),
+        status,
+    })
+}
+
+fn git_create_branch_blocking(
+    request: ComputerGitCreateBranchRequest,
+) -> Result<ComputerGitActionResult, String> {
+    let branch_name = request.name.trim().to_string();
+    let repository_path = resolve_git_repository_path(&request.path)?;
+
+    validate_git_branch_name(&repository_path, &branch_name)?;
+
+    let output = run_git(&repository_path, &["switch", "-c", &branch_name])?;
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: format!("Created and switched to {}.", branch_name),
+        output: optional_git_output(output),
+        status,
+    })
+}
+
+fn git_push_blocking(request: ComputerGitPushRequest) -> Result<ComputerGitActionResult, String> {
+    let repository_path = resolve_git_repository_path(&request.path)?;
+    let branch = run_git(&repository_path, &["branch", "--show-current"])?
+        .trim()
+        .to_string();
+
+    if branch.is_empty() {
+        return Err(
+            "Cannot push while HEAD is detached. Create or switch to a branch first.".to_string(),
+        );
+    }
+
+    let remote = request
+        .remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("origin")
+        .to_string();
+
+    validate_git_remote_name(&remote)?;
+
+    let upstream = run_git(
+        &repository_path,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    )
+    .ok()
+    .filter(|value| !value.trim().is_empty());
+    let output = if upstream.is_some() {
+        run_git(&repository_path, &["push"])?
+    } else {
+        run_git(
+            &repository_path,
+            &["push", "--set-upstream", &remote, &branch],
+        )?
+    };
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: format!("Pushed {}.", branch),
+        output: optional_git_output(output),
+        status,
     })
 }
 
@@ -1435,9 +1630,22 @@ fn create_unavailable_git_status(error: Option<String>) -> ComputerGitStatus {
         files: Vec::new(),
         github_owner: None,
         github_repo: None,
+        head_sha: None,
         remote_url: None,
         repository_root: None,
+        upstream: None,
     }
+}
+
+fn resolve_git_repository_path(input_path: &str) -> Result<PathBuf, String> {
+    let path = normalize_input_path(input_path);
+
+    if !path.exists() {
+        return Err(format!("{} does not exist.", path_to_string(&path)));
+    }
+
+    find_git_repository_root(&path)
+        .ok_or_else(|| "This folder is not inside a Git repository.".to_string())
 }
 
 fn find_git_repository_root(path: &Path) -> Option<PathBuf> {
@@ -1486,6 +1694,341 @@ fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn validate_git_branch_name(repository_path: &Path, branch_name: &str) -> Result<(), String> {
+    if branch_name.is_empty() {
+        return Err("Enter a branch name before creating a branch.".to_string());
+    }
+
+    if branch_name.starts_with('-')
+        || branch_name
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err("Branch names cannot start with '-' or contain whitespace.".to_string());
+    }
+
+    run_git(
+        repository_path,
+        &["check-ref-format", "--branch", branch_name],
+    )
+    .map(|_| ())
+    .map_err(|_| "Enter a valid Git branch name.".to_string())
+}
+
+fn validate_git_remote_name(remote: &str) -> Result<(), String> {
+    if remote.is_empty()
+        || remote.starts_with('-')
+        || remote
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err("Enter a valid Git remote name.".to_string());
+    }
+
+    Ok(())
+}
+
+fn optional_git_output(output: String) -> Option<String> {
+    let trimmed = output.trim();
+
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[derive(Clone)]
+struct GitDiffPreview {
+    lines: Vec<ComputerGitDiffLine>,
+    truncated: bool,
+}
+
+fn get_git_ahead_behind(repository_path: &Path) -> Option<(usize, usize)> {
+    let output = run_git(
+        repository_path,
+        &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+    )
+    .ok()?;
+    let mut parts = output.split_whitespace();
+    let behind = parts.next()?.parse::<usize>().ok()?;
+    let ahead = parts.next()?.parse::<usize>().ok()?;
+
+    Some((behind, ahead))
+}
+
+fn build_git_diff_previews(
+    repository_path: &Path,
+    status_output: &str,
+) -> HashMap<String, GitDiffPreview> {
+    let diff_output = run_git(
+        repository_path,
+        &[
+            "diff",
+            "--unified=4",
+            "--no-ext-diff",
+            "--no-color",
+            "HEAD",
+            "--",
+        ],
+    )
+    .unwrap_or_default();
+    let mut previews = parse_tracked_git_diff_previews(&diff_output);
+
+    for line in status_output.lines() {
+        if previews.len() >= MAX_GIT_DIFF_PREVIEW_FILES {
+            break;
+        }
+
+        let trimmed = line.trim_end();
+
+        if trimmed.len() < 4 {
+            continue;
+        }
+
+        let Some(status) = trimmed.get(0..2).map(str::trim) else {
+            continue;
+        };
+
+        if status != "??" {
+            continue;
+        }
+
+        let Some(raw_path) = trimmed.get(3..).map(str::trim) else {
+            continue;
+        };
+        let (_old_path, path) = split_git_status_path(raw_path);
+        let key = git_status_path_key(&path);
+
+        if previews.contains_key(&key) {
+            continue;
+        }
+
+        if let Some(preview) = create_untracked_git_diff_preview(repository_path, &path) {
+            previews.insert(key, preview);
+        }
+    }
+
+    previews
+}
+
+fn parse_tracked_git_diff_previews(output: &str) -> HashMap<String, GitDiffPreview> {
+    let mut previews = HashMap::<String, GitDiffPreview>::new();
+    let mut current_key: Option<String> = None;
+    let mut pending_old_path: Option<String> = None;
+    let mut old_line = 0usize;
+    let mut new_line = 0usize;
+
+    for line in output.lines() {
+        if line.starts_with("diff --git ") {
+            if previews.len() >= MAX_GIT_DIFF_PREVIEW_FILES {
+                break;
+            }
+
+            current_key = None;
+            pending_old_path = None;
+            old_line = 0;
+            new_line = 0;
+            continue;
+        }
+
+        if let Some(raw_path) = line.strip_prefix("--- ") {
+            pending_old_path = parse_git_diff_marker_path(raw_path);
+            continue;
+        }
+
+        if let Some(raw_path) = line.strip_prefix("+++ ") {
+            let path = parse_git_diff_marker_path(raw_path).or_else(|| pending_old_path.clone());
+
+            if let Some(path) = path {
+                let key = git_status_path_key(&path);
+                previews
+                    .entry(key.clone())
+                    .or_insert_with(|| GitDiffPreview {
+                        lines: Vec::new(),
+                        truncated: false,
+                    });
+                current_key = Some(key);
+            }
+
+            continue;
+        }
+
+        let Some(key) = current_key.as_ref() else {
+            continue;
+        };
+
+        if line.starts_with("@@") {
+            if let Some((next_old_line, next_new_line)) = parse_git_diff_hunk_header(line) {
+                old_line = next_old_line;
+                new_line = next_new_line;
+            }
+
+            push_git_diff_preview_line(
+                &mut previews,
+                key,
+                ComputerGitDiffLine {
+                    content: truncate_git_diff_line(line),
+                    kind: "hunk".to_string(),
+                    new_line: None,
+                    old_line: None,
+                },
+            );
+            continue;
+        }
+
+        if line.starts_with("\\ ") {
+            push_git_diff_preview_line(
+                &mut previews,
+                key,
+                ComputerGitDiffLine {
+                    content: truncate_git_diff_line(line),
+                    kind: "meta".to_string(),
+                    new_line: None,
+                    old_line: None,
+                },
+            );
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix('+') {
+            push_git_diff_preview_line(
+                &mut previews,
+                key,
+                ComputerGitDiffLine {
+                    content: truncate_git_diff_line(content),
+                    kind: "add".to_string(),
+                    new_line: Some(new_line),
+                    old_line: None,
+                },
+            );
+            new_line = new_line.saturating_add(1);
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix('-') {
+            push_git_diff_preview_line(
+                &mut previews,
+                key,
+                ComputerGitDiffLine {
+                    content: truncate_git_diff_line(content),
+                    kind: "remove".to_string(),
+                    new_line: None,
+                    old_line: Some(old_line),
+                },
+            );
+            old_line = old_line.saturating_add(1);
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix(' ') {
+            push_git_diff_preview_line(
+                &mut previews,
+                key,
+                ComputerGitDiffLine {
+                    content: truncate_git_diff_line(content),
+                    kind: "context".to_string(),
+                    new_line: Some(new_line),
+                    old_line: Some(old_line),
+                },
+            );
+            old_line = old_line.saturating_add(1);
+            new_line = new_line.saturating_add(1);
+        }
+    }
+
+    previews
+}
+
+fn create_untracked_git_diff_preview(
+    repository_path: &Path,
+    relative_path: &str,
+) -> Option<GitDiffPreview> {
+    let path = repository_path.join(relative_path);
+    let metadata = fs::metadata(&path).ok()?;
+
+    if !metadata.is_file() || metadata.len() > MAX_GIT_UNTRACKED_DIFF_BYTES {
+        return None;
+    }
+
+    let bytes = fs::read(&path).ok()?;
+
+    if bytes.is_empty() || bytes.contains(&0) {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = Vec::new();
+    let truncated = false;
+
+    for (index, line) in text.lines().enumerate() {
+        lines.push(ComputerGitDiffLine {
+            content: truncate_git_diff_line(line),
+            kind: "add".to_string(),
+            new_line: Some(index + 1),
+            old_line: None,
+        });
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(GitDiffPreview { lines, truncated })
+    }
+}
+
+fn push_git_diff_preview_line(
+    previews: &mut HashMap<String, GitDiffPreview>,
+    key: &str,
+    line: ComputerGitDiffLine,
+) {
+    let Some(preview) = previews.get_mut(key) else {
+        return;
+    };
+
+    preview.lines.push(line);
+}
+
+fn parse_git_diff_marker_path(raw_path: &str) -> Option<String> {
+    let cleaned = clean_git_path(raw_path);
+
+    if cleaned == "/dev/null" {
+        return None;
+    }
+
+    if let Some(path) = cleaned.strip_prefix("a/") {
+        Some(path.to_string())
+    } else if let Some(path) = cleaned.strip_prefix("b/") {
+        Some(path.to_string())
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn parse_git_diff_hunk_header(line: &str) -> Option<(usize, usize)> {
+    let mut parts = line.split_whitespace();
+    parts.next()?;
+    let old_part = parts.next()?;
+    let new_part = parts.next()?;
+
+    Some((
+        parse_git_diff_hunk_start(old_part)?,
+        parse_git_diff_hunk_start(new_part)?,
+    ))
+}
+
+fn parse_git_diff_hunk_start(part: &str) -> Option<usize> {
+    part.trim_start_matches(|character| character == '-' || character == '+')
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()
+}
+
+fn truncate_git_diff_line(line: &str) -> String {
+    line.to_string()
+}
+
 fn parse_git_numstat_entries(output: &str) -> Vec<(String, usize, usize)> {
     output
         .lines()
@@ -1525,6 +2068,7 @@ fn parse_git_changed_files(
     status_output: &str,
     tracked_stats: &[(String, usize, usize)],
     untracked_additions_by_path: &HashMap<String, usize>,
+    diff_previews: &HashMap<String, GitDiffPreview>,
 ) -> Vec<ComputerGitChangedFile> {
     let tracked_stats_by_path = tracked_stats
         .iter()
@@ -1549,10 +2093,15 @@ fn parse_git_changed_files(
             } else {
                 tracked_stats_by_path.get(&key).copied().unwrap_or((0, 0))
             };
+            let diff_preview = diff_previews.get(&key);
 
             Some(ComputerGitChangedFile {
                 additions,
                 deletions,
+                diff_preview: diff_preview.map(|preview| preview.lines.clone()),
+                diff_truncated: diff_preview
+                    .map(|preview| preview.truncated)
+                    .unwrap_or(false),
                 old_path,
                 path,
                 status,

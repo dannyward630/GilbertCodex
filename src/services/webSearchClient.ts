@@ -7,6 +7,8 @@ import type { ChatMessage, ChatSource } from "../types/chat";
 export const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
 /** Runtime ceiling used by Deep Research while still bounding one search call. */
 export const MAX_WEB_SEARCH_RESULTS = 12;
+const DESKTOP_WEB_SEARCH_TIMEOUT_MS = 22_000;
+const BROWSER_WEB_SEARCH_TIMEOUT_MS = 12_000;
 
 /** Normalized source result shared by desktop DuckDuckGo HTML search and browser fallback. */
 export interface WebSearchResult {
@@ -52,10 +54,14 @@ export async function searchDuckDuckGo(query: string, options: SearchDuckDuckGoO
   throwIfAborted(options.signal);
 
   if (isTauriDesktopRuntime()) {
-    const desktopResults = await invoke<WebSearchResult[]>("duckduckgo_search", {
-      maxResults,
-      query: normalizedQuery,
-    });
+    const desktopResults = await withSearchTimeout(
+      invoke<WebSearchResult[]>("duckduckgo_search", {
+        maxResults,
+        query: normalizedQuery,
+      }),
+      DESKTOP_WEB_SEARCH_TIMEOUT_MS,
+      options.signal,
+    );
 
     throwIfAborted(options.signal);
     const normalizedResults = normalizeSearchResults(desktopResults, maxResults);
@@ -67,6 +73,7 @@ export async function searchDuckDuckGo(query: string, options: SearchDuckDuckGoO
     return normalizedResults;
   }
 
+  const browserController = createSearchAbortController(options.signal);
   const response = await fetch(
     `https://api.duckduckgo.com/?${new URLSearchParams({
       format: "json",
@@ -76,9 +83,9 @@ export async function searchDuckDuckGo(query: string, options: SearchDuckDuckGoO
     })}`,
     {
       method: "GET",
-      signal: options.signal,
+      signal: browserController.signal,
     },
-  );
+  ).finally(() => browserController.dispose());
 
   if (!response.ok) {
     throw new Error(`DuckDuckGo search failed with HTTP ${response.status}.`);
@@ -210,6 +217,54 @@ function clampMaxResults(value: number | undefined) {
   }
 
   return Math.min(Math.max(Math.round(value ?? DEFAULT_WEB_SEARCH_MAX_RESULTS), 1), MAX_WEB_SEARCH_RESULTS);
+}
+
+function withSearchTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(`DuckDuckGo search timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
+    const abort = () => {
+      window.clearTimeout(timeoutId);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+
+    signal?.addEventListener("abort", abort, { once: true });
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        signal?.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timeoutId);
+        signal?.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function createSearchAbortController(parentSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timeoutId = window.setTimeout(abort, BROWSER_WEB_SEARCH_TIMEOUT_MS);
+
+  parentSignal?.addEventListener("abort", abort, { once: true });
+
+  return {
+    dispose() {
+      window.clearTimeout(timeoutId);
+      parentSignal?.removeEventListener("abort", abort);
+    },
+    signal: controller.signal,
+  };
 }
 
 function normalizeUrl(rawUrl: string) {

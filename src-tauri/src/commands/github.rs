@@ -4,7 +4,10 @@
 //! storage, OAuth device flow, REST API normalization, and source-control
 //! operations that do not require a local clone or GitHub CLI installation.
 
-use crate::core::storage::{self, SYSTEM_NAMESPACE};
+use crate::{
+    commands::auth,
+    core::storage::{self, SYSTEM_NAMESPACE},
+};
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -2172,8 +2175,10 @@ fn encode_path_segment(segment: &str) -> String {
 }
 
 fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
-    if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY)?
-    {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    clear_shared_database(app)?;
+
+    if let Some(content) = storage::read_value(app, &namespace, GITHUB_DATABASE_STORAGE_KEY)? {
         cleanup_legacy_database(app)?;
         return parse_database_content(&content, "Gilbert Database GitHub account store");
     }
@@ -2208,7 +2213,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
     })?;
     storage::write_value(
         app,
-        SYSTEM_NAMESPACE,
+        &namespace,
         GITHUB_DATABASE_STORAGE_KEY,
         &migrated_content,
     )?;
@@ -2218,12 +2223,34 @@ fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
 }
 
 fn save_database(app: &tauri::AppHandle, database: &GithubDatabase) -> Result<(), String> {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    clear_shared_database(app)?;
     let content = serde_json::to_string_pretty(database)
         .map_err(|error| format!("Could not serialize the GitHub account store: {error}"))?;
 
-    storage::write_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY, &content).map_err(
-        |error| format!("Could not write the GitHub account store to Gilbert Database: {error}"),
-    )
+    storage::write_value(app, &namespace, GITHUB_DATABASE_STORAGE_KEY, &content).map_err(|error| {
+        format!("Could not write the GitHub account store to Gilbert Database: {error}")
+    })
+}
+
+fn clear_shared_database(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY)?
+    else {
+        return Ok(());
+    };
+
+    if parse_database_content(&content, "shared GitHub account store")
+        .map(|database| database.token.is_none() && database.user.is_none())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    };
+
+    let content = serde_json::to_string_pretty(&fresh_database()).map_err(|error| {
+        format!("Could not serialize the cleared shared GitHub account store: {error}")
+    })?;
+    storage::write_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY, &content)
+        .map_err(|error| format!("Could not clear the shared GitHub account store: {error}"))
 }
 
 fn parse_database_content(content: &str, source: &str) -> Result<GithubDatabase, String> {

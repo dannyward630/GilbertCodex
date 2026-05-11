@@ -19,7 +19,7 @@ export interface AppUpdateController {
   update: AppUpdateCheckResponse | null;
 }
 
-const AUTO_CHECK_DELAY_MS = 2_500;
+const STARTUP_CHECK_DELAY_MS = 900;
 const FOCUS_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const TRANSIENT_STATUS_MS = 4_500;
 
@@ -129,8 +129,8 @@ export function useAppUpdateController(desktopRuntime: boolean): AppUpdateContro
     }
 
     const timer = window.setTimeout(() => {
-      void runCheck(true);
-    }, AUTO_CHECK_DELAY_MS);
+      void runCheck(false);
+    }, STARTUP_CHECK_DELAY_MS);
 
     return () => window.clearTimeout(timer);
   }, [desktopRuntime, runCheck]);

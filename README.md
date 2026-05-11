@@ -29,23 +29,31 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The latest Windows public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.2.1).
+The latest Windows public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.2.2).
 
 Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.2.1 release notes](docs/releases/v0.2.1.md) for included hotfixes, setup notes, known limitations, and checksum details.
+See [v0.2.2 release notes](docs/releases/v0.2.2.md) for the Stability Pack 1 milestone, updater status, setup notes, known limitations, and checksum details.
 
 ## Product Shape
 
 - Desktop shell: Tauri 2 window, custom chrome, local app metadata, and Rust commands.
 - Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
-- Chat workspace: searchable history, pinned chats, project grouping, markdown rendering, image/file attachments, regeneration, stop, and local persistence.
+- Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, targeted stop controls, and local persistence.
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Tools: web search, local Git status/diff/stage/commit/push/pull/branch tools, GitHub repository/release/workflow tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, vector helpers, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
+- Tools: web search, local Git status/diff/stage/commit/push/pull/branch tools, review-panel Git commit/push actions, GitHub repository/release/workflow tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, vector helpers, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, interactive PTY terminal sessions, browser preview, and Toolbox feature toggles.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
 - Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and web-search controls.
+
+## Coming Next
+
+- Stability Pack follow-ups: more provider/runtime tests, safer local tool recovery, durable long-running jobs, and clearer update/install diagnostics.
+- Model selector revamp: provider profiles, model capability badges, context-window hints, local/cloud filtering, and faster switching between coding, planning, reasoning, and multimodal models.
+- Multimodal creation tools: image generation/editing, image-to-code workflows, video generation job tracking, thumbnails, and saved media artifacts.
+- Messaging integrations: WhatsApp support research focused on compliant Business Platform flows, plus stronger Discord/GitHub notification routing.
+- Collaboration polish: richer source-control review cards, PR handoff helpers, issue templates, roadmap labels, and contributor-friendly first tasks.
 
 ## Repository Layout
 

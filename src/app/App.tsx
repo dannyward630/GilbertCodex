@@ -57,6 +57,7 @@ import {
   DEFAULT_PLANNING_MAX_PASSES,
   runPlanningMode,
 } from "../services/planningClient";
+import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
 import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
 import { buildComputerFileIndex, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../tools/computer/files";
@@ -100,6 +101,7 @@ import {
   listenForDiscordInteractions,
   sendDiscordInteractionResponse,
   startDiscordBridge,
+  stopDiscordBridge,
   type DiscordInteractionEvent,
 } from "./tauriClient";
 import { getGithubState } from "./githubClient";
@@ -116,6 +118,7 @@ import type { AppInfo } from "../types/app";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../types/agentRun";
 import type { AuthSession } from "../types/auth";
 import type {
+  ChatAttachment,
   ChatContextCompaction,
   ChatComposerDraft,
   ChatMessage,
@@ -138,7 +141,9 @@ import { normalizeToolRegistrySettings } from "../types/tools";
 import type { ToolRegistrySettings } from "../types/tools";
 
 interface ActiveGeneration {
+  chatId?: string;
   controller: AbortController;
+  messageId?: string;
   previousChat: ChatSummary;
   previousChatExisted: boolean;
   requestId: number;
@@ -197,6 +202,7 @@ const MAX_DEEP_RESEARCH_TOOL_PASSES = 24;
 const MAX_DEEP_RESEARCH_TOOL_EXECUTIONS = 96;
 const MAX_TOOL_FINALIZATION_RETRIES = 3;
 const MAX_MALFORMED_TOOL_RECOVERY_RETRIES = 2;
+const MESSAGE_RETRY_TIMEOUT_MS = 10_000;
 const CONTEXT_COMPACTION_PROGRESS_ID = "context-compaction";
 const DISCORD_NEW_CHAT_COMMAND = "gilbertnewchat";
 const DISCORD_STREAM_UPDATE_INTERVAL_MS = 2_400;
@@ -205,6 +211,7 @@ const STEERING_PROGRESS_ID = "response-steering";
 const CURRENT_INFORMATION_PROMPT_PATTERN =
   /\b(latest|current|currently|today|tonight|tomorrow|yesterday|now|right now|recent|newest|up[-\s]?to[-\s]?date|news|release|released|changelog|version|pricing|price|schedule|weather|forecast|docs?|official|standard|api|model|verify|source|cite|look up|lookup|web|search)\b/i;
 const RESEARCH_PROMPT_PATTERN = /\b(research|investigate|audit|compare|verify|source|cite|latest|current|docs?|official|standard|api|model|release|changelog)\b/i;
+const PENDING_CHAT_TITLE = "Naming chat...";
 
 function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorkspaceSettings {
   return {
@@ -416,6 +423,10 @@ export function App() {
   }, []);
 
   async function handleLogout() {
+    if (isTauriDesktopRuntime()) {
+      await stopDiscordBridge().catch(() => undefined);
+    }
+
     await logoutLocalAccount();
     setStorageNamespace(null);
     setAuthSession(null);
@@ -467,7 +478,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     name: "Gilbert Codex",
     phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.2.1",
+    version: "0.2.2",
   });
   const [sendingChatId, setSendingChatId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -501,6 +512,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const activeGenerationRef = useRef<ActiveGeneration | null>(null);
   const discordAutoStartKeyRef = useRef<string | null>(null);
   const discordBridgeSettingsRef = useRef(discordBridgeSettings);
+  const titleGenerationRequestsRef = useRef(new Map<string, AbortController>());
   const activeChatIdRef = useRef(activeChatId);
   const localWorkspaceRef = useRef(localWorkspace);
   const projectsRef = useRef<ProjectSummary[]>(projects);
@@ -510,6 +522,21 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const queuedStarterRef = useRef<string | null>(null);
   const sessionApprovalDecisionsRef = useRef<SessionApprovalDecisionsByWorkspace>({});
   const sendingRequestRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      activeGenerationRef.current?.controller.abort();
+      activeGenerationRef.current = null;
+      sendingRequestRef.current = null;
+      queuedChatSendsRef.current = [];
+
+      for (const controller of titleGenerationRequestsRef.current.values()) {
+        controller.abort();
+      }
+
+      titleGenerationRequestsRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     void getAppInfo().then(setAppInfo);
@@ -1045,6 +1072,35 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               completedAt: step.completedAt ?? now,
               detail: errorMessage,
               status: "failed",
+            }
+          : step,
+      ),
+      updatedAt: now,
+    }));
+  }
+
+  function setAgentRunCancelled(runId: string | undefined, detail?: string) {
+    updateAgentRun(runId, (run, now) => ({
+      ...run,
+      completedAt: now,
+      events: [
+        ...run.events,
+        {
+          at: now,
+          detail,
+          id: createId("agent-event"),
+          label: "Agent run stopped",
+          type: "status",
+        },
+      ],
+      status: "cancelled",
+      steps: run.steps.map((step) =>
+        step.status === "running" || step.status === "queued" || step.status === "waiting_for_approval"
+          ? {
+              ...step,
+              completedAt: step.completedAt ?? now,
+              detail: detail ?? step.detail,
+              status: "skipped",
             }
           : step,
       ),
@@ -1686,14 +1742,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setSearchOpen(false);
   }
 
-  function createActiveGeneration(previousChat: ChatSummary, previousChatExisted: boolean, restoreDraft?: ChatComposerDraft) {
+  function createActiveGeneration(previousChat: ChatSummary, previousChatExisted: boolean, restoreDraft?: ChatComposerDraft, target?: { chatId: string; messageId: string }) {
     const requestId = activeSendRef.current + 1;
     const controller = new AbortController();
 
     activeSendRef.current = requestId;
     sendingRequestRef.current = requestId;
     activeGenerationRef.current = {
+      chatId: target?.chatId,
       controller,
+      messageId: target?.messageId,
       previousChat,
       previousChatExisted,
       requestId,
@@ -1701,6 +1759,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
 
     return { controller, requestId };
+  }
+
+  function setActiveGenerationTarget(requestId: number, chatId: string, messageId: string) {
+    const activeGeneration = activeGenerationRef.current;
+
+    if (!activeGeneration || activeGeneration.requestId !== requestId) {
+      return;
+    }
+
+    activeGeneration.chatId = chatId;
+    activeGeneration.messageId = messageId;
   }
 
   function isRequestInactive(requestId: number, controller: AbortController) {
@@ -1715,14 +1784,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
-  function handleStopGeneration() {
-    stopActiveGeneration({ restoreDraft: true });
+  function handleStopGeneration(messageId?: string) {
+    stopActiveGeneration({ messageId, restoreDraft: !messageId });
   }
 
-  function stopActiveGeneration({ restoreDraft }: { restoreDraft: boolean }) {
+  function stopActiveGeneration({ messageId, restoreDraft }: { messageId?: string; restoreDraft: boolean }) {
     const activeGeneration = activeGenerationRef.current;
 
     if (!activeGeneration) {
+      if (messageId) {
+        stopStreamingMessage(messageId);
+      } else {
+        stopStaleStreamingMessages();
+      }
+      return;
+    }
+
+    const isTargetedStop = Boolean(messageId);
+    const stopMatchesActiveGeneration = !messageId || !activeGeneration.messageId || activeGeneration.messageId === messageId;
+
+    if (!stopMatchesActiveGeneration) {
+      stopStreamingMessage(messageId);
       return;
     }
 
@@ -1732,7 +1814,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       setComposerDraftToRestore(activeGeneration.restoreDraft);
     }
 
-    restoreChatSnapshot(preserveQueuedMessagesForSnapshot(activeGeneration.previousChat), activeGeneration.previousChatExisted);
+    if (isTargetedStop && messageId) {
+      stopStreamingMessage(messageId);
+    } else {
+      restoreChatSnapshot(preserveQueuedMessagesForSnapshot(activeGeneration.previousChat), activeGeneration.previousChatExisted);
+    }
 
     if (sendingRequestRef.current === activeGeneration.requestId) {
       sendingRequestRef.current = null;
@@ -1740,6 +1826,131 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     activeGenerationRef.current = null;
     setSendingChatId(null);
+  }
+
+  function stopStreamingMessage(messageId: string) {
+    const stoppedRunId = pendingChatsRef.current.flatMap((chat) => chat.messages).find((message) => message.id === messageId && message.role === "assistant" && message.isStreaming)?.agentRunId;
+
+    setChats((currentChats) => {
+      let changed = false;
+      const stoppedAt = new Date().toISOString();
+      const nextChats = currentChats.map((chat) => {
+        let chatChanged = false;
+        const nextMessages = chat.messages.map((message) => {
+          if (message.id !== messageId || message.role !== "assistant" || !message.isStreaming) {
+            return message;
+          }
+
+          changed = true;
+          chatChanged = true;
+          return stopStreamingAssistantMessage(message, stoppedAt);
+        });
+
+        return chatChanged
+          ? {
+              ...chat,
+              messages: nextMessages,
+              updatedAt: stoppedAt,
+            }
+          : chat;
+      });
+
+      if (!changed) {
+        return currentChats;
+      }
+
+      pendingChatsRef.current = nextChats;
+      return nextChats;
+    });
+
+    setAgentRunCancelled(stoppedRunId, "Response stopped.");
+  }
+
+  function stopStaleStreamingMessages(exceptMessageId?: string) {
+    const stoppedRunIds = new Set(
+      pendingChatsRef.current
+        .flatMap((chat) => chat.messages)
+        .filter((message) => message.role === "assistant" && message.isStreaming && message.id !== exceptMessageId && message.agentRunId)
+        .map((message) => message.agentRunId!),
+    );
+
+    setChats((currentChats) => {
+      let changed = false;
+      const stoppedAt = new Date().toISOString();
+      const nextChats = currentChats.map((chat) => {
+        let chatChanged = false;
+        const nextMessages = chat.messages.map((message) => {
+          if (message.role !== "assistant" || !message.isStreaming || message.id === exceptMessageId) {
+            return message;
+          }
+
+          changed = true;
+          chatChanged = true;
+          return stopStreamingAssistantMessage(message, stoppedAt);
+        });
+
+        return chatChanged
+          ? {
+              ...chat,
+              messages: nextMessages,
+              updatedAt: stoppedAt,
+            }
+          : chat;
+      });
+
+      if (!changed) {
+        return currentChats;
+      }
+
+      pendingChatsRef.current = nextChats;
+      return nextChats;
+    });
+
+    stoppedRunIds.forEach((runId) => setAgentRunCancelled(runId, "Stale response stopped before starting the next message."));
+  }
+
+  function stopStreamingAssistantMessage(message: ChatMessage, stoppedAt: string): ChatMessage {
+    return {
+      ...message,
+      agentRunStatus: message.agentRunStatus === "running" || message.agentRunStatus === "queued" ? "cancelled" : message.agentRunStatus,
+      isStreaming: false,
+      progress: completeActiveProgress(message.progress),
+      thinking: message.thinking
+        ? {
+            ...message.thinking,
+            completedAt: message.thinking.completedAt ?? stoppedAt,
+          }
+        : undefined,
+      toolCalls: message.toolCalls?.map((toolCall) =>
+        toolCall.status === "active"
+          ? {
+              ...toolCall,
+              detail: toolCall.detail ?? "Stopped.",
+              status: "error",
+              terminal: toolCall.terminal
+                ? {
+                    ...toolCall.terminal,
+                    live: false,
+                  }
+                : toolCall.terminal,
+            }
+          : toolCall,
+      ),
+    };
+  }
+
+  function completeActiveProgress(progress: ChatProgressItem[] | undefined) {
+    const nextProgress = (progress ?? []).map((item) =>
+      item.status === "active"
+        ? {
+            ...item,
+            detail: item.detail ?? "Stopped.",
+            status: "complete" as const,
+          }
+        : item,
+    );
+
+    return nextProgress.length > 0 ? nextProgress : undefined;
   }
 
   function preserveQueuedMessagesForSnapshot(chatSnapshot: ChatSummary) {
@@ -1782,6 +1993,112 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     });
   }
 
+  function scheduleGeneratedChatTitle({
+    attachments,
+    chatId,
+    content,
+    fallbackTitle,
+    settings,
+    userMessageId,
+  }: {
+    attachments: ChatAttachment[];
+    chatId: string;
+    content: string;
+    fallbackTitle: string;
+    settings: ProviderSettings;
+    userMessageId: string;
+  }) {
+    titleGenerationRequestsRef.current.get(chatId)?.abort();
+
+    const controller = new AbortController();
+    titleGenerationRequestsRef.current.set(chatId, controller);
+
+    void generateChatTitle(settings, { attachments, content }, { signal: controller.signal })
+      .then((generatedTitle) => {
+        if (controller.signal.aborted || titleGenerationRequestsRef.current.get(chatId) !== controller) {
+          return;
+        }
+
+        applyGeneratedChatTitle({
+          chatId,
+          fallbackTitle,
+          title: generatedTitle,
+          userMessageId,
+        });
+      })
+      .catch(() => {
+        if (controller.signal.aborted || titleGenerationRequestsRef.current.get(chatId) !== controller) {
+          return;
+        }
+
+        applyGeneratedChatTitle({
+          chatId,
+          fallbackTitle,
+          title: fallbackTitle,
+          userMessageId,
+        });
+      })
+      .finally(() => {
+        if (titleGenerationRequestsRef.current.get(chatId) === controller) {
+          titleGenerationRequestsRef.current.delete(chatId);
+        }
+      });
+  }
+
+  function applyGeneratedChatTitle({
+    chatId,
+    fallbackTitle,
+    title,
+    userMessageId,
+  }: {
+    chatId: string;
+    fallbackTitle: string;
+    title: string;
+    userMessageId: string;
+  }) {
+    const cleanTitle = title.trim();
+
+    if (!cleanTitle) {
+      return;
+    }
+
+    setChats((currentChats) => {
+      let changed = false;
+      const nextChats = currentChats.map((chat) => {
+        if (chat.id !== chatId || chat.archived) {
+          return chat;
+        }
+
+        const firstUserMessage = chat.messages.find((message) => message.role === "user");
+
+        if (firstUserMessage?.id !== userMessageId) {
+          return chat;
+        }
+
+        if (chat.title !== PENDING_CHAT_TITLE && chat.title !== fallbackTitle && chat.title !== "New chat") {
+          return chat;
+        }
+
+        if (chat.title === cleanTitle) {
+          return chat;
+        }
+
+        changed = true;
+        return {
+          ...chat,
+          title: cleanTitle,
+        };
+      });
+
+      if (!changed) {
+        return currentChats;
+      }
+
+      pendingChatsRef.current = nextChats;
+      return nextChats;
+    });
+  }
+
   function enqueueChatSend(input: ChatSendInput) {
     const content = input.content.trim();
     const attachments = input.attachments;
@@ -1812,10 +2129,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setChats((currentChats) => {
       const chatForQueue = currentChats.find((chat) => chat.id === currentChat.id) ?? currentChat;
       const hasCurrentChat = currentChats.some((chat) => chat.id === currentChat.id);
+      const shouldGenerateTitle = chatForQueue.messages.length === 0;
       const updatedChat: ChatSummary = {
         ...chatForQueue,
         messages: [...chatForQueue.messages, userMessage],
-        title: chatForQueue.messages.length === 0 ? titleFromMessage(content, attachments) : chatForQueue.title,
+        title: shouldGenerateTitle ? PENDING_CHAT_TITLE : chatForQueue.title,
         updatedAt: now,
       };
       const nextChats = sortChatsByUpdatedAt(hasCurrentChat ? currentChats.map((chat) => (chat.id === currentChat.id ? updatedChat : chat)) : [updatedChat, ...currentChats]);
@@ -1910,7 +2228,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       messages: [...messagesBeforeAssistant, ...messagesAfterAssistant],
       updatedAt: now,
     };
-    const { controller, requestId } = createActiveGeneration(previousChatSnapshot, true);
+    const { controller, requestId } = createActiveGeneration(previousChatSnapshot, true, undefined, {
+      chatId: currentChat.id,
+      messageId: assistantMessage.id,
+    });
     const latestPrompt = getLatestUserPrompt(messagesBeforeAssistant);
     const steeringPrompt = [latestPrompt, `Steer: ${steerContent}`].filter(Boolean).join("\n\n");
     const partialAssistantContent = assistantMessage.content.trim();
@@ -2828,13 +3149,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       if (!hasLocalComputerToolCalls(assistantResponse.content, toolExecutionPolicy)) {
-        if (localProgress && looksLikeOnlyToolPrelude(finalResponse.content)) {
+        if (localProgress && (looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content))) {
           finalizationRetries += 1;
 
           if (finalizationRetries > MAX_TOOL_FINALIZATION_RETRIES) {
             const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
               [...messages, createMessage("assistant", assistantResponse.content)],
-              "The previous finalization attempt was only a tool prelude. Write the actual answer from the completed tool evidence.",
+              "The previous finalization attempt exposed tool activity instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
               assistantResponse.reasoning,
             );
 
@@ -3050,10 +3371,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function createToolFinalAnswerUnavailableMessage() {
-    return [
-      "I finished the background work for this request, but the final write-up did not come back cleanly.",
-      "Use Continue response to retry from the saved Activity without rerunning completed work.",
-    ].join("\n\n");
+    return "I could not produce a clean final answer for this run.";
   }
 
   function appendAutoCompactionContinuation(messages: ChatMessage[], prompt: string, executedToolCalls: number) {
@@ -3144,7 +3462,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       recordProviderActualUsage(chatId, messages, settings, response.usage);
       return response;
     } catch (error) {
-      if (!isProviderEmptyResponseError(error) || options.signal?.aborted) {
+      if (options.signal?.aborted || !isRetryableProviderMessageError(error)) {
         throw error;
       }
 
@@ -3166,24 +3484,76 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       const retryInstruction = createMessage(
         "user",
-        [
-          "RETRY AFTER EMPTY PROVIDER RESPONSE",
-          "The previous stream produced no visible final answer.",
-          hasLocalToolEvidence(messages)
-            ? "Previously gathered observations are already present above. Use them silently: emit the next needed tool_call only if work is unfinished, or write the direct final answer if it is done."
-            : "Answer the latest real user request above now.",
-          "Keep hidden reasoning brief and produce visible text. Do not leave the visible answer blank.",
-          "Do not mention provider behavior, app recovery, saved evidence, tool loops, continuation, or fallback text.",
-        ].join("\n\n"),
+        createProviderRetryInstruction(messages, isProviderEmptyResponseError(error)),
       );
       const retryMessages = [...compactedMessages, retryInstruction];
 
       recordProviderContextUsage(chatId, retryMessages, retrySettings);
 
-      const response = await streamProviderMessage(retrySettings, retryMessages, onUpdate, options);
+      const response = await runProviderRetryWithTimeout(options.signal, (signal) =>
+        streamProviderMessage(retrySettings, retryMessages, onUpdate, {
+          ...options,
+          signal,
+        }),
+      );
       recordProviderActualUsage(chatId, retryMessages, retrySettings, response.usage);
       return response;
     }
+  }
+
+  async function runProviderRetryWithTimeout<T>(parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) {
+    const retryController = new AbortController();
+    const abortRetry = () => retryController.abort();
+    const timeoutId = window.setTimeout(abortRetry, MESSAGE_RETRY_TIMEOUT_MS);
+
+    if (parentSignal?.aborted) {
+      window.clearTimeout(timeoutId);
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    parentSignal?.addEventListener("abort", abortRetry, { once: true });
+
+    try {
+      return await run(retryController.signal);
+    } catch (error) {
+      if (retryController.signal.aborted && !parentSignal?.aborted) {
+        throw new Error("The response retry did not finish within 10 seconds.");
+      }
+
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+      parentSignal?.removeEventListener("abort", abortRetry);
+    }
+  }
+
+  function createProviderRetryInstruction(messages: ChatMessage[], emptyResponse: boolean) {
+    return [
+      emptyResponse ? "RETRY AFTER EMPTY PROVIDER RESPONSE" : "RETRY AFTER TRANSIENT PROVIDER FAILURE",
+      emptyResponse ? "The previous stream produced no visible final answer." : "The previous provider request failed before a complete visible answer was produced.",
+      hasLocalToolEvidence(messages)
+        ? "Previously gathered observations are already present above. Use them silently: emit the next needed tool_call only if work is unfinished, or write the direct final answer if it is done."
+        : "Answer the latest real user request above now.",
+      "Keep hidden reasoning brief and produce visible text. Do not leave the visible answer blank.",
+      "Do not mention provider behavior, app recovery, saved evidence, tool loops, continuation, fallback text, or retry attempts.",
+    ].join("\n\n");
+  }
+
+  function isRetryableProviderMessageError(error: unknown) {
+    if (isProviderEmptyResponseError(error)) {
+      return true;
+    }
+
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const message = error.message.toLowerCase();
+
+    return (
+      /\bhttp\s+(?:408|409|425|429|500|502|503|504|520|521|522|523|524)\b/.test(message) ||
+      /\b(fetch failed|failed to fetch|network|timeout|timed out|temporarily unavailable|connection reset|connection refused|econnreset|etimedout)\b/.test(message)
+    );
   }
 
   function hasLocalToolEvidence(messages: ChatMessage[]) {
@@ -3675,10 +4045,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const restoreDraft: ChatComposerDraft = { attachments, content };
     const messagesBeforeUser = queuedSend ? currentChat.messages.slice(0, queuedMessageIndex) : currentChat.messages;
     const messagesAfterUser = queuedSend ? currentChat.messages.slice(queuedMessageIndex + 1) : [];
+    const shouldGenerateChatTitle = messagesBeforeUser.length === 0;
+    const fallbackChatTitle = titleFromMessage(content, attachments);
     const previousChatSnapshot = queuedSend
       ? {
           ...currentChat,
           messages: [...messagesBeforeUser, ...messagesAfterUser],
+          title: shouldGenerateChatTitle ? "New chat" : currentChat.title,
         }
       : currentChat;
     const { controller, requestId } = createActiveGeneration(previousChatSnapshot, currentChatExisted, restoreDraft);
@@ -3737,6 +4110,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     });
     assistantMessage.agentRunId = agentRun.id;
     assistantMessage.agentRunStatus = agentRun.status;
+    setActiveGenerationTarget(requestId, currentChat.id, assistantMessage.id);
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
@@ -3748,7 +4122,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const updatedChat: ChatSummary = {
         ...currentChat,
         messages: nextMessages,
-        title: currentChat.messages.length === 0 ? titleFromMessage(content, attachments) : currentChat.title,
+        title: shouldGenerateChatTitle ? PENDING_CHAT_TITLE : currentChat.title,
         updatedAt: now,
       };
 
@@ -3758,7 +4132,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       pendingChatsRef.current = sortedChats;
       return sortedChats;
     });
+    stopStaleStreamingMessages(assistantMessage.id);
     touchProject(currentChat.project);
+
+    if (shouldGenerateChatTitle) {
+      scheduleGeneratedChatTitle({
+        attachments,
+        chatId: currentChat.id,
+        content,
+        fallbackTitle: fallbackChatTitle,
+        settings: effectiveProviderSettings,
+        userMessageId: userMessage.id,
+      });
+    }
 
     try {
       const webContext = webSearchEnabled
@@ -4147,7 +4533,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, run?.localWorkspace ?? localWorkspaceRef.current);
     rememberSessionApprovalDecision(approval, decision, workspaceSettings);
     const prompt = run?.prompt ?? getLatestUserPrompt(currentChat.messages.slice(0, assistantMessageIndex));
-    const { controller, requestId } = createActiveGeneration(currentChat, true);
+    const { controller, requestId } = createActiveGeneration(currentChat, true, undefined, {
+      chatId: currentChat.id,
+      messageId,
+    });
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
@@ -4441,7 +4830,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const planningMaxPasses = clampPlanningPasses(assistantMessage.planning?.maxPasses ?? DEFAULT_PLANNING_MAX_PASSES);
-    const { controller, requestId } = createActiveGeneration(currentChat, true);
+    const { controller, requestId } = createActiveGeneration(currentChat, true, undefined, {
+      chatId: currentChat.id,
+      messageId,
+    });
     const now = new Date().toISOString();
     const planningInputRequests = getPlanningInputRequests(assistantMessage.planning);
     const answeredInputRequests = markPlanningInputAnswered(planningInputRequests, inputRequest.id, answers, now);
@@ -4786,6 +5178,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       prompt: originalPrompt || revisionFeedback,
       title: titleFromMessage(originalPrompt || revisionFeedback, []),
     });
+    setActiveGenerationTarget(requestId, currentChat.id, revisedAssistantMessage.id);
     const supersededPlanMessage: ChatMessage = {
       ...assistantMessage,
       agentRunStatus: assistantMessage.agentRunStatus === "waiting_for_approval" ? "cancelled" : assistantMessage.agentRunStatus,
@@ -4839,6 +5232,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ),
       ),
     );
+    stopStaleStreamingMessages(revisedAssistantMessage.id);
 
     try {
       const webContext = webSearchEnabled
@@ -5100,6 +5494,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       toolCalls: continueInterruptedResponse ? assistantMessage.toolCalls : undefined,
       webSearch: initialWebSearch,
     };
+    setActiveGenerationTarget(requestId, currentChat.id, regeneratedAssistantMessage.id);
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
@@ -5122,6 +5517,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ),
       ),
     );
+    stopStaleStreamingMessages(regeneratedAssistantMessage.id);
 
     try {
       const webContext = webSearchEnabled

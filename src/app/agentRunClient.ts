@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentRun } from "../types/agentRun";
+import { loadPersistentString, savePersistentString } from "../lib/appStorage";
 import { isTauriDesktopRuntime } from "./tauriClient";
 
 const FALLBACK_AGENT_RUNS_KEY = "gilbert-codex.agent-runs.v1";
@@ -9,7 +10,7 @@ export async function listAgentRuns(): Promise<AgentRun[]> {
     try {
       return await invoke<AgentRun[]>("agent_runs_list");
     } catch {
-      return readFallbackAgentRuns();
+      return [];
     }
   }
 
@@ -23,7 +24,6 @@ export async function saveAgentRun(run: AgentRun): Promise<AgentRun> {
     try {
       return await invoke<AgentRun>("agent_run_save", { run: normalizedRun });
     } catch {
-      writeFallbackAgentRun(normalizedRun);
       return normalizedRun;
     }
   }
@@ -38,7 +38,6 @@ export async function deleteAgentRun(id: string): Promise<void> {
       await invoke<void>("agent_run_delete", { id });
       return;
     } catch {
-      deleteFallbackAgentRun(id);
       return;
     }
   }
@@ -61,7 +60,7 @@ function normalizeAgentRun(run: AgentRun): AgentRun {
 
 function readFallbackAgentRuns(): AgentRun[] {
   try {
-    const rawRuns = window.localStorage.getItem(FALLBACK_AGENT_RUNS_KEY);
+    const rawRuns = loadPersistentString(FALLBACK_AGENT_RUNS_KEY);
     const parsedRuns = rawRuns ? JSON.parse(rawRuns) : [];
     return Array.isArray(parsedRuns) ? parsedRuns.map((run) => normalizeAgentRun(run as AgentRun)) : [];
   } catch {
@@ -88,7 +87,7 @@ function deleteFallbackAgentRun(id: string) {
 
 function writeFallbackAgentRuns(runs: AgentRun[]) {
   try {
-    window.localStorage.setItem(FALLBACK_AGENT_RUNS_KEY, JSON.stringify(runs.slice(0, 200)));
+    savePersistentString(FALLBACK_AGENT_RUNS_KEY, JSON.stringify(runs.slice(0, 200)));
   } catch {
     return;
   }

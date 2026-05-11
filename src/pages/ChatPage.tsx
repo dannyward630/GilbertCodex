@@ -41,7 +41,7 @@ interface ChatPageProps {
   onRegenerateResponse: (messageId: string) => void | Promise<void>;
   onSendMessage: (input: ChatSendInput) => void | Promise<void>;
   onSteerQueuedMessage: (messageId: string) => void;
-  onStopGeneration: () => void;
+  onStopGeneration: (messageId?: string) => void;
   onSubmitPlanningInput: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   providerSettings: ProviderSettings;

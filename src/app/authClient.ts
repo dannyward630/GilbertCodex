@@ -16,6 +16,11 @@ const WORKSPACE_STORAGE_KEYS = [
   "gilbert-codex.active-chat.v1",
   "gilbert-codex.local-workspace.v1",
   "gilbert-codex.tool-registry.v1",
+  "gilbert-codex.github-oauth-client-id.v1",
+  "gilbert-codex.discord-bridge.v1",
+  "gilbert-codex.browser-preview.v2",
+  "gilbert-codex.browser-preview.v1",
+  "gilbert-codex.agent-runs.v1",
 ];
 
 interface AuthUserRecord {

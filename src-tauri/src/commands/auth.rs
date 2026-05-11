@@ -276,6 +276,21 @@ pub fn auth_logout(
     save_database(&app, &database)
 }
 
+pub fn current_user_storage_namespace(app: &tauri::AppHandle) -> Result<String, String> {
+    let database = load_database(app)?;
+    let session = database
+        .current_session
+        .as_ref()
+        .ok_or_else(|| "Sign in before opening account-scoped local data.".to_string())?;
+    let user = database
+        .users
+        .iter()
+        .find(|user| user.id == session.user_id)
+        .ok_or_else(|| "The signed-in local account is no longer available.".to_string())?;
+
+    storage::user_namespace(&user.id)
+}
+
 impl From<&AuthUserRecord> for AuthUser {
     fn from(user: &AuthUserRecord) -> Self {
         Self {

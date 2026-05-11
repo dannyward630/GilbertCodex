@@ -1,6 +1,6 @@
 {
   "name": "gilbert-codex",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "GUI-first local desktop agent workspace built with React, Tauri, and Rust.",
   "license": "MIT",
   "type": "module",
@@ -42,6 +42,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-notification": "^2.3.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "color-name-list": "^14.36.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

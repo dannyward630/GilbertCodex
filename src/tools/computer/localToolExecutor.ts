@@ -86,7 +86,9 @@ const MAX_TERMINAL_TIMEOUT_MS = 180_000;
 const BACKGROUND_TERMINAL_PROBE_MS = 18_000;
 const BACKGROUND_TERMINAL_FAST_RETURN_MS = 3_800;
 const BACKGROUND_TERMINAL_MIN_READY_MS = 900;
-const MAX_TERMINAL_LIVE_OUTPUT_CHARS = Number.POSITIVE_INFINITY;
+const FAST_TERMINAL_COMMAND_TIMEOUT_MS = 12_000;
+const MAX_TERMINAL_LIVE_OUTPUT_CHARS = 256 * 1024;
+const MAX_TERMINAL_RESULT_OUTPUT_CHARS = 256 * 1024;
 const TERMINAL_TOOL_POLL_INTERVAL_MS = 120;
 const DEV_SERVER_PROBE_INTERVAL_MS = 650;
 const DEV_SERVER_PROBE_TIMEOUT_MS = 650;
@@ -3112,6 +3114,7 @@ async function runTerminalCommandInBackgroundProbe({
 }): Promise<TerminalRunCommandResponse & { sessionId?: string }> {
   const startedAt = Date.now();
   const session = await createTerminalSession({ shell, workingDirectory });
+  const releaseAbortKill = bindTerminalSessionAbort(signal, session.sessionId);
   const stdout: string[] = [];
   const stderr: string[] = [];
   const transcript: string[] = [];
@@ -3190,7 +3193,7 @@ async function runTerminalCommandInBackgroundProbe({
 
     while (Date.now() - startedAt < BACKGROUND_TERMINAL_PROBE_MS) {
       throwIfAborted(signal);
-      await sleep(TERMINAL_TOOL_POLL_INTERVAL_MS);
+      await sleep(TERMINAL_TOOL_POLL_INTERVAL_MS, signal);
 
       const drain = await drainTerminalSession(session.sessionId);
       appendChunks(drain.chunks);
@@ -3229,11 +3232,13 @@ async function runTerminalCommandInBackgroundProbe({
       }
     }
   } catch (error) {
+    releaseAbortKill();
     await killTerminalSession(session.sessionId).catch(() => undefined);
     throw error;
   }
 
   if (completed) {
+    releaseAbortKill();
     await killTerminalSession(session.sessionId).catch(() => undefined);
   } else {
     appendChunks([
@@ -3278,6 +3283,7 @@ async function runTerminalCommandWithProgress({
 }): Promise<TerminalRunCommandResponse> {
   const startedAt = Date.now();
   const session = await createTerminalSession({ shell, workingDirectory });
+  const releaseAbortKill = bindTerminalSessionAbort(signal, session.sessionId);
   const stdout: string[] = [];
   const stderr: string[] = [];
   const transcript: string[] = [];
@@ -3286,6 +3292,7 @@ async function runTerminalCommandWithProgress({
   let exitCode: number | null = null;
   let outputTruncated = false;
   let timedOut = false;
+  let completed = false;
 
   const appendChunks = (chunks: TerminalOutputChunk[]) => {
     for (const chunk of chunks) {
@@ -3336,7 +3343,8 @@ async function runTerminalCommandWithProgress({
       }),
       terminal: {
         command,
-        live: !timedOut,
+        exitCode,
+        live: !completed && !timedOut,
         outputTruncated,
         shell,
         timedOut,
@@ -3363,7 +3371,7 @@ async function runTerminalCommandWithProgress({
         break;
       }
 
-      await sleep(TERMINAL_TOOL_POLL_INTERVAL_MS);
+      await sleep(TERMINAL_TOOL_POLL_INTERVAL_MS, signal);
       const drain = await drainTerminalSession(session.sessionId);
       appendChunks(drain.chunks);
 
@@ -3377,14 +3385,18 @@ async function runTerminalCommandWithProgress({
 
       if (drain.lastCommandCompleted) {
         exitCode = drain.lastCommandExitCode ?? null;
+        completed = true;
+        emitProgress();
         break;
       }
     }
   } catch (error) {
+    releaseAbortKill();
     await killTerminalSession(session.sessionId).catch(() => undefined);
     throw error;
   }
 
+  releaseAbortKill();
   await killTerminalSession(session.sessionId).catch(() => undefined);
 
   return {
@@ -3397,6 +3409,117 @@ async function runTerminalCommandWithProgress({
     timedOut,
     workingDirectory: session.workingDirectory,
   };
+}
+
+async function runTerminalCommandFastWithProgress({
+  command,
+  onProgress,
+  shell,
+  signal,
+  timeoutMs,
+  workingDirectory,
+}: {
+  command: string;
+  onProgress: TerminalProgressHandler;
+  shell: TerminalShellId;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  workingDirectory: string;
+}): Promise<TerminalRunCommandResponse> {
+  throwIfAborted(signal);
+  onProgress({
+    output: formatTerminalLiveOutput({
+      command,
+      outputTruncated: false,
+      shell,
+      timedOut: false,
+      transcript: "[system] Running through the fast command runner...\n",
+      workingDirectory,
+    }),
+    terminal: {
+      command,
+      live: true,
+      outputTruncated: false,
+      shell,
+      timedOut: false,
+      workingDirectory,
+    },
+  });
+
+  const result = await runTerminalCommand({
+    command,
+    shell,
+    timeoutMs,
+    workingDirectory,
+  });
+
+  throwIfAborted(signal);
+  onProgress({
+    output: formatTerminalLiveOutput({
+      command,
+      outputTruncated: result.outputTruncated,
+      shell: result.shell,
+      timedOut: result.timedOut,
+      transcript: formatFastTerminalTranscript(result),
+      workingDirectory: result.workingDirectory,
+    }),
+    terminal: {
+      command,
+      exitCode: result.exitCode,
+      live: false,
+      outputTruncated: result.outputTruncated,
+      shell: result.shell,
+      timedOut: result.timedOut,
+      workingDirectory: result.workingDirectory,
+    },
+  });
+
+  return result;
+}
+
+function formatFastTerminalTranscript(result: TerminalRunCommandResponse) {
+  const stdout = result.stdout.trimEnd();
+  const stderr = result.stderr.trimEnd();
+  const parts = [
+    stdout,
+    stderr ? `[stderr]\n${stderr}` : "",
+    `[system] Command finished in ${result.durationMs} ms with exit code ${result.exitCode ?? "none"}.`,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? limitToolResultBlock(parts.join("\n"), MAX_TERMINAL_LIVE_OUTPUT_CHARS) : "[system] Command completed with no output.";
+}
+
+function shouldUseFastTerminalCommand(command: string, timeoutMs: number) {
+  const normalized = normalizeCommandForFastPath(command);
+
+  if (!normalized || isLikelyDevServerCommand(normalized)) {
+    return false;
+  }
+
+  if (/^git\s+(?:status|diff|log|branch|show|rev-parse|remote|ls-files|describe)\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^(?:pwd|whoami|hostname|git\s+--version|node\s+--version|npm(?:\.cmd)?\s+--version|pnpm(?:\.cmd)?\s+--version|yarn(?:\.cmd)?\s+--version|python\s+--version|py\s+--version|cargo\s+--version|rustc\s+--version)\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^(?:get-location|write-output|echo)\b/i.test(normalized)) {
+    return true;
+  }
+
+  return timeoutMs <= FAST_TERMINAL_COMMAND_TIMEOUT_MS && !looksLikeStreamingCommand(normalized);
+}
+
+function normalizeCommandForFastPath(command: string) {
+  return command
+    .replace(/\s+(?:1?>|2>|2>&1|2>&\s*1|>>)\s*[^&|;]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeStreamingCommand(command: string) {
+  return /\b(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun|cargo|gradle|gradlew|pytest|vitest|jest|playwright|tauri|vite|next|react-scripts)\b/i.test(command);
 }
 
 function formatTerminalLiveOutput({
@@ -3451,8 +3574,46 @@ function createTerminalToolMetadata(command: string, result: TerminalRunCommandR
   };
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function bindTerminalSessionAbort(signal: AbortSignal | undefined, sessionId: string) {
+  if (!signal) {
+    return () => undefined;
+  }
+
+  const killSession = () => {
+    void killTerminalSession(sessionId).catch(() => undefined);
+  };
+
+  if (signal.aborted) {
+    killSession();
+    return () => undefined;
+  }
+
+  signal.addEventListener("abort", killSession, { once: true });
+  return () => signal.removeEventListener("abort", killSession);
+}
+
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+
+    let timeoutId: number | undefined;
+    const abort = () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+
+    timeoutId = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function formatTerminalRunResult(command: string, result: TerminalRunCommandResponse, extraDetail?: string) {
@@ -3479,7 +3640,7 @@ function formatTerminalStream(label: string, content: string) {
     return `${label}: <empty>`;
   }
 
-  return `${label}\n${limitToolResultBlock(normalized, null)}`;
+  return `${label}\n${limitToolResultBlock(normalized, MAX_TERMINAL_RESULT_OUTPUT_CHARS)}`;
 }
 
 function terminalShellFromArgs(args: Record<string, string>): TerminalShellId {

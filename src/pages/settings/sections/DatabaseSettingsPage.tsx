@@ -128,7 +128,7 @@ export function DatabaseSettingsPage() {
 
   return (
     <>
-      <SettingsSectionHeading detail="Inspect the local SQL database, context footprint, legacy storage, and reset controls." icon={Database} title="Database" />
+      <SettingsSectionHeading detail="Inspect this account's local SQL records, context footprint, legacy storage, and reset controls." icon={Database} title="Database" />
       <div className="settings-section-grid database-settings-grid">
         {status ? (
           <div className="settings-status-banner settings-card-wide" data-kind={status.kind}>
@@ -157,7 +157,7 @@ export function DatabaseSettingsPage() {
             <ListTree size={19} aria-hidden="true" />
             <div>
               <h2>Storage usage</h2>
-              <p>What the local database is using right now.</p>
+              <p>What this signed-in account is using right now.</p>
             </div>
           </div>
           <div className="database-usage-list">
@@ -227,7 +227,7 @@ export function DatabaseSettingsPage() {
             <FileText size={19} aria-hidden="true" />
             <div>
               <h2>Records</h2>
-              <p>Saved objects without exposing raw sensitive values.</p>
+              <p>Saved objects for this account without exposing raw sensitive values.</p>
             </div>
           </div>
           <div className="database-record-list">
@@ -301,7 +301,7 @@ export function DatabaseSettingsPage() {
           </div>
           <div className="settings-warning">
             <AlertTriangle size={16} aria-hidden="true" />
-            <span>Deleting the database removes auth, chats, projects, sources, images, settings, tool history, and local integrations.</span>
+            <span>Deleting the database removes all local accounts, chats, projects, sources, images, settings, tool history, and local integrations.</span>
           </div>
           <button className="settings-danger-button database-danger-button" type="button" onClick={() => setResetConfirmOpen(true)}>
             <Trash2 size={16} aria-hidden="true" />
@@ -321,7 +321,7 @@ export function DatabaseSettingsPage() {
             </button>
           </>
         }
-        description="This deletes Gilbert Database and resets the app to a clean slate on this device."
+        description="This deletes Gilbert Database for every local account and resets the app to a clean slate on this device."
         icon={Trash2}
         open={resetConfirmOpen}
         title="Delete Gilbert Database?"

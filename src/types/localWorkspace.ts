@@ -75,16 +75,33 @@ export interface ComputerGitStatus {
   files?: ComputerGitChangedFile[];
   githubOwner?: string;
   githubRepo?: string;
+  headSha?: string;
   remoteUrl?: string;
   repositoryRoot?: string;
+  upstream?: string;
+}
+
+export interface ComputerGitActionResult {
+  message: string;
+  output?: string;
+  status: ComputerGitStatus;
 }
 
 export interface ComputerGitChangedFile {
   additions: number;
   deletions: number;
+  diffPreview?: ComputerGitDiffLine[];
+  diffTruncated?: boolean;
   oldPath?: string;
   path: string;
   status: string;
+}
+
+export interface ComputerGitDiffLine {
+  content: string;
+  kind: "add" | "context" | "hunk" | "meta" | "remove";
+  newLine?: number;
+  oldLine?: number;
 }
 
 export interface ComputerSearchResult {

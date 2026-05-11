@@ -61,6 +61,8 @@ export function isToolResultFallbackAnswer(content: string) {
   return (
     content.includes("## Answer From Completed Tool Results") ||
     content.includes("## Tool Run Needs Continuation") ||
+    content.includes("final write-up did not come back cleanly") ||
+    content.includes("I completed the tool work. Here are the saved results:") ||
     content.includes("provider still did not return separate visible answer text")
   );
 }
@@ -73,6 +75,9 @@ export function looksLikeInternalToolRecoveryAnswer(content: string) {
     isToolResultFallbackAnswer(content) ||
     normalized.includes("use continue response to keep this same run moving") ||
     normalized.includes("instead of leaving the chat blank") ||
+    /\b(summary|recap|overview)\b[\s\S]{0,120}\b(tool calls?|tools? (?:i|we|the app|it) (?:ran|used|called|executed)|terminal|git)\b/.test(normalized) ||
+    /\b(i|we|the app)\b[\s\S]{0,80}\b(ran|used|called|executed|completed)\b[\s\S]{0,80}\b(tool calls?|tools?|terminal|git)\b/.test(normalized) ||
+    /\b(tool calls?|tools?|terminal|git)\b[\s\S]{0,100}\b(completed|executed|ran successfully|returned|produced)\b/.test(normalized) ||
     /\b(provider|app)\b[\s\S]{0,160}\b(visible answer|tool results?|completed tool|saved evidence)\b/.test(normalized) ||
     /\b(original request|what ran|evidence)\b[\s\S]{0,240}\b(executed|completed|tool call)\b/.test(normalized)
   );

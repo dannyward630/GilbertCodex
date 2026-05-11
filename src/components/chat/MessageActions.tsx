@@ -8,7 +8,7 @@ interface MessageActionsProps {
   canRegenerate?: boolean;
   message: ChatMessage;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
-  onStopGeneration?: () => void;
+  onStopGeneration?: (messageId: string) => void;
 }
 
 function formatMessageTime(createdAt: string) {
@@ -120,7 +120,7 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
     }
 
     setMenuOpen(false);
-    onStopGeneration();
+    onStopGeneration(message.id);
   }
 
   return (

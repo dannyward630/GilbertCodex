@@ -19,7 +19,7 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.2.1",
+  version: "0.2.2",
   phase: "Public alpha",
   runtime: "Browser preview",
 };
@@ -325,6 +325,16 @@ export async function writeTerminalSession(sessionId: string, input: string): Pr
   return invoke<void>("terminal_write_session", {
     request: {
       input,
+      sessionId,
+    },
+  });
+}
+
+export async function resizeTerminalSession(sessionId: string, cols: number, rows: number): Promise<void> {
+  return invoke<void>("terminal_resize_session", {
+    request: {
+      cols,
+      rows,
       sessionId,
     },
   });

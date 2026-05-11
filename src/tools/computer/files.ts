@@ -5,6 +5,7 @@ import { isTauriDesktopRuntime } from "../../app/tauriClient";
 import type {
   ComputerDirectoryListing,
   ComputerDrive,
+  ComputerGitActionResult,
   ComputerFileIndexProgress,
   ComputerFileIndexSummary,
   ComputerGitStatus,
@@ -234,6 +235,49 @@ export async function getComputerGitStatus(path: string): Promise<ComputerGitSta
   return await invoke<ComputerGitStatus>("computer_get_git_status", {
     request: {
       path,
+    },
+  });
+}
+
+/** Stages all local Git changes by default and creates a commit. */
+export async function commitComputerGitChanges(path: string, message: string, stageAll = true): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_commit", {
+    request: {
+      message,
+      path,
+      stageAll,
+    },
+  });
+}
+
+/** Creates and switches to a new local Git branch. */
+export async function createComputerGitBranch(path: string, name: string): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_create_branch", {
+    request: {
+      name,
+      path,
+    },
+  });
+}
+
+/** Pushes the current branch and sets origin/current-branch as upstream when needed. */
+export async function pushComputerGitBranch(path: string, remote = "origin"): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_push", {
+    request: {
+      path,
+      remote,
     },
   });
 }

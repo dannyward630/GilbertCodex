@@ -234,6 +234,11 @@ pub fn write_values(
     sync_namespace_projections(&connection, &namespace)
 }
 
+pub fn user_namespace(user_id: &str) -> Result<String, String> {
+    let sanitized = sanitize_storage_scope(user_id);
+    normalize_identifier(&format!("user.{sanitized}"), "storage namespace")
+}
+
 pub fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let documents = match app.path().document_dir() {
         Ok(path) => path,
@@ -642,6 +647,28 @@ fn normalize_identifier(value: &str, label: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.to_string())
+}
+
+fn sanitize_storage_scope(value: &str) -> String {
+    let mut sanitized = String::new();
+
+    for character in value.trim().chars() {
+        if sanitized.len() >= 80 {
+            break;
+        }
+
+        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.') {
+            sanitized.push(character);
+        } else {
+            sanitized.push('-');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "local".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn fallback_documents_dir() -> Option<PathBuf> {

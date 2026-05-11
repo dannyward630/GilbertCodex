@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -11,6 +11,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+use portable_pty::{native_pty_system, Child as PtyChild, CommandBuilder, MasterPty, PtySize};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -32,13 +34,16 @@ pub struct TerminalState {
 }
 
 struct TerminalSession {
-    active_child: Option<Child>,
+    active_child: Option<Box<dyn PtyChild + Send + Sync>>,
     active_command: Option<String>,
+    active_pty: Option<Box<dyn MasterPty + Send>>,
+    active_stdin: Option<Box<dyn Write + Send>>,
     exited: Option<i32>,
     last_command_completed: bool,
     last_command_exit_code: Option<i32>,
     output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
     shell: TerminalShell,
+    mode: TerminalSessionMode,
     working_directory: PathBuf,
 }
 
@@ -47,12 +52,15 @@ impl Drop for TerminalSession {
         if let Some(child) = self.active_child.as_mut() {
             let _ = child.kill();
         }
+        self.active_stdin.take();
+        self.active_pty.take();
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalCreateSessionRequest {
+    pub mode: Option<TerminalSessionMode>,
     pub shell: Option<TerminalShell>,
     pub working_directory: Option<String>,
 }
@@ -76,6 +84,14 @@ pub struct TerminalRunCommandRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalResizeSessionRequest {
+    pub cols: u16,
+    pub rows: u16,
     pub session_id: String,
 }
 
@@ -112,6 +128,14 @@ pub struct TerminalRunCommandResponse {
     pub stdout: String,
     pub timed_out: bool,
     pub working_directory: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum TerminalSessionMode {
+    #[serde(rename = "command")]
+    Command,
+    #[serde(rename = "interactive")]
+    Interactive,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -158,6 +182,7 @@ pub fn terminal_create_session(
     request: TerminalCreateSessionRequest,
 ) -> Result<TerminalCreateSessionResponse, String> {
     let shell = normalize_terminal_shell(request.shell.unwrap_or_else(default_terminal_shell));
+    let mode = request.mode.unwrap_or(TerminalSessionMode::Command);
     let working_directory = resolve_working_directory(request.working_directory)?;
     let output = Arc::new(Mutex::new(VecDeque::new()));
 
@@ -165,8 +190,13 @@ pub fn terminal_create_session(
         &output,
         TerminalOutputStream::System,
         format!(
-            "Started {} command sandbox in {}\n",
+            "Started {} {} in {}\n",
             shell_label(&shell),
+            if mode == TerminalSessionMode::Interactive {
+                "terminal"
+            } else {
+                "command sandbox"
+            },
             path_to_string(&working_directory)
         ),
     );
@@ -180,14 +210,29 @@ pub fn terminal_create_session(
         "terminal-{}",
         state.next_id.fetch_add(1, Ordering::Relaxed) + 1
     );
+    let mut active_child = None;
+    let mut active_pty = None;
+    let mut active_stdin = None;
+
+    if mode == TerminalSessionMode::Interactive {
+        let (child, pty, stdin) =
+            spawn_interactive_terminal(&shell, &working_directory, Arc::clone(&output))?;
+        active_child = Some(child);
+        active_pty = Some(pty);
+        active_stdin = Some(stdin);
+    }
+
     let session = TerminalSession {
-        active_child: None,
+        active_child,
         active_command: None,
+        active_pty,
+        active_stdin,
         exited: None,
         last_command_completed: false,
         last_command_exit_code: None,
         output: Arc::clone(&output),
         shell,
+        mode,
         working_directory,
     };
     let mut sessions = state
@@ -226,11 +271,31 @@ pub fn terminal_write_session(
         return Err("That terminal session has already exited. Start a new session.".to_string());
     }
 
+    if session.mode == TerminalSessionMode::Interactive {
+        let stdin = session
+            .active_stdin
+            .as_mut()
+            .ok_or_else(|| "The terminal shell is not accepting input.".to_string())?;
+
+        stdin
+            .write_all(request.input.as_bytes())
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("Could not write to the terminal: {error}"))?;
+        return Ok(());
+    }
+
     if session.active_child.is_some() {
-        return Err(
-            "A command is already running in this terminal. Stop it or wait for it to finish."
-                .to_string(),
-        );
+        let process_input = request.input.trim_end_matches(['\r', '\n']);
+        let stdin = session
+            .active_stdin
+            .as_mut()
+            .ok_or_else(|| "The running command is not accepting terminal input.".to_string())?;
+
+        stdin
+            .write_all(format!("{process_input}\r\n").as_bytes())
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("Could not write to the running command: {error}"))?;
+        return Ok(());
     }
 
     let input = request.input.trim();
@@ -281,16 +346,25 @@ pub fn terminal_write_session(
         format!("Running command: {input}\n"),
     );
 
-    let mut command = create_shell_command(&session.shell, input);
-
-    command
-        .current_dir(&session.working_directory)
-        .env("GILBERT_CODEX_TERMINAL", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = command.spawn().map_err(|error| {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| format!("Could not open terminal: {error}"))?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| format!("Could not read from terminal: {error}"))?;
+    let child_stdin = pair
+        .master
+        .take_writer()
+        .map_err(|error| format!("Could not write to terminal: {error}"))?;
+    let command = create_pty_shell_command(&session.shell, input, &session.working_directory);
+    let child = pair.slave.spawn_command(command).map_err(|error| {
         format!(
             "Could not run {} command: {}",
             shell_label(&session.shell),
@@ -298,26 +372,47 @@ pub fn terminal_write_session(
         )
     })?;
 
-    if let Some(stdout) = child.stdout.take() {
-        read_terminal_stream(
-            stdout,
-            TerminalOutputStream::Stdout,
-            Arc::clone(&session.output),
-        );
-    }
-
-    if let Some(stderr) = child.stderr.take() {
-        read_terminal_stream(
-            stderr,
-            TerminalOutputStream::Stderr,
-            Arc::clone(&session.output),
-        );
-    }
+    read_terminal_stream(
+        reader,
+        TerminalOutputStream::Stdout,
+        Arc::clone(&session.output),
+        true,
+    );
 
     session.active_child = Some(child);
     session.active_command = Some(input.to_string());
+    session.active_pty = Some(pair.master);
+    session.active_stdin = Some(child_stdin);
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn terminal_resize_session(
+    state: tauri::State<'_, TerminalState>,
+    request: TerminalResizeSessionRequest,
+) -> Result<(), String> {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "The terminal session registry is busy. Try again in a moment.".to_string())?;
+    let session = sessions
+        .get_mut(&request.session_id)
+        .ok_or_else(|| "That terminal session is no longer available.".to_string())?;
+
+    let Some(pty) = session.active_pty.as_mut() else {
+        return Ok(());
+    };
+    let rows = request.rows.clamp(4, 200);
+    let cols = request.cols.clamp(20, 500);
+
+    pty.resize(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })
+    .map_err(|error| format!("Could not resize terminal: {error}"))
 }
 
 #[tauri::command]
@@ -352,7 +447,8 @@ pub fn terminal_drain_session(
     Ok(TerminalDrainResponse {
         active_command: session.active_command.clone(),
         chunks: drain_output(&session.output),
-        command_running: session.active_child.is_some(),
+        command_running: session.mode == TerminalSessionMode::Command
+            && session.active_child.is_some(),
         exit_code: session.exited,
         last_command_completed: session.last_command_completed,
         last_command_exit_code: session.last_command_exit_code,
@@ -377,6 +473,8 @@ pub fn terminal_kill_session(
                 let _ = child.kill();
                 let _ = child.wait();
             }
+            session.active_stdin.take();
+            session.active_pty.take();
         })
         .ok_or_else(|| "That terminal session is already closed.".to_string())
 }
@@ -485,29 +583,49 @@ fn refresh_active_command(session: &mut TerminalSession) -> Result<(), String> {
 
     if let Some(status) = exit_status {
         session.active_child.take();
-        session.last_command_completed = true;
-        session.last_command_exit_code = status.code();
+        session.active_stdin.take();
+        session.active_pty.take();
+        let exit_code = status.exit_code() as i32;
+        if session.mode == TerminalSessionMode::Interactive {
+            session.exited = Some(exit_code);
+        } else {
+            session.last_command_completed = true;
+            session.last_command_exit_code = Some(exit_code);
+        }
         let command = session
             .active_command
             .take()
-            .unwrap_or_else(|| "command".to_string());
+            .unwrap_or_else(|| "terminal".to_string());
 
-        match status.code() {
-            Some(0) => push_output(
-                &session.output,
-                TerminalOutputStream::System,
-                format!("Command finished: {command}\n"),
-            ),
-            Some(code) => push_output(
-                &session.output,
-                TerminalOutputStream::System,
-                format!("Command exited with code {code}: {command}\n"),
-            ),
-            None => push_output(
-                &session.output,
-                TerminalOutputStream::System,
-                format!("Command stopped: {command}\n"),
-            ),
+        if session.mode == TerminalSessionMode::Interactive {
+            let message = if status.success() {
+                "Terminal exited.\n".to_string()
+            } else if let Some(signal) = status.signal() {
+                format!("Terminal stopped by {signal}.\n")
+            } else {
+                format!("Terminal exited with code {exit_code}.\n")
+            };
+            push_output(&session.output, TerminalOutputStream::System, message);
+        } else {
+            if status.success() {
+                push_output(
+                    &session.output,
+                    TerminalOutputStream::System,
+                    format!("Command finished: {command}\n"),
+                );
+            } else if let Some(signal) = status.signal() {
+                push_output(
+                    &session.output,
+                    TerminalOutputStream::System,
+                    format!("Command stopped by {signal}: {command}\n"),
+                );
+            } else {
+                push_output(
+                    &session.output,
+                    TerminalOutputStream::System,
+                    format!("Command exited with code {exit_code}: {command}\n"),
+                );
+            }
         }
     }
 
@@ -563,6 +681,158 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
             }
         }
     }
+}
+
+fn spawn_interactive_terminal(
+    shell: &TerminalShell,
+    working_directory: &Path,
+    output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
+) -> Result<
+    (
+        Box<dyn PtyChild + Send + Sync>,
+        Box<dyn MasterPty + Send>,
+        Box<dyn Write + Send>,
+    ),
+    String,
+> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| format!("Could not open terminal: {error}"))?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| format!("Could not read from terminal: {error}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|error| format!("Could not write to terminal: {error}"))?;
+    let command = create_interactive_shell_command(shell, working_directory);
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("Could not start {} terminal: {}", shell_label(shell), error))?;
+
+    read_terminal_stream(reader, TerminalOutputStream::Stdout, output, false);
+
+    Ok((child, pair.master, writer))
+}
+
+fn create_interactive_shell_command(
+    shell: &TerminalShell,
+    working_directory: &Path,
+) -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        let mut command = match shell {
+            TerminalShell::PowerShell => {
+                let mut command = CommandBuilder::new("powershell.exe");
+                command.args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"]);
+                command
+            }
+            TerminalShell::Cmd => {
+                let mut command = CommandBuilder::new("cmd.exe");
+                command.args(["/Q"]);
+                command
+            }
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = CommandBuilder::new(unix_shell_program(shell));
+                command.arg("-i");
+                command
+            }
+        };
+
+        configure_pty_command(&mut command, working_directory);
+        command
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut command = match shell {
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = CommandBuilder::new(unix_shell_program(shell));
+                command.arg("-i");
+                command
+            }
+            TerminalShell::PowerShell | TerminalShell::Cmd => {
+                let mut command = CommandBuilder::new(default_unix_shell_path());
+                command.arg("-i");
+                command
+            }
+        };
+
+        configure_pty_command(&mut command, working_directory);
+        command
+    }
+}
+
+fn create_pty_shell_command(
+    shell: &TerminalShell,
+    input: &str,
+    working_directory: &Path,
+) -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        let mut command = match shell {
+            TerminalShell::PowerShell => {
+                let mut command = CommandBuilder::new("powershell.exe");
+                let normalized_input = normalize_windows_powershell_command(input);
+                command.args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    normalized_input.as_str(),
+                ]);
+                command
+            }
+            TerminalShell::Cmd => {
+                let mut command = CommandBuilder::new("cmd.exe");
+                command.args(["/Q", "/C", input]);
+                command
+            }
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = CommandBuilder::new(unix_shell_program(shell));
+                command.args(["-lc", input]);
+                command
+            }
+        };
+
+        configure_pty_command(&mut command, working_directory);
+        command
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut command = match shell {
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
+                let mut command = CommandBuilder::new(unix_shell_program(shell));
+                command.args(["-lc", input]);
+                command
+            }
+            TerminalShell::PowerShell | TerminalShell::Cmd => {
+                let mut command = CommandBuilder::new(default_unix_shell_path());
+                command.args(["-lc", input]);
+                command
+            }
+        };
+
+        configure_pty_command(&mut command, working_directory);
+        command
+    }
+}
+
+fn configure_pty_command(command: &mut CommandBuilder, working_directory: &Path) {
+    command.cwd(working_directory);
+    command.env("GILBERT_CODEX_TERMINAL", "1");
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
 }
 
 fn default_terminal_shell() -> TerminalShell {
@@ -626,23 +896,30 @@ fn read_terminal_stream<R>(
     reader: R,
     stream: TerminalOutputStream,
     output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
+    clean_control_sequences: bool,
 ) where
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
         let mut reader = reader;
         let mut buffer = [0u8; STREAM_READ_BYTES];
+        let mut cleaner = TerminalOutputCleaner::default();
 
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read_count) => {
-                    push_output(
-                        &output,
-                        stream.clone(),
-                        String::from_utf8_lossy(&buffer[..read_count.min(MAX_CHUNK_BYTES)])
-                            .to_string(),
-                    );
+                    let raw_text =
+                        String::from_utf8_lossy(&buffer[..read_count.min(MAX_CHUNK_BYTES)]);
+                    let text = if clean_control_sequences {
+                        cleaner.clean(&raw_text)
+                    } else {
+                        raw_text.to_string()
+                    };
+
+                    if !text.is_empty() {
+                        push_output(&output, stream.clone(), text);
+                    }
                 }
                 Err(error) => {
                     push_output(
@@ -903,6 +1180,123 @@ fn path_to_string(path: impl AsRef<Path>) -> String {
 fn bytes_to_string(output: &Arc<Mutex<Vec<u8>>>) -> String {
     output
         .lock()
-        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .map(|bytes| clean_terminal_output_text(&String::from_utf8_lossy(&bytes)))
         .unwrap_or_default()
+}
+
+fn clean_terminal_output_text(value: &str) -> String {
+    TerminalOutputCleaner::default().clean(value)
+}
+
+#[derive(Clone, Copy, Default)]
+enum TerminalOutputCleanerState {
+    #[default]
+    Ground,
+    Escape,
+    ControlSequence,
+    OperatingSystemCommand,
+    OperatingSystemCommandEscape,
+    StringCommand,
+    StringCommandEscape,
+}
+
+#[derive(Default)]
+struct TerminalOutputCleaner {
+    state: TerminalOutputCleanerState,
+}
+
+impl TerminalOutputCleaner {
+    fn clean(&mut self, value: &str) -> String {
+        let mut cleaned = String::with_capacity(value.len());
+
+        for character in value.chars() {
+            self.consume(character, &mut cleaned);
+        }
+
+        cleaned
+    }
+
+    fn consume(&mut self, character: char, cleaned: &mut String) {
+        match self.state {
+            TerminalOutputCleanerState::Ground => self.consume_ground(character, cleaned),
+            TerminalOutputCleanerState::Escape => self.consume_escape(character),
+            TerminalOutputCleanerState::ControlSequence => {
+                if ('@'..='~').contains(&character) {
+                    self.state = TerminalOutputCleanerState::Ground;
+                }
+            }
+            TerminalOutputCleanerState::OperatingSystemCommand => {
+                if character == '\u{7}' {
+                    self.state = TerminalOutputCleanerState::Ground;
+                } else if character == '\u{1b}' {
+                    self.state = TerminalOutputCleanerState::OperatingSystemCommandEscape;
+                }
+            }
+            TerminalOutputCleanerState::OperatingSystemCommandEscape => {
+                self.state = if character == '\\' {
+                    TerminalOutputCleanerState::Ground
+                } else {
+                    TerminalOutputCleanerState::OperatingSystemCommand
+                };
+            }
+            TerminalOutputCleanerState::StringCommand => {
+                if character == '\u{1b}' {
+                    self.state = TerminalOutputCleanerState::StringCommandEscape;
+                }
+            }
+            TerminalOutputCleanerState::StringCommandEscape => {
+                self.state = if character == '\\' {
+                    TerminalOutputCleanerState::Ground
+                } else {
+                    TerminalOutputCleanerState::StringCommand
+                };
+            }
+        }
+    }
+
+    fn consume_ground(&mut self, character: char, cleaned: &mut String) {
+        match character {
+            '\u{1b}' => self.state = TerminalOutputCleanerState::Escape,
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => {
+                self.state = TerminalOutputCleanerState::StringCommand
+            }
+            '\u{9b}' => self.state = TerminalOutputCleanerState::ControlSequence,
+            '\u{9d}' => self.state = TerminalOutputCleanerState::OperatingSystemCommand,
+            '\u{7}' => {}
+            '\n' | '\r' | '\t' => cleaned.push(character),
+            value if value.is_control() => {}
+            value => cleaned.push(value),
+        }
+    }
+
+    fn consume_escape(&mut self, character: char) {
+        self.state = match character {
+            '[' => TerminalOutputCleanerState::ControlSequence,
+            ']' => TerminalOutputCleanerState::OperatingSystemCommand,
+            'P' | 'X' | '^' | '_' => TerminalOutputCleanerState::StringCommand,
+            _ => TerminalOutputCleanerState::Ground,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_output_cleaner_strips_split_ansi_sequences() {
+        let mut cleaner = TerminalOutputCleaner::default();
+
+        assert_eq!(cleaner.clean("\u{1b}"), "");
+        assert_eq!(cleaner.clean("[36mhttp://localhost:"), "http://localhost:");
+        assert_eq!(cleaner.clean("\u{1b}[1m5174\u{1b}[22m/\u{1b}[39m"), "5174/");
+    }
+
+    #[test]
+    fn terminal_output_cleaner_strips_split_title_sequences() {
+        let mut cleaner = TerminalOutputCleaner::default();
+
+        assert_eq!(cleaner.clean("\u{1b}]0;dev server"), "");
+        assert_eq!(cleaner.clean("\u{7}ready\n"), "ready\n");
+    }
 }

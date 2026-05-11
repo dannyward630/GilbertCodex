@@ -1,4 +1,7 @@
-use crate::core::storage::{self, DeviceStorageSeed, DeviceStorageSnapshot};
+use crate::{
+    commands::auth,
+    core::storage::{self, DeviceStorageSeed, DeviceStorageSnapshot},
+};
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
@@ -120,6 +123,7 @@ pub fn gilbert_database_load(
     namespace: String,
     seeds: Vec<DeviceStorageSeed>,
 ) -> Result<DeviceStorageSnapshot, String> {
+    let namespace = require_active_namespace(&app, &namespace)?;
     storage::load_namespace(&app, &namespace, &seeds)
 }
 
@@ -130,6 +134,7 @@ pub fn gilbert_database_set_value(
     key: String,
     value: String,
 ) -> Result<(), String> {
+    let namespace = require_active_namespace(&app, &namespace)?;
     storage::write_value(&app, &namespace, &key, &value)
 }
 
@@ -139,6 +144,7 @@ pub fn gilbert_database_set_values(
     namespace: String,
     values: Vec<DeviceStorageSeed>,
 ) -> Result<(), String> {
+    let namespace = require_active_namespace(&app, &namespace)?;
     storage::write_values(&app, &namespace, &values)
 }
 
@@ -159,6 +165,7 @@ pub fn gilbert_database_cleanup_legacy_storage(
 
 #[tauri::command]
 pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewResponse, String> {
+    let active_namespace = auth::current_user_storage_namespace(&app)?;
     let database_path = storage::database_path(&app)
         .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
     let exists = database_path.exists();
@@ -174,7 +181,7 @@ pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewR
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64);
 
     let stored_records = if exists {
-        read_database_records(&database_path)?
+        read_database_records(&database_path, &active_namespace)?
     } else {
         Vec::new()
     };
@@ -276,6 +283,18 @@ fn legacy_storage_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+fn require_active_namespace(app: &AppHandle, requested_namespace: &str) -> Result<String, String> {
+    let active_namespace = auth::current_user_storage_namespace(app)?;
+
+    if requested_namespace.trim() != active_namespace {
+        return Err(
+            "Account-scoped database access is limited to the signed-in local user.".to_string(),
+        );
+    }
+
+    Ok(active_namespace)
+}
+
 fn delete_path(path: &Path) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
@@ -314,7 +333,10 @@ fn database_file_family(database_path: &Path) -> Vec<PathBuf> {
     ]
 }
 
-fn read_database_records(database_path: &Path) -> Result<Vec<StoredDatabaseRecord>, String> {
+fn read_database_records(
+    database_path: &Path,
+    namespace: &str,
+) -> Result<Vec<StoredDatabaseRecord>, String> {
     let connection = Connection::open(database_path)
         .map_err(|error| format!("Could not open local database: {error}"))?;
     let mut statement = connection
@@ -323,11 +345,11 @@ fn read_database_records(database_path: &Path) -> Result<Vec<StoredDatabaseRecor
                     storage_key,
                     storage_value,
                     COALESCE(CAST(strftime('%s', updated_at) AS INTEGER) * 1000, 0) AS updated_at_ms \
-             FROM app_storage ORDER BY namespace, storage_key",
+             FROM app_storage WHERE namespace = ?1 ORDER BY storage_key",
         )
         .map_err(|error| format!("Could not read local database index: {error}"))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([namespace], |row| {
             Ok(StoredDatabaseRecord {
                 namespace: row.get(0)?,
                 key: row.get(1)?,

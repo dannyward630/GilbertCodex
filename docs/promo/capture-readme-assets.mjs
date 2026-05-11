@@ -87,8 +87,8 @@ function createSeedState() {
               detail: "Release checklist for public alpha",
               id: "artifact-release",
               kind: "file",
-              title: "docs/releases/v0.2.1.md",
-              url: "docs/releases/v0.2.1.md",
+              title: "docs/releases/v0.2.2.md",
+              url: "docs/releases/v0.2.2.md",
             },
           ],
           sources: [
@@ -115,7 +115,7 @@ function createSeedState() {
               detail: "Read project docs and release notes",
               id: "tool-read-docs",
               label: "read_files",
-              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.2.1.md",
+              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.2.2.md",
               status: "complete",
             },
             {

@@ -67,11 +67,9 @@ const PERSISTED_STORAGE_KEYS = [
   DISCORD_BRIDGE_KEY,
   BROWSER_PREVIEW_SESSION_KEY,
   LEGACY_BROWSER_PREVIEW_SESSION_KEY,
-];
-const LEGACY_BROWSER_ONLY_KEYS = [
-  BROWSER_AUTH_DB_KEY,
   BROWSER_AGENT_RUNS_KEY,
 ];
+const LEGACY_BROWSER_ONLY_KEYS = [BROWSER_AUTH_DB_KEY];
 let storageNamespace = "legacy";
 let deviceDatabasePath: string | null = null;
 let deviceStorageInitialized = false;
@@ -109,7 +107,17 @@ export const defaultProviderSettings: ProviderSettings = {
 };
 
 export function setStorageNamespace(userId: string | null) {
-  storageNamespace = userId ? `user.${sanitizeStorageScope(userId)}` : "legacy";
+  const nextNamespace = userId ? `user.${sanitizeStorageScope(userId)}` : "legacy";
+
+  if (nextNamespace === storageNamespace) {
+    return;
+  }
+
+  storageNamespace = nextNamespace;
+  storageInitializationToken += 1;
+  deviceDatabasePath = null;
+  deviceStorageInitialized = false;
+  deviceStorageValues = new Map();
 }
 
 export async function initializeDeviceStorage(userId: string | null) {
@@ -412,17 +420,11 @@ function readRawString(key: string) {
 
 function readRawStorageValue(key: string) {
   try {
-    const scopedValue = readRawString(scopedStorageKey(key));
-
-    if (scopedValue !== null) {
-      return scopedValue;
-    }
-
     if (storageNamespace !== "legacy") {
-      return readRawString(key);
+      return readRawString(scopedStorageKey(key));
     }
 
-    return null;
+    return readRawString(key);
   } catch {
     return null;
   }

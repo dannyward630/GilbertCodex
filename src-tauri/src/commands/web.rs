@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DUCKDUCKGO_API_URL: &str = "https://api.duckduckgo.com/";
 const DUCKDUCKGO_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 const DUCKDUCKGO_LITE_URL: &str = "https://lite.duckduckgo.com/lite/";
 const MAX_DUCKDUCKGO_RESULTS: usize = 6;
+const DUCKDUCKGO_CONNECT_TIMEOUT_SECS: u64 = 4;
+const DUCKDUCKGO_CLIENT_TIMEOUT_SECS: u64 = 8;
+const DUCKDUCKGO_API_TIMEOUT_SECS: u64 = 4;
+const DUCKDUCKGO_HTML_TIMEOUT_SECS: u64 = 5;
+const DUCKDUCKGO_TOTAL_BUDGET_SECS: u64 = 16;
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 GilbertCodex/0.1";
 
@@ -52,11 +57,13 @@ pub async fn duckduckgo_search(
         .clamp(1, MAX_DUCKDUCKGO_RESULTS);
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(18))
+        .connect_timeout(Duration::from_secs(DUCKDUCKGO_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(DUCKDUCKGO_CLIENT_TIMEOUT_SECS))
         .build()
         .map_err(|error| format!("Could not create DuckDuckGo client: {error}"))?;
     let mut results = Vec::new();
     let mut seen_urls = HashSet::new();
+    let started_at = Instant::now();
 
     if let Ok(api_results) =
         fetch_duckduckgo_instant_answer(&client, trimmed_query, result_limit).await
@@ -85,6 +92,13 @@ pub async fn duckduckgo_search(
     let mut last_error = None;
 
     for attempt in attempts {
+        if started_at.elapsed() >= Duration::from_secs(DUCKDUCKGO_TOTAL_BUDGET_SECS) {
+            last_error = Some(
+                "DuckDuckGo search timed out before another source could be tried.".to_string(),
+            );
+            break;
+        }
+
         match fetch_duckduckgo_html(&client, attempt, trimmed_query).await {
             Ok(html) => {
                 let html_results = parse_duckduckgo_results(&html, result_limit);
@@ -124,6 +138,7 @@ async fn fetch_duckduckgo_instant_answer(
     let response = client
         .get(url)
         .header("Accept", "application/json")
+        .timeout(Duration::from_secs(DUCKDUCKGO_API_TIMEOUT_SECS))
         .send()
         .await
         .map_err(|error| format!("DuckDuckGo Instant Answer request failed: {error}"))?;
@@ -300,6 +315,7 @@ async fn fetch_duckduckgo_html(
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         )
         .header("Accept-Language", "en-US,en;q=0.9")
+        .timeout(Duration::from_secs(DUCKDUCKGO_HTML_TIMEOUT_SECS))
         .send()
         .await
         .map_err(|error| format!("DuckDuckGo search failed: {error}"))?;

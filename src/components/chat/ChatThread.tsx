@@ -28,7 +28,7 @@ interface ChatThreadProps {
   onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
-  onStopGeneration?: () => void;
+  onStopGeneration?: (messageId: string) => void;
 }
 
 export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRequestPlanRevision, onRegenerateResponse, onResolveToolApproval, onStopGeneration }: ChatThreadProps) {

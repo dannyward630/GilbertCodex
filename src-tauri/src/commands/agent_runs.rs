@@ -1,4 +1,7 @@
-use crate::core::storage::{self, SYSTEM_NAMESPACE};
+use crate::{
+    commands::auth,
+    core::storage::{self, SYSTEM_NAMESPACE},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -112,7 +115,10 @@ pub fn agent_run_delete(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
-    if let Some(raw) = storage::read_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY)? {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    clear_shared_agent_runs(app)?;
+
+    if let Some(raw) = storage::read_value(app, &namespace, AGENT_RUNS_STORAGE_KEY)? {
         cleanup_legacy_agent_runs(app)?;
         return parse_agent_runs(&raw, "Gilbert Database agent runs");
     }
@@ -129,17 +135,29 @@ fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
     let migrated_raw = serde_json::to_string_pretty(&runs)
         .map_err(|error| format!("Failed to serialize migrated agent runs: {error}"))?;
 
-    storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, &migrated_raw)?;
+    storage::write_value(app, &namespace, AGENT_RUNS_STORAGE_KEY, &migrated_raw)?;
     delete_legacy_file(&path, "agent runs store")?;
 
     Ok(runs)
 }
 
 fn save_agent_runs(app: &AppHandle, runs: &[AgentRunRecord]) -> Result<(), String> {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    clear_shared_agent_runs(app)?;
     let raw = serde_json::to_string_pretty(runs)
         .map_err(|error| format!("Failed to serialize agent runs: {error}"))?;
-    storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, &raw)
+    storage::write_value(app, &namespace, AGENT_RUNS_STORAGE_KEY, &raw)
         .map_err(|error| format!("Failed to save agent runs to Gilbert Database: {error}"))
+}
+
+fn clear_shared_agent_runs(app: &AppHandle) -> Result<(), String> {
+    if storage::read_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY)?
+        .is_some_and(|raw| raw.trim() != "[]")
+    {
+        storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, "[]")?;
+    }
+
+    Ok(())
 }
 
 fn parse_agent_runs(raw: &str, source: &str) -> Result<Vec<AgentRunRecord>, String> {
