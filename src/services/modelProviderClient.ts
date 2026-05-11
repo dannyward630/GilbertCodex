@@ -748,6 +748,13 @@ function applyReasoningToRequestBody(settings: ProviderSettings, body: Record<st
   const model = typeof body.model === "string" ? body.model : settings.model;
 
   if (!settings.thinking.enabled || !supportsProviderThinking(settings.provider, settings.thinking.effort, model)) {
+    if (provider.reasoningMode === "openrouter") {
+      body.reasoning = {
+        effort: "none",
+        exclude: true,
+      };
+    }
+
     if (provider.reasoningMode === "deepseek-thinking") {
       body.thinking = { type: "disabled" };
     }

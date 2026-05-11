@@ -73,6 +73,7 @@ import {
 } from "../tools/computer/localToolExecutor";
 import {
   createActiveLocalToolCalls,
+  createFinalAnswerRecoveryInstruction,
   createInterruptedResponseContinuationInstruction,
   createLocalToolBudgetFinalInstruction,
   createLocalToolFinalInstruction,
@@ -2817,21 +2818,21 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : MAX_LOCAL_TOOL_PASSES;
     const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : MAX_LOCAL_TOOL_EXECUTIONS;
 
-    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], _detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
-      if (allToolCalls.length === 0 || isRequestInactive(requestId, controller)) {
+    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
+      if (isRequestInactive(requestId, controller)) {
         return null;
       }
 
-      const activeProgress = createLocalComputerProgress("active", "Writing final answer from gathered tool results");
+      const activeProgress = createLocalComputerProgress("active", allToolCalls.length > 0 ? "Writing final answer from gathered tool results" : "Recovering final answer");
       updateGeneratedMessage(chatId, messageId, (message) => ({
         ...message,
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
-        toolCalls: allToolCalls,
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
       }));
       onExternalUpdate?.({
         progress: activeProgress,
-        status: "Writing final answer from gathered tool results...",
+        status: allToolCalls.length > 0 ? "Writing final answer from gathered tool results..." : "Recovering final answer...",
       });
 
       const baseSynthesisSettings = createFinalOnlyProviderSettings();
@@ -2854,14 +2855,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       ];
 
       for (const retryInstruction of synthesisRetries) {
-        const synthesisInstruction = createLocalToolBudgetFinalInstruction(
-          prompt,
-          [
-            `The prior tool pass supplied ${totalExecutedToolCalls} observation${totalExecutedToolCalls === 1 ? "" : "s"} for this request.`,
-            "Use those observations silently as evidence and write only the visible answer the user asked for.",
-            retryInstruction,
-          ].filter(Boolean).join("\n"),
-        );
+        const synthesisDetail = [
+          allToolCalls.length > 0
+            ? `The prior tool pass supplied ${totalExecutedToolCalls} observation${totalExecutedToolCalls === 1 ? "" : "s"} for this request.`
+            : "Use the conversation, web-search, and local workspace context already provided above as evidence.",
+          detail,
+          "Use those observations silently and write only the visible answer the user asked for.",
+          retryInstruction,
+        ].filter(Boolean).join("\n");
+        const synthesisInstruction = allToolCalls.length > 0
+          ? createLocalToolBudgetFinalInstruction(prompt, synthesisDetail)
+          : createFinalAnswerRecoveryInstruction(prompt, synthesisDetail);
         const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings);
 
         if (synthesisCompaction.contextCompaction) {
@@ -3149,7 +3153,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       if (!hasLocalComputerToolCalls(assistantResponse.content, toolExecutionPolicy)) {
-        if (localProgress && (looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content))) {
+        if (looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content)) {
           finalizationRetries += 1;
 
           if (finalizationRetries > MAX_TOOL_FINALIZATION_RETRIES) {
@@ -3171,16 +3175,29 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             };
           }
 
+          const recoveryProgress = localProgress ?? createLocalComputerProgress("active", "Recovering final answer");
           updateGeneratedMessage(chatId, messageId, (message) => ({
             ...message,
             content: "",
-            progress: withLocalComputerProgress(localProgress, message.progress),
-            toolCalls: allToolCalls,
+            progress: withLocalComputerProgress(recoveryProgress, message.progress),
+            toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
           }));
+          onExternalUpdate?.({
+            progress: recoveryProgress,
+            status: localProgress ? "Synthesizing gathered tool results..." : "Recovering final answer...",
+          });
           messages = [
             ...messages,
             createMessage("assistant", assistantResponse.content),
-            createMessage("user", createLocalToolFinalInstruction(prompt)),
+            createMessage(
+              "user",
+              localProgress
+                ? createLocalToolFinalInstruction(prompt)
+                : createFinalAnswerRecoveryInstruction(
+                    prompt,
+                    "The previous response exposed internal continuation text instead of answering the user. Rewrite it as the actual final answer now.",
+                  ),
+            ),
           ];
           passIndex += 1;
           continue;

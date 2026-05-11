@@ -58,10 +58,15 @@ export function looksLikeOnlyToolPrelude(content: string) {
 }
 
 export function isToolResultFallbackAnswer(content: string) {
+  const normalized = content.toLowerCase();
+
   return (
     content.includes("## Answer From Completed Tool Results") ||
     content.includes("## Tool Run Needs Continuation") ||
-    content.includes("final write-up did not come back cleanly") ||
+    normalized.includes("final write-up did not come back cleanly") ||
+    normalized.includes("finished the background work for this request") ||
+    normalized.includes("use continue response") ||
+    normalized.includes("saved activity") ||
     content.includes("I completed the tool work. Here are the saved results:") ||
     content.includes("provider still did not return separate visible answer text")
   );
@@ -110,6 +115,20 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Do not emit more tool_call XML or JSON. Do not promise to keep inspecting unless the next step is impossible without user input.",
+  ].join("\n\n");
+}
+
+/** Creates a final-answer retry when the model exposed app recovery text. */
+export function createFinalAnswerRecoveryInstruction(prompt: string, detail: string) {
+  return [
+    "FINAL ANSWER REQUIRED",
+    `Original user request: ${prompt}`,
+    detail,
+    "Use the conversation context, web context, local workspace context, and completed tool evidence already provided above.",
+    "Write only the user-facing answer now.",
+    "Do not mention background work, Activity, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
+    "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
+    "If the available context is insufficient, say exactly what is missing in one short sentence, then give the best answer possible from the available evidence.",
   ].join("\n\n");
 }
 
