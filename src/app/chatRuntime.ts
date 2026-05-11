@@ -12,10 +12,12 @@ import type {
   ChatWebSearch,
 } from "../types/chat";
 
+/** Browser/provider abort detection shared by streaming, planning, and tool loops. */
 export function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+/** Normalizes legacy single-request planning state and newer multi-request state. */
 export function getPlanningInputRequests(planning?: ChatPlanning) {
   if (planning?.inputRequests?.length) {
     return planning.inputRequests;
@@ -44,6 +46,7 @@ export function createPlanningAnswerMessages(requests: ChatPlanningInputRequest[
   return requests.filter((request) => request.answeredAt && request.answers?.length).map((request) => createPlanningAnswersMessage(request, request.answers ?? []));
 }
 
+/** Detects filler text that should not become the assistant's final visible answer. */
 export function looksLikeOnlyToolPrelude(content: string) {
   const normalized = content.trim().toLowerCase();
 
@@ -54,6 +57,7 @@ export function looksLikeOnlyToolPrelude(content: string) {
   );
 }
 
+/** Creates a recovery turn that forces the model to answer from completed tool evidence. */
 export function createLocalToolFinalInstruction(prompt: string) {
   return [
     "FINAL ANSWER REQUIRED FROM LOCAL TOOL RESULTS",
@@ -61,23 +65,25 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "Use the agent tool results already provided as the evidence for your answer.",
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
     "If more evidence is truly required, emit concrete tool calls now. Otherwise write the final answer now.",
-    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs.",
+    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Cite web sources with Markdown links when the tool results include URLs.",
     "Do not output raw tool_call XML or JSON as prose.",
   ].join("\n\n");
 }
 
+/** Creates a final-answer instruction when a run reaches its configured tool budget. */
 export function createLocalToolBudgetFinalInstruction(prompt: string, detail: string) {
   return [
     "FINAL ANSWER REQUIRED FROM CURRENT TOOL RESULTS",
     `Original user request: ${prompt}`,
     detail,
     "Use the tool results already provided as evidence and write the best final answer now.",
-    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs.",
+    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Do not emit more tool_call XML or JSON. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
 }
 
+/** Creates a continuation instruction after malformed tool-call markup. */
 export function createMalformedToolCallRecoveryInstruction(prompt: string) {
   return [
     "CONTINUE AFTER UNREADABLE TOOL REQUEST",
@@ -88,6 +94,7 @@ export function createMalformedToolCallRecoveryInstruction(prompt: string) {
   ].join("\n\n");
 }
 
+/** Preserves completed activity and visible text when the user steers an in-flight answer. */
 export function createInterruptedResponseContinuationInstruction(prompt: string, message: ChatMessage) {
   const toolCallCount = message.toolCalls?.length ?? 0;
   const visibleContent = message.content.trim();
@@ -105,6 +112,7 @@ export function createInterruptedResponseContinuationInstruction(prompt: string,
     .join("\n\n");
 }
 
+/** Returns true when a saved assistant message should be continued instead of restarted. */
 export function isInterruptedAssistantMessage(message: ChatMessage) {
   if (message.role !== "assistant" || message.isStreaming) {
     return false;
@@ -117,6 +125,7 @@ export function isInterruptedAssistantMessage(message: ChatMessage) {
   return message.content.includes("I reached the agent tool budget for this run");
 }
 
+/** Stamps stable display IDs onto tool activity generated during one execution pass. */
 export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: number) {
   return toolCalls.map((toolCall, index) => ({
     ...toolCall,
@@ -124,6 +133,7 @@ export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: numb
   }));
 }
 
+/** Creates optimistic tool activity cards from tool markup before execution completes. */
 export function createActiveLocalToolCalls(content: string, passIndex: number, executionPolicy?: LocalComputerToolExecutionPolicy): ChatToolCall[] {
   if (!hasLocalComputerToolCalls(content, executionPolicy)) {
     return [];
@@ -148,6 +158,7 @@ export function createActiveLocalToolCalls(content: string, passIndex: number, e
   ];
 }
 
+/** Merges source lists while preserving first-seen order and avoiding duplicate URLs. */
 export function mergeChatSources(existingSources: ChatSource[] | undefined, nextSources: ChatSource[]) {
   const seenUrls = new Set<string>();
   const merged: ChatSource[] = [];
@@ -164,6 +175,7 @@ export function mergeChatSources(existingSources: ChatSource[] | undefined, next
   return merged;
 }
 
+/** Replaces any stale web-search progress row with the current search state. */
 export function withWebSearchProgress(webSearch: ChatWebSearch | undefined, progress: ChatProgressItem[] | undefined) {
   const progressWithoutWeb = (progress ?? []).filter((item) => item.id !== "web-search");
   const webProgress = createWebSearchProgress(webSearch);
@@ -172,6 +184,7 @@ export function withWebSearchProgress(webSearch: ChatWebSearch | undefined, prog
   return nextProgress.length > 0 ? nextProgress : undefined;
 }
 
+/** Replaces any stale local-tool progress row with the current local-tool state. */
 export function withLocalComputerProgress(localProgress: ChatProgressItem | undefined, progress: ChatProgressItem[] | undefined) {
   const progressWithoutLocal = (progress ?? []).filter((item) => item.id !== "local-computer-tools");
   const nextProgress = localProgress ? [...progressWithoutLocal, localProgress] : progressWithoutLocal;
@@ -179,6 +192,7 @@ export function withLocalComputerProgress(localProgress: ChatProgressItem | unde
   return nextProgress.length > 0 ? nextProgress : undefined;
 }
 
+/** Converts a persisted web-search state object into a chat progress row. */
 export function createWebSearchProgress(webSearch: ChatWebSearch | undefined): ChatProgressItem | null {
   if (!webSearch?.enabled) {
     return null;
@@ -196,6 +210,7 @@ export function createWebSearchProgress(webSearch: ChatWebSearch | undefined): C
   };
 }
 
+/** Returns the latest non-empty user prompt for recovery, tools, and web-search context. */
 export function getLatestUserPrompt(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === "user" && message.content.trim())?.content.trim() ?? "";
 }

@@ -55,6 +55,12 @@ const MAX_TOOL_CALL_OUTPUT_CHARS: number | null = null;
 const MAX_TOOL_INPUT_PREVIEW_CHARS: number | null = null;
 const DEFAULT_READ_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Runtime guardrails for parsing and executing model-emitted local tool calls.
+ *
+ * Standard chat keeps a per-pass cap for responsiveness; Deep Research raises
+ * that ceiling while preserving the same permission and approval boundaries.
+ */
 export interface LocalComputerToolExecutionPolicy {
   maxCallsPerPass: number | null;
   maxToolCallOutputChars: number | null;
@@ -97,15 +103,52 @@ const MUTATING_TOOL_NAMES = new Set<string>([
   "create_unit_test",
   "delete_file",
   "edit_file",
+  "git_branch",
+  "git_checkout",
+  "git_commit",
+  "git_fetch",
+  "git_pull",
+  "git_push",
+  "git_stage",
+  "git_unstage",
   "github_commit_files",
   "github_create_branch",
   "github_create_pull_request",
+  "github_create_release",
+  "github_dispatch_workflow",
   "inline_edit",
   "run_terminal",
   "run_tests",
   "run_tool",
   "typescript_check",
   "write_file",
+]);
+
+type LocalGitToolName =
+  | "git_branch"
+  | "git_checkout"
+  | "git_commit"
+  | "git_diff"
+  | "git_fetch"
+  | "git_log"
+  | "git_pull"
+  | "git_push"
+  | "git_stage"
+  | "git_status"
+  | "git_unstage";
+
+const LOCAL_GIT_TOOL_NAMES = new Set<LocalGitToolName>([
+  "git_branch",
+  "git_checkout",
+  "git_commit",
+  "git_diff",
+  "git_fetch",
+  "git_log",
+  "git_pull",
+  "git_push",
+  "git_stage",
+  "git_status",
+  "git_unstage",
 ]);
 
 type LocalComputerToolName =
@@ -115,6 +158,7 @@ type LocalComputerToolName =
   | CodingToolName
   | "create_tool"
   | FileCreationToolName
+  | LocalGitToolName
   | GithubToolName
   | "edit_file"
   | "list_directory"
@@ -181,6 +225,7 @@ export interface LocalSubagentResult {
 
 type SubagentRunHandler = (tasks: LocalSubagentTask[]) => Promise<LocalSubagentResult[]>;
 
+/** Detects whether assistant text contains executable local-tool markup. */
 export function hasLocalComputerToolCalls(content: string, executionPolicy: LocalComputerToolExecutionPolicy = STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY) {
   const scanContent = limitToolCallScanContent(content, executionPolicy);
   const scanLower = scanContent.toLowerCase();
@@ -192,6 +237,7 @@ export function hasLocalComputerToolCalls(content: string, executionPolicy: Loca
   return /<tool_call\b/i.test(scanContent) || /```(?:json|tool_call)?\s*(?:\{|\[)[\s\S]*?"(?:tool|name)"\s*:/i.test(scanContent);
 }
 
+/** Removes tool-call markup before rendering assistant text in the visible chat bubble. */
 export function sanitizeLocalToolCallsForDisplay(content: string, executionPolicy: LocalComputerToolExecutionPolicy = STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY) {
   if (!hasLocalComputerToolCalls(content, executionPolicy)) {
     return content;
@@ -224,6 +270,7 @@ export function createLocalComputerProgress(status: ChatProgressItem["status"], 
   };
 }
 
+/** Builds lightweight activity cards while the app waits for real tool results. */
 export function createLocalComputerToolCallPreviews(content: string, executionPolicy: LocalComputerToolExecutionPolicy = STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY): ChatToolCall[] {
   return parseLocalComputerToolCalls(content, executionPolicy)
     .map((call, index) => ({
@@ -235,6 +282,10 @@ export function createLocalComputerToolCallPreviews(content: string, executionPo
     }));
 }
 
+/**
+ * Executes parsed local, web, Git, GitHub, browser, and terminal tools for one
+ * assistant pass, returning both model context and user-visible activity records.
+ */
 export async function runLocalComputerToolCalls({
   approvalDecisions,
   assistantContent,
@@ -272,10 +323,10 @@ export async function runLocalComputerToolCalls({
       : settings.permissionMode === "ask-first"
       ? "Write policy: ask-first pauses mutating tools and creates approval cards with a preview."
       : settings.permissionMode === "gilbert-review"
-        ? "Write policy: Gilbert review pauses mutating tools and resumes the same run after allow, deny, or edited approval."
+        ? "Write policy: Gilbert review pauses mutating tools and resumes the same run after allow or deny."
       : settings.scope === "full-computer"
-        ? "Write policy: full computer access can read and write inside the enabled drive roots."
-        : "Write policy: writes may run only inside the selected/current workspace roots.",
+        ? "Write policy: auto full access can read and write inside the enabled drive roots without approval prompts."
+        : "Write policy: auto full access can read and write inside the selected/current workspace roots without approval prompts.",
     tools.terminal
       ? settings.permissionMode === "read-only"
         ? "Terminal policy: read-only mode blocks terminal commands."
@@ -284,8 +335,8 @@ export async function runLocalComputerToolCalls({
         : settings.permissionMode === "gilbert-review"
           ? "Terminal policy: Gilbert review creates approval cards for terminal commands and custom tools."
         : settings.scope === "full-computer"
-          ? "Terminal policy: run_terminal, create_tool, and run_tool may run inside the enabled drive roots."
-          : "Terminal policy: run_terminal, create_tool, and run_tool may run inside the selected/current workspace roots."
+          ? "Terminal policy: run_terminal, create_tool, and run_tool may run inside the enabled drive roots without approval prompts."
+          : "Terminal policy: run_terminal, create_tool, and run_tool may run inside the selected/current workspace roots without approval prompts."
       : "Terminal policy: terminal tools are disabled in Toolbox.",
     tools.codeEdit || tools.fileCreation
       ? "Source edit policy: use edit_file, write_file, or create_files for source/text changes. Terminal commands that directly write source files through here-strings, Set-Content, Out-File, Tee-Object, or redirection are rejected so code edits stay structured and reviewable."
@@ -298,8 +349,8 @@ export async function runLocalComputerToolCalls({
       : "",
     "Web evidence rule: when WEB TOOL RESULTS are present, use only those listed URLs/snippets for live web claims. If web_search returned no usable sources, say that rather than answering current facts from memory.",
     tools.sourceControl
-      ? "GitHub policy: GitHub tools use the connected account in Settings through GitHub's API. Browser login requests full GitHub OAuth access, and local Git is not required. Use GitHub tools for remote repository listing, code search, branch reads, file reads, branch creation, commits, and pull requests. Repo-specific requests should inspect the named repository, not answer with a full repository inventory."
-      : "GitHub policy: source control tools are disabled in Toolbox.",
+      ? "Source control policy: local git_* tools operate on the selected workspace clone and should be used for local status, diffs, staging, commits, pushes, pulls, branches, and logs. GitHub tools use the connected account in Settings through GitHub's API for remote repository listing, code search, branch/file reads, releases, workflows, commits, and pull requests. Use local Git for unpushed workspace changes; use github_* for remote GitHub facts and API operations."
+      : "Source control policy: Git and GitHub tools are disabled in Toolbox.",
     tools.sourceControl
       ? "GitHub answer format: for repository inventories, status, and branch lists, use concise Markdown bullets or numbered lists instead of pipe tables."
       : "",
@@ -338,6 +389,8 @@ export async function runLocalComputerToolCalls({
     const approvalRequest = createToolApprovalRequest(call, callNumber, settings);
     const approvalDecision = approvalRequest ? approvalDecisions?.[approvalRequest.id] : undefined;
     const executableCall = approvalDecision?.editedArgs ? applyApprovalEditedArgs(call, approvalDecision.editedArgs) : call;
+    // Approved review actions resume with workspace write permissions for only
+    // this call; the user's saved permission mode is left unchanged.
     const effectiveSettings = approvalRequest && (approvalDecision?.status === "approved" || approvalDecision?.status === "edited")
       ? {
           ...settings,
@@ -537,17 +590,25 @@ function createApprovalPreview(call: ParsedLocalComputerToolCall) {
     return [`Path: ${path}`, content ? `Content preview:\n${limitInlineValue(content, 1200)}` : undefined].filter(Boolean).join("\n");
   }
 
-  if (call.tool === "github_create_branch" || call.tool === "github_commit_files" || call.tool === "github_create_pull_request") {
+  if (isLocalGitToolName(call.tool)) {
+    return createGitApprovalPreview(call);
+  }
+
+  if (call.tool === "github_create_branch" || call.tool === "github_commit_files" || call.tool === "github_create_pull_request" || call.tool === "github_create_release" || call.tool === "github_dispatch_workflow") {
     const repository = firstArg(call.args, ["repository", "repo_full_name", "full_name"]);
     const owner = firstArg(call.args, ["owner", "org", "organization"]);
     const repo = firstArg(call.args, ["repo", "repository_name", "name"]);
     const branch = firstArg(call.args, ["branch", "head", "new_branch", "newBranch"]);
+    const tag = firstArg(call.args, ["tag", "tag_name", "tagName", "version"]);
+    const workflow = firstArg(call.args, ["workflow", "workflow_id", "workflowId", "file"]);
     const message = firstArg(call.args, ["message", "commit_message", "commitMessage", "title"]);
     const files = firstArg(call.args, ["files_json", "files", "changes", "items", "path", "file_path", "file"]);
 
     return [
       `Repository: ${repository || (owner && repo ? `${owner}/${repo}` : "unknown")}`,
       branch ? `Branch: ${branch}` : undefined,
+      tag ? `Tag: ${tag}` : undefined,
+      workflow ? `Workflow: ${workflow}` : undefined,
       message ? `Message: ${message}` : undefined,
       files ? `Files: ${limitInlineValue(files, 1200)}` : undefined,
     ].filter(Boolean).join("\n");
@@ -557,7 +618,7 @@ function createApprovalPreview(call: ParsedLocalComputerToolCall) {
 }
 
 function approvalKindForTool(tool: LocalComputerToolName): AgentApproval["kind"] {
-  if (tool === "run_terminal" || tool === "run_tool" || tool === "run_tests" || tool === "typescript_check") {
+  if (tool === "run_terminal" || tool === "run_tool" || tool === "run_tests" || tool === "typescript_check" || isLocalGitToolName(tool)) {
     return "terminal";
   }
 
@@ -589,11 +650,11 @@ function approvalKindForTool(tool: LocalComputerToolName): AgentApproval["kind"]
 }
 
 function approvalRiskForTool(tool: LocalComputerToolName): AgentApproval["risk"] {
-  if (tool === "delete_file" || tool === "run_terminal" || tool === "run_tool" || tool === "create_tool" || tool === "github_commit_files") {
+  if (tool === "delete_file" || tool === "run_terminal" || tool === "run_tool" || tool === "create_tool" || tool === "github_commit_files" || tool === "github_create_release" || tool === "github_dispatch_workflow" || tool === "git_commit" || tool === "git_push" || tool === "git_pull" || tool === "git_checkout" || tool === "git_branch") {
     return "high";
   }
 
-  if (tool === "edit_file" || tool === "write_file" || tool === "inline_edit" || isFileCreationToolName(tool) || tool.startsWith("create_")) {
+  if (tool === "edit_file" || tool === "write_file" || tool === "inline_edit" || tool === "git_stage" || tool === "git_unstage" || tool === "git_fetch" || isFileCreationToolName(tool) || tool.startsWith("create_")) {
     return "medium";
   }
 
@@ -723,6 +784,23 @@ async function executeLocalComputerToolCall(
         executed: true,
       };
     }
+    case "git_status":
+    case "git_diff":
+    case "git_log":
+    case "git_stage":
+    case "git_unstage":
+    case "git_commit":
+    case "git_push":
+    case "git_pull":
+    case "git_fetch":
+    case "git_branch":
+    case "git_checkout": {
+      if (roots.length === 0) {
+        return skipNoRoots();
+      }
+
+      return executeLocalGitToolCall(call, settings, roots, signal, onTerminalProgress);
+    }
     case "github_status":
     case "github_list_repositories":
     case "github_get_repository":
@@ -732,7 +810,13 @@ async function executeLocalComputerToolCall(
     case "github_search_code":
     case "github_create_branch":
     case "github_commit_files":
-    case "github_create_pull_request": {
+    case "github_create_pull_request":
+    case "github_generate_release_notes":
+    case "github_create_release":
+    case "github_list_releases":
+    case "github_list_workflows":
+    case "github_dispatch_workflow":
+    case "github_list_workflow_runs": {
       const result = await executeGithubTool(call.tool, call.args, { userPrompt });
       return {
         content: result.content,
@@ -1136,6 +1220,228 @@ async function executeLocalComputerToolCall(
         executed: false,
       };
   }
+}
+
+async function executeLocalGitToolCall(
+  call: ParsedLocalComputerToolCall,
+  settings: LocalWorkspaceSettings,
+  roots: string[],
+  signal?: AbortSignal,
+  onTerminalProgress?: TerminalProgressHandler,
+): Promise<LocalComputerToolCallResult> {
+  const shell = terminalShellFromArgs(call.args);
+  const workingDirectory = resolveTerminalWorkingDirectory(call.args, roots);
+  const command = createGitCommand(call, shell);
+  const mutating = MUTATING_TOOL_NAMES.has(call.tool);
+  const policy = getGitRunPolicy(settings, roots, workingDirectory, mutating);
+
+  if (!policy.allowed) {
+    return {
+      content: `Git command blocked: ${policy.reason}`,
+      executed: false,
+    };
+  }
+
+  if (!command) {
+    return {
+      content: `${formatToolName(call.tool)} skipped: missing required Git arguments.`,
+      executed: false,
+    };
+  }
+
+  const timeoutMs = terminalTimeoutFromArgs(call.args);
+  const result = onTerminalProgress
+    ? await runTerminalCommandWithProgress({
+        command,
+        onProgress: onTerminalProgress,
+        shell,
+        signal,
+        timeoutMs,
+        workingDirectory,
+      })
+    : await runTerminalCommand({
+        command,
+        shell,
+        timeoutMs,
+        workingDirectory,
+      });
+
+  return {
+    content: formatTerminalRunResult(command, result, `Git tool: ${formatToolName(call.tool)}`),
+    executed: true,
+    terminal: createTerminalToolMetadata(command, result),
+  };
+}
+
+function createGitCommand(call: ParsedLocalComputerToolCall, shell: TerminalShellId) {
+  const paths = parseGitPaths(call.args);
+  const all = booleanArg(call.args, ["all", "all_files", "allFiles"], false);
+  const remote = firstArg(call.args, ["remote"]);
+  const branch = firstArg(call.args, ["branch", "ref"]);
+
+  switch (call.tool) {
+    case "git_status":
+      return "git status --short --branch --untracked-files=all";
+    case "git_diff": {
+      const staged = booleanArg(call.args, ["staged", "cached"], false);
+      const statOnly = booleanArg(call.args, ["stat", "summary"], false);
+      return ["git", "diff", staged ? "--cached" : "", "--stat", statOnly ? "" : "--patch", ...gitPathspecArgs(paths, shell)].filter(Boolean).join(" ");
+    }
+    case "git_log": {
+      const limit = Math.max(1, Math.min(Math.trunc(numberArg(call.args, ["limit", "count", "n"], 20)), 100));
+      return `git log --oneline --decorate -n ${limit}`;
+    }
+    case "git_stage":
+      if (all) {
+        return "git add -A";
+      }
+      return paths.length > 0 ? ["git", "add", "--", ...paths.map((path) => quoteShellArg(path, shell))].join(" ") : "";
+    case "git_unstage":
+      if (all) {
+        return "git restore --staged .";
+      }
+      return paths.length > 0 ? ["git", "restore", "--staged", "--", ...paths.map((path) => quoteShellArg(path, shell))].join(" ") : "";
+    case "git_commit": {
+      const message = firstArg(call.args, ["message", "commit_message", "commitMessage"]);
+      return message ? `git commit -m ${quoteShellArg(message, shell)}` : "";
+    }
+    case "git_push": {
+      const setUpstream = booleanArg(call.args, ["set_upstream", "setUpstream", "upstream"], false);
+      const forceWithLease = booleanArg(call.args, ["force_with_lease", "forceWithLease"], false);
+      const targetRemote = remote || (branch ? "origin" : "");
+      return ["git", "push", forceWithLease ? "--force-with-lease" : "", setUpstream ? "--set-upstream" : "", targetRemote ? quoteShellArg(targetRemote, shell) : "", branch ? quoteShellArg(branch, shell) : ""].filter(Boolean).join(" ");
+    }
+    case "git_pull": {
+      const rebase = booleanArg(call.args, ["rebase"], false);
+      const targetRemote = remote || (branch ? "origin" : "");
+      return ["git", "pull", rebase ? "--rebase" : "", targetRemote ? quoteShellArg(targetRemote, shell) : "", branch ? quoteShellArg(branch, shell) : ""].filter(Boolean).join(" ");
+    }
+    case "git_fetch": {
+      const prune = booleanArg(call.args, ["prune"], true);
+      return ["git", "fetch", prune ? "--prune" : "", remote ? quoteShellArg(remote, shell) : ""].filter(Boolean).join(" ");
+    }
+    case "git_branch": {
+      const newBranch = firstArg(call.args, ["new_branch", "newBranch", "name"]);
+      const deleteBranch = firstArg(call.args, ["delete_branch", "deleteBranch", "delete"]);
+      const force = booleanArg(call.args, ["force"], false);
+
+      if (deleteBranch) {
+        return ["git", "branch", force ? "-D" : "-d", quoteShellArg(deleteBranch, shell)].join(" ");
+      }
+
+      if (newBranch) {
+        const base = firstArg(call.args, ["base", "base_branch", "baseBranch", "from"]);
+        return ["git", "branch", quoteShellArg(newBranch, shell), base ? quoteShellArg(base, shell) : ""].filter(Boolean).join(" ");
+      }
+
+      return "git branch --all --verbose";
+    }
+    case "git_checkout": {
+      const target = firstArg(call.args, ["branch", "ref", "name"]);
+      const create = booleanArg(call.args, ["create", "new", "new_branch", "newBranch"], false);
+      const base = firstArg(call.args, ["base", "base_branch", "baseBranch", "from"]);
+
+      if (!target) {
+        return "";
+      }
+
+      return create
+        ? ["git", "switch", "-c", quoteShellArg(target, shell), base ? quoteShellArg(base, shell) : ""].filter(Boolean).join(" ")
+        : ["git", "switch", quoteShellArg(target, shell)].join(" ");
+    }
+    default:
+      return "";
+  }
+}
+
+function gitPathspecArgs(paths: string[], shell: TerminalShellId) {
+  return paths.length > 0 ? ["--", ...paths.map((path) => quoteShellArg(path, shell))] : [];
+}
+
+function parseGitPaths(args: Record<string, string>) {
+  const rawJson = firstArg(args, ["paths_json", "pathsJson"]);
+
+  if (rawJson) {
+    const parsed = JSON.parse(rawJson) as unknown;
+    const items = Array.isArray(parsed) ? parsed : [];
+    return items.map((item) => normalizeGitPath(String(item))).filter(Boolean);
+  }
+
+  const raw = firstArg(args, ["paths", "path", "file_path", "file", "files"]);
+
+  if (!raw) {
+    return [];
+  }
+
+  return raw.split(/[\n,]/).map(normalizeGitPath).filter(Boolean);
+}
+
+function normalizeGitPath(path: string) {
+  const normalized = path.trim();
+
+  if (!normalized || normalized.includes("\0") || normalized.includes("\n") || normalized.includes("\r")) {
+    return "";
+  }
+
+  return normalized;
+}
+
+function quoteShellArg(value: string, shell: TerminalShellId) {
+  const normalized = value.replace(/\0/g, "");
+
+  if (shell === "cmd") {
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+
+  if (shell === "powershell") {
+    return `'${normalized.replace(/'/g, "''")}'`;
+  }
+
+  return `'${normalized.replace(/'/g, "'\\''")}'`;
+}
+
+function getGitRunPolicy(settings: LocalWorkspaceSettings, roots: string[], workingDirectory: string, mutating: boolean) {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      allowed: false,
+      reason: "Git tools are available only in the Tauri desktop app.",
+    };
+  }
+
+  if (mutating && settings.permissionMode === "read-only") {
+    return {
+      allowed: false,
+      reason: "read-only mode blocks Git mutations.",
+    };
+  }
+
+  if (!roots.some((root) => isPathInsideRoot(workingDirectory, root))) {
+    return {
+      allowed: false,
+      reason: "the working directory is outside the enabled local workspace roots.",
+    };
+  }
+
+  return {
+    allowed: true,
+  };
+}
+
+function createGitApprovalPreview(call: ParsedLocalComputerToolCall) {
+  const workingDirectory = firstArg(call.args, ["working_directory", "cwd", "directory", "path"]);
+  const message = firstArg(call.args, ["message", "commit_message", "commitMessage"]);
+  const branch = firstArg(call.args, ["branch", "ref", "name", "new_branch", "newBranch"]);
+  const paths = firstArg(call.args, ["paths", "path", "file_path", "file", "files", "paths_json"]);
+  const remote = firstArg(call.args, ["remote"]);
+
+  return [
+    `Operation: ${formatToolName(call.tool)}`,
+    workingDirectory ? `Working directory: ${workingDirectory}` : undefined,
+    branch ? `Branch/ref: ${branch}` : undefined,
+    remote ? `Remote: ${remote}` : undefined,
+    message ? `Message: ${message}` : undefined,
+    paths ? `Paths: ${limitInlineValue(paths, 1200)}` : undefined,
+  ].filter(Boolean).join("\n");
 }
 
 async function executeTerminalCommandTool(
@@ -1620,7 +1926,7 @@ async function runCustomTerminalTool(
 }
 
 function isDirectGithubAnswerTool(tool: LocalComputerToolName) {
-  return tool === "github_status" || tool === "github_list_repositories" || tool === "github_list_branches";
+  return tool === "github_status" || tool === "github_list_repositories" || tool === "github_list_branches" || tool === "github_list_releases" || tool === "github_list_workflows";
 }
 
 function formatToolExecutionError(tool: LocalComputerToolName, error: unknown) {
@@ -1661,10 +1967,16 @@ function formatDirectGithubErrorAnswer(tool: LocalComputerToolName, detail: stri
       ? "list your GitHub repositories"
       : tool === "github_list_branches"
         ? "list the GitHub branches"
-        : tool === "github_list_tree"
+      : tool === "github_list_tree"
           ? "inspect the GitHub repository files"
           : tool === "github_read_file"
             ? "read the GitHub file"
+            : tool === "github_list_releases"
+              ? "list GitHub releases"
+              : tool === "github_list_workflows"
+                ? "list GitHub Actions workflows"
+                : tool === "github_list_workflow_runs"
+                  ? "list GitHub workflow runs"
         : "check GitHub";
 
   return [
@@ -1719,13 +2031,30 @@ function formatToolName(tool: LocalComputerToolName) {
     view_code: "View code",
     web_search: "Web search",
     write_file: "Write file",
+    git_branch: "Git branch",
+    git_checkout: "Git checkout",
+    git_commit: "Git commit",
+    git_diff: "Git diff",
+    git_fetch: "Git fetch",
+    git_log: "Git log",
+    git_pull: "Git pull",
+    git_push: "Git push",
+    git_stage: "Git stage",
+    git_status: "Git status",
+    git_unstage: "Git unstage",
     github_commit_files: "GitHub commit files",
     github_create_branch: "GitHub create branch",
     github_create_pull_request: "GitHub create pull request",
+    github_create_release: "GitHub create release",
+    github_dispatch_workflow: "GitHub dispatch workflow",
+    github_generate_release_notes: "GitHub release notes",
     github_get_repository: "GitHub repository",
     github_list_branches: "GitHub list branches",
     github_list_repositories: "GitHub list repositories",
+    github_list_releases: "GitHub list releases",
     github_list_tree: "GitHub list tree",
+    github_list_workflow_runs: "GitHub list workflow runs",
+    github_list_workflows: "GitHub list workflows",
     github_read_file: "GitHub read file",
     github_search_code: "GitHub search code",
     github_status: "GitHub status",
@@ -1744,6 +2073,8 @@ function summarizeToolCall(call: ParsedLocalComputerToolCall) {
   const color = firstArg(call.args, ["color", "hex", "value"]);
   const query = firstArg(call.args, ["query", "q", "search", "text"]);
   const url = firstArg(call.args, ["url", "href", "address", "target", "page"]);
+  const branch = firstArg(call.args, ["branch", "ref", "name", "new_branch", "newBranch"]);
+  const message = firstArg(call.args, ["message", "commit_message", "commitMessage"]);
 
   if (path) {
     return path;
@@ -1759,6 +2090,10 @@ function summarizeToolCall(call: ParsedLocalComputerToolCall) {
 
   if (owner && repo) {
     return `${owner}/${repo}`;
+  }
+
+  if (isLocalGitToolName(call.tool)) {
+    return [branch, message, path].filter(Boolean).join(" - ") || call.tool;
   }
 
   if (call.tool === "lookup_color" && color) {
@@ -2066,6 +2401,12 @@ function normalizeToolName(command: string, args: Record<string, string>): Local
     return normalized;
   }
 
+  const localGitToolName = normalizeLocalGitToolName(normalized);
+
+  if (localGitToolName) {
+    return localGitToolName;
+  }
+
   const githubToolName = normalizeGithubToolName(normalized);
 
   if (githubToolName) {
@@ -2254,6 +2595,64 @@ function normalizeToolName(command: string, args: Record<string, string>): Local
   return "unknown";
 }
 
+function isLocalGitToolName(value: string): value is LocalGitToolName {
+  return LOCAL_GIT_TOOL_NAMES.has(value as LocalGitToolName);
+}
+
+function normalizeLocalGitToolName(command: string): LocalGitToolName | null {
+  const normalized = command.replace(/^git[._-]/, "git_");
+
+  if (isLocalGitToolName(normalized)) {
+    return normalized;
+  }
+
+  if (["git", "git_status", "git_state", "git_worktree_status", "version_control_status"].includes(normalized)) {
+    return "git_status";
+  }
+
+  if (["git_diff", "git_changes", "git_patch", "git_show_changes"].includes(normalized)) {
+    return "git_diff";
+  }
+
+  if (["git_log", "git_history", "git_commits"].includes(normalized)) {
+    return "git_log";
+  }
+
+  if (["git_add", "git_stage", "git_stage_files"].includes(normalized)) {
+    return "git_stage";
+  }
+
+  if (["git_unstage", "git_reset_stage", "git_restore_staged"].includes(normalized)) {
+    return "git_unstage";
+  }
+
+  if (["git_commit", "git_create_commit"].includes(normalized)) {
+    return "git_commit";
+  }
+
+  if (["git_push"].includes(normalized)) {
+    return "git_push";
+  }
+
+  if (["git_pull"].includes(normalized)) {
+    return "git_pull";
+  }
+
+  if (["git_fetch"].includes(normalized)) {
+    return "git_fetch";
+  }
+
+  if (["git_branch", "git_list_branches", "git_create_branch", "git_delete_branch"].includes(normalized)) {
+    return "git_branch";
+  }
+
+  if (["git_checkout", "git_switch", "git_switch_branch"].includes(normalized)) {
+    return "git_checkout";
+  }
+
+  return null;
+}
+
 function normalizeGithubToolName(command: string): GithubToolName | null {
   const normalized = command.replace(/^github[._-]/, "github_").replace(/^git[._-]/, "github_");
 
@@ -2299,6 +2698,30 @@ function normalizeGithubToolName(command: string): GithubToolName | null {
 
   if (["github_pr", "github_pull_request", "github_create_pr", "github_create_pull_request", "github_open_pr"].includes(normalized)) {
     return "github_create_pull_request";
+  }
+
+  if (["github_release_notes", "github_generate_release_notes", "github_generate_notes", "github_notes", "github_changelog"].includes(normalized)) {
+    return "github_generate_release_notes";
+  }
+
+  if (["github_release", "github_create_release", "github_publish_release", "github_draft_release", "github_new_release"].includes(normalized)) {
+    return "github_create_release";
+  }
+
+  if (["github_releases", "github_list_releases", "github_release_list", "github_tags_releases"].includes(normalized)) {
+    return "github_list_releases";
+  }
+
+  if (["github_workflows", "github_list_workflows", "github_actions_workflows", "github_workflow_list"].includes(normalized)) {
+    return "github_list_workflows";
+  }
+
+  if (["github_dispatch_workflow", "github_workflow_dispatch", "github_run_workflow", "github_trigger_workflow", "github_actions_dispatch"].includes(normalized)) {
+    return "github_dispatch_workflow";
+  }
+
+  if (["github_workflow_runs", "github_list_workflow_runs", "github_actions_runs", "github_runs"].includes(normalized)) {
+    return "github_list_workflow_runs";
   }
 
   return null;
@@ -3624,6 +4047,10 @@ function getDisabledToolReason(tool: LocalComputerToolName, settings: ToolRegist
 
   if (isGithubToolName(tool) && !tools.sourceControl) {
     return "GitHub source control is disabled in Toolbox.";
+  }
+
+  if (isLocalGitToolName(tool) && !tools.sourceControl) {
+    return "Git source control is disabled in Toolbox.";
   }
 
   if (tool === "lookup_color" && !tools.colorTools) {

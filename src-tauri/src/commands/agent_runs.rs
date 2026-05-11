@@ -1,8 +1,11 @@
+use crate::core::storage::{self, SYSTEM_NAMESPACE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
+
+const AGENT_RUNS_STORAGE_KEY: &str = "agent-runs.v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +112,11 @@ pub fn agent_run_delete(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
-    let path = agent_runs_path(app)?;
+    if let Some(raw) = storage::read_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY)? {
+        return parse_agent_runs(&raw, "Gilbert Database agent runs");
+    }
+
+    let path = legacy_agent_runs_path(app)?;
 
     if !path.exists() {
         return Ok(Vec::new());
@@ -117,25 +124,32 @@ fn load_agent_runs(app: &AppHandle) -> Result<Vec<AgentRunRecord>, String> {
 
     let raw =
         fs::read_to_string(&path).map_err(|error| format!("Failed to read agent runs: {error}"))?;
-    serde_json::from_str::<Vec<AgentRunRecord>>(&raw)
-        .map_err(|error| format!("Failed to parse agent runs: {error}"))
+    let runs = parse_agent_runs(&raw, "legacy agent runs file")?;
+    let migrated_raw = serde_json::to_string_pretty(&runs)
+        .map_err(|error| format!("Failed to serialize migrated agent runs: {error}"))?;
+
+    storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, &migrated_raw)?;
+
+    Ok(runs)
 }
 
 fn save_agent_runs(app: &AppHandle, runs: &[AgentRunRecord]) -> Result<(), String> {
-    let path = agent_runs_path(app)?;
     let raw = serde_json::to_string_pretty(runs)
         .map_err(|error| format!("Failed to serialize agent runs: {error}"))?;
-    fs::write(&path, raw).map_err(|error| format!("Failed to save agent runs: {error}"))
+    storage::write_value(app, SYSTEM_NAMESPACE, AGENT_RUNS_STORAGE_KEY, &raw)
+        .map_err(|error| format!("Failed to save agent runs to Gilbert Database: {error}"))
 }
 
-fn agent_runs_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn parse_agent_runs(raw: &str, source: &str) -> Result<Vec<AgentRunRecord>, String> {
+    serde_json::from_str::<Vec<AgentRunRecord>>(raw)
+        .map_err(|error| format!("Failed to parse {source}: {error}"))
+}
+
+fn legacy_agent_runs_path(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
-
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("Failed to create app data directory: {error}"))?;
 
     Ok(directory.join("agent-runs.json"))
 }

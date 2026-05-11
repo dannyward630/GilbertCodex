@@ -63,15 +63,15 @@ const currentTools: ToolSurface[] = [
     summary: "On-demand web search from chat or thinking for current facts, docs, errors, and citations.",
   },
   {
-    capabilities: ["Repos", "Commits", "Pull requests"],
-    detail: "GitHub API",
+    capabilities: ["Local Git", "Releases", "Workflows"],
+    detail: "Git + GitHub API",
     icon: GitBranch,
     id: "sourceControl",
     label: "GitHub Source Control",
     phase: "Current",
     rail: "Repository",
     status: "Active",
-    summary: "List repositories, read code, create branches, push commits, and open pull requests without local Git.",
+    summary: "Inspect local status and diffs, stage, commit, push, pull, branch, and use GitHub APIs for repositories, pull requests, releases, notes, and workflows.",
   },
   {
     capabilities: ["lookup_color", "30k+ names", "HEX/RGB/HSL"],

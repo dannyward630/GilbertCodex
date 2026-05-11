@@ -1,3 +1,4 @@
+use crate::core::storage::{self, SYSTEM_NAMESPACE};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -9,6 +10,7 @@ use tauri::Manager;
 use uuid::Uuid;
 
 const AUTH_DATABASE_FILE: &str = "local-auth-db.json";
+const AUTH_DATABASE_STORAGE_KEY: &str = "local-auth-db.v1";
 const AUTH_DATABASE_GENERATION: u32 = 2;
 const PASSWORD_ALGORITHM: &str = "pbkdf2-sha256";
 const MIN_PASSWORD_ITERATIONS: u32 = 100_000;
@@ -419,7 +421,11 @@ fn normalize_password_material(
 }
 
 fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
-    let database_path = database_path(app)?;
+    if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, AUTH_DATABASE_STORAGE_KEY)? {
+        return parse_database_content(app, &content, "Gilbert Database auth record");
+    }
+
+    let database_path = legacy_database_path(app)?;
 
     if !database_path.exists() {
         return Ok(fresh_database());
@@ -437,12 +443,43 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
         return Ok(fresh_database());
     }
 
-    let database = serde_json::from_str::<AuthDatabase>(&content).map_err(|error| {
-        format!(
-            "Could not parse the local auth database at {}: {}",
-            path_to_string(&database_path),
-            error
-        )
+    let database = parse_database_content(
+        app,
+        &content,
+        &format!(
+            "legacy local auth database at {}",
+            path_to_string(&database_path)
+        ),
+    )?;
+    let migrated_content = serde_json::to_string_pretty(&database).map_err(|error| {
+        format!("Could not serialize the migrated local auth database: {error}")
+    })?;
+    storage::write_value(
+        app,
+        SYSTEM_NAMESPACE,
+        AUTH_DATABASE_STORAGE_KEY,
+        &migrated_content,
+    )?;
+
+    Ok(database)
+}
+
+fn save_database(app: &tauri::AppHandle, database: &AuthDatabase) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(database)
+        .map_err(|error| format!("Could not serialize the local auth database: {}", error))?;
+
+    storage::write_value(app, SYSTEM_NAMESPACE, AUTH_DATABASE_STORAGE_KEY, &content).map_err(
+        |error| format!("Could not write the local auth database to Gilbert Database: {error}"),
+    )
+}
+
+fn parse_database_content(
+    app: &tauri::AppHandle,
+    content: &str,
+    source: &str,
+) -> Result<AuthDatabase, String> {
+    let database = serde_json::from_str::<AuthDatabase>(content).map_err(|error| {
+        format!("Could not parse the local auth database from {source}: {error}")
     })?;
 
     if database.database_generation != AUTH_DATABASE_GENERATION {
@@ -454,32 +491,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     Ok(database)
 }
 
-fn save_database(app: &tauri::AppHandle, database: &AuthDatabase) -> Result<(), String> {
-    let database_path = database_path(app)?;
-
-    if let Some(parent) = database_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Could not create the local auth database folder at {}: {}",
-                path_to_string(parent),
-                error
-            )
-        })?;
-    }
-
-    let content = serde_json::to_string_pretty(database)
-        .map_err(|error| format!("Could not serialize the local auth database: {}", error))?;
-
-    fs::write(&database_path, content).map_err(|error| {
-        format!(
-            "Could not write the local auth database at {}: {}",
-            path_to_string(&database_path),
-            error
-        )
-    })
-}
-
-fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("auth").join(AUTH_DATABASE_FILE))

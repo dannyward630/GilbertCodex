@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, PanelLeft } from "lucide-react";
 import { closeWindow, maximizeWindow, minimizeWindow, startWindowDrag } from "../../app/windowClient";
 import { IconButton } from "../common/IconButton";
+import { AppUpdateIndicator, useAppUpdateController } from "./AppUpdateIndicator";
 import { WindowControls } from "./WindowControls";
 import type { AppInfo } from "../../types/app";
 import type { PrimaryRoute } from "../../types/navigation";
@@ -10,6 +11,7 @@ import type { PrimaryRoute } from "../../types/navigation";
 interface AppTopBarProps {
   activeRoute: PrimaryRoute;
   appInfo: AppInfo;
+  desktopRuntime: boolean;
   onNewChat: () => void;
   onOpenSearch: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
@@ -31,6 +33,7 @@ interface MenuDefinition {
 interface MenuAction {
   checked?: boolean;
   danger?: boolean;
+  disabled?: boolean;
   label: string;
   onSelect: () => void | Promise<void>;
   separatorBefore?: boolean;
@@ -88,6 +91,7 @@ async function pasteIntoActiveElement() {
 export function AppTopBar({
   activeRoute,
   appInfo,
+  desktopRuntime,
   onNewChat,
   onOpenSearch,
   onRouteChange,
@@ -99,6 +103,7 @@ export function AppTopBar({
 }: AppTopBarProps) {
   const topbarRef = useRef<HTMLElement>(null);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
+  const updateController = useAppUpdateController(desktopRuntime);
 
   const menus = useMemo<Record<MenuId, MenuAction[]>>(
     () => ({
@@ -129,11 +134,30 @@ export function AppTopBar({
         { label: "Close window", danger: true, separatorBefore: true, onSelect: closeWindow },
       ],
       help: [
+        {
+          disabled: !desktopRuntime || updateController.busy,
+          label: "Check for updates",
+          onSelect: updateController.checkNow,
+        },
         { label: `About ${appInfo.name}`, onSelect: onShowAbout },
         { label: "Open settings", separatorBefore: true, onSelect: () => onRouteChange("settings") },
       ],
     }),
-    [activeRoute, appInfo, onNewChat, onOpenSearch, onRouteChange, onShowAbout, onToggleSidebar, onToggleTerminal, sidebarOpen, terminalOpen],
+    [
+      activeRoute,
+      appInfo,
+      desktopRuntime,
+      onNewChat,
+      onOpenSearch,
+      onRouteChange,
+      onShowAbout,
+      onToggleSidebar,
+      onToggleTerminal,
+      sidebarOpen,
+      terminalOpen,
+      updateController.busy,
+      updateController.checkNow,
+    ],
   );
 
   useEffect(() => {
@@ -230,6 +254,10 @@ export function AppTopBar({
   }
 
   function selectMenuAction(action: MenuAction) {
+    if (action.disabled) {
+      return;
+    }
+
     setOpenMenu(null);
     void action.onSelect();
   }
@@ -264,8 +292,10 @@ export function AppTopBar({
                       type="button"
                       role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
                       aria-checked={item.checked ?? undefined}
+                      disabled={item.disabled}
                       data-checked={item.checked}
                       data-danger={item.danger}
+                      data-disabled={item.disabled}
                       data-separator-before={item.separatorBefore}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectMenuAction(item)}
@@ -287,7 +317,10 @@ export function AppTopBar({
         <img className="topbar-logo" src="/gilbert-codex-logo.svg" alt="" aria-hidden="true" draggable={false} />
         <span>{appInfo.name}</span>
       </div>
-      <WindowControls />
+      <div className="topbar-right" data-topbar-interactive="true">
+        <AppUpdateIndicator controller={updateController} />
+        <WindowControls />
+      </div>
     </header>
   );
 }

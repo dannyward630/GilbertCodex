@@ -1,3 +1,4 @@
+/** Toolbox categories that can be enabled or disabled by the user. */
 export type ToolRegistryId =
   | "browserPreview"
   | "codeEdit"
@@ -26,6 +27,7 @@ export type ToolRegistryId =
 
 export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
 
+/** New installs start with every current tool category enabled. */
 export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   browserPreview: true,
   codeEdit: true,
@@ -53,6 +55,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   workflowAutomation: true,
 };
 
+/** Merges persisted Toolbox settings with defaults so new tool categories opt in. */
 export function normalizeToolRegistrySettings(value: unknown): ToolRegistrySettings {
   const storedSettings = typeof value === "object" && value ? (value as Partial<ToolRegistrySettings>) : {};
 

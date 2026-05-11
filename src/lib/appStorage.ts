@@ -23,6 +23,7 @@ import {
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
+import { isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
 import type {
   ChatAttachment,
   ChatContextCompaction,
@@ -49,7 +50,27 @@ const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
 const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
 const GITHUB_OAUTH_CLIENT_ID_KEY = "gilbert-codex.github-oauth-client-id.v1";
 const DISCORD_BRIDGE_KEY = "gilbert-codex.discord-bridge.v1";
+const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
+const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
+const PERSISTED_STORAGE_KEYS = [
+  CHATS_KEY,
+  PROJECTS_KEY,
+  SETTINGS_KEY,
+  THINKING_KEY,
+  APPEARANCE_KEY,
+  ACTIVE_CHAT_KEY,
+  LOCAL_WORKSPACE_KEY,
+  TOOL_REGISTRY_KEY,
+  GITHUB_OAUTH_CLIENT_ID_KEY,
+  DISCORD_BRIDGE_KEY,
+  BROWSER_PREVIEW_SESSION_KEY,
+  LEGACY_BROWSER_PREVIEW_SESSION_KEY,
+];
 let storageNamespace = "legacy";
+let deviceDatabasePath: string | null = null;
+let deviceStorageInitialized = false;
+let deviceStorageValues = new Map<string, string>();
+let storageInitializationToken = 0;
 
 export const defaultProviderSettings: ProviderSettings = {
   apiKeys: {},
@@ -81,6 +102,36 @@ export const defaultProviderSettings: ProviderSettings = {
 
 export function setStorageNamespace(userId: string | null) {
   storageNamespace = userId ? `user.${sanitizeStorageScope(userId)}` : "legacy";
+}
+
+export async function initializeDeviceStorage(userId: string | null) {
+  setStorageNamespace(userId);
+
+  const initializationToken = ++storageInitializationToken;
+  const namespace = storageNamespace;
+  deviceDatabasePath = null;
+  deviceStorageInitialized = false;
+  deviceStorageValues = new Map();
+
+  if (!isDeviceDatabaseAvailable()) {
+    deviceStorageInitialized = true;
+    return;
+  }
+
+  const snapshot = await loadDeviceDatabaseNamespace(namespace, collectLocalStorageSeeds());
+
+  if (initializationToken !== storageInitializationToken || namespace !== storageNamespace) {
+    return;
+  }
+
+  deviceDatabasePath = snapshot?.databasePath ?? null;
+  deviceStorageValues = new Map(Object.entries(snapshot?.values ?? {}));
+  deviceStorageInitialized = true;
+  mirrorDeviceValuesToLocalStorage();
+}
+
+export function getDeviceDatabasePath() {
+  return deviceDatabasePath;
 }
 
 export function loadChats(): ChatSummary[] {
@@ -254,9 +305,17 @@ export function saveDiscordBridgeSettings(settings: DiscordBridgeSettings) {
   writeJson(DISCORD_BRIDGE_KEY, normalizeDiscordBridgeSettings(settings));
 }
 
+export function loadPersistentString(key: string) {
+  return readString(key);
+}
+
+export function savePersistentString(key: string, value: string) {
+  writeString(key, value);
+}
+
 function readJson<T>(key: string): T | null {
   try {
-    const rawValue = readRawString(scopedStorageKey(key));
+    const rawValue = readString(key);
     return rawValue ? (JSON.parse(rawValue) as T) : null;
   } catch {
     return null;
@@ -269,7 +328,11 @@ function writeJson(key: string, value: unknown) {
 
 function readString(key: string) {
   try {
-    return readRawString(scopedStorageKey(key));
+    if (deviceStorageInitialized && deviceStorageValues.has(key)) {
+      return deviceStorageValues.get(key) ?? null;
+    }
+
+    return readRawStorageValue(key);
   } catch {
     return null;
   }
@@ -279,7 +342,13 @@ function writeString(key: string, value: string) {
   try {
     window.localStorage.setItem(scopedStorageKey(key), value);
   } catch {
-    return;
+    // The SQLite database remains the durable desktop store even if the
+    // webview fallback storage is full or unavailable.
+  }
+
+  if (deviceStorageInitialized && isDeviceDatabaseAvailable()) {
+    deviceStorageValues.set(key, value);
+    void saveDeviceDatabaseValue(storageNamespace, key, value).catch(() => undefined);
   }
 }
 
@@ -293,6 +362,50 @@ function scopedStorageKey(key: string) {
 
 function readRawString(key: string) {
   return window.localStorage.getItem(key);
+}
+
+function readRawStorageValue(key: string) {
+  try {
+    const scopedValue = readRawString(scopedStorageKey(key));
+
+    if (scopedValue !== null) {
+      return scopedValue;
+    }
+
+    if (storageNamespace !== "legacy") {
+      return readRawString(key);
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function collectLocalStorageSeeds(): DeviceDatabaseSeed[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  return PERSISTED_STORAGE_KEYS.flatMap((key) => {
+    const value = readRawStorageValue(key);
+
+    return value === null ? [] : [{ key, value }];
+  });
+}
+
+function mirrorDeviceValuesToLocalStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  for (const [key, value] of deviceStorageValues) {
+    try {
+      window.localStorage.setItem(scopedStorageKey(key), value);
+    } catch {
+      return;
+    }
+  }
 }
 
 function sanitizeStorageScope(value: string) {

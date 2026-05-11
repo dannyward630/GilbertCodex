@@ -449,8 +449,7 @@
 }
 
 .approval-list h4 small,
-.approval-card-header small,
-.approval-edit-label {
+.approval-card-header small {
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.35;
@@ -501,8 +500,7 @@
   border-color: color-mix(in srgb, var(--red) 38%, transparent);
 }
 
-.approval-card pre,
-.approval-card textarea {
+.approval-card pre {
   width: 100%;
   min-width: 0;
   margin: 0;
@@ -520,17 +518,6 @@
 .approval-card pre {
   max-height: 150px;
   overflow: auto;
-}
-
-.approval-card textarea {
-  min-height: 86px;
-  resize: vertical;
-}
-
-.approval-error {
-  margin: -2px 0 0;
-  color: var(--red);
-  font-size: 11.5px;
 }
 
 .approval-actions {
@@ -556,6 +543,11 @@
   color: var(--text);
   border-color: color-mix(in srgb, var(--blue) 42%, var(--line) 58%);
   background: color-mix(in srgb, var(--blue-soft) 52%, var(--surface-raised) 48%);
+}
+
+.approval-actions button[data-variant="session"] {
+  border-color: color-mix(in srgb, var(--blue) 44%, var(--line) 56%);
+  background: color-mix(in srgb, var(--blue-soft) 46%, var(--surface-raised) 54%);
 }
 
 .activity-tool-call span,
@@ -864,6 +856,20 @@
   overflow: hidden;
   padding-right: 0;
   scrollbar-gutter: auto;
+}
+
+.rail-card[data-section="sources"] {
+  max-height: min(32vh, 320px);
+}
+
+.right-rail[data-mode="activity"] .rail-card[data-section="sources"] {
+  max-height: min(28vh, 280px);
+}
+
+.rail-card[data-section="sources"] .rail-card-scroll {
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
 }
 
 .progress-row,

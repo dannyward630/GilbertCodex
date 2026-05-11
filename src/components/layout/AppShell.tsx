@@ -25,6 +25,7 @@ interface AppShellProps {
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
+  onOpenBulkDeleteChats: () => void;
   onOpenSearch: () => void;
   onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
@@ -59,6 +60,7 @@ export function AppShell({
   onDeleteChat,
   onDeleteProject,
   onNewChat,
+  onOpenBulkDeleteChats,
   onOpenSearch,
   onLogout,
   onRouteChange,
@@ -97,6 +99,7 @@ export function AppShell({
       <AppTopBar
         activeRoute={activeRoute}
         appInfo={appInfo}
+        desktopRuntime={desktopRuntime}
         sidebarOpen={sidebarOpen}
         terminalOpen={terminalOpen}
         onNewChat={onNewChat}
@@ -140,6 +143,10 @@ export function AppShell({
           }}
           onNewChat={(project) => {
             onNewChat(project);
+            closeSidebarOnSmallScreens();
+          }}
+          onOpenBulkDeleteChats={() => {
+            onOpenBulkDeleteChats();
             closeSidebarOnSmallScreens();
           }}
           onOpenSearch={() => {

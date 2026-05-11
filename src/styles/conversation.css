@@ -219,6 +219,10 @@
   grid-template-columns: minmax(0, 1fr) minmax(320px, 372px);
 }
 
+.conversation-body[data-side-layout="review"] {
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 520px);
+}
+
 .conversation-body[data-side-layout="preview"] {
   grid-template-columns: minmax(320px, 1fr) minmax(320px, min(var(--browser-preview-width), calc(100% - 320px)));
 }

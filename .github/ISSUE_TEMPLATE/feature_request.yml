@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a product improvement or new contributor task.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+      placeholder: Users need to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the intended product behavior, not just an implementation idea.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Chat workspace
+        - Model/provider runtime
+        - Tools or Toolbox
+        - Local files or terminal
+        - Git or GitHub integration
+        - Web search or browser preview
+        - Settings
+        - Desktop shell or installer
+        - Documentation
+        - Platform support
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What should be true when this is complete?
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Design, security, or platform notes
+      description: Include screenshots, references, local-data concerns, or platform limits.
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to help implement or test this.
+          required: false

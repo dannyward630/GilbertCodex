@@ -1,9 +1,10 @@
-import { Children, isValidElement, type ReactNode, useEffect, useRef, useState } from "react";
+import { Children, isValidElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { copyTextToClipboard } from "../../lib/clipboard";
+import { normalizeMarkdownForDisplay } from "../../lib/markdown";
 import { OpenableImage } from "./MessageAttachments";
 
 interface MarkdownMessageProps {
@@ -106,6 +107,8 @@ const markdownComponents: Components = {
 };
 
 export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {
+  const displayContent = useMemo(() => normalizeMarkdownForDisplay(content), [content]);
+
   if (!content) {
     return null;
   }
@@ -113,7 +116,7 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
   return (
     <div className={isStreaming ? "markdown-message markdown-message-streaming" : "markdown-message"} data-streaming={Boolean(isStreaming)}>
       <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
-        {content}
+        {displayContent}
       </ReactMarkdown>
     </div>
   );

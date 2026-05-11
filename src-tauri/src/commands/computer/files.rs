@@ -1,6 +1,11 @@
+//! Local computer filesystem commands.
+//!
+//! This module backs the desktop workspace picker, file index, Git status,
+//! text reads/writes, and delete operations used by the model tool runtime.
+
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::DefaultHasher, VecDeque},
+    collections::{hash_map::DefaultHasher, HashMap, VecDeque},
     fs::{self, File},
     hash::{Hash, Hasher},
     io::Read,
@@ -25,6 +30,8 @@ const MAX_PREVIEW_BYTES: usize = 8 * 1024;
 const MAX_READ_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INDEX_PREVIEW_BYTES: usize = 4 * 1024;
 const MAX_TEXT_INDEX_FILE_BYTES: u64 = 1_500_000;
+const MAX_GIT_UNTRACKED_FILES_FOR_STATS: usize = 200;
+const MAX_GIT_UNTRACKED_FILE_BYTES: u64 = 1024 * 1024;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
@@ -59,6 +66,7 @@ const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
     "venv",
 ];
 
+/// Shared in-memory file index state for the active desktop process.
 #[derive(Clone)]
 pub struct ComputerFileIndexState {
     active_request_id: Arc<AtomicU64>,
@@ -184,6 +192,16 @@ pub struct ComputerGitStatusRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComputerGitChangedFile {
+    pub additions: usize,
+    pub deletions: usize,
+    pub old_path: Option<String>,
+    pub path: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComputerGitStatus {
     pub additions: usize,
     pub ahead: usize,
@@ -194,6 +212,7 @@ pub struct ComputerGitStatus {
     pub clean: bool,
     pub deletions: usize,
     pub error: Option<String>,
+    pub files: Vec<ComputerGitChangedFile>,
     pub github_owner: Option<String>,
     pub github_repo: Option<String>,
     pub remote_url: Option<String>,
@@ -276,17 +295,20 @@ pub struct ComputerDeleteFileResult {
     pub path: String,
 }
 
+/// Returns the user's default workspace path when the host can determine one.
 #[tauri::command]
 pub fn computer_get_default_workspace() -> Option<String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.parent().map(path_to_string)
 }
 
+/// Lists host drives or root folders for workspace selection.
 #[tauri::command]
 pub fn computer_list_drives() -> Vec<ComputerDrive> {
     list_system_roots()
 }
 
+/// Opens the native folder picker and returns the selected path.
 #[tauri::command]
 pub async fn computer_pick_folder(start_path: Option<String>) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || pick_folder_blocking(start_path))
@@ -308,6 +330,7 @@ fn pick_folder_blocking(start_path: Option<String>) -> Result<Option<String>, St
     Ok(dialog.pick_folder().map(path_to_string))
 }
 
+/// Lists a single directory with a capped number of entries.
 #[tauri::command]
 pub fn computer_list_directory(
     request: ComputerDirectoryRequest,
@@ -355,6 +378,7 @@ pub fn computer_list_directory(
     })
 }
 
+/// Builds a capped searchable file index and emits progress events.
 #[tauri::command]
 pub async fn computer_build_file_index(
     app: tauri::AppHandle,
@@ -511,6 +535,7 @@ fn build_file_index_blocking(
     Ok(summary)
 }
 
+/// Returns the last completed file-index summary.
 #[tauri::command]
 pub fn computer_get_file_index_summary(
     state: tauri::State<'_, ComputerFileIndexState>,
@@ -522,6 +547,7 @@ pub fn computer_get_file_index_summary(
     Ok(index.summary())
 }
 
+/// Reads Git status signals for a workspace root.
 #[tauri::command]
 pub async fn computer_get_git_status(
     request: ComputerGitStatusRequest,
@@ -561,34 +587,49 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         .as_deref()
         .and_then(parse_github_remote_url)
         .unwrap_or((None, None));
-    let status_output =
-        run_git(&repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
+    let status_output = match run_git(&repository_path, &["status", "--porcelain=v1"]) {
+        Ok(output) => output,
+        Err(error) => return Ok(create_unavailable_git_status(Some(error))),
+    };
     let changed_files = status_output
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count();
-    let (additions, deletions) = parse_git_numstat(
+    let tracked_stats = parse_git_numstat_entries(
         &run_git(&repository_path, &["diff", "--numstat", "HEAD"]).unwrap_or_default(),
     );
-    let (ahead, behind) = parse_git_ahead_behind(
-        &run_git(
-            &repository_path,
-            &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
-        )
-        .unwrap_or_default(),
-    );
+    let tracked_additions = tracked_stats
+        .iter()
+        .map(|(_path, additions, _deletions)| *additions)
+        .sum::<usize>();
+    let deletions = tracked_stats
+        .iter()
+        .map(|(_path, _additions, deletions)| *deletions)
+        .sum::<usize>();
+    let untracked_output = run_git(
+        &repository_path,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .unwrap_or_default();
+    let untracked_additions_by_path =
+        count_untracked_git_additions_by_path(&repository_path, &untracked_output);
+    let untracked_additions = untracked_additions_by_path.values().sum::<usize>();
+    let additions = tracked_additions + untracked_additions;
+    let files =
+        parse_git_changed_files(&status_output, &tracked_stats, &untracked_additions_by_path);
     let repository_root = path_to_string(&repository_path);
 
     Ok(ComputerGitStatus {
         additions,
-        ahead,
+        ahead: 0,
         available: true,
-        behind,
+        behind: 0,
         branch,
         changed_files,
         clean: changed_files == 0,
         deletions,
         error: None,
+        files,
         github_owner,
         github_repo,
         remote_url,
@@ -596,6 +637,7 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
     })
 }
 
+/// Searches the active file index using path, preview text, and local embeddings.
 #[tauri::command]
 pub fn computer_search_file_index(
     state: tauri::State<'_, ComputerFileIndexState>,
@@ -647,6 +689,7 @@ pub fn computer_search_file_index(
     Ok(results)
 }
 
+/// Reads one text file with a byte cap to keep UI/tool results responsive.
 #[tauri::command]
 pub fn computer_read_text_file(
     request: ComputerReadFileRequest,
@@ -690,6 +733,7 @@ pub fn computer_read_text_file(
     })
 }
 
+/// Writes one text file after checking it stays inside enabled roots.
 #[tauri::command]
 pub fn computer_write_text_file(
     request: ComputerWriteFileRequest,
@@ -760,6 +804,7 @@ pub fn computer_write_text_file(
     })
 }
 
+/// Deletes one file after checking it stays inside enabled roots.
 #[tauri::command]
 pub fn computer_delete_file(
     request: ComputerDeleteFileRequest,
@@ -1371,6 +1416,7 @@ fn create_unavailable_git_status(error: Option<String>) -> ComputerGitStatus {
         clean: true,
         deletions: 0,
         error,
+        files: Vec::new(),
         github_owner: None,
         github_repo: None,
         remote_url: None,
@@ -1424,36 +1470,124 @@ fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn parse_git_numstat(output: &str) -> (usize, usize) {
+fn parse_git_numstat_entries(output: &str) -> Vec<(String, usize, usize)> {
     output
         .lines()
-        .fold((0usize, 0usize), |(additions, deletions), line| {
+        .filter_map(|line| {
             let mut columns = line.split('\t');
-            let added = columns
-                .next()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0);
-            let deleted = columns
-                .next()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0);
+            let additions = columns.next()?.parse::<usize>().unwrap_or(0);
+            let deletions = columns.next()?.parse::<usize>().unwrap_or(0);
+            let path = columns.next()?.trim();
 
-            (additions + added, deletions + deleted)
+            if path.is_empty() {
+                None
+            } else {
+                Some((clean_git_path(path), additions, deletions))
+            }
         })
+        .collect()
 }
 
-fn parse_git_ahead_behind(output: &str) -> (usize, usize) {
-    let mut parts = output.split_whitespace();
-    let behind = parts
-        .next()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let ahead = parts
-        .next()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
+fn count_untracked_git_additions_by_path(
+    repository_path: &Path,
+    output: &str,
+) -> HashMap<String, usize> {
+    output
+        .split('\0')
+        .filter(|path| !path.trim().is_empty())
+        .take(MAX_GIT_UNTRACKED_FILES_FOR_STATS)
+        .map(|path| {
+            (
+                git_status_path_key(path),
+                count_text_file_lines(&repository_path.join(path)),
+            )
+        })
+        .collect()
+}
 
-    (ahead, behind)
+fn parse_git_changed_files(
+    status_output: &str,
+    tracked_stats: &[(String, usize, usize)],
+    untracked_additions_by_path: &HashMap<String, usize>,
+) -> Vec<ComputerGitChangedFile> {
+    let tracked_stats_by_path = tracked_stats
+        .iter()
+        .map(|(path, additions, deletions)| (git_status_path_key(path), (*additions, *deletions)))
+        .collect::<HashMap<_, _>>();
+
+    status_output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_end();
+
+            if trimmed.len() < 4 {
+                return None;
+            }
+
+            let status = trimmed.get(0..2)?.trim().to_string();
+            let raw_path = trimmed.get(3..)?.trim();
+            let (old_path, path) = split_git_status_path(raw_path);
+            let key = git_status_path_key(&path);
+            let (additions, deletions) = if status == "??" {
+                (*untracked_additions_by_path.get(&key).unwrap_or(&0), 0)
+            } else {
+                tracked_stats_by_path.get(&key).copied().unwrap_or((0, 0))
+            };
+
+            Some(ComputerGitChangedFile {
+                additions,
+                deletions,
+                old_path,
+                path,
+                status,
+            })
+        })
+        .collect()
+}
+
+fn split_git_status_path(raw_path: &str) -> (Option<String>, String) {
+    if let Some((old_path, path)) = raw_path.split_once(" -> ") {
+        return (Some(clean_git_path(old_path)), clean_git_path(path));
+    }
+
+    (None, clean_git_path(raw_path))
+}
+
+fn clean_git_path(path: &str) -> String {
+    path.trim()
+        .trim_matches('"')
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
+}
+
+fn git_status_path_key(path: &str) -> String {
+    clean_git_path(path).replace('\\', "/")
+}
+
+fn count_text_file_lines(path: &Path) -> usize {
+    let Ok(metadata) = fs::metadata(path) else {
+        return 0;
+    };
+
+    if !metadata.is_file() || metadata.len() > MAX_GIT_UNTRACKED_FILE_BYTES {
+        return 0;
+    }
+
+    let Ok(bytes) = fs::read(path) else {
+        return 0;
+    };
+
+    if bytes.is_empty() || bytes.contains(&0) {
+        return 0;
+    }
+
+    let newline_count = bytes.iter().filter(|byte| **byte == b'\n').count();
+
+    if bytes.ends_with(b"\n") {
+        newline_count
+    } else {
+        newline_count + 1
+    }
 }
 
 fn parse_github_remote_url(remote_url: &str) -> Option<(Option<String>, Option<String>)> {

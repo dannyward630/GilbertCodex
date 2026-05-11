@@ -4,6 +4,7 @@ import { BrowserPreviewPanel } from "../components/browser/BrowserPreviewPanel";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
+import { GitReviewPanel } from "../components/git/GitReviewPanel";
 import { RightRail, chatHasLiveRightRailActivity, chatHasRightRailContent } from "../components/inspector/RightRail";
 import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
 import type { AppInfo } from "../types/app";
@@ -34,6 +35,7 @@ interface ChatPageProps {
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string, provider: ProviderSettings["provider"]) => void;
   onDeleteQueuedMessage: (messageId: string) => void;
+  onOpenSideChat: () => void;
   onSelectProject: (project: string) => void;
   onRequestPlanRevision: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse: (messageId: string) => void | Promise<void>;
@@ -76,6 +78,7 @@ export function ChatPage({
   onLocalWorkspaceChange,
   onModelChange,
   onDeleteQueuedMessage,
+  onOpenSideChat,
   onSelectProject,
   onRequestPlanRevision,
   onRegenerateResponse,
@@ -104,6 +107,7 @@ export function ChatPage({
   const [browserPreviewExpanded, setBrowserPreviewExpanded] = useState(false);
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
+  const [gitReviewOpen, setGitReviewOpen] = useState(false);
   const rightRailHasActivity = useMemo(() => chatHasLiveRightRailActivity(chat), [chat]);
   const rightRailHasContent = useMemo(() => chatHasRightRailContent(chat), [chat]);
   const queuedMessages = useMemo(() => getQueuedMessages(chat.messages), [chat.messages]);
@@ -111,9 +115,10 @@ export function ChatPage({
   const conversationMainStyle = {
     "--composer-clearance": `${Math.max(composerHeight + 34, 178)}px`,
   } as CSSProperties;
-  const showRightRail = rightRailOpen && rightRailHasContent;
-  const showBrowserPreview = browserPreviewOpen;
-  const sideLayout = showRightRail && showBrowserPreview ? "split" : showBrowserPreview ? "preview" : showRightRail ? "rail" : "none";
+  const showGitReview = gitReviewOpen;
+  const showRightRail = !showGitReview && rightRailOpen && rightRailHasContent;
+  const showBrowserPreview = !showGitReview && browserPreviewOpen;
+  const sideLayout = showGitReview ? "review" : showRightRail && showBrowserPreview ? "split" : showBrowserPreview ? "preview" : showRightRail ? "rail" : "none";
   const conversationBodyStyle = {
     "--browser-preview-width": `${browserPreviewWidth}px`,
   } as CSSProperties;
@@ -133,6 +138,7 @@ export function ChatPage({
       return;
     }
 
+    setGitReviewOpen(false);
     setBrowserPreviewOpen((open) => {
       if (open) {
         setBrowserPreviewExpanded(false);
@@ -146,6 +152,29 @@ export function ChatPage({
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
   }, []);
+
+  const handleOpenGitReview = useCallback(() => {
+    setBrowserPreviewExpanded(false);
+    setBrowserPreviewOpen(false);
+    setRightRailOpen(false);
+    setGitReviewOpen(true);
+  }, []);
+
+  const handleSubmitGitReview = useCallback(
+    (prompt: string) =>
+      onSendMessage({
+        attachments: [],
+        content: prompt,
+        localWorkspace,
+        mode: "chat",
+        webSearch: {
+          enabled: false,
+          maxResults: webSearch.maxResults,
+          provider: "duckduckgo",
+        },
+      }),
+    [localWorkspace, onSendMessage, webSearch.maxResults],
+  );
 
   const handleBrowserPreviewResizeStart = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -246,6 +275,10 @@ export function ChatPage({
   }, [chat.id, rightRailHasActivity]);
 
   useEffect(() => {
+    setGitReviewOpen(false);
+  }, [chat.id]);
+
+  useEffect(() => {
     if (!rightRailHasContent) {
       setRightRailOpen(false);
     }
@@ -277,6 +310,7 @@ export function ChatPage({
 
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(true);
+    setGitReviewOpen(false);
   }, [browserPreviewEnabled, browserPreviewRequestId, browserPreviewUrl]);
 
   const composer = (
@@ -298,6 +332,7 @@ export function ChatPage({
       onHeightChange={setComposerHeight}
       onLocalWorkspaceChange={onLocalWorkspaceChange}
       onModelChange={onModelChange}
+      onReviewChanges={handleOpenGitReview}
       onSelectProject={onSelectProject}
       onStopGeneration={onStopGeneration}
       onSteerQueuedMessage={onSteerQueuedMessage}
@@ -323,7 +358,16 @@ export function ChatPage({
         pinned={Boolean(chat.pinned)}
         title={chat.title}
         onToggleBrowserPreview={handleToggleBrowserPreview}
-        onToggleInspector={() => setRightRailOpen((open) => (rightRailHasContent ? !open : false))}
+        onToggleInspector={() => {
+          if (showGitReview) {
+            setGitReviewOpen(false);
+            setRightRailOpen(rightRailHasContent);
+            return;
+          }
+
+          setRightRailOpen((open) => (rightRailHasContent ? !open : false));
+        }}
+        onOpenSideChat={onOpenSideChat}
         onTogglePin={onTogglePin}
         onToggleTerminal={onToggleTerminal}
         terminalEnabled={terminalEnabled}
@@ -333,6 +377,7 @@ export function ChatPage({
         className="conversation-body"
         data-browser-expanded={showBrowserPreview && browserPreviewExpanded}
         data-browser-resizing={browserPreviewResizing}
+        data-git-review-open={showGitReview}
         data-right-rail-open={showRightRail}
         data-side-layout={sideLayout}
         ref={conversationBodyRef}
@@ -376,6 +421,7 @@ export function ChatPage({
           )}
         </section>
         {showRightRail ? <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} onResolveToolApproval={onResolveToolApproval} onSubmitPlanningInput={onSubmitPlanningInput} /> : null}
+        {showGitReview ? <GitReviewPanel root={localWorkspace.roots[0] ?? ""} onClose={() => setGitReviewOpen(false)} onSubmitReview={handleSubmitGitReview} /> : null}
         {showBrowserPreview ? (
           <BrowserPreviewPanel
             expanded={browserPreviewExpanded}

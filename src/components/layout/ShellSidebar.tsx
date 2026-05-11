@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Clock3, Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Search, Settings, Trash2, UserRound, Wrench } from "lucide-react";
-import { formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
+import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
 import type { AuthUser } from "../../types/auth";
@@ -20,6 +20,7 @@ interface ShellSidebarProps {
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
+  onOpenBulkDeleteChats: () => void;
   onOpenSearch: () => void;
   onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
@@ -41,6 +42,7 @@ export function ShellSidebar({
   onDeleteChat,
   onDeleteProject,
   onNewChat,
+  onOpenBulkDeleteChats,
   onOpenSearch,
   onLogout,
   onRouteChange,
@@ -209,6 +211,10 @@ export function ShellSidebar({
           <Search size={17} aria-hidden="true" />
           <span>Search</span>
         </button>
+        <button className="sidebar-action" type="button" onClick={onOpenBulkDeleteChats}>
+          <Trash2 size={17} aria-hidden="true" />
+          <span>Delete chats</span>
+        </button>
         <button className="sidebar-action" data-active={activeRoute === "toolbox"} type="button" onClick={() => onRouteChange("toolbox")}>
           <Wrench size={17} aria-hidden="true" />
           <span>Toolbox</span>
@@ -272,6 +278,9 @@ export function ShellSidebar({
         />
         <SidebarSection
           title="Recent chats"
+          actionIcon={MessageSquarePlus}
+          actionLabel="New chat outside project"
+          onAction={() => onNewChat(DEFAULT_PROJECT)}
           items={recentChats.map(createChatItem)}
         />
       </div>

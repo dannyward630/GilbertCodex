@@ -1,5 +1,6 @@
 import { type ChangeEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowUp,
   Boxes,
   Check,
@@ -43,6 +44,7 @@ import {
   type ModelContextWindow,
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
+import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
 import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
@@ -62,7 +64,7 @@ import {
   writeComputerTextFile,
 } from "../../tools/computer/files";
 import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
-import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, ComputerGitStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, ComputerGitStatus, LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ProjectSummary } from "../../types/project";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
@@ -125,6 +127,7 @@ interface ChatComposerProps {
   onHeightChange?: (height: number) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string, provider: ChatModelOption["provider"]) => void;
+  onReviewChanges?: () => void;
   onSelectProject: (project: string) => void;
   onStopGeneration?: () => void;
   onSteerQueuedMessage: (messageId: string) => void;
@@ -155,6 +158,7 @@ interface PlanningModeSettings {
 }
 
 const planningPassOptions = [3, 5, DEFAULT_PLANNING_MAX_PASSES];
+const GIT_STATUS_REFRESH_INTERVAL_MS = 2_500;
 
 function modelFromValue(modelValue: string, providerId: ChatModelOption["provider"], discoveredModels?: ProviderModelMetadata[]): ChatModelOption {
   const normalizedValue = modelValue.trim();
@@ -261,6 +265,7 @@ export function ChatComposer({
   onHeightChange,
   onLocalWorkspaceChange,
   onModelChange,
+  onReviewChanges,
   onSelectProject,
   onStopGeneration,
   onSteerQueuedMessage,
@@ -319,7 +324,7 @@ export function ChatComposer({
   const activeProject = projects.find((project) => project.name.toLowerCase() === activeProjectName.toLowerCase());
   const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
-  const hasGitChanges = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
+  const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -355,27 +360,49 @@ export function ChatComposer({
     }
 
     let disposed = false;
-    setGitStatusLoading(true);
 
-    void getComputerGitStatus(activeRoot)
-      .then((status) => {
+    async function refreshGitStatus(showLoading: boolean) {
+      if (showLoading) {
+        setGitStatusLoading(true);
+      }
+
+      try {
+        const status = await getComputerGitStatus(activeRoot);
+
         if (!disposed) {
           setGitStatus(status);
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!disposed) {
           setGitStatus(createUnavailableGitStatus(readErrorMessage(error, "Git status unavailable.")));
         }
-      })
-      .finally(() => {
+      } finally {
         if (!disposed) {
           setGitStatusLoading(false);
         }
-      });
+      }
+    }
+
+    void refreshGitStatus(true);
+
+    const refreshTimer = window.setInterval(() => {
+      void refreshGitStatus(false);
+    }, GIT_STATUS_REFRESH_INTERVAL_MS);
+    const refreshOnFocus = () => void refreshGitStatus(false);
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshGitStatus(false);
+      }
+    };
+
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnVisibility);
 
     return () => {
       disposed = true;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
   }, [activeRoot, localWorkspace.indexUpdatedAt, localWorkspace.scope]);
 
@@ -741,16 +768,42 @@ export function ChatComposer({
         accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.rs,.kt,.java,.py"
         onChange={handleFileSelect}
       />
+      {hasGitChangeSummary ? (
+        <div className="composer-menu-anchor composer-change-root">
+          <div className="composer-change-strip" aria-label={formatGitChangeStripLabel(gitStatus)}>
+            <div className="composer-change-summary">
+              <span>{formatGitChangedFiles(gitStatus)}</span>
+              <span className="composer-change-add">+{gitStatus?.additions ?? 0}</span>
+              <span className="composer-change-remove">-{gitStatus?.deletions ?? 0}</span>
+            </div>
+            <button
+              type="button"
+              className="composer-review-button"
+              onClick={() => {
+                setOpenMenu(null);
+                onReviewChanges?.();
+              }}
+            >
+              Review changes
+            </button>
+          </div>
+          {openMenu === "branch" ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
+        </div>
+      ) : null}
       {queuedMessages.length > 0 ? (
         <div className="composer-queue-tray" aria-label="Queued follow-up messages">
           {queuedMessages.map((queuedMessage) => (
             <div className="composer-queue-row" key={queuedMessage.id}>
               <CornerDownRight size={15} aria-hidden="true" />
               <span title={queuedMessage.content}>{formatQueuedMessagePreview(queuedMessage)}</span>
-              <button type="button" className="composer-queue-steer" onClick={() => onSteerQueuedMessage(queuedMessage.id)}>
-                <CornerDownRight size={14} aria-hidden="true" />
-                <span>Steer</span>
-              </button>
+              {isGenerating ? (
+                <button type="button" className="composer-queue-steer" onClick={() => onSteerQueuedMessage(queuedMessage.id)}>
+                  <CornerDownRight size={14} aria-hidden="true" />
+                  <span>Steer</span>
+                </button>
+              ) : (
+                <span className="composer-queue-state">Queued</span>
+              )}
               <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => onDeleteQueuedMessage(queuedMessage.id)}>
                 <Trash2 size={14} aria-hidden="true" />
               </button>
@@ -1065,10 +1118,9 @@ export function ChatComposer({
           >
             <GitBranch size={14} aria-hidden="true" />
             <span>{gitBranchLabel}</span>
-            {hasGitChanges ? <strong>{formatGitInlineChanges(gitStatus)}</strong> : null}
             <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "branch" ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
+          {openMenu === "branch" && !hasGitChangeSummary ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
         </div>
         <div className="composer-menu-anchor composer-context-root">
           <button
@@ -1217,15 +1269,30 @@ function GitStatusPopover({ loading, root, status }: { loading: boolean; root: s
   }
 
   if (!status?.available) {
+    const issue = getGitStatusIssue(status, root);
+
     return (
       <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
-        <div className="git-status-empty">
-          <GitBranch size={18} aria-hidden="true" />
+        <div className="git-status-error" data-kind={issue.kind}>
+          <div className="git-status-error-icon">
+            {issue.kind === "not-repo" ? <GitBranch size={18} aria-hidden="true" /> : issue.kind === "missing-path" ? <FolderOpen size={18} aria-hidden="true" /> : <AlertTriangle size={18} aria-hidden="true" />}
+          </div>
           <span>
-            <strong>No Git repository detected</strong>
-            <small>{formatNoGitDetail(status, root)}</small>
+            <strong>{issue.title}</strong>
+            <small>{issue.detail}</small>
           </span>
         </div>
+        {issue.hint ? <div className="git-status-hint">{issue.hint}</div> : null}
+        {status?.error ? (
+          <div className="git-status-error-detail" title={status.error}>
+            {status.error}
+          </div>
+        ) : null}
+        {root ? (
+          <div className="git-status-root" title={root}>
+            {formatCompactPath(root)}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1241,22 +1308,15 @@ function GitStatusPopover({ loading, root, status }: { loading: boolean; root: s
       </div>
       <dl className="git-status-list">
         <div>
-          <dt>Files changed</dt>
-          <dd>{status.changedFiles}</dd>
-        </div>
-        <div>
-          <dt>Additions</dt>
+          <dt>Code added</dt>
           <dd className="git-additions">+{status.additions}</dd>
         </div>
         <div>
-          <dt>Deletions</dt>
+          <dt>Code removed</dt>
           <dd className="git-deletions">-{status.deletions}</dd>
         </div>
-        <div>
-          <dt>Upstream</dt>
-          <dd>{status.ahead || status.behind ? `${status.ahead} ahead / ${status.behind} behind` : "Synced or no upstream"}</dd>
-        </div>
       </dl>
+      <div className="git-status-file-count">{status.changedFiles === 1 ? "1 changed file" : `${status.changedFiles} changed files`}</div>
       <div className="git-status-root" title={status.repositoryRoot || root}>
         {formatCompactPath(status.repositoryRoot || root)}
       </div>
@@ -1397,6 +1457,29 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
       }
     } catch (caughtError) {
       setError(readErrorMessage(caughtError, "Could not switch local workspace scope."));
+    }
+  }
+
+  async function selectPermissionMode(permissionMode: LocalPermissionMode) {
+    setError(null);
+
+    try {
+      const roots = settings.enabled && settings.roots.length > 0 ? settings.roots : await resolveRootsForScope(settings.scope);
+      const nextSettings: LocalWorkspaceSettings = {
+        ...settings,
+        enabled: true,
+        permissionMode,
+        roots,
+        lastError: undefined,
+      };
+
+      commitSettings(nextSettings);
+
+      if (!settings.enabled && roots.length > 0) {
+        void rebuildIndex(nextSettings, "Auto-indexing workspace");
+      }
+    } catch (caughtError) {
+      setError(readErrorMessage(caughtError, "Could not switch local permission mode."));
     }
   }
 
@@ -1567,6 +1650,26 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
             <button key={scope} type="button" role="radio" aria-checked={selected} data-selected={selected} onClick={() => void selectScope(scope)}>
               <Icon size={15} aria-hidden="true" />
               <span>{localWorkspaceScopeLabel(scope)}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="local-permission-row" role="radiogroup" aria-label="Local workspace permissions">
+        {[
+          { icon: Wand2, label: "Auto full", mode: "full-workspace" },
+          { icon: AlertTriangle, label: "Review", mode: "gilbert-review" },
+          { icon: CloudOff, label: "Read only", mode: "read-only" },
+        ].map((option) => {
+          const selected = option.mode === "gilbert-review"
+            ? settings.permissionMode === "gilbert-review" || settings.permissionMode === "ask-first"
+            : settings.permissionMode === option.mode;
+          const Icon = option.icon;
+
+          return (
+            <button key={option.mode} type="button" role="radio" aria-checked={selected} data-selected={selected} onClick={() => void selectPermissionMode(option.mode as LocalPermissionMode)}>
+              <Icon size={15} aria-hidden="true" />
+              <span>{option.label}</span>
             </button>
           );
         })}
@@ -1906,29 +2009,6 @@ function formatCompactPath(path: string) {
   return `...\\${parts.slice(-3).join("\\")}`;
 }
 
-function formatGitInlineChanges(status: ComputerGitStatus | null) {
-  if (!status?.available || status.changedFiles === 0) {
-    return "";
-  }
-
-  const additions = status.additions > 0 ? `+${status.additions}` : "";
-  const deletions = status.deletions > 0 ? `-${status.deletions}` : "";
-
-  return [status.changedFiles, additions, deletions].filter(Boolean).join(" ");
-}
-
-function formatNoGitDetail(status: ComputerGitStatus | null, root: string) {
-  if (!root) {
-    return "Choose a project folder to read branch state.";
-  }
-
-  if (status?.error && !status.error.toLowerCase().includes("not a git repository")) {
-    return "Git status is unavailable for this folder.";
-  }
-
-  return "This folder is not inside a Git repository.";
-}
-
 function createUnavailableGitStatus(error?: string): ComputerGitStatus {
   return {
     additions: 0,
@@ -1939,6 +2019,7 @@ function createUnavailableGitStatus(error?: string): ComputerGitStatus {
     clean: true,
     deletions: 0,
     error,
+    files: [],
   };
 }
 

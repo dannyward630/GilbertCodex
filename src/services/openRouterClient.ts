@@ -2,11 +2,10 @@ import type { ChatMessage } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
 import { attachmentSummary, isImageAttachment } from "../lib/chatAttachments";
 import { createMessageContextSurface } from "../lib/contextWindow";
-import { IMAGE_REASONING_MODEL, isOpenRouterRouterModel, normalizeProviderModelId } from "../lib/models";
+import { getProviderBaseUrl, IMAGE_REASONING_MODEL, isOpenRouterRouterModel, normalizeProviderModelId } from "../lib/models";
 import { buildAgentSystemPrompt } from "../prompts/agent";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1";
 const STREAM_FLUSH_MS = 80;
 const MAX_STREAM_REASONING_CHARS = 80_000;
 const TRIMMED_REASONING_PREFIX = "[Earlier reasoning trimmed to keep the app responsive.]\n\n";
@@ -117,7 +116,7 @@ export async function sendOpenRouterMessage(settings: ProviderSettings, messages
 
   assertUsableSettings(apiKey, model);
 
-  const response = await fetch(`${OPENROUTER_API_URL}/chat/completions`, {
+  const response = await fetch(`${getOpenRouterBaseUrl(settings)}/chat/completions`, {
     body: JSON.stringify(createOpenRouterChatRequestBody(settings, messages, model)),
     headers: createOpenRouterHeaders(apiKey),
     method: "POST",
@@ -155,7 +154,7 @@ export async function streamOpenRouterMessage(
 
   assertUsableSettings(apiKey, model);
 
-  const response = await fetch(`${OPENROUTER_API_URL}/chat/completions`, {
+  const response = await fetch(`${getOpenRouterBaseUrl(settings)}/chat/completions`, {
     body: JSON.stringify(createOpenRouterStreamRequestBody(settings, messages, model)),
     headers: createOpenRouterHeaders(apiKey),
     method: "POST",
@@ -338,7 +337,7 @@ export async function validateOpenRouterSettings(settings: ProviderSettings) {
     throw new Error("Enter an OpenRouter API key first.");
   }
 
-  const response = await fetch(`${OPENROUTER_API_URL}/models`, {
+  const response = await fetch(`${getOpenRouterBaseUrl(settings)}/models`, {
     headers: createOpenRouterHeaders(apiKey),
     method: "GET",
   });
@@ -369,7 +368,7 @@ export async function fetchOpenRouterModelContextLengths(settings: ProviderSetti
     return {};
   }
 
-  const response = await fetch(`${OPENROUTER_API_URL}/models`, {
+  const response = await fetch(`${getOpenRouterBaseUrl(settings)}/models`, {
     headers: createOpenRouterHeaders(settings.openRouterApiKey.trim()),
     method: "GET",
     signal: options.signal,
@@ -487,6 +486,10 @@ function createOpenRouterHeaders(apiKey: string) {
     "HTTP-Referer": window.location.origin,
     "X-Title": "Gilbert Codex",
   };
+}
+
+function getOpenRouterBaseUrl(settings: ProviderSettings) {
+  return getProviderBaseUrl({ ...settings, provider: "openrouter" });
 }
 
 function assertUsableSettings(apiKey: string, model: string) {

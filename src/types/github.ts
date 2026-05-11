@@ -1,3 +1,9 @@
+/**
+ * Shared contracts for GitHub desktop integration.
+ *
+ * These shapes mirror the camelCase payloads emitted by the Rust Tauri commands,
+ * not the snake_case fields returned directly by GitHub's REST API.
+ */
 export interface GithubUser {
   avatarUrl?: string;
   htmlUrl: string;
@@ -6,6 +12,7 @@ export interface GithubUser {
   name?: string;
 }
 
+/** Current local GitHub account state stored by the desktop command layer. */
 export interface GithubConnectionState {
   connected: boolean;
   connectedAt?: number;
@@ -13,6 +20,7 @@ export interface GithubConnectionState {
   user?: GithubUser;
 }
 
+/** Device-flow session details displayed while the user authorizes in a browser. */
 export interface GithubDeviceLoginSession {
   deviceCode: string;
   expiresIn: number;
@@ -24,6 +32,7 @@ export interface GithubDeviceLoginSession {
 
 export type GithubDeviceLoginStatus = "authorized" | "denied" | "error" | "expired" | "pending" | "slowDown";
 
+/** Poll response intentionally models pending/error states as data, not thrown errors. */
 export interface GithubDeviceLoginPollResponse {
   connection?: GithubConnectionState;
   error?: string;
@@ -38,6 +47,7 @@ export interface GithubRepositoryPermissions {
   push: boolean;
 }
 
+/** Repository summary normalized from GitHub REST responses for UI and tool output. */
 export interface GithubRepository {
   defaultBranch: string;
   description?: string;
@@ -51,12 +61,14 @@ export interface GithubRepository {
   updatedAt?: string;
 }
 
+/** Branch ref returned by list/create branch commands. */
 export interface GithubBranch {
   commitSha: string;
   name: string;
   protected: boolean;
 }
 
+/** File tree entry from GitHub's Git Trees API after local result capping. */
 export interface GithubTreeEntry {
   kind: string;
   mode?: string;
@@ -73,6 +85,7 @@ export interface GithubTreeResponse {
   truncated: boolean;
 }
 
+/** Text-file read result; binary files are rejected before reaching the frontend. */
 export interface GithubReadFileResponse {
   branch?: string;
   content: string;
@@ -101,6 +114,7 @@ export interface GithubSearchCodeResponse {
   totalCount: number;
 }
 
+/** One file mutation inside a GitHub API commit batch. */
 export interface GithubCommitFileInput {
   content?: string;
   operation?: "delete" | "remove" | "upsert" | "write" | string;
@@ -120,4 +134,65 @@ export interface GithubPullRequestResponse {
   number: number;
   state: string;
   title: string;
+}
+
+/** GitHub-generated Markdown release notes preview. */
+export interface GithubReleaseNotesResponse {
+  body: string;
+  name: string;
+}
+
+/** Release metadata returned after create/list release commands. */
+export interface GithubReleaseResponse {
+  body?: string;
+  draft: boolean;
+  htmlUrl: string;
+  id: number;
+  name?: string;
+  prerelease: boolean;
+  publishedAt?: string;
+  tagName: string;
+}
+
+/** GitHub Actions workflow metadata normalized for Settings/tool output. */
+export interface GithubWorkflow {
+  badgeUrl: string;
+  createdAt: string;
+  htmlUrl: string;
+  id: number;
+  name: string;
+  path: string;
+  state: string;
+  updatedAt: string;
+}
+
+export interface GithubWorkflowListResponse {
+  totalCount: number;
+  workflows: GithubWorkflow[];
+}
+
+/** Confirmation payload after requesting a workflow_dispatch run. */
+export interface GithubDispatchWorkflowResponse {
+  refName: string;
+  workflowId: string;
+}
+
+/** GitHub Actions run metadata for recent workflow-run inspection. */
+export interface GithubWorkflowRun {
+  branch?: string;
+  conclusion?: string;
+  createdAt: string;
+  event: string;
+  headSha: string;
+  htmlUrl: string;
+  id: number;
+  name?: string;
+  runNumber: number;
+  status?: string;
+  updatedAt: string;
+}
+
+export interface GithubWorkflowRunListResponse {
+  runs: GithubWorkflowRun[];
+  totalCount: number;
 }

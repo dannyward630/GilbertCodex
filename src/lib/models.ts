@@ -93,7 +93,7 @@ const PROVIDER_DOCS_URLS: Required<Record<ModelProviderId, string>> = {
 const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinition> = {
   anthropic: {
     apiKeyLabel: "Anthropic API key",
-    apiKeyPlaceholder: "sk-ant-...",
+    apiKeyPlaceholder: "Paste Anthropic API key",
     apiStyle: "anthropic-messages",
     baseUrlLabel: "Anthropic base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.anthropic,
@@ -108,7 +108,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
   },
   deepseek: {
     apiKeyLabel: "DeepSeek API key",
-    apiKeyPlaceholder: "sk-...",
+    apiKeyPlaceholder: "Paste DeepSeek API key",
     apiStyle: "openai-compatible",
     baseUrlLabel: "DeepSeek base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.deepseek,
@@ -123,7 +123,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
   },
   google: {
     apiKeyLabel: "Google AI Studio API key",
-    apiKeyPlaceholder: "AIza...",
+    apiKeyPlaceholder: "Paste Google AI Studio API key",
     apiStyle: "openai-compatible",
     baseUrlLabel: "Gemini OpenAI-compatible base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.google,
@@ -138,7 +138,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
   },
   groq: {
     apiKeyLabel: "Groq API key",
-    apiKeyPlaceholder: "gsk_...",
+    apiKeyPlaceholder: "Paste Groq API key",
     apiStyle: "openai-compatible",
     baseUrlLabel: "Groq OpenAI-compatible base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.groq,
@@ -200,7 +200,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
   },
   openai: {
     apiKeyLabel: "OpenAI API key",
-    apiKeyPlaceholder: "sk-...",
+    apiKeyPlaceholder: "Paste OpenAI API key",
     apiStyle: "openai-compatible",
     baseUrlLabel: "OpenAI base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.openai,
@@ -231,7 +231,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
   },
   openrouter: {
     apiKeyLabel: "OpenRouter API key",
-    apiKeyPlaceholder: "sk-or-v1-...",
+    apiKeyPlaceholder: "Paste OpenRouter API key",
     apiStyle: "openai-compatible",
     baseUrlLabel: "OpenRouter base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.openrouter,

@@ -13,6 +13,9 @@ const now = Date.now();
 const isoNow = new Date(now).toISOString();
 const userId = "user-readme-demo";
 const storageSuffix = `user.${userId}`;
+const demoWorkspacePath =
+  process.env.GILBERT_CODEX_DEMO_WORKSPACE ?? (process.platform === "win32" ? "C:\\Projects\\GilbertCodex" : "/home/demo/projects/GilbertCodex");
+const demoWebSearchMaxResults = normalizeDemoWebSearchMaxResults(process.env.GILBERT_CODEX_DEMO_WEB_RESULTS);
 
 const browserCandidates = [
   process.env.CHROMIUM_EXECUTABLE_PATH,
@@ -51,14 +54,14 @@ function createSeedState() {
     indexSummary: {
       builtAt: now - 32_000,
       entryCount: 426,
-      roots: ["C:\\Users\\Kobe Work\\Documents\\GilbertCodex"],
+      roots: [demoWorkspacePath],
       scannedDirectories: 74,
       skippedEntries: 9,
       truncated: false,
     },
     indexUpdatedAt: isoNow,
     permissionMode: "gilbert-review",
-    roots: ["C:\\Users\\Kobe Work\\Documents\\GilbertCodex"],
+    roots: [demoWorkspacePath],
     scope: "current-folder",
   };
 
@@ -84,8 +87,8 @@ function createSeedState() {
               detail: "Release checklist for public alpha",
               id: "artifact-release",
               kind: "file",
-              title: "docs/releases/v0.0.1-alpha.md",
-              url: "docs/releases/v0.0.1-alpha.md",
+              title: "docs/releases/v0.0.2.md",
+              url: "docs/releases/v0.0.2.md",
             },
           ],
           sources: [
@@ -112,7 +115,7 @@ function createSeedState() {
               detail: "Read project docs and release notes",
               id: "tool-read-docs",
               label: "read_files",
-              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.0.1-alpha.md",
+              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.0.2.md",
               status: "complete",
             },
             {
@@ -125,7 +128,7 @@ function createSeedState() {
           ],
           webSearch: {
             enabled: true,
-            maxResults: 6,
+            maxResults: demoWebSearchMaxResults,
             provider: "duckduckgo",
             query: "GitHub README video autoplay best practice",
             resultCount: 4,
@@ -163,7 +166,7 @@ function createSeedState() {
                 command: "npm.cmd run dev -- --host 127.0.0.1 --port 1420",
                 live: true,
                 shell: "powershell",
-                workingDirectory: "C:\\Users\\Kobe Work\\Documents\\GilbertCodex",
+                workingDirectory: demoWorkspacePath,
               },
             },
             {
@@ -175,7 +178,7 @@ function createSeedState() {
           ],
           webSearch: {
             enabled: true,
-            maxResults: 6,
+            maxResults: demoWebSearchMaxResults,
             provider: "duckduckgo",
             query: "GitHub README animated GIF autoplay",
             status: "active",
@@ -343,3 +346,14 @@ try {
 }
 
 console.log(`Captured README screenshots in ${path.relative(process.cwd(), assetDir)}`);
+
+function normalizeDemoWebSearchMaxResults(value) {
+  const fallback = 6;
+  const parsed = Number.parseInt(value ?? "", 10);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, 1), fallback);
+}

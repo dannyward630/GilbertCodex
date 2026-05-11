@@ -13,7 +13,7 @@ pub fn get_app_info() -> AppInfo {
     AppInfo {
         name: "Gilbert Codex".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        phase: "Phase 1".to_string(),
+        phase: "Public alpha".to_string(),
         runtime: "Tauri desktop".to_string(),
     }
 }

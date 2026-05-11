@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/app";
 import type { DiscordBridgeResponseStyle, DiscordTunnelProvider } from "../types/discord";
@@ -19,20 +19,22 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.1.0",
-  phase: "Phase 1",
+  version: "0.0.2",
+  phase: "Public alpha",
   runtime: "Browser preview",
 };
 
 const DISCORD_INTERACTION_EVENT = "discord-interaction";
 const DISCORD_BRIDGE_STATUS_EVENT = "discord-bridge-status";
 
+/** Request shape for the native browser-preview helper. */
 export interface BrowserAutomationRequest {
   action: "assert_text" | "click_link" | "inspect" | "open";
   text?: string;
   url: string;
 }
 
+/** Normalized browser inspection result returned by Rust. */
 export interface BrowserAutomationResponse {
   action: string;
   links: Array<{
@@ -109,10 +111,41 @@ export interface DiscordInteractionEvent {
   username?: string | null;
 }
 
+export interface AppUpdateCheckResponse {
+  available: boolean;
+  body?: string | null;
+  currentVersion: string;
+  date?: string | null;
+  target?: string | null;
+  version?: string | null;
+}
+
+export type AppUpdateInstallEvent =
+  | {
+      event: "started";
+      data: {
+        contentLength?: number | null;
+      };
+    }
+  | {
+      event: "progress";
+      data: {
+        chunkLength: number;
+        contentLength?: number | null;
+        downloaded: number;
+      };
+    }
+  | {
+      event: "finished";
+      data?: null;
+    };
+
+/** Detects the desktop runtime before invoking Tauri-only commands. */
 export function isTauriDesktopRuntime() {
   return typeof window !== "undefined" && (Boolean(window.__TAURI_INTERNALS__) || Boolean(window.__TAURI__));
 }
 
+/** Reads app metadata from Rust and falls back for browser-only previews. */
 export async function getAppInfo(): Promise<AppInfo> {
   try {
     return await invoke<AppInfo>("get_app_info");
@@ -121,6 +154,27 @@ export async function getAppInfo(): Promise<AppInfo> {
   }
 }
 
+export async function checkForAppUpdate(): Promise<AppUpdateCheckResponse> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      available: false,
+      currentVersion: fallbackAppInfo.version,
+    };
+  }
+
+  return invoke<AppUpdateCheckResponse>("app_update_check");
+}
+
+export async function installAppUpdate(onEvent: (event: AppUpdateInstallEvent) => void): Promise<void> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("App updates are available in the desktop app.");
+  }
+
+  const onEventChannel = new Channel<AppUpdateInstallEvent>(onEvent);
+  return invoke<void>("app_update_install", { onEvent: onEventChannel });
+}
+
+/** Runs one native browser automation action from the in-app browser preview. */
 export async function runBrowserAutomation(request: BrowserAutomationRequest): Promise<BrowserAutomationResponse> {
   return invoke<BrowserAutomationResponse>("browser_automation", { request });
 }
@@ -223,6 +277,7 @@ export async function listenForDiscordInteractions(onInteraction: (interaction: 
   });
 }
 
+/** Listens for Discord bridge health updates emitted by the Rust command layer. */
 export async function listenForDiscordBridgeStatus(onStatus: (status: DiscordBridgeStatus) => void) {
   if (!isTauriDesktopRuntime()) {
     return () => undefined;
@@ -242,7 +297,7 @@ function createWorkspaceDependencyPreviewDiagnostic(message: string): WorkspaceD
     pythonPath: "",
     pythonVersion: null,
     status: "error",
-    version: "26.430.10722",
+    version: "desktop-only",
   };
 }
 
@@ -250,6 +305,7 @@ export async function createTerminalSession(request: TerminalCreateSessionReques
   return invoke<TerminalCreateSessionResponse>("terminal_create_session", { request });
 }
 
+/** Runs a command through the native terminal session manager. */
 export async function runTerminalCommand(request: TerminalRunCommandRequest): Promise<TerminalRunCommandResponse> {
   return invoke<TerminalRunCommandResponse>("terminal_run_command", { request });
 }

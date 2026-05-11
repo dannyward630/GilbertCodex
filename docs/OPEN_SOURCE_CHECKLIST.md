@@ -9,6 +9,15 @@ Use this checklist before publishing, tagging a release, or inviting outside col
 - Run `git status --short --ignored=matching` and confirm ignored local artifacts are expected.
 - Run `git diff --check` before committing.
 
+## Contribution Infrastructure
+
+- Keep `.github/ISSUE_TEMPLATE/` forms current for bugs, feature requests, and platform support.
+- Keep `.github/PULL_REQUEST_TEMPLATE.md` aligned with the active review process.
+- Keep `.github/CODEOWNERS` aligned with maintainer ownership and security-sensitive paths.
+- Keep `.github/workflows/ci.yml` passing on `main`, `develop`, and `testing`.
+- Keep `.github/dependabot.yml` targeting `develop` so dependency updates follow normal review.
+- Protect `main`, `develop`, and `testing` with branch protection or rulesets before inviting outside contributors.
+
 ## Validation
 
 ```bash
@@ -39,8 +48,9 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 ## Comment Style
 
 - Prefer clear names over explanatory comments.
-- Use short single-line comments only where the code is not self-explanatory.
-- Avoid block comments in source files.
+- Follow [Code Documentation Standards](CODE_DOCUMENTATION.md) for exported contracts, Tauri commands, model/tool boundaries, and security-sensitive fallback behavior.
+- Use TSDoc/JSDoc or Rust doc comments where a public contract would otherwise require reading several files.
+- Use short inline comments only where the implementation decision is not self-explanatory.
 - Do not leave TODO, FIXME, debug, or temporary investigation comments in committed code.
 
 ## Security Review

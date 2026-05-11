@@ -6,6 +6,7 @@ import { describeFileCreationTools } from "../../tools/fileCreation";
 import type { ProviderSettings } from "../../types/settings";
 import { createGithubRuntimeToolInstructions } from "./githubToolPrompt";
 
+/** Inputs used to build the model-visible runtime tool contract for one request. */
 export interface RuntimeToolPromptInput {
   hasLocalComputerContext: boolean;
   hasWebContext: boolean;
@@ -14,6 +15,10 @@ export interface RuntimeToolPromptInput {
   settings: ProviderSettings;
 }
 
+/**
+ * Builds the dynamic tool prompt from current Toolbox toggles, thinking mode,
+ * selected prompt chunks, and whether prior tool/web evidence is already present.
+ */
 export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext, latestUserPrompt, selectedChunkIds, settings }: RuntimeToolPromptInput) {
   const tools = normalizeToolRegistrySettings(settings.tools);
   const localTools = createLocalToolNames(settings);
@@ -33,10 +38,14 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? "web_search is available on demand for current facts, official docs, provider/model data, package behavior, API behavior, source-backed claims, and external design data. After WEB TOOL RESULTS arrive, use those results directly instead of repeating the same search."
       : "web_search is disabled in Toolbox.",
     localTools.length > 0 ? `Runtime action tools enabled: ${localTools.join(", ")}.` : "Local workspace and source-control tools are disabled in Toolbox.",
+    createRuntimeToolUsageMap(tools),
     tools.sourceControl
-      ? createGithubRuntimeToolInstructions(latestUserPrompt)
+      ? [
+          createLocalGitRuntimeToolInstructions(),
+          createGithubRuntimeToolInstructions(latestUserPrompt),
+        ].join("\n")
       : "",
-    tools.sourceControl ? "" : "GitHub source-control tools are disabled in Toolbox.",
+    tools.sourceControl ? "" : "Git and GitHub source-control tools are disabled in Toolbox.",
     hasWebContext
       ? "A web-search context or web_search result is present. Treat it as live web evidence. Cite supported claims with Markdown links using only listed URLs. If results are insufficient, say that instead of filling gaps from memory."
       : "",
@@ -67,12 +76,39 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       : "",
     createRelevantToolExamples(settings, latestUserPrompt),
     "After tool results arrive, continue from the evidence and do not print raw tool calls.",
-    "Visible answers should be normal Markdown: concise headings, bullets or numbered lists, Markdown links, and fenced code blocks for code, logs, diffs, or command output.",
+    "Visible answers should be normal Markdown: concise headings, bullets or numbered lists, Markdown links, and fenced code blocks for code, logs, diffs, or command output. If you use a pipe table, include a complete GFM delimiter row for every column.",
   ].filter(Boolean);
 
   return sections.join("\n");
 }
 
+/** Local git instructions stay separate from GitHub API instructions to avoid routing mixups. */
+function createLocalGitRuntimeToolInstructions() {
+  return [
+    "Local Git tools operate on the selected local workspace clone using real git commands. Use them for this project/current workspace version-control work instead of pretending GitHub API tools can see local unpushed changes.",
+    "Local Git tool map: git_status shows local branch/index/worktree state; git_diff shows patch/stat output; git_log shows recent commits; git_stage stages paths or all=true; git_unstage unstages paths or all=true; git_commit commits already staged changes with message; git_push pushes to a remote; git_pull pulls from a remote; git_fetch updates remote refs; git_branch lists/creates/deletes branches; git_checkout switches branches with git switch.",
+    "For safe local publish flow, call git_status, git_diff, then git_stage with explicit paths or all=true, git_commit with message, git_push with remote/branch as needed. Mutating Git tools pause for approval in ask-first or review modes, and run without approval prompts in Auto full mode.",
+    "Use github_* tools only for remote GitHub API operations such as repository inventory, remote file reads, release notes/releases, workflow dispatch/runs, and pull requests.",
+  ].join("\n");
+}
+
+function createRuntimeToolUsageMap(tools: ReturnType<typeof normalizeToolRegistrySettings>) {
+  return [
+    "Runtime tool usage map:",
+    tools.fileSearch ? "- recall_context/search_files: find project memory, filenames, symbols, and relevant code before guessing." : "",
+    tools.codeView ? "- view_code/read_file: inspect exact source before editing; use line or character windows for precision." : "",
+    tools.codeEdit ? "- edit_file/write_file/inline_edit: perform structured source edits instead of shell write tricks." : "",
+    tools.fileCreation ? "- create_text_file/create_markdown_file/create_code_file/create_react_file/create_html_file/create_pdf_file/create_files: create new artifacts, preferably batched with create_files for multi-file work." : "",
+    tools.terminal ? "- run_terminal: run builds, tests, dev servers, package commands, formatters, and evidence commands with command plus optional cwd/shell/timeout/background." : "",
+    tools.sourceControl ? "- git_*: operate on the local clone; github_*: operate on GitHub through the connected account." : "",
+    tools.browserPreview ? "- open_browser_preview: open local/web HTTP URLs for visual verification." : "",
+    tools.testingTools || tools.typescriptTools ? "- run_tests/typescript_check/create_unit_test: verify code and add focused tests." : "",
+    tools.webSearch ? "- web_search: current external facts, official docs, changelogs, APIs, and citations." : "",
+    tools.colorTools ? "- lookup_color: local CSS and extended color-name lookup." : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** Returns the exact tool names the model may call for the current Toolbox state. */
 export function createLocalToolNames(settings: ProviderSettings) {
   const tools = normalizeToolRegistrySettings(settings.tools);
 
@@ -111,6 +147,17 @@ export function createLocalToolNames(settings: ProviderSettings) {
     tools.codeGeneration ? "dependency_audit" : "",
     tools.codeGeneration ? "create_api_route" : "",
     tools.sourceControl ? "github_status" : "",
+    tools.sourceControl ? "git_status" : "",
+    tools.sourceControl ? "git_diff" : "",
+    tools.sourceControl ? "git_log" : "",
+    tools.sourceControl ? "git_stage" : "",
+    tools.sourceControl ? "git_unstage" : "",
+    tools.sourceControl ? "git_commit" : "",
+    tools.sourceControl ? "git_push" : "",
+    tools.sourceControl ? "git_pull" : "",
+    tools.sourceControl ? "git_fetch" : "",
+    tools.sourceControl ? "git_branch" : "",
+    tools.sourceControl ? "git_checkout" : "",
     tools.sourceControl ? "github_list_repositories" : "",
     tools.sourceControl ? "github_get_repository" : "",
     tools.sourceControl ? "github_list_branches" : "",
@@ -120,6 +167,12 @@ export function createLocalToolNames(settings: ProviderSettings) {
     tools.sourceControl ? "github_create_branch" : "",
     tools.sourceControl ? "github_commit_files" : "",
     tools.sourceControl ? "github_create_pull_request" : "",
+    tools.sourceControl ? "github_generate_release_notes" : "",
+    tools.sourceControl ? "github_create_release" : "",
+    tools.sourceControl ? "github_list_releases" : "",
+    tools.sourceControl ? "github_list_workflows" : "",
+    tools.sourceControl ? "github_dispatch_workflow" : "",
+    tools.sourceControl ? "github_list_workflow_runs" : "",
     tools.terminal ? "run_terminal" : "",
     tools.browserPreview ? "open_browser_preview" : "",
     tools.terminal && tools.codeEdit ? "create_tool" : "",
@@ -135,10 +188,14 @@ function createRelevantToolExamples(settings: ProviderSettings, latestUserPrompt
     examples.push("web_search example:\n<tool_call>\nweb_search\n<arg_key>query</arg_key><arg_value>official docs query</arg_value>\n</tool_call>");
   }
 
-  if (tools.sourceControl && /\b(github|repo|repository|branch|commit|push|pull|pr|pull request|source control)\b/i.test(latestUserPrompt)) {
+  if (tools.sourceControl && /\b(github|repo|repository|branch|commit|push|pull|pr|pull request|source control|release|workflow|actions?)\b/i.test(latestUserPrompt)) {
+    examples.push("git_status example:\n<tool_call>\ngit_status\n<arg_key>cwd</arg_key><arg_value>C:\\path\\to\\project</arg_value>\n</tool_call>");
+    examples.push("git_commit example:\n<tool_call>\ngit_stage\n<arg_key>all</arg_key><arg_value>true</arg_value>\n</tool_call>\n<tool_call>\ngit_commit\n<arg_key>message</arg_key><arg_value>feat: update source control tools</arg_value>\n</tool_call>");
     examples.push("github_list_tree example:\n<tool_call>\ngithub_list_tree\n<arg_key>repo</arg_key><arg_value>repo-name-if-owner-unknown</arg_value>\n<arg_key>recursive</arg_key><arg_value>true</arg_value>\n<arg_key>limit</arg_key><arg_value>500</arg_value>\n</tool_call>");
     examples.push("github_read_file example:\n<tool_call>\ngithub_read_file\n<arg_key>repository</arg_key><arg_value>owner/repo</arg_value>\n<arg_key>path</arg_key><arg_value>README.md</arg_value>\n</tool_call>");
     examples.push("github_commit_files example:\n<tool_call>\ngithub_commit_files\n<arg_key>repository</arg_key><arg_value>owner/repo</arg_value>\n<arg_key>branch</arg_key><arg_value>codex/my-change</arg_value>\n<arg_key>message</arg_key><arg_value>feat: update docs</arg_value>\n<arg_key>files_json</arg_key><arg_value>[{\"path\":\"README.md\",\"content\":\"...\"}]</arg_value>\n</tool_call>");
+    examples.push("github_generate_release_notes example:\n<tool_call>\ngithub_generate_release_notes\n<arg_key>repository</arg_key><arg_value>owner/repo</arg_value>\n<arg_key>tag_name</arg_key><arg_value>v1.0.0</arg_value>\n<arg_key>target_commitish</arg_key><arg_value>main</arg_value>\n</tool_call>");
+    examples.push("github_list_workflows example:\n<tool_call>\ngithub_list_workflows\n<arg_key>repository</arg_key><arg_value>owner/repo</arg_value>\n</tool_call>");
   }
 
   if (tools.terminal && /\b(test|build|check|install|run|command|terminal|server|dev)\b/i.test(latestUserPrompt)) {

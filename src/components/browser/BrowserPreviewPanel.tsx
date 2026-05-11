@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { loadPersistentString, savePersistentString } from "../../lib/appStorage";
 
 interface BrowserPreviewPanelProps {
   expanded: boolean;
@@ -676,7 +677,7 @@ function loadBrowserPreviewSession(initialUrl?: string | null): BrowserPreviewSe
 
 function readStoredSession(key: string) {
   try {
-    return JSON.parse(window.localStorage.getItem(key) ?? "null") as Partial<BrowserPreviewSession> | null;
+    return JSON.parse(loadPersistentString(key) ?? "null") as Partial<BrowserPreviewSession> | null;
   } catch {
     return null;
   }
@@ -688,7 +689,7 @@ function saveBrowserPreviewSession(session: BrowserPreviewSession) {
   }
 
   try {
-    window.localStorage.setItem(BROWSER_PREVIEW_SESSION_KEY, JSON.stringify(session));
+    savePersistentString(BROWSER_PREVIEW_SESSION_KEY, JSON.stringify(session));
   } catch {
     return;
   }

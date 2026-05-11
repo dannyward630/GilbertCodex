@@ -72,10 +72,19 @@ export interface ComputerGitStatus {
   clean: boolean;
   deletions: number;
   error?: string;
+  files?: ComputerGitChangedFile[];
   githubOwner?: string;
   githubRepo?: string;
   remoteUrl?: string;
   repositoryRoot?: string;
+}
+
+export interface ComputerGitChangedFile {
+  additions: number;
+  deletions: number;
+  oldPath?: string;
+  path: string;
+  status: string;
 }
 
 export interface ComputerSearchResult {

@@ -3,9 +3,12 @@ import { createId } from "../lib/chatUtils";
 import { isTauriDesktopRuntime } from "../app/tauriClient";
 import type { ChatMessage, ChatSource } from "../types/chat";
 
+/** Default source cap for ordinary web-enabled chat turns. */
 export const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
+/** Runtime ceiling used by Deep Research while still bounding one search call. */
 export const MAX_WEB_SEARCH_RESULTS = 12;
 
+/** Normalized source result shared by desktop DuckDuckGo HTML search and browser fallback. */
 export interface WebSearchResult {
   snippet?: string;
   title: string;
@@ -31,6 +34,12 @@ interface SearchDuckDuckGoOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Searches DuckDuckGo for current web evidence.
+ *
+ * Desktop routes through Rust to avoid renderer CORS limits and to support
+ * normal result pages; browser fallback uses DuckDuckGo's Instant Answer API.
+ */
 export async function searchDuckDuckGo(query: string, options: SearchDuckDuckGoOptions = {}): Promise<WebSearchResult[]> {
   const normalizedQuery = normalizeQuery(query);
 
@@ -85,6 +94,7 @@ export async function searchDuckDuckGo(query: string, options: SearchDuckDuckGoO
   return normalizedResults;
 }
 
+/** Converts normalized web results into stable chat source cards. */
 export function createChatSourcesFromWebResults(results: WebSearchResult[]): ChatSource[] {
   return normalizeSearchResults(results, results.length).map((result, index) => ({
     detail: formatSourceDetail(result),
@@ -94,6 +104,7 @@ export function createChatSourcesFromWebResults(results: WebSearchResult[]): Cha
   }));
 }
 
+/** Creates a model-visible context message that constrains answers to live sources. */
 export function createWebSearchContextMessage(query: string, sources: ChatSource[], error?: string): ChatMessage[] {
   const normalizedQuery = normalizeQuery(query);
 

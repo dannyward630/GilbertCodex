@@ -1,3 +1,10 @@
+//! GitHub desktop commands.
+//!
+//! This module owns the native side of the GitHub integration: local token
+//! storage, OAuth device flow, REST API normalization, and source-control
+//! operations that do not require a local clone or GitHub CLI installation.
+
+use crate::core::storage::{self, SYSTEM_NAMESPACE};
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -17,6 +24,7 @@ const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_DEVICE_VERIFICATION_URL: &str = "https://github.com/login/device";
 const GITHUB_OAUTH_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_DATABASE_FILE: &str = "github-account.json";
+const GITHUB_DATABASE_STORAGE_KEY: &str = "github-account.v1";
 const GITHUB_DATABASE_GENERATION: u32 = 1;
 const USER_AGENT: &str = "GilbertCodex/0.1 (desktop source control)";
 const DEFAULT_OAUTH_SCOPE: &str = "repo workflow delete_repo admin:repo_hook admin:org admin:public_key admin:org_hook gist notifications user project write:packages read:packages delete:packages admin:gpg_key codespace read:audit_log security_events";
@@ -27,6 +35,7 @@ const MAX_TREE_LIMIT: usize = 5_000;
 const DEFAULT_READ_BYTES: usize = 1024 * 1024;
 const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
 
+/// Shared lock for the local GitHub account store.
 #[derive(Default)]
 pub struct GithubState {
     lock: Mutex<()>,
@@ -310,6 +319,144 @@ pub struct GithubPullRequestResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubGenerateReleaseNotesRequest {
+    pub configuration_file_path: Option<String>,
+    pub owner: String,
+    pub previous_tag_name: Option<String>,
+    pub repo: String,
+    pub tag_name: String,
+    pub target_commitish: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubReleaseNotesResponse {
+    pub body: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCreateReleaseRequest {
+    pub body: Option<String>,
+    pub draft: Option<bool>,
+    pub generate_release_notes: Option<bool>,
+    pub make_latest: Option<String>,
+    pub name: Option<String>,
+    pub owner: String,
+    pub prerelease: Option<bool>,
+    pub repo: String,
+    pub tag_name: String,
+    pub target_commitish: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubListReleasesRequest {
+    pub owner: String,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+    pub repo: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubReleaseResponse {
+    pub body: Option<String>,
+    pub draft: bool,
+    pub html_url: String,
+    pub id: u64,
+    pub name: Option<String>,
+    pub prerelease: bool,
+    pub published_at: Option<String>,
+    pub tag_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubListWorkflowsRequest {
+    pub owner: String,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+    pub repo: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubWorkflowListResponse {
+    pub total_count: u64,
+    pub workflows: Vec<GithubWorkflow>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubWorkflow {
+    pub badge_url: String,
+    pub created_at: String,
+    pub html_url: String,
+    pub id: u64,
+    pub name: String,
+    pub path: String,
+    pub state: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubDispatchWorkflowRequest {
+    pub inputs: Option<Value>,
+    pub owner: String,
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    pub repo: String,
+    pub workflow_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubDispatchWorkflowResponse {
+    pub ref_name: String,
+    pub workflow_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubListWorkflowRunsRequest {
+    pub branch: Option<String>,
+    pub event: Option<String>,
+    pub owner: String,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+    pub repo: String,
+    pub status: Option<String>,
+    pub workflow_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubWorkflowRunListResponse {
+    pub runs: Vec<GithubWorkflowRun>,
+    pub total_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubWorkflowRun {
+    pub branch: Option<String>,
+    pub conclusion: Option<String>,
+    pub created_at: String,
+    pub event: String,
+    pub head_sha: String,
+    pub html_url: String,
+    pub id: u64,
+    pub name: Option<String>,
+    pub run_number: u64,
+    pub status: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubUserApi {
     avatar_url: Option<String>,
     html_url: String,
@@ -435,6 +582,64 @@ struct GithubPullRequestApi {
     title: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GithubReleaseNotesApi {
+    body: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseApi {
+    body: Option<String>,
+    draft: bool,
+    html_url: String,
+    id: u64,
+    name: Option<String>,
+    prerelease: bool,
+    published_at: Option<String>,
+    tag_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubWorkflowListApi {
+    total_count: u64,
+    workflows: Vec<GithubWorkflowApi>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubWorkflowApi {
+    badge_url: String,
+    created_at: String,
+    html_url: String,
+    id: u64,
+    name: String,
+    path: String,
+    state: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubWorkflowRunListApi {
+    total_count: u64,
+    workflow_runs: Vec<GithubWorkflowRunApi>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubWorkflowRunApi {
+    conclusion: Option<String>,
+    created_at: String,
+    event: String,
+    head_branch: Option<String>,
+    head_sha: String,
+    html_url: String,
+    id: u64,
+    name: Option<String>,
+    run_number: u64,
+    status: Option<String>,
+    updated_at: String,
+}
+
+/// Returns the saved GitHub connection without exposing the access token.
 #[tauri::command]
 pub fn github_get_state(
     app: tauri::AppHandle,
@@ -449,6 +654,7 @@ pub fn github_get_state(
     Ok(create_connection_state(&database))
 }
 
+/// Validates a manually supplied token and persists the normalized account state.
 #[tauri::command]
 pub async fn github_connect_token(
     app: tauri::AppHandle,
@@ -470,6 +676,7 @@ pub async fn github_connect_token(
     Ok(create_connection_state(&database))
 }
 
+/// Starts GitHub OAuth device flow and returns the user-code session.
 #[tauri::command]
 pub async fn github_begin_device_login(
     request: GithubBeginDeviceLoginRequest,
@@ -509,6 +716,7 @@ pub async fn github_begin_device_login(
     })
 }
 
+/// Opens only GitHub's official device authorization page in the system browser.
 #[tauri::command]
 pub fn github_open_device_login(request: GithubOpenDeviceLoginRequest) -> Result<(), String> {
     let verification_uri = request
@@ -528,6 +736,7 @@ pub fn github_open_device_login(request: GithubOpenDeviceLoginRequest) -> Result
     open_external_url(GITHUB_DEVICE_VERIFICATION_URL)
 }
 
+/// Polls device-flow authorization and stores the token once GitHub authorizes it.
 #[tauri::command]
 pub async fn github_poll_device_login(
     app: tauri::AppHandle,
@@ -596,6 +805,7 @@ pub async fn github_poll_device_login(
     })
 }
 
+/// Clears the local GitHub account database and returns the disconnected state.
 #[tauri::command]
 pub fn github_disconnect(
     app: tauri::AppHandle,
@@ -611,6 +821,7 @@ pub fn github_disconnect(
     Ok(create_connection_state(&database))
 }
 
+/// Lists repositories visible to the signed-in GitHub account.
 #[tauri::command]
 pub async fn github_list_repositories(
     app: tauri::AppHandle,
@@ -676,6 +887,7 @@ pub async fn github_list_repositories(
         .collect())
 }
 
+/// Fetches normalized metadata for one repository.
 #[tauri::command]
 pub async fn github_get_repository(
     app: tauri::AppHandle,
@@ -693,6 +905,7 @@ pub async fn github_get_repository(
     Ok(repository.into())
 }
 
+/// Lists branch heads for one repository.
 #[tauri::command]
 pub async fn github_list_branches(
     app: tauri::AppHandle,
@@ -720,6 +933,7 @@ pub async fn github_list_branches(
     Ok(branches)
 }
 
+/// Returns a capped Git tree for a branch, resolving the default branch when omitted.
 #[tauri::command]
 pub async fn github_list_tree(
     app: tauri::AppHandle,
@@ -763,6 +977,7 @@ pub async fn github_list_tree(
     })
 }
 
+/// Reads and decodes one text file from a repository branch.
 #[tauri::command]
 pub async fn github_read_file(
     app: tauri::AppHandle,
@@ -817,6 +1032,7 @@ pub async fn github_read_file(
     })
 }
 
+/// Runs GitHub code search, optionally scoped to repository and branch qualifiers.
 #[tauri::command]
 pub async fn github_search_code(
     app: tauri::AppHandle,
@@ -866,6 +1082,7 @@ pub async fn github_search_code(
     })
 }
 
+/// Creates a branch ref from the default or requested base branch.
 #[tauri::command]
 pub async fn github_create_branch(
     app: tauri::AppHandle,
@@ -895,6 +1112,7 @@ pub async fn github_create_branch(
     })
 }
 
+/// Creates a Git tree, commit, and branch ref update for a batch of file changes.
 #[tauri::command]
 pub async fn github_commit_files(
     app: tauri::AppHandle,
@@ -965,6 +1183,7 @@ pub async fn github_commit_files(
     })
 }
 
+/// Opens a pull request; draft is the default unless the caller opts out.
 #[tauri::command]
 pub async fn github_create_pull_request(
     app: tauri::AppHandle,
@@ -1004,6 +1223,229 @@ pub async fn github_create_pull_request(
         number: pull_request.number,
         state: pull_request.state,
         title: pull_request.title,
+    })
+}
+
+/// Delegates release-note generation to GitHub without creating a release.
+#[tauri::command]
+pub async fn github_generate_release_notes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubGenerateReleaseNotesRequest,
+) -> Result<GithubReleaseNotesResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let tag_name = normalize_required_text(&request.tag_name, "release tag")?;
+    let url = parse_api_url(&format!("/repos/{owner}/{repo}/releases/generate-notes"))?;
+    let mut payload = json!({
+        "tag_name": tag_name,
+    });
+
+    insert_optional_payload_string(
+        &mut payload,
+        "target_commitish",
+        normalize_optional_text(request.target_commitish),
+    );
+    insert_optional_payload_string(
+        &mut payload,
+        "previous_tag_name",
+        normalize_optional_text(request.previous_tag_name),
+    );
+    insert_optional_payload_string(
+        &mut payload,
+        "configuration_file_path",
+        normalize_optional_repo_path(request.configuration_file_path)?,
+    );
+
+    let notes =
+        github_api::<GithubReleaseNotesApi>(&client, &token, Method::POST, url, Some(payload))
+            .await?;
+
+    Ok(GithubReleaseNotesResponse {
+        body: notes.body,
+        name: notes.name,
+    })
+}
+
+/// Creates a release, defaulting to draft release behavior for review safety.
+#[tauri::command]
+pub async fn github_create_release(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubCreateReleaseRequest,
+) -> Result<GithubReleaseResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let tag_name = normalize_required_text(&request.tag_name, "release tag")?;
+    let url = parse_api_url(&format!("/repos/{owner}/{repo}/releases"))?;
+    let mut payload = json!({
+        "tag_name": tag_name,
+        "draft": request.draft.unwrap_or(true),
+        "prerelease": request.prerelease.unwrap_or(false),
+        "generate_release_notes": request.generate_release_notes.unwrap_or(true),
+    });
+
+    insert_optional_payload_string(
+        &mut payload,
+        "target_commitish",
+        normalize_optional_text(request.target_commitish),
+    );
+    insert_optional_payload_string(&mut payload, "name", normalize_optional_text(request.name));
+    insert_optional_payload_string(&mut payload, "body", normalize_optional_text(request.body));
+    insert_optional_payload_string(
+        &mut payload,
+        "make_latest",
+        normalize_make_latest(request.make_latest)?,
+    );
+
+    let release =
+        github_api::<GithubReleaseApi>(&client, &token, Method::POST, url, Some(payload)).await?;
+
+    Ok(release.into())
+}
+
+/// Lists releases visible to the signed-in account.
+#[tauri::command]
+pub async fn github_list_releases(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubListReleasesRequest,
+) -> Result<Vec<GithubReleaseResponse>, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let mut url = parse_api_url(&format!("/repos/{owner}/{repo}/releases"))?;
+
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("per_page", &clamp_per_page(request.per_page).to_string());
+        query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
+    }
+
+    let releases = github_api::<Vec<GithubReleaseApi>>(&client, &token, Method::GET, url, None)
+        .await?
+        .into_iter()
+        .map(GithubReleaseResponse::from)
+        .collect();
+
+    Ok(releases)
+}
+
+/// Lists GitHub Actions workflows for a repository.
+#[tauri::command]
+pub async fn github_list_workflows(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubListWorkflowsRequest,
+) -> Result<GithubWorkflowListResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let mut url = parse_api_url(&format!("/repos/{owner}/{repo}/actions/workflows"))?;
+
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("per_page", &clamp_per_page(request.per_page).to_string());
+        query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
+    }
+
+    let workflows =
+        github_api::<GithubWorkflowListApi>(&client, &token, Method::GET, url, None).await?;
+
+    Ok(GithubWorkflowListResponse {
+        total_count: workflows.total_count,
+        workflows: workflows
+            .workflows
+            .into_iter()
+            .map(GithubWorkflow::from)
+            .collect(),
+    })
+}
+
+/// Dispatches a workflow_dispatch workflow for a ref and optional inputs.
+#[tauri::command]
+pub async fn github_dispatch_workflow(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubDispatchWorkflowRequest,
+) -> Result<GithubDispatchWorkflowResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let workflow_id = normalize_required_text(&request.workflow_id, "workflow id")?;
+    let ref_name = normalize_required_text(&request.ref_name, "workflow ref")?;
+    let url = parse_api_url(&format!(
+        "/repos/{owner}/{repo}/actions/workflows/{}/dispatches",
+        encode_path_segment(&workflow_id)
+    ))?;
+    let mut payload = json!({
+        "ref": ref_name,
+    });
+
+    if let Some(inputs) = normalize_workflow_inputs(request.inputs)? {
+        payload["inputs"] = inputs;
+    }
+
+    github_api_empty(&client, &token, Method::POST, url, Some(payload)).await?;
+
+    Ok(GithubDispatchWorkflowResponse {
+        ref_name,
+        workflow_id,
+    })
+}
+
+/// Lists recent workflow runs for a selected workflow.
+#[tauri::command]
+pub async fn github_list_workflow_runs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubListWorkflowRunsRequest,
+) -> Result<GithubWorkflowRunListResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let owner = normalize_owner(&request.owner)?;
+    let repo = normalize_repo(&request.repo)?;
+    let workflow_id = normalize_required_text(&request.workflow_id, "workflow id")?;
+    let mut url = parse_api_url(&format!(
+        "/repos/{owner}/{repo}/actions/workflows/{}/runs",
+        encode_path_segment(&workflow_id)
+    ))?;
+
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("per_page", &clamp_per_page(request.per_page).to_string());
+        query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
+
+        if let Some(branch) = normalize_optional_text(request.branch) {
+            query.append_pair("branch", &branch);
+        }
+
+        if let Some(event) = normalize_optional_text(request.event) {
+            query.append_pair("event", &event);
+        }
+
+        if let Some(status) = normalize_optional_text(request.status) {
+            query.append_pair("status", &status);
+        }
+    }
+
+    let runs =
+        github_api::<GithubWorkflowRunListApi>(&client, &token, Method::GET, url, None).await?;
+
+    Ok(GithubWorkflowRunListResponse {
+        runs: runs
+            .workflow_runs
+            .into_iter()
+            .map(GithubWorkflowRun::from)
+            .collect(),
+        total_count: runs.total_count,
     })
 }
 
@@ -1049,6 +1491,54 @@ impl From<GithubBranchApi> for GithubBranch {
             commit_sha: branch.commit.sha,
             name: branch.name,
             protected: branch.protected,
+        }
+    }
+}
+
+impl From<GithubReleaseApi> for GithubReleaseResponse {
+    fn from(release: GithubReleaseApi) -> Self {
+        Self {
+            body: release.body,
+            draft: release.draft,
+            html_url: release.html_url,
+            id: release.id,
+            name: release.name,
+            prerelease: release.prerelease,
+            published_at: release.published_at,
+            tag_name: release.tag_name,
+        }
+    }
+}
+
+impl From<GithubWorkflowApi> for GithubWorkflow {
+    fn from(workflow: GithubWorkflowApi) -> Self {
+        Self {
+            badge_url: workflow.badge_url,
+            created_at: workflow.created_at,
+            html_url: workflow.html_url,
+            id: workflow.id,
+            name: workflow.name,
+            path: workflow.path,
+            state: workflow.state,
+            updated_at: workflow.updated_at,
+        }
+    }
+}
+
+impl From<GithubWorkflowRunApi> for GithubWorkflowRun {
+    fn from(run: GithubWorkflowRunApi) -> Self {
+        Self {
+            branch: run.head_branch,
+            conclusion: run.conclusion,
+            created_at: run.created_at,
+            event: run.event,
+            head_sha: run.head_sha,
+            html_url: run.html_url,
+            id: run.id,
+            name: run.name,
+            run_number: run.run_number,
+            status: run.status,
+            updated_at: run.updated_at,
         }
     }
 }
@@ -1192,6 +1682,42 @@ async fn github_api<T: DeserializeOwned>(
             text.chars().take(240).collect::<String>()
         )
     })
+}
+
+async fn github_api_empty(
+    client: &reqwest::Client,
+    token: &str,
+    method: Method,
+    url: reqwest::Url,
+    body: Option<Value>,
+) -> Result<(), String> {
+    let mut request = client
+        .request(method, url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .bearer_auth(token);
+
+    if let Some(body) = body {
+        request = request
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("GitHub request failed: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read GitHub response: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format_github_error(status.as_u16(), &text));
+    }
+
+    Ok(())
 }
 
 async fn resolve_branch_name(
@@ -1404,6 +1930,65 @@ fn normalize_repo_path(path: &str) -> Result<String, String> {
     Ok(path)
 }
 
+fn normalize_optional_repo_path(path: Option<String>) -> Result<Option<String>, String> {
+    path.map(|path| normalize_repo_path(&path)).transpose()
+}
+
+fn normalize_required_text(value: &str, label: &str) -> Result<String, String> {
+    let value = value.trim();
+
+    if value.is_empty() {
+        return Err(format!("GitHub {label} is required."));
+    }
+
+    if value.contains('\0') {
+        return Err(format!("GitHub {label} is invalid."));
+    }
+
+    Ok(value.to_string())
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && !value.contains('\0'))
+}
+
+fn normalize_make_latest(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(value) = normalize_optional_text(value) else {
+        return Ok(None);
+    };
+    let normalized = value.to_lowercase();
+
+    if matches!(normalized.as_str(), "true" | "false" | "legacy") {
+        return Ok(Some(normalized));
+    }
+
+    Err("GitHub release makeLatest must be true, false, or legacy.".to_string())
+}
+
+fn normalize_workflow_inputs(inputs: Option<Value>) -> Result<Option<Value>, String> {
+    let Some(inputs) = inputs else {
+        return Ok(None);
+    };
+
+    if inputs.is_null() {
+        return Ok(None);
+    }
+
+    if inputs.is_object() {
+        return Ok(Some(inputs));
+    }
+
+    Err("GitHub workflow inputs must be a JSON object.".to_string())
+}
+
+fn insert_optional_payload_string(payload: &mut Value, key: &str, value: Option<String>) {
+    if let Some(value) = value {
+        payload[key] = Value::String(value);
+    }
+}
+
 fn normalize_branch(branch: &str) -> Result<String, String> {
     let branch = branch.trim().trim_start_matches("refs/heads/");
 
@@ -1580,7 +2165,12 @@ fn encode_path_segment(segment: &str) -> String {
 }
 
 fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
-    let database_path = database_path(app)?;
+    if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY)?
+    {
+        return parse_database_content(&content, "Gilbert Database GitHub account store");
+    }
+
+    let database_path = legacy_database_path(app)?;
 
     if !database_path.exists() {
         return Ok(fresh_database());
@@ -1598,12 +2188,38 @@ fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
         return Ok(fresh_database());
     }
 
-    let database = serde_json::from_str::<GithubDatabase>(&content).map_err(|error| {
-        format!(
-            "Could not parse the GitHub account store at {}: {}",
-            path_to_string(&database_path),
-            error
-        )
+    let database = parse_database_content(
+        &content,
+        &format!(
+            "legacy GitHub account store at {}",
+            path_to_string(&database_path)
+        ),
+    )?;
+    let migrated_content = serde_json::to_string_pretty(&database).map_err(|error| {
+        format!("Could not serialize the migrated GitHub account store: {error}")
+    })?;
+    storage::write_value(
+        app,
+        SYSTEM_NAMESPACE,
+        GITHUB_DATABASE_STORAGE_KEY,
+        &migrated_content,
+    )?;
+
+    Ok(database)
+}
+
+fn save_database(app: &tauri::AppHandle, database: &GithubDatabase) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(database)
+        .map_err(|error| format!("Could not serialize the GitHub account store: {error}"))?;
+
+    storage::write_value(app, SYSTEM_NAMESPACE, GITHUB_DATABASE_STORAGE_KEY, &content).map_err(
+        |error| format!("Could not write the GitHub account store to Gilbert Database: {error}"),
+    )
+}
+
+fn parse_database_content(content: &str, source: &str) -> Result<GithubDatabase, String> {
+    let database = serde_json::from_str::<GithubDatabase>(content).map_err(|error| {
+        format!("Could not parse the GitHub account store from {source}: {error}")
     })?;
 
     if database.database_generation != GITHUB_DATABASE_GENERATION {
@@ -1613,32 +2229,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<GithubDatabase, String> {
     Ok(database)
 }
 
-fn save_database(app: &tauri::AppHandle, database: &GithubDatabase) -> Result<(), String> {
-    let database_path = database_path(app)?;
-
-    if let Some(parent) = database_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Could not create the GitHub account store folder at {}: {}",
-                path_to_string(parent),
-                error
-            )
-        })?;
-    }
-
-    let content = serde_json::to_string_pretty(database)
-        .map_err(|error| format!("Could not serialize the GitHub account store: {error}"))?;
-
-    fs::write(&database_path, content).map_err(|error| {
-        format!(
-            "Could not write the GitHub account store at {}: {}",
-            path_to_string(&database_path),
-            error
-        )
-    })
-}
-
-fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("github").join(GITHUB_DATABASE_FILE))

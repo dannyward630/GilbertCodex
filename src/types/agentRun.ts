@@ -11,9 +11,12 @@ export type AgentApprovalKind = "browser" | "custom_tool" | "delete" | "edit" | 
 
 export type AgentApprovalRisk = "low" | "medium" | "high";
 
+export type AgentApprovalDecisionScope = "once" | "session";
+
 export interface AgentApprovalDecision {
   editedArgs?: Record<string, unknown>;
   note?: string;
+  scope?: AgentApprovalDecisionScope;
   status: Extract<AgentApprovalStatus, "approved" | "denied" | "edited">;
 }
 

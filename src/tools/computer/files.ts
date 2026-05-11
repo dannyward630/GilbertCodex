@@ -30,8 +30,11 @@ const MAX_GILBERT_MEMORY_CHARS = 16_000;
 const MAX_GILBERT_MEMORY_IMPORT_DEPTH = 5;
 const MAX_SNIPPET_CHARS = 2_600;
 const COMPUTER_FILE_INDEX_PROGRESS_EVENT = "computer-file-index-progress";
+
+/** Project-local memory file imported into workspace context when present. */
 export const GILBERT_PROJECT_MEMORY_FILE = "GILBERT.md";
 
+/** A loaded project memory note and the absolute/local path it came from. */
 export interface GilbertProjectMemory {
   content: string;
   path: string;
@@ -82,6 +85,7 @@ let browserIndexSummary: ComputerFileIndexSummary = {
   truncated: false,
 };
 
+/** Returns the desktop default workspace, or the first browser folder fallback. */
 export async function getDefaultComputerWorkspace() {
   if (!isTauriDesktopRuntime()) {
     return browserWorkspaceRoots.keys().next().value ?? "";
@@ -90,6 +94,7 @@ export async function getDefaultComputerWorkspace() {
   return (await invoke<string | null>("computer_get_default_workspace")) ?? "";
 }
 
+/** Lists readable roots for full-computer and folder-picker UI. */
 export async function listComputerDrives() {
   if (!isTauriDesktopRuntime()) {
     return Array.from(browserWorkspaceRoots.values()).map((root) => ({
@@ -104,6 +109,7 @@ export async function listComputerDrives() {
   return await invoke<ComputerDrive[]>("computer_list_drives");
 }
 
+/** Opens the native folder picker in desktop, with browser File System Access fallback. */
 export async function pickComputerFolder(startPath?: string) {
   if (!isTauriDesktopRuntime()) {
     return await pickBrowserFolder();
@@ -114,6 +120,7 @@ export async function pickComputerFolder(startPath?: string) {
   });
 }
 
+/** Registers folders dropped onto the browser preview fallback runtime. */
 export async function registerBrowserDroppedFolders(dataTransfer: DataTransfer) {
   if (isTauriDesktopRuntime()) {
     return [];
@@ -138,6 +145,7 @@ export async function registerBrowserDroppedFolders(dataTransfer: DataTransfer) 
   return roots;
 }
 
+/** Subscribes to native folder drag/drop events from the Tauri webview. */
 export async function listenForComputerFolderDrops(onDrop: (paths: string[]) => void, onHover?: (hovering: boolean) => void) {
   if (!isTauriDesktopRuntime()) {
     return () => undefined;
@@ -161,6 +169,7 @@ export async function listenForComputerFolderDrops(onDrop: (paths: string[]) => 
   });
 }
 
+/** Lists one directory from the native command layer or browser folder fallback. */
 export async function listComputerDirectory(path: string, limit = 600) {
   if (isBrowserWorkspacePath(path)) {
     return await listBrowserDirectory(path, limit);
@@ -178,6 +187,7 @@ export async function listComputerDirectory(path: string, limit = 600) {
   });
 }
 
+/** Builds a capped hybrid file index for the selected workspace scope. */
 export async function buildComputerFileIndex(roots: string[], scope: LocalWorkspaceScope, requestId = Date.now()) {
   const fullComputer = scope === "full-computer";
 
@@ -195,6 +205,7 @@ export async function buildComputerFileIndex(roots: string[], scope: LocalWorksp
   });
 }
 
+/** Streams indexing progress from Rust while large folders are scanned. */
 export async function listenForComputerFileIndexProgress(onProgress: (progress: ComputerFileIndexProgress) => void) {
   if (!isTauriDesktopRuntime()) {
     return () => undefined;
@@ -205,6 +216,7 @@ export async function listenForComputerFileIndexProgress(onProgress: (progress: 
   });
 }
 
+/** Returns the most recent local file-index summary for UI status and context. */
 export async function getComputerFileIndexSummary() {
   if (!isTauriDesktopRuntime()) {
     return browserIndexSummary;
@@ -213,6 +225,7 @@ export async function getComputerFileIndexSummary() {
   return await invoke<ComputerFileIndexSummary>("computer_get_file_index_summary");
 }
 
+/** Reads local Git status for a workspace root when native git is available. */
 export async function getComputerGitStatus(path: string): Promise<ComputerGitStatus> {
   if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
     return createUnavailableGitStatus(path ? "Git status is available in the desktop app for real folders." : "Choose a project folder first.");
@@ -225,6 +238,7 @@ export async function getComputerGitStatus(path: string): Promise<ComputerGitSta
   });
 }
 
+/** Searches the current file index and optionally filters results to selected roots. */
 export async function searchComputerFiles(query: string, limit = 24, roots: string[] = []) {
   const filterToRoots = (results: ComputerSearchResult[]) => (roots.length > 0 ? results.filter((result) => roots.some((root) => isPathInsideRoot(result.path, root))) : results);
 
@@ -242,6 +256,7 @@ export async function searchComputerFiles(query: string, limit = 24, roots: stri
   return filterToRoots(results);
 }
 
+/** Reads a text file through the active desktop or browser workspace backend. */
 export async function readComputerTextFile(path: string, maxBytes = 16 * 1024 * 1024) {
   if (isBrowserWorkspacePath(path)) {
     return await readBrowserTextFile(path, maxBytes);
@@ -259,6 +274,7 @@ export async function readComputerTextFile(path: string, maxBytes = 16 * 1024 * 
   });
 }
 
+/** Writes a text file after the caller has already resolved permission policy. */
 export async function writeComputerTextFile(path: string, content: string, roots: string[], options: { createParentDirs?: boolean; overwrite?: boolean } = {}) {
   if (isBrowserWorkspacePath(path)) {
     return await writeBrowserTextFile(path, content, roots, options);
@@ -279,6 +295,7 @@ export async function writeComputerTextFile(path: string, content: string, roots
   });
 }
 
+/** Deletes one file through the active backend; directories are rejected below Rust/browser layers. */
 export async function deleteComputerFile(path: string, roots: string[]) {
   if (isBrowserWorkspacePath(path)) {
     return await deleteBrowserFile(path, roots);
@@ -296,6 +313,7 @@ export async function deleteComputerFile(path: string, roots: string[]) {
   });
 }
 
+/** Resolves saved workspace settings to concrete roots used by context and tools. */
 export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSettings) {
   if (!settings.enabled) {
     return [];
@@ -317,6 +335,10 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
   return [];
 }
 
+/**
+ * Builds the compact model-visible workspace context from roots, Git status,
+ * project memories, directory listings, search results, and text snippets.
+ */
 export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings) {
   if (!settings.enabled) {
     return "";
@@ -368,7 +390,7 @@ export function localPermissionModeLabel(mode: LocalPermissionMode) {
   }
 
   if (mode === "full-workspace") {
-    return "Full workspace";
+    return "Auto full";
   }
 
   return "Gilbert review";
@@ -776,6 +798,17 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.codeEdit ? "write_file" : "",
     ...fileCreationTools,
     ...codingTools,
+    tools.sourceControl ? "git_status" : "",
+    tools.sourceControl ? "git_diff" : "",
+    tools.sourceControl ? "git_log" : "",
+    tools.sourceControl ? "git_stage" : "",
+    tools.sourceControl ? "git_unstage" : "",
+    tools.sourceControl ? "git_commit" : "",
+    tools.sourceControl ? "git_push" : "",
+    tools.sourceControl ? "git_pull" : "",
+    tools.sourceControl ? "git_fetch" : "",
+    tools.sourceControl ? "git_branch" : "",
+    tools.sourceControl ? "git_checkout" : "",
     tools.terminal ? "run_terminal" : "",
     tools.browserPreview ? "open_browser_preview" : "",
     tools.terminal && tools.codeEdit ? "create_tool" : "",
@@ -783,8 +816,8 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
   ].filter(Boolean);
   const permissionRules = {
     "ask-first": "Ask before editing, deleting, moving, or running anything. Viewing and indexing are allowed.",
-    "gilbert-review": "Read and review freely inside the selected workspace roots. File changes must stay inside those roots and should call out risk.",
-    "full-workspace": "Read/write is allowed inside the enabled workspace roots. In full computer scope, those roots are the readable drive roots.",
+    "gilbert-review": "Review mode reads freely but pauses file changes, terminal commands, custom tools, and mutating Git/GitHub actions for approval.",
+    "full-workspace": "Auto full mode runs file changes, terminal commands, custom tools, and mutating Git/GitHub actions without approval prompts inside the enabled workspace roots. In full computer scope, those roots are the readable drive roots.",
     "read-only": "Read, list, index, and search workspace files. File writes, deletes, custom tools, and terminal commands are blocked.",
   } satisfies Record<LocalPermissionMode, string>;
 
@@ -793,8 +826,8 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     "Tool access: Gilbert can view drives, open folders, read text files, use the local vector file index, and make precise workspace edits when local work is enabled.",
       `Runtime tools enabled from Toolbox: ${runtimeTools.length > 0 ? runtimeTools.join(", ") : "none"}.`,
       `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed up to ${MAX_GILBERT_MEMORY_IMPORT_DEPTH} levels.`,
-      "Full computer scope expands the enabled roots to the readable computer drives. File edits, writes, custom tools, and terminal commands may run inside those roots when the user's permission mode allows it; Ask first mode still requires user confirmation before writes or terminal commands.",
-      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, run_terminal for local project commands when Terminal is enabled, and open_browser_preview to inspect a local app URL in the in-app browser.",
+      "Auto full mode is the no-approval workspace mode: file edits, writes, custom tools, terminal commands, and mutating source-control actions may run inside the enabled roots without stopping for approval. Review and Ask first modes still require confirmation for mutating tools.",
+      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, git_status/git_diff/git_stage/git_commit/git_push for local version-control work when Source Control is enabled, run_terminal for local project commands when Terminal is enabled, and open_browser_preview to inspect a local app URL in the in-app browser.",
       "Edit syntax: read with view_code first, then use edit_file with old_text/new_text, start_line/end_line/content, insert_at_line/content, or start_char/end_char/content. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text when available so Gilbert can refuse the edit if the file changed.",
       tools.fileCreation ? describeFileCreationTools() : "",
       describeCodingTools(),
@@ -822,6 +855,7 @@ function createUnavailableGitStatus(error?: string): ComputerGitStatus {
     clean: true,
     deletions: 0,
     error,
+    files: [],
   };
 }
 
@@ -838,9 +872,8 @@ function formatGitStatuses(statuses: ComputerGitStatus[]) {
       const repository = status.githubOwner && status.githubRepo ? `${status.githubOwner}/${status.githubRepo}` : status.remoteUrl || "No GitHub remote detected";
       const branch = status.branch || "unknown branch";
       const changes = status.clean ? "working tree clean" : formatGitChangeSummary(status);
-      const upstream = status.ahead || status.behind ? `, ${status.ahead} ahead / ${status.behind} behind upstream` : "";
 
-      return `- ${status.repositoryRoot || "repository"}: ${repository}, branch ${branch}, ${changes}${upstream}.`;
+      return `- ${status.repositoryRoot || "repository"}: ${repository}, branch ${branch}, ${changes}.`;
     }),
     "Use this Git state when answering branch, GitHub repository, or changed-file questions for the selected project.",
   ].join("\n");

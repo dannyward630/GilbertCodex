@@ -6,12 +6,14 @@
   .desktop-root[data-runtime="web"] .conversation-body,
   .desktop-root[data-runtime="web"] .conversation-body[data-right-rail-open="true"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="rail"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="review"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="preview"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .desktop-root[data-runtime="web"] .conversation-body .right-rail,
+  .desktop-root[data-runtime="web"] .conversation-body .git-review-panel,
   .desktop-root[data-runtime="web"] .conversation-body .browser-preview-panel {
     display: none;
   }
@@ -23,12 +25,14 @@
   .conversation-body,
   .conversation-body[data-right-rail-open="true"],
   .conversation-body[data-side-layout="rail"],
+  .conversation-body[data-side-layout="review"],
   .conversation-body[data-side-layout="preview"],
   .conversation-body[data-side-layout="split"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .conversation-body .right-rail,
+  .conversation-body .git-review-panel,
   .conversation-body .browser-preview-panel {
     display: none;
   }

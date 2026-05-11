@@ -23,6 +23,7 @@ import { formatChatAge } from "../lib/chatUtils";
 import type { AgentRun, AgentRunStatus } from "../types/agentRun";
 import type { ChatSendInput, ChatSummary } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
+import type { WebSearchSettings } from "../types/settings";
 import type { ToolRegistryId, ToolRegistrySettings } from "../types/tools";
 
 type CapabilityStatus = "Live" | "Partial" | "Missing";
@@ -60,6 +61,7 @@ interface WorkflowsPageProps {
   onOpenChat: (chatId: string) => void;
   onStartWorkflow: (input: ChatSendInput) => void;
   toolSettings: ToolRegistrySettings;
+  webSearchSettings: WebSearchSettings;
 }
 
 const workflowTemplates: WorkflowTemplate[] = [
@@ -233,6 +235,7 @@ export function WorkflowsPage({
   onOpenChat,
   onStartWorkflow,
   toolSettings,
+  webSearchSettings,
 }: WorkflowsPageProps) {
   const sortedRuns = useMemo(
     () => [...agentRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
@@ -264,8 +267,8 @@ export function WorkflowsPage({
       webSearch: template.webSearch && toolSettings.webSearch
         ? {
             enabled: true,
-            maxResults: 6,
-            provider: "duckduckgo",
+            maxResults: webSearchSettings.maxResults,
+            provider: webSearchSettings.provider,
           }
         : undefined,
     });
@@ -516,7 +519,7 @@ function formatWorkspaceScope(localWorkspace: LocalWorkspaceSettings) {
 
 function formatApprovalMode(mode: LocalWorkspaceSettings["permissionMode"]) {
   if (mode === "full-workspace") {
-    return "Full access";
+    return "Auto full";
   }
 
   if (mode === "read-only") {

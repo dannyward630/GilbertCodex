@@ -1,6 +1,6 @@
 # File Creation Tools
 
-Gilbert Codex exposes typed file creation tools through the local computer runtime. They are designed for agent use: each call has a clear file kind, writes only inside enabled workspace roots, respects the current permission mode, and refreshes the local file index after success.
+Gilbert Codex exposes typed file creation tools through the local computer runtime. They are designed for agent use: each call has a clear file kind, writes only inside enabled workspace roots, respects the current permission mode, and refreshes the local file index after success. Auto Full mode writes without approval prompts inside those roots; Review and Ask First modes pause mutating actions for approval.
 
 ## Tool Set
 

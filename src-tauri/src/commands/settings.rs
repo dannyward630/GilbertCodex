@@ -1,3 +1,5 @@
+//! Settings and runtime diagnostic commands for contributor-facing app setup.
+
 use serde::Serialize;
 use std::{
     env, fs,
@@ -5,7 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-const WORKSPACE_DEPENDENCY_VERSION: &str = "26.430.10722";
+const WORKSPACE_DEPENDENCY_VERSION_ENV: &str = "GILBERT_WORKSPACE_DEPENDENCY_VERSION";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,11 +32,13 @@ pub struct WorkspaceDependencyDiagnostic {
     pub version: String,
 }
 
+/// Reads the user's Codex config path and deprecated-hook flag status.
 #[tauri::command]
 pub fn settings_get_user_config() -> Result<UserConfigInfo, String> {
     read_user_config_info()
 }
 
+/// Creates the config file if needed, opens it, and returns the refreshed state.
 #[tauri::command]
 pub fn settings_open_user_config() -> Result<UserConfigInfo, String> {
     let path = user_config_path()?;
@@ -56,11 +60,13 @@ pub fn settings_open_user_config() -> Result<UserConfigInfo, String> {
     read_user_config_info()
 }
 
+/// Reports bundled Node/Python dependency availability without mutating files.
 #[tauri::command]
 pub fn workspace_dependencies_diagnose() -> Result<WorkspaceDependencyDiagnostic, String> {
     Ok(create_workspace_dependency_diagnostic("diagnose"))
 }
 
+/// Verifies host-managed bundled dependencies and reports whether repair is needed.
 #[tauri::command]
 pub fn workspace_dependencies_reinstall() -> Result<WorkspaceDependencyDiagnostic, String> {
     Ok(create_workspace_dependency_diagnostic("reinstall"))
@@ -104,7 +110,9 @@ fn create_workspace_dependency_diagnostic(action: &str) -> WorkspaceDependencyDi
     let codex_version = run_program_version("codex");
     let mut details = Vec::new();
 
-    details.push(format!("Bundle version: {WORKSPACE_DEPENDENCY_VERSION}"));
+    let dependency_version = workspace_dependency_version();
+
+    details.push(format!("Bundle version: {dependency_version}"));
     details.push(format!("Node.js: {}", node_path.display()));
     details.push(format!("Python: {}", python_path.display()));
 
@@ -138,8 +146,16 @@ fn create_workspace_dependency_diagnostic(action: &str) -> WorkspaceDependencyDi
         python_path: python_path.display().to_string(),
         python_version,
         status,
-        version: WORKSPACE_DEPENDENCY_VERSION.to_string(),
+        version: dependency_version,
     }
+}
+
+fn workspace_dependency_version() -> String {
+    env::var(WORKSPACE_DEPENDENCY_VERSION_ENV)
+        .map(|value| value.trim().to_string())
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "host-managed".to_string())
 }
 
 fn workspace_dependency_root() -> PathBuf {

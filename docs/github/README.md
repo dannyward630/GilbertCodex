@@ -146,7 +146,7 @@ Search UrbanWafflezz/GilbertCodex for github_create_pull_request.
 Create a branch, update docs, and open a draft PR.
 ```
 
-Mutating operations such as commits and pull requests go through the app's tool approval path when permission mode requires review.
+Mutating operations such as commits, releases, workflow dispatches, and pull requests go through the app's tool approval path when permission mode requires review.
 
 ## Supported GitHub Tool Surface
 
@@ -160,6 +160,12 @@ Mutating operations such as commits and pull requests go through the app's tool 
 - `github_create_branch`: create a branch from an existing branch.
 - `github_commit_files`: commit one or more files through GitHub's API.
 - `github_create_pull_request`: open a draft or ready pull request.
+- `github_generate_release_notes`: generate release notes for a tag.
+- `github_create_release`: create draft or ready releases.
+- `github_list_releases`: list repository releases.
+- `github_list_workflows`: list GitHub Actions workflows.
+- `github_dispatch_workflow`: trigger workflow_dispatch workflows.
+- `github_list_workflow_runs`: inspect workflow runs.
 
 See the broader tool contract in:
 ../CODING_TOOLS.md

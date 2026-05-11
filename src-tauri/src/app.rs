@@ -1,14 +1,17 @@
 use crate::commands;
 use tauri::Manager;
 
+/// Builds the Tauri app, registers shared command state, and exposes command handlers.
 pub fn builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::auth::AuthState::default())
         .manage(commands::computer::files::ComputerFileIndexState::default())
         .manage(commands::discord::DiscordBridgeState::default())
         .manage(commands::github::GithubState::default())
         .manage(commands::terminal::TerminalState::default())
+        .manage(commands::updates::AppUpdateState::default())
         .setup(|app| {
             if let Some(icon) = app.default_window_icon().cloned() {
                 for window in app.webview_windows().values() {
@@ -40,6 +43,9 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::computer::files::computer_read_text_file,
             commands::computer::files::computer_search_file_index,
             commands::computer::files::computer_write_text_file,
+            commands::database::gilbert_database_load,
+            commands::database::gilbert_database_set_value,
+            commands::database::gilbert_database_set_values,
             commands::discord::discord_bridge_send_interaction_response,
             commands::discord::discord_bridge_start,
             commands::discord::discord_bridge_status,
@@ -50,12 +56,18 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::github::github_connect_token,
             commands::github::github_create_branch,
             commands::github::github_create_pull_request,
+            commands::github::github_create_release,
             commands::github::github_disconnect,
+            commands::github::github_dispatch_workflow,
+            commands::github::github_generate_release_notes,
             commands::github::github_get_repository,
             commands::github::github_get_state,
             commands::github::github_list_branches,
             commands::github::github_list_repositories,
+            commands::github::github_list_releases,
             commands::github::github_list_tree,
+            commands::github::github_list_workflow_runs,
+            commands::github::github_list_workflows,
             commands::github::github_open_device_login,
             commands::github::github_poll_device_login,
             commands::github::github_read_file,
@@ -69,6 +81,8 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::terminal::terminal_kill_session,
             commands::terminal::terminal_run_command,
             commands::terminal::terminal_write_session,
+            commands::updates::app_update_check,
+            commands::updates::app_update_install,
             commands::web::duckduckgo_search
         ])
 }

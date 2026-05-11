@@ -21,7 +21,7 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ## Current Status
 
-Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
+Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, local Git source control, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
 
 Platform status: Windows x64 is the verified alpha target. macOS and Linux now have partial source support, but they still need contributors on those operating systems to run the app, package it, and finish any native port issues. See [Platform Support And Porting Notes](docs/platform/README.md).
 
@@ -29,13 +29,13 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The first public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.0.1-alpha).
+The latest Windows public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.0.2).
 
 Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included capabilities, setup notes, known limitations, and checksum details.
+See [v0.0.2 release notes](docs/releases/v0.0.2.md) for included capabilities, setup notes, known limitations, visual assets, and checksum details.
 
 ## Product Shape
 
@@ -43,7 +43,7 @@ See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included cap
 - Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
 - Chat workspace: searchable history, pinned chats, project grouping, markdown rendering, image/file attachments, regeneration, stop, and local persistence.
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Tools: web search, GitHub repository/source-control tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, vector helpers, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
+- Tools: web search, local Git status/diff/stage/commit/push/pull/branch tools, GitHub repository/release/workflow tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, vector helpers, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, terminal sessions, browser preview, and Toolbox feature toggles.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
 - Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and web-search controls.
 
@@ -51,6 +51,7 @@ See [v0.0.1-alpha release notes](docs/releases/v0.0.1-alpha.md) for included cap
 
 ```text
 .
+|-- .github/               Issue forms, PR template, CODEOWNERS, CI, and Dependabot
 |-- public/                 Static app assets
 |-- docs/                   Project docs, tool contracts, and publishing checklists
 |   |-- platform/           Platform support matrix and macOS/Linux port checklist
@@ -152,7 +153,14 @@ npm run audit:prod
 git diff --check
 ```
 
-Use [CONTRIBUTING.md](CONTRIBUTING.md) for coding and review standards, and [PROGRESS.md](PROGRESS.md) for the current roadmap.
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for coding and review standards, [docs/CODE_DOCUMENTATION.md](docs/CODE_DOCUMENTATION.md) for source comment expectations, and [PROGRESS.md](PROGRESS.md) for the current roadmap.
+
+Branch and contribution flow:
+
+- Normal contributor work targets `develop`.
+- QA batches promote from `develop` to `testing`.
+- Release-ready work promotes from `testing` to `main`.
+- The detailed workflow lives in [docs/BRANCHING.md](docs/BRANCHING.md) and [docs/CONTRIBUTION_PROCESS.md](docs/CONTRIBUTION_PROCESS.md).
 
 ## License
 

@@ -10,7 +10,7 @@ interface AuthPageProps {
   hasAccounts: boolean;
   initialError?: string | null;
   loading?: boolean;
-  onAuthenticated: (session: AuthSession) => void;
+  onAuthenticated: (session: AuthSession) => void | Promise<void>;
 }
 
 export function AuthPage({ hasAccounts, initialError, loading = false, onAuthenticated }: AuthPageProps) {
@@ -56,14 +56,14 @@ export function AuthPage({ hasAccounts, initialError, loading = false, onAuthent
           password,
           username,
         });
-        onAuthenticated(session);
+        await onAuthenticated(session);
       } else {
         validateLogin();
         const session = await loginLocalAccount({
           login,
           password,
         });
-        onAuthenticated(session);
+        await onAuthenticated(session);
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "The local auth request failed.");

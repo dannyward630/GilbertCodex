@@ -97,6 +97,118 @@
   line-height: 1.45;
 }
 
+.app-dialog:has(.bulk-delete-chat-list) {
+  width: min(620px, 100%);
+}
+
+.bulk-delete-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.bulk-delete-toolbar span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.bulk-delete-toolbar button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.bulk-delete-toolbar button:hover:not(:disabled),
+.bulk-delete-toolbar button:focus-visible:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.bulk-delete-chat-list {
+  display: grid;
+  max-height: min(360px, 48vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.bulk-delete-chat-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.bulk-delete-chat-row + .bulk-delete-chat-row {
+  border-top: 1px solid var(--line);
+}
+
+.bulk-delete-chat-row:hover {
+  background: var(--hover);
+}
+
+.bulk-delete-chat-row[data-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.bulk-delete-chat-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--danger);
+}
+
+.bulk-delete-chat-row span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.bulk-delete-chat-row strong,
+.bulk-delete-chat-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-delete-chat-row strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.bulk-delete-chat-row small {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.bulk-delete-chat-row em {
+  color: var(--danger);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.bulk-delete-empty {
+  padding: 18px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
 .dialog-detail-list {
   display: grid;
   gap: 8px;
@@ -196,6 +308,12 @@
 .dialog-button:hover,
 .dialog-button:focus-visible {
   background: var(--surface-raised);
+}
+
+.dialog-button:disabled,
+.bulk-delete-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .dialog-button-primary {

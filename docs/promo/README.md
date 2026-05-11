@@ -22,10 +22,13 @@ npm.cmd run dev -- --host 127.0.0.1 --port 1420
 Then run:
 
 ```powershell
+$env:GILBERT_CODEX_DEMO_WORKSPACE = "C:\Projects\GilbertCodex"
 node docs/promo/capture-readme-assets.mjs
 ```
 
 The capture script seeds a browser-only demo account and writes contributor-safe screenshots under `docs/assets/readme/`.
+Use `GILBERT_CODEX_CAPTURE_URL` to point at a different local dev server and `GILBERT_CODEX_DEMO_WORKSPACE` to control the demo path shown in screenshots.
+Use `GILBERT_CODEX_DEMO_WEB_RESULTS` when the seeded web-search result count needs to mirror a different public demo cap.
 It requires Playwright and a Chromium-based browser in the local tooling environment; they stay out of the production app dependencies.
 
 ## Optional Standalone Video

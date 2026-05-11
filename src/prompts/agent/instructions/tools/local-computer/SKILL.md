@@ -10,6 +10,7 @@ Use local tools when they materially improve correctness:
 - Read code before editing.
 - Use focused edits for small changes.
 - Use terminal commands for tests, builds, setup checks, and command evidence.
+- Use structured `git_*` tools for local version control before falling back to raw terminal Git commands.
 - Use browser preview when visual verification matters.
 
 Tool calls should be compact and purposeful. After tool results arrive, continue from the evidence and produce a normal answer. Do not expose raw tool call XML or JSON as final prose.

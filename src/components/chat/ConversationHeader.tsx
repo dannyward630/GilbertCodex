@@ -22,6 +22,7 @@ interface ConversationHeaderProps {
   browserPreviewEnabled: boolean;
   inspectorAvailable: boolean;
   inspectorOpen: boolean;
+  onOpenSideChat: () => void;
   onToggleBrowserPreview: () => void;
   onToggleInspector: () => void;
   onTogglePin: () => void;
@@ -46,6 +47,7 @@ export function ConversationHeader({
   browserPreviewEnabled,
   inspectorAvailable,
   inspectorOpen,
+  onOpenSideChat,
   onToggleBrowserPreview,
   onToggleInspector,
   onTogglePin,
@@ -97,6 +99,7 @@ export function ConversationHeader({
     {
       icon: MessageCirclePlus,
       label: "Open side chat",
+      onSelect: onOpenSideChat,
       separatorBefore: true,
     },
     {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Info, Trash2 } from "lucide-react";
 import { AuthPage } from "../pages/AuthPage";
-import { ConfirmDialog, NoticeDialog } from "../components/dialogs/AppDialog";
+import { ConfirmDialog, DialogShell, NoticeDialog } from "../components/dialogs/AppDialog";
 import { AppShell } from "../components/layout/AppShell";
 import { ChatPage } from "../pages/ChatPage";
 import { SettingsPage } from "../pages/settings/SettingsPage";
@@ -23,6 +23,7 @@ import {
   saveLocalWorkspaceSettings,
   saveProjects,
   saveProviderSettings,
+  initializeDeviceStorage,
   setStorageNamespace,
 } from "../lib/appStorage";
 import {
@@ -30,6 +31,7 @@ import {
   createId,
   createMessage,
   DEFAULT_PROJECT,
+  formatChatAge,
   isNoProjectName,
   normalizeProjectName,
   sortChatsByUpdatedAt,
@@ -169,6 +171,9 @@ interface DiscordStreamUpdate {
   toolCall?: ChatToolCall;
 }
 
+type SessionApprovalDecisionMap = Record<string, AgentApprovalDecision>;
+type SessionApprovalDecisionsByWorkspace = Record<string, SessionApprovalDecisionMap>;
+
 const MAX_PLANNING_INPUT_ROUNDS = 3;
 const PINNED_MODEL_IDS = CHAT_MODEL_OPTIONS.map((option) => option.value);
 const LOCAL_TOOL_FINAL_MIN_TOKENS = 4096;
@@ -216,6 +221,16 @@ function isCleanNoProjectWorkspace(settings: LocalWorkspaceSettings) {
   );
 }
 
+function createApprovalWorkspaceSessionKey(settings: LocalWorkspaceSettings) {
+  const roots = settings.roots.map((root) => root.trim().replace(/[\\/]+$/, "")).filter(Boolean).sort();
+
+  return JSON.stringify({
+    enabled: settings.enabled,
+    roots,
+    scope: settings.scope,
+  });
+}
+
 function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, settings: ProviderSettings, isDiscordRequest: boolean) {
   if (input.webSearch?.enabled) {
     return true;
@@ -256,6 +271,90 @@ function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSe
   ];
 }
 
+interface BulkDeleteChatsDialogProps {
+  chats: ChatSummary[];
+  onClearSelection: () => void;
+  onClose: () => void;
+  onConfirm: () => void;
+  onSelectAll: () => void;
+  onToggleChat: (chatId: string) => void;
+  open: boolean;
+  selectedChatIds: string[];
+  sendingChatId: string | null;
+}
+
+function BulkDeleteChatsDialog({
+  chats,
+  onClearSelection,
+  onClose,
+  onConfirm,
+  onSelectAll,
+  onToggleChat,
+  open,
+  selectedChatIds,
+  sendingChatId,
+}: BulkDeleteChatsDialogProps) {
+  const visibleChats = sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived));
+  const selectedIds = new Set(selectedChatIds);
+  const selectableCount = visibleChats.filter((chat) => chat.id !== sendingChatId).length;
+  const selectedCount = visibleChats.filter((chat) => selectedIds.has(chat.id) && chat.id !== sendingChatId).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
+
+  return (
+    <DialogShell
+      description="Select multiple chats and delete them together from local history."
+      icon={Trash2}
+      onClose={onClose}
+      open={open}
+      title="Delete chats"
+      tone="danger"
+      actions={
+        <>
+          <button className="dialog-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="dialog-button dialog-button-primary" data-tone="danger" type="button" disabled={selectedCount === 0} onClick={onConfirm}>
+            {selectedCount === 1 ? "Delete 1 chat" : `Delete ${selectedCount} chats`}
+          </button>
+        </>
+      }
+    >
+      <div className="bulk-delete-toolbar">
+        <span>
+          {selectedCount} of {selectableCount} selected
+        </span>
+        <button type="button" disabled={selectableCount === 0} onClick={allSelected ? onClearSelection : onSelectAll}>
+          {allSelected ? "Clear" : "Select all"}
+        </button>
+      </div>
+      <div className="bulk-delete-chat-list" role="list" aria-label="Chats to delete">
+        {visibleChats.length > 0 ? (
+          visibleChats.map((chat) => {
+            const disabled = chat.id === sendingChatId;
+            const selected = selectedIds.has(chat.id) && !disabled;
+            const projectName = normalizeProjectName(chat.project);
+
+            return (
+              <label className="bulk-delete-chat-row" data-disabled={disabled} key={chat.id}>
+                <input type="checkbox" checked={selected} disabled={disabled} onChange={() => onToggleChat(chat.id)} />
+                <span>
+                  <strong>{chat.title}</strong>
+                  <small>
+                    {projectName} - {chat.messages.length} {chat.messages.length === 1 ? "message" : "messages"} - {formatChatAge(chat.updatedAt)}
+                  </small>
+                </span>
+                {disabled ? <em>Responding</em> : null}
+              </label>
+            );
+          })
+        ) : (
+          <div className="bulk-delete-empty">There are no chats to delete.</div>
+        )}
+      </div>
+    </DialogShell>
+  );
+}
+
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -265,32 +364,39 @@ export function App() {
   useEffect(() => {
     let mounted = true;
 
-    void getAuthState()
-      .then((state) => {
+    async function loadLocalSession() {
+      try {
+        const state = await getAuthState();
+
         if (!mounted) {
           return;
         }
 
         if (state.session) {
-          setStorageNamespace(state.session.user.id);
+          await initializeDeviceStorage(state.session.user.id);
+        }
+
+        if (!mounted) {
+          return;
         }
 
         setAuthSession(state.session);
         setAuthHasAccounts(state.hasAccounts);
         setAuthError(null);
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!mounted) {
           return;
         }
 
         setAuthError(error instanceof Error ? error.message : "Local auth is not available yet.");
-      })
-      .finally(() => {
+      } finally {
         if (mounted) {
           setAuthLoading(false);
         }
-      });
+      }
+    }
+
+    void loadLocalSession();
 
     return () => {
       mounted = false;
@@ -310,11 +416,19 @@ export function App() {
         hasAccounts={authHasAccounts}
         initialError={authError}
         loading={authLoading}
-        onAuthenticated={(session) => {
-          setStorageNamespace(session.user.id);
-          setAuthSession(session);
-          setAuthHasAccounts(true);
-          setAuthError(null);
+        onAuthenticated={async (session) => {
+          setAuthLoading(true);
+          try {
+            await initializeDeviceStorage(session.user.id);
+            setAuthSession(session);
+            setAuthHasAccounts(true);
+            setAuthError(null);
+          } catch (error) {
+            setAuthError(error instanceof Error ? error.message : "The local database is not available yet.");
+            throw error;
+          } finally {
+            setAuthLoading(false);
+          }
         }}
       />
     );
@@ -339,9 +453,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadAppearanceMode());
   const [appInfo, setAppInfo] = useState<AppInfo>({
     name: "Gilbert Codex",
-    phase: "Local workspace",
+    phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.1.0",
+    version: "0.0.2",
   });
   const [sendingChatId, setSendingChatId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -354,6 +468,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [noticeDialog, setNoticeDialog] = useState<{ description?: string; title: string } | null>(null);
   const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
   const [pendingDeleteProjectName, setPendingDeleteProjectName] = useState<string | null>(null);
+  const [bulkDeleteChatsOpen, setBulkDeleteChatsOpen] = useState(false);
+  const [bulkDeleteChatIds, setBulkDeleteChatIds] = useState<string[]>([]);
   const [composerDraftToRestore, setComposerDraftToRestore] = useState<ChatComposerDraft | null>(null);
   const [contextWindow, setContextWindow] = useState<{ source: "estimate" | "openrouter" | "provider"; tokens: number }>(() => ({
     source: "estimate",
@@ -379,6 +495,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const agentRunsRef = useRef<AgentRun[]>([]);
   const queuedChatSendsRef = useRef<QueuedChatSend[]>([]);
   const queuedStarterRef = useRef<string | null>(null);
+  const sessionApprovalDecisionsRef = useRef<SessionApprovalDecisionsByWorkspace>({});
   const sendingRequestRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -963,8 +1080,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function handleNewChat(project = DEFAULT_PROJECT) {
-    const projectName = normalizeProjectName(project);
+  function handleNewChat(project?: string) {
+    const projectName = normalizeProjectName(project ?? activeChat.project);
     const nextChat = createEmptyChat(projectName);
 
     restoreProjectLocalWorkspace(projectName);
@@ -1399,6 +1516,28 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setPendingDeleteProjectName(projectToDelete.name);
   }
 
+  function handleOpenBulkDeleteChats() {
+    setBulkDeleteChatIds([]);
+    setBulkDeleteChatsOpen(true);
+    setSearchOpen(false);
+  }
+
+  function handleToggleBulkDeleteChat(chatId: string) {
+    if (chatId === sendingChatId) {
+      return;
+    }
+
+    setBulkDeleteChatIds((currentIds) => (currentIds.includes(chatId) ? currentIds.filter((id) => id !== chatId) : [...currentIds, chatId]));
+  }
+
+  function handleSelectAllBulkDeleteChats() {
+    setBulkDeleteChatIds(sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived && chat.id !== sendingChatId)).map((chat) => chat.id));
+  }
+
+  function handleClearBulkDeleteChats() {
+    setBulkDeleteChatIds([]);
+  }
+
   function confirmDeleteChat() {
     const chatToDelete = chats.find((chat) => chat.id === pendingDeleteChatId);
 
@@ -1481,6 +1620,47 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     if (activeChatWasDeleted) {
       setActiveRoute("chat");
     }
+  }
+
+  function confirmBulkDeleteChats() {
+    const selectedIds = new Set(bulkDeleteChatIds);
+
+    if (selectedIds.size === 0) {
+      return;
+    }
+
+    if (sendingChatId && selectedIds.has(sendingChatId)) {
+      setNoticeDialog({
+        description: "Wait for the current response to finish, then include that chat in a bulk delete.",
+        title: "A selected chat is still responding",
+      });
+      setBulkDeleteChatIds((currentIds) => currentIds.filter((id) => id !== sendingChatId));
+      return;
+    }
+
+    let nextChats = sortChatsByUpdatedAt(chats.filter((chat) => !selectedIds.has(chat.id)));
+
+    if (!nextChats.some((chat) => !chat.archived)) {
+      nextChats = [createEmptyChat(DEFAULT_PROJECT)];
+    }
+
+    if (!nextChats.some((chat) => chat.id === activeChatId && !chat.archived)) {
+      const nextActiveChat = nextChats.find((chat) => !chat.archived) ?? createEmptyChat(DEFAULT_PROJECT);
+
+      if (!nextChats.some((chat) => chat.id === nextActiveChat.id)) {
+        nextChats = sortChatsByUpdatedAt([nextActiveChat, ...nextChats]);
+      }
+
+      setActiveChatId(nextActiveChat.id);
+      setActiveRoute("chat");
+    }
+
+    pendingChatsRef.current = nextChats;
+    setChats(nextChats);
+    updateQueuedChatSends((currentQueue) => currentQueue.filter((queuedSend) => !selectedIds.has(queuedSend.chatId)));
+    setBulkDeleteChatsOpen(false);
+    setBulkDeleteChatIds([]);
+    setSearchOpen(false);
   }
 
   function createActiveGeneration(previousChat: ChatSummary, previousChatExisted: boolean, restoreDraft?: ChatComposerDraft) {
@@ -2207,6 +2387,41 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     });
   }
 
+  function rememberSessionApprovalDecision(approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings) {
+    if (decision.scope !== "session" || decision.status === "denied" || approval.tool === "planning_handoff") {
+      return;
+    }
+
+    const workspaceKey = createApprovalWorkspaceSessionKey(workspaceSettings);
+    const workspaceDecisions = sessionApprovalDecisionsRef.current[workspaceKey] ?? {};
+
+    sessionApprovalDecisionsRef.current = {
+      ...sessionApprovalDecisionsRef.current,
+      [workspaceKey]: {
+        ...workspaceDecisions,
+        [approval.id]: {
+          editedArgs: decision.editedArgs,
+          note: decision.note,
+          scope: "session",
+          status: decision.status,
+        },
+      },
+    };
+  }
+
+  function createRuntimeApprovalDecisions(workspaceSettings: LocalWorkspaceSettings, approvalDecisions?: Record<string, AgentApprovalDecision>) {
+    const sessionDecisions = sessionApprovalDecisionsRef.current[createApprovalWorkspaceSessionKey(workspaceSettings)] ?? {};
+
+    if (Object.keys(sessionDecisions).length === 0) {
+      return approvalDecisions;
+    }
+
+    return {
+      ...sessionDecisions,
+      ...(approvalDecisions ?? {}),
+    };
+  }
+
   function getRuntimeWebSearchMaxResults(settings: ProviderSettings, requestedMaxResults?: number) {
     const requested = requestedMaxResults ?? settings.webSearch.maxResults;
     const deepMinimum = isDeepResearchThinking(createToolAwareProviderSettings(settings).thinking) ? MAX_WEB_SEARCH_RESULTS : requested;
@@ -2266,6 +2481,80 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : MAX_LOCAL_TOOL_PASSES;
     const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : MAX_LOCAL_TOOL_EXECUTIONS;
 
+    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
+      if (allToolCalls.length === 0 || isRequestInactive(requestId, controller)) {
+        return null;
+      }
+
+      const activeProgress = createLocalComputerProgress("active", "Writing final answer from gathered tool results");
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        content: "",
+        progress: withLocalComputerProgress(activeProgress, message.progress),
+        toolCalls: allToolCalls,
+      }));
+      onExternalUpdate?.({
+        progress: activeProgress,
+        status: "Writing final answer from gathered tool results...",
+      });
+
+      const baseSynthesisSettings = createFinalOnlyProviderSettings();
+      const synthesisSettings = createEmptyResponseRetrySettings({
+        ...baseSynthesisSettings,
+        maxTokens: Math.max(baseSynthesisSettings.maxTokens, deepResearch ? DEEP_RESEARCH_MIN_TOKENS : LOCAL_TOOL_FINAL_MIN_TOKENS),
+        temperature: Math.min(baseSynthesisSettings.temperature, 0.25),
+      });
+      const synthesisInstruction = createLocalToolBudgetFinalInstruction(
+        prompt,
+        [
+          `The app already gathered ${totalExecutedToolCalls} local tool result${totalExecutedToolCalls === 1 ? "" : "s"}.`,
+          detail,
+          "Tools are disabled for this synthesis pass. Use the saved tool outputs above and write the visible final answer now.",
+        ].join("\n"),
+      );
+      const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings);
+
+      if (synthesisCompaction.contextCompaction) {
+        const compactionProgress = createContextCompactionProgress(synthesisCompaction);
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...withContextCompactionMarker(message, synthesisCompaction.contextCompaction),
+          progress: withContextCompactionProgress(compactionProgress, message.progress),
+        }));
+      }
+
+      try {
+        recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings);
+        const response = await sendProviderMessage(synthesisSettings, synthesisCompaction.messages, {
+          signal: controller.signal,
+        });
+        recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage);
+
+        if (isRequestInactive(requestId, controller)) {
+          return null;
+        }
+
+        const content = sanitizeLocalToolCallsForDisplay(response.content, toolExecutionPolicy).trim();
+
+        if (!content || looksLikeOnlyToolPrelude(content)) {
+          return null;
+        }
+
+        return {
+          content,
+          progress: localProgress,
+          reasoning: response.reasoning ?? fallbackReasoning,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+        };
+      } catch (error) {
+        if (isAbortError(error) || isRequestInactive(requestId, controller)) {
+          throw error;
+        }
+
+        return null;
+      }
+    }
+
     if (resumeToolCallContent) {
       const activeProgress = createLocalComputerProgress("active", "Resuming approved tool action");
       const activeToolCalls = createActiveLocalToolCalls(resumeToolCallContent, passIndex, toolExecutionPolicy);
@@ -2284,7 +2573,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions,
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: resumeToolCallContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
@@ -2426,6 +2715,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           throw error;
         }
 
+        const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+          messages,
+          "The streaming final response failed after the app gathered tool results.",
+        );
+
+        if (synthesizedResponse) {
+          return synthesizedResponse;
+        }
+
         return {
           content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
           progress: localProgress,
@@ -2479,6 +2777,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           continue;
         }
 
+        const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+          [...messages, createMessage("assistant", assistantResponse.content)],
+          "The model requested more tools after the configured tool budget. Synthesize from the saved results instead of asking for more tools.",
+          assistantResponse.reasoning,
+        );
+
+        if (synthesizedResponse) {
+          return synthesizedResponse;
+        }
+
         return {
           content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
           progress: localProgress,
@@ -2492,6 +2800,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           finalizationRetries += 1;
 
           if (finalizationRetries > MAX_TOOL_FINALIZATION_RETRIES) {
+            const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+              [...messages, createMessage("assistant", assistantResponse.content)],
+              "The previous finalization attempt was only a tool prelude. Write the actual answer from the completed tool evidence.",
+              assistantResponse.reasoning,
+            );
+
+            if (synthesizedResponse) {
+              return synthesizedResponse;
+            }
+
             return {
               content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
               progress: localProgress,
@@ -2538,7 +2856,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions,
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: assistantResponse.content,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
@@ -2629,6 +2947,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ];
           passIndex += 1;
           continue;
+        }
+
+        const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+          [...messages, createMessage("assistant", assistantResponse.content)],
+          "The previous assistant output looked like an unreadable tool request. Write the final answer from the completed tool evidence.",
+          assistantResponse.reasoning,
+        );
+
+        if (synthesizedResponse) {
+          return synthesizedResponse;
         }
 
         return {
@@ -3793,11 +4121,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const resolvedApproval: AgentApproval = {
       ...approval,
       editedArgs: decision.editedArgs,
-      resolutionNote: decision.note,
+      resolutionNote: decision.note ?? (decision.scope === "session" ? "Allowed for this app session." : undefined),
       resolvedAt,
       status: decision.status,
     };
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, run?.localWorkspace ?? localWorkspaceRef.current);
+    rememberSessionApprovalDecision(approval, decision, workspaceSettings);
     const prompt = run?.prompt ?? getLatestUserPrompt(currentChat.messages.slice(0, assistantMessageIndex));
     const { controller, requestId } = createActiveGeneration(currentChat, true);
 
@@ -3858,7 +4187,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ...existingRun.events,
         {
           at: now,
-          detail: decision.status === "denied" ? "The user denied the pending tool action." : "The user approved the pending tool action.",
+          detail: decision.status === "denied"
+            ? "The user denied the pending tool action."
+            : decision.scope === "session"
+              ? "The user approved this exact tool action for the current app session."
+              : "The user approved the pending tool action.",
           id: createId("agent-event"),
           label: "Approval resolved",
           type: "resume",
@@ -5086,6 +5419,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           chats={chats}
           localWorkspace={localWorkspace}
           toolSettings={toolSettings}
+          webSearchSettings={providerSettings.webSearch}
           onOpenChat={(chatId) => {
             setActiveChatId(chatId);
             setActiveRoute("chat");
@@ -5130,7 +5464,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         contextWindowSource={contextWindow.source}
         contextWindowTokens={contextWindow.tokens}
         hasApiKey={!getModelProvider(providerSettings.provider).requiresApiKey || Boolean(getProviderApiKey(providerSettings).trim())}
-        isSending={Boolean(sendingChatId)}
+        isSending={sendingChatId === activeChat.id}
         lastContextCompaction={lastContextCompaction?.chatId === activeChat.id && lastContextCompaction.contextWindowTokens === contextWindow.tokens ? lastContextCompaction : null}
         localWorkspace={localWorkspace}
         model={providerSettings.model}
@@ -5170,6 +5504,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         webSearch={providerSettings.webSearch}
         onTogglePin={() => activeChat && handleTogglePin(activeChat.id)}
         onToggleTerminal={handleToggleTerminal}
+        onOpenSideChat={() => handleNewChat(activeChat.project)}
         terminalEnabled={toolSettings.terminal}
         terminalOpen={terminalOpen}
       />
@@ -5200,6 +5535,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
         onNewChat={handleNewChat}
+        onOpenBulkDeleteChats={handleOpenBulkDeleteChats}
         onOpenSearch={() => setSearchOpen(true)}
         onLogout={onLogout}
         onRouteChange={setActiveRoute}
@@ -5227,6 +5563,21 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ) : null}
         </div>
       </AppShell>
+
+      <BulkDeleteChatsDialog
+        chats={chats}
+        open={bulkDeleteChatsOpen}
+        selectedChatIds={bulkDeleteChatIds}
+        sendingChatId={sendingChatId}
+        onClearSelection={handleClearBulkDeleteChats}
+        onClose={() => {
+          setBulkDeleteChatsOpen(false);
+          setBulkDeleteChatIds([]);
+        }}
+        onConfirm={confirmBulkDeleteChats}
+        onSelectAll={handleSelectAllBulkDeleteChats}
+        onToggleChat={handleToggleBulkDeleteChat}
+      />
 
       <ConfirmDialog
         confirmLabel="Delete chat"

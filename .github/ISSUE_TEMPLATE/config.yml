@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/UrbanWafflezz/GilbertCodex/security/policy
+    about: Report vulnerabilities or sensitive local-data issues privately.
+  - name: Contribution guide
+    url: https://github.com/UrbanWafflezz/GilbertCodex/blob/main/CONTRIBUTING.md
+    about: Read setup, branch, and pull request expectations before contributing.

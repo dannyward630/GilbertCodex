@@ -1,4 +1,4 @@
-import { Ban, Check, ChevronDown, ChevronRight, Circle, CircleCheck, FileCode2, FileText, Globe2, Image, LoaderCircle, PencilLine, Pin, SendHorizontal, Sparkles, TerminalSquare, X } from "lucide-react";
+import { Ban, Check, ChevronDown, ChevronRight, Circle, CircleCheck, FileCode2, FileText, Globe2, Image, LoaderCircle, Pin, SendHorizontal, Sparkles, TerminalSquare, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { terminalShellLabel } from "../../lib/terminalShells";
@@ -215,39 +215,6 @@ function ApprovalPanel({
   approvals: AgentApproval[];
   onResolve: (approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
 }) {
-  const [editedArgsById, setEditedArgsById] = useState<Record<string, string>>(() =>
-    approvals.reduce<Record<string, string>>((drafts, approval) => {
-      drafts[approval.id] = JSON.stringify(approval.args ?? {}, null, 2);
-      return drafts;
-    }, {}),
-  );
-  const [errorById, setErrorById] = useState<Record<string, string>>({});
-
-  function updateEditedArgs(approvalId: string, value: string) {
-    setEditedArgsById((drafts) => ({ ...drafts, [approvalId]: value }));
-    setErrorById((errors) => ({ ...errors, [approvalId]: "" }));
-  }
-
-  async function approveEdited(approval: AgentApproval) {
-    try {
-      const parsedArgs = JSON.parse(editedArgsById[approval.id] ?? "{}");
-
-      if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
-        throw new Error("Edited arguments must be a JSON object.");
-      }
-
-      await onResolve(approval.id, {
-        editedArgs: parsedArgs,
-        status: "edited",
-      });
-    } catch (error) {
-      setErrorById((errors) => ({
-        ...errors,
-        [approval.id]: error instanceof Error ? error.message : "Edited arguments must be valid JSON.",
-      }));
-    }
-  }
-
   return (
     <div className="approval-list" aria-label="Pending approvals">
       <h4>
@@ -264,25 +231,22 @@ function ApprovalPanel({
             <b>{approval.risk}</b>
           </div>
           {approval.preview ? <pre>{limitActivityText(approval.preview, 1600)}</pre> : null}
-          <label className="approval-edit-label" htmlFor={`approval-edit-${approval.id}`}>
-            Edit arguments
-          </label>
-          <textarea
-            id={`approval-edit-${approval.id}`}
-            value={editedArgsById[approval.id] ?? "{}"}
-            spellCheck={false}
-            onChange={(event) => updateEditedArgs(approval.id, event.currentTarget.value)}
-          />
-          {errorById[approval.id] ? <p className="approval-error">{errorById[approval.id]}</p> : null}
           <div className="approval-actions">
             <button type="button" onClick={() => onResolve(approval.id, { status: "approved" })}>
               <Check size={14} aria-hidden="true" />
               <span>Allow</span>
             </button>
-            <button type="button" onClick={() => approveEdited(approval)}>
-              <PencilLine size={14} aria-hidden="true" />
-              <span>Approve edited</span>
-            </button>
+            {approval.tool !== "planning_handoff" ? (
+              <button
+                type="button"
+                data-variant="session"
+                title="Allow this exact action for this app session"
+                onClick={() => onResolve(approval.id, { scope: "session", status: "approved" })}
+              >
+                <Pin size={14} aria-hidden="true" />
+                <span>Allow session</span>
+              </button>
+            ) : null}
             <button type="button" onClick={() => onResolve(approval.id, { status: "denied" })}>
               <Ban size={14} aria-hidden="true" />
               <span>Deny</span>
@@ -735,8 +699,10 @@ function RailSection({ items, title }: RailSectionProps) {
     return null;
   }
 
+  const sectionKey = title.toLowerCase();
+
   return (
-    <section className="rail-card rail-card-compact">
+    <section className="rail-card rail-card-compact" data-section={sectionKey}>
       <div className="rail-heading">
         <h2>{title}</h2>
       </div>

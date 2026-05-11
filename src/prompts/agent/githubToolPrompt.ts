@@ -3,6 +3,7 @@ export type GithubPromptIntent =
   | "repository_inventory"
   | "repository_inspection"
   | "repository_mutation"
+  | "release_or_workflow"
   | "branch_or_history"
   | "pull_request"
   | "status";
@@ -16,6 +17,7 @@ export interface GithubPromptAnalysis {
   shouldSkipLocalWorkspaceContext: boolean;
 }
 
+/** Minimal state needed to add GitHub routing hints to the active prompt. */
 export interface GithubRoutingContextInput {
   connected: boolean;
   connectedAccount: string;
@@ -62,6 +64,7 @@ const REPO_HINT_STOP_WORDS = new Set([
   "with",
 ]);
 
+/** Classifies whether a user request should route through GitHub API tools. */
 export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
   const normalized = prompt.toLowerCase();
   const ownerRepoHint = extractOwnerRepoHint(prompt);
@@ -75,13 +78,16 @@ export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
     && /\b(github|git|oauth|token)\b/i.test(prompt);
   const asksPullRequest = /\b(pull\s+request|prs?\b|review|merge)\b/i.test(prompt);
   const asksMutation = /\b(commit|push|write|edit|change|modify|update|delete|create\s+branch|branch\s+off|open\s+pr|pull\s+request)\b/i.test(prompt);
-  const asksBranchOrHistory = /\b(branches?|commits?|history|tags?|releases?)\b/i.test(prompt);
+  const asksReleaseOrWorkflow = /\b(releases?|release\s+notes?|changelog|workflows?|actions?|workflow_dispatch|ci|builds?)\b/i.test(prompt);
+  const asksBranchOrHistory = /\b(branches?|commits?|history|tags?)\b/i.test(prompt);
   const asksInspection = /\b(look\s+at|check\s+out|inspect|deep\s+dive|code\s*base|codebase|what\s+is|what's|tell\s+me\s+about|read|files?|tree|structure|stack|app|application|project)\b/i.test(prompt);
   let intent: GithubPromptIntent = "none";
 
   if (mentionsGithub) {
     if (asksPullRequest) {
       intent = "pull_request";
+    } else if (asksReleaseOrWorkflow) {
+      intent = "release_or_workflow";
     } else if (asksMutation) {
       intent = "repository_mutation";
     } else if (asksBranchOrHistory) {
@@ -107,14 +113,15 @@ export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
   };
 }
 
+/** Detects GitHub/source-control wording without requiring a repository name. */
 export function isGithubSourceControlPrompt(prompt: string) {
   const normalized = prompt.toLowerCase();
 
-  if (/\bgithub\b|\bsource\s+control\b|\bpull\s+request\b|\bprs?\b/.test(normalized)) {
+  if (/\bgithub\b|\bsource\s+control\b|\bpull\s+request\b|\bprs?\b|\bgithub\s+actions?\b/.test(normalized)) {
     return true;
   }
 
-  if (/\bgit\b/.test(normalized) && /\b(repos?|repositories|branches?|commits?|push|pull|clone|remote|status|oauth|token)\b/.test(normalized)) {
+  if (/\bgit\b/.test(normalized) && /\b(repos?|repositories|branches?|commits?|push|pull|clone|remote|status|oauth|token|releases?|workflows?|actions?)\b/.test(normalized)) {
     return true;
   }
 
@@ -122,9 +129,10 @@ export function isGithubSourceControlPrompt(prompt: string) {
     return true;
   }
 
-  return /\b(branches?|commits?|push|pull|merge)\b/.test(normalized) && /\b(repos?|repositories|github|git|remote)\b/.test(normalized);
+  return /\b(branches?|commits?|push|pull|merge|releases?|workflows?|actions?)\b/.test(normalized) && /\b(repos?|repositories|github|git|remote)\b/.test(normalized);
 }
 
+/** Builds model-facing instructions for GitHub tool selection and answer shape. */
 export function createGithubRuntimeToolInstructions(prompt: string) {
   const analysis = analyzeGithubPrompt(prompt);
   const hint = analysis.ownerRepoHint
@@ -140,6 +148,7 @@ export function createGithubRuntimeToolInstructions(prompt: string) {
     "For a named repository, call github_get_repository, github_list_branches, github_list_tree, github_read_file, or github_search_code with repository=owner/repo when known. If only the repo name is known, pass repo=<name> so the GitHub tool can infer the owner from the connected account.",
     "For codebase deep dives, first call github_list_tree with recursive=true and a useful limit, then read concrete evidence with github_read_file such as README files, package manifests, config files, and entry points. Use github_search_code when the tree does not reveal enough. Synthesize only after those tool results arrive.",
     "For GitHub mutations, create an isolated branch with github_create_branch when appropriate, commit through github_commit_files, and open draft PRs with github_create_pull_request. Ask for missing repo, branch, or file details instead of guessing destructive changes.",
+    "For GitHub releases, use github_generate_release_notes before github_create_release when the user wants release notes. github_create_release defaults to a draft release unless draft=false is explicitly requested. For GitHub Actions, use github_list_workflows, github_dispatch_workflow, and github_list_workflow_runs.",
     "Use local computer tools only when the user explicitly asks for local workspace files, a local clone, this app/current project, or after GitHub results show local evidence is needed.",
     "GitHub answer format: use normal Markdown bullets, numbered lists, headings, and links. Avoid Markdown pipe tables for repository inventories unless the user explicitly asks for a table.",
     hint,
@@ -147,6 +156,7 @@ export function createGithubRuntimeToolInstructions(prompt: string) {
   ].filter(Boolean).join("\n");
 }
 
+/** Builds the compact context inserted when GitHub routing is strongly indicated. */
 export function createGithubRoutingContext(input: GithubRoutingContextInput) {
   const analysis = analyzeGithubPrompt(input.prompt);
   const hint = analysis.ownerRepoHint

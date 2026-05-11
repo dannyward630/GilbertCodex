@@ -1,6 +1,6 @@
 [package]
 name = "gilbert-codex"
-version = "0.0.1-alpha"
+version = "0.0.2"
 description = "GUI-first local agent workspace."
 authors = ["Gilbert Codex Contributors"]
 edition = "2021"
@@ -18,8 +18,10 @@ base64 = "0.22"
 ed25519-dalek = "2"
 reqwest = { version = "0.13.3", features = ["json"] }
 rfd = "0.15"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-updater = "2"
 uuid = { version = "1", features = ["v4"] }

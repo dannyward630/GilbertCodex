@@ -17,21 +17,23 @@ Delivered:
 - Markdown assistant rendering with GitHub-flavored markdown support.
 - File and image attachment flow with local previews, attachment status, and image-capable model routing.
 - Web search path backed by DuckDuckGo context and source cards.
-- GitHub source-control path with Settings browser login, repository listing, branch/tree/file reads, code search, branch creation, API-backed commits, and draft pull requests without local Git.
+- Source-control path with local Git status, diff, log, stage, unstage, commit, push, pull, fetch, branch, and switch tools, plus GitHub Settings browser login, repository listing, branch/tree/file reads, code search, branch creation, API-backed commits, draft pull requests, releases, release notes, and workflow runs.
 - Discord slash-command bridge setup and runtime with chat-mode selection, Discord application fields, signed interaction receiver, ngrok-backed public URL discovery, incoming channel webhook storage, GitHub-to-Discord event options, generated GitHub payload URL, and setup checklist copying.
 - Local computer workspace context with folder selection, browser folder fallback, file indexing, file search, read, and write helpers.
 - Typed file creation tools for TXT, Markdown, code, React, HTML, PDF, notes, duplicate-safe writes, delete-file safety, and multi-file batches.
 - Coding tool pack for chat PDF generation, inline edits, vectors, tests, TypeScript checks, SQL files, React Native screens, unit tests, API routes, dependency reports, and codebase health scans.
 - Terminal panel for desktop PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
-- Toolbox feature toggles for provider, planning, thinking, web search, GitHub source control, local computer, terminal, browser preview, and future tools.
+- Toolbox feature toggles for provider, planning, thinking, web search, local Git/GitHub source control, local computer, terminal, browser preview, and future tools.
 - Confirmation dialogs for destructive chat deletion and settings reset flows.
 - Right-side activity rail for reasoning, tool calls, sources, and thinking-state visibility.
 - Browser preview panel with local URL detection, resize controls, expanded mode, and keyboard resizing.
 - Settings page for appearance, provider configuration, GitHub account connection, Discord bridge setup, model, generation, thinking, and web-search controls.
 - Tauri security hardening with a configured CSP and least-privilege notification permissions.
 - Rust host commands for auth, app info, computer files, Discord interactions, GitHub API operations, terminal, and web search.
+- Source documentation standards plus JSDoc/Rust doc coverage for key runtime, tool, GitHub, web-search, and workspace APIs.
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.
+- Version 0.0.2 release prep for local Git review UX, broader GitHub release/workflow tooling, update checks, contributor infrastructure, and refreshed README media.
 - macOS/Linux port groundwork documented in `docs/platform/README.md`, with native verification still outstanding.
 
 ## UI Completed So Far

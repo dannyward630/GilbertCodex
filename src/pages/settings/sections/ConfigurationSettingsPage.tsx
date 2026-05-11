@@ -82,14 +82,14 @@ export function ConfigurationSettingsPage({
             <Settings2 size={19} aria-hidden="true" />
             <div>
               <h2>Approval policy</h2>
-              <p>Choose when Gilbert asks for approval.</p>
+              <p>Choose whether Gilbert pauses before workspace actions.</p>
             </div>
           </div>
           <div className="settings-segmented-control" role="radiogroup" aria-label="Approval policy">
             {[
-              { id: "on-request", label: "On request" },
-              { id: "untrusted", label: "Untrusted only" },
-              { id: "never", label: "Never" },
+              { id: "never", label: "Auto approve" },
+              { id: "on-request", label: "Ask first" },
+              { id: "untrusted", label: "Read only" },
             ].map((option) => (
               <button
                 key={option.id}
@@ -110,7 +110,7 @@ export function ConfigurationSettingsPage({
             <Wrench size={19} aria-hidden="true" />
             <div>
               <h2>Sandbox settings</h2>
-              <p>Choose how much Gilbert can do when running commands.</p>
+              <p>Choose which local roots Gilbert can use.</p>
             </div>
           </div>
           <div className="settings-segmented-control" role="radiogroup" aria-label="Sandbox settings">
@@ -147,7 +147,7 @@ export function ConfigurationSettingsPage({
           <div className="settings-row-list">
             <div className="settings-row">
               <span>Current version</span>
-              <strong>{dependencyDiagnostic?.version ?? "26.430.10722"}</strong>
+              <strong>{dependencyDiagnostic?.version ?? "Unknown"}</strong>
             </div>
             <div className="settings-row">
               <span>Codex dependencies</span>

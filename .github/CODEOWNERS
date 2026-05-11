@@ -1,0 +1,18 @@
+# Default owner for the current maintainer phase. Split these into teams as the project grows.
+* @UrbanWafflezz
+
+# Repository governance and contribution workflow.
+/.github/ @UrbanWafflezz
+/CONTRIBUTING.md @UrbanWafflezz
+/SECURITY.md @UrbanWafflezz
+/docs/BRANCHING.md @UrbanWafflezz
+/docs/CONTRIBUTION_PROCESS.md @UrbanWafflezz
+/docs/OPEN_SOURCE_CHECKLIST.md @UrbanWafflezz
+
+# Security-sensitive runtime surfaces.
+/src-tauri/ @UrbanWafflezz
+/src/app/ @UrbanWafflezz
+/src/prompts/ @UrbanWafflezz
+/src/tools/ @UrbanWafflezz
+/src/services/openRouterClient.ts @UrbanWafflezz
+/src/services/webSearchClient.ts @UrbanWafflezz

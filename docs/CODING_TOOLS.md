@@ -40,6 +40,24 @@ Edit and write results can include quality warnings for suspicious content, incl
 
 Before adding or changing an AI model ID, use `web_search` for official provider docs and prefer live provider `/models` data when available. OpenRouter model selection now loads its catalog from `https://openrouter.ai/api/v1/models` so model names, context windows, supported parameters, and expired endpoints are not guessed from stale memory.
 
+## Local Git Source Control
+
+Local Git tools run real `git` commands in the selected workspace clone through the same desktop command layer that powers terminal execution. Use these when the user means the current local project, local uncommitted changes, local branches, commits, or pushing the current checkout.
+
+- `git_status`: shows branch, upstream, staged, unstaged, and untracked state.
+- `git_diff`: shows `git diff --stat --patch`; use `staged=true` for staged changes or `stat=true` for summary only.
+- `git_log`: shows recent commits with `limit`.
+- `git_stage`: stages `paths`, `paths_json`, or `all=true`.
+- `git_unstage`: unstages `paths`, `paths_json`, or `all=true`.
+- `git_commit`: commits staged changes with `message`.
+- `git_push`: pushes to `remote` and optional `branch`; supports `set_upstream=true` and `force_with_lease=true`.
+- `git_pull`: pulls from `remote` and optional `branch`; supports `rebase=true`.
+- `git_fetch`: fetches from `remote`, with `prune=true` by default.
+- `git_branch`: lists branches, creates `new_branch` from optional `base`, or deletes `delete_branch`.
+- `git_checkout`: switches branches using `git switch`; use `create=true` to create and switch.
+
+Mutating local Git tools are approval-gated in Ask First and Gilbert Review modes, and run without approval prompts in Auto Full mode. Prefer `git_status` and `git_diff` before staging, committing, or pushing.
+
 ## GitHub Source Control
 
 GitHub tools run through the desktop Tauri command layer and the connected account in Settings. Users connect with GitHub OAuth device-flow browser login. The tools do not require `git`, GitHub CLI, or a local clone. Browser login requests a full-access OAuth scope bundle by default: `repo`, `workflow`, `delete_repo`, `admin:repo_hook`, `admin:org`, `admin:public_key`, `admin:org_hook`, `gist`, `notifications`, `user`, `project`, package scopes, `admin:gpg_key`, `codespace`, `read:audit_log`, and `security_events`. A signed-in account can still only do what GitHub itself allows for that user, organization, SSO policy, and repository.
@@ -56,8 +74,14 @@ Setup guide: [GitHub integration setup](github/README.md).
 - `github_create_branch`: creates a branch from the default or named base branch.
 - `github_commit_files`: pushes one or more file changes as a real Git commit by creating a Git tree, commit, and branch ref update through GitHub's API.
 - `github_create_pull_request`: opens a draft pull request from a head branch to a base branch.
+- `github_generate_release_notes`: asks GitHub to generate Markdown release notes for a tag without saving a release.
+- `github_create_release`: creates a GitHub release. The tool defaults to draft releases unless `draft=false` is explicitly requested.
+- `github_list_releases`: lists releases for a repository, including draft releases when the connected account has access.
+- `github_list_workflows`: lists GitHub Actions workflows for a repository.
+- `github_dispatch_workflow`: triggers a workflow_dispatch workflow for a selected ref and optional JSON inputs.
+- `github_list_workflow_runs`: lists recent runs for a selected workflow.
 
-Mutating GitHub tools are routed through the same approval path as local edits and terminal actions when workspace permission mode requires review.
+Mutating GitHub tools are routed through the same approval path as local edits and terminal actions when workspace permission mode requires review. In Auto Full mode, they run without approval prompts inside the enabled workspace/tool boundaries.
 
 ## Vectors
 

@@ -4,25 +4,38 @@ import {
   commitGithubFiles,
   createGithubBranch,
   createGithubPullRequest,
+  createGithubRelease,
+  dispatchGithubWorkflow,
+  generateGithubReleaseNotes,
   getGithubRepository,
   getGithubState,
   getMissingRequiredGithubOAuthScopes,
   listGithubBranches,
   listGithubRepositories,
+  listGithubReleases,
   listGithubTree,
+  listGithubWorkflowRuns,
+  listGithubWorkflows,
   readGithubFile,
   searchGithubCode,
 } from "../../app/githubClient";
 import type { GithubCommitFileInput, GithubRepository } from "../../types/github";
 
+/** Model-callable GitHub tools exposed through the local-computer runtime. */
 export type GithubToolName =
   | "github_commit_files"
   | "github_create_branch"
   | "github_create_pull_request"
+  | "github_create_release"
+  | "github_dispatch_workflow"
+  | "github_generate_release_notes"
   | "github_get_repository"
   | "github_list_branches"
   | "github_list_repositories"
+  | "github_list_releases"
   | "github_list_tree"
+  | "github_list_workflow_runs"
+  | "github_list_workflows"
   | "github_read_file"
   | "github_search_code"
   | "github_status";
@@ -34,6 +47,7 @@ export interface GithubToolExecutionResult {
   sources?: ChatSource[];
 }
 
+/** Extra conversational context used to infer repository names when args are sparse. */
 export interface GithubToolExecutionContext {
   userPrompt?: string;
 }
@@ -47,10 +61,16 @@ const GITHUB_TOOL_NAMES = new Set<GithubToolName>([
   "github_commit_files",
   "github_create_branch",
   "github_create_pull_request",
+  "github_create_release",
+  "github_dispatch_workflow",
+  "github_generate_release_notes",
   "github_get_repository",
   "github_list_branches",
   "github_list_repositories",
+  "github_list_releases",
   "github_list_tree",
+  "github_list_workflow_runs",
+  "github_list_workflows",
   "github_read_file",
   "github_search_code",
   "github_status",
@@ -60,6 +80,10 @@ export function isGithubToolName(value: string): value is GithubToolName {
   return GITHUB_TOOL_NAMES.has(value as GithubToolName);
 }
 
+/**
+ * Executes one GitHub tool request and returns model-ready text plus optional
+ * direct-answer Markdown for inventory/status-style questions.
+ */
 export async function executeGithubTool(tool: GithubToolName, args: Record<string, string>, context: GithubToolExecutionContext = {}): Promise<GithubToolExecutionResult> {
   switch (tool) {
     case "github_status": {
@@ -239,7 +263,131 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
         sources: [{ title: `PR #${pullRequest.number}`, url: pullRequest.htmlUrl }],
       };
     }
+    case "github_generate_release_notes": {
+      const repo = await getRepositoryArgs(args, context);
+      const notes = await generateGithubReleaseNotes({
+        ...repo,
+        configurationFilePath: firstArg(args, ["configuration_file_path", "configurationFilePath", "config", "release_config"]),
+        previousTagName: firstArg(args, ["previous_tag_name", "previousTagName", "previous_tag", "from_tag"]),
+        tagName: requiredArg(args, ["tag_name", "tagName", "tag", "version"]),
+        targetCommitish: firstArg(args, ["target_commitish", "targetCommitish", "target", "branch", "ref"]),
+      });
+
+      return {
+        content: formatReleaseNotes(notes),
+        directAnswer: formatReleaseNotesAnswer(notes),
+        executed: true,
+      };
+    }
+    case "github_create_release": {
+      const repo = await getRepositoryArgs(args, context);
+      const release = await createGithubRelease({
+        ...repo,
+        body: firstArg(args, ["body", "notes", "description"]),
+        draft: booleanArg(args, ["draft"], true),
+        generateReleaseNotes: booleanArg(args, ["generate_release_notes", "generateReleaseNotes", "auto_notes"], true),
+        makeLatest: firstArg(args, ["make_latest", "makeLatest"]),
+        name: firstArg(args, ["name", "title"]),
+        prerelease: booleanArg(args, ["prerelease", "pre_release", "preRelease"], false),
+        tagName: requiredArg(args, ["tag_name", "tagName", "tag", "version"]),
+        targetCommitish: firstArg(args, ["target_commitish", "targetCommitish", "target", "branch", "ref"]),
+      });
+
+      return {
+        content: formatRelease(release),
+        directAnswer: formatReleaseAnswer(release),
+        executed: true,
+        sources: [{ title: release.tagName, url: release.htmlUrl }],
+      };
+    }
+    case "github_list_releases": {
+      const repo = await resolveRepositoryArgs(args, context);
+
+      if (!repo) {
+        return createMissingRepositoryResult("list releases");
+      }
+
+      const releases = await listGithubReleases({
+        ...repo,
+        page: numberArg(args, ["page"]),
+        perPage: numberArg(args, ["per_page", "perPage", "limit"]),
+      });
+
+      return {
+        content: formatReleaseList(repo.owner, repo.repo, releases),
+        directAnswer: formatReleaseListAnswer(repo.owner, repo.repo, releases),
+        executed: true,
+        sources: releases.slice(0, 12).map((release) => ({ title: release.tagName, url: release.htmlUrl })),
+      };
+    }
+    case "github_list_workflows": {
+      const repo = await resolveRepositoryArgs(args, context);
+
+      if (!repo) {
+        return createMissingRepositoryResult("list workflows");
+      }
+
+      const workflows = await listGithubWorkflows({
+        ...repo,
+        page: numberArg(args, ["page"]),
+        perPage: numberArg(args, ["per_page", "perPage", "limit"]),
+      });
+
+      return {
+        content: formatWorkflowList(repo.owner, repo.repo, workflows),
+        directAnswer: formatWorkflowListAnswer(repo.owner, repo.repo, workflows),
+        executed: true,
+        sources: workflows.workflows.slice(0, 12).map((workflow) => ({ title: workflow.name, url: workflow.htmlUrl })),
+      };
+    }
+    case "github_dispatch_workflow": {
+      const repo = await getRepositoryArgs(args, context);
+      const workflowId = requiredArg(args, ["workflow_id", "workflowId", "workflow", "file", "name"]);
+      const ref = requiredArg(args, ["ref", "branch", "ref_name", "refName"]);
+      const dispatch = await dispatchGithubWorkflow({
+        ...repo,
+        inputs: jsonObjectArg(args, ["inputs_json", "inputs", "parameters", "params"]),
+        ref,
+        workflowId,
+      });
+
+      return {
+        content: [`Workflow: ${dispatch.workflowId}`, `Ref: ${dispatch.refName}`, "Dispatch: requested"].join("\n"),
+        directAnswer: `Requested workflow dispatch for \`${dispatch.workflowId}\` on \`${dispatch.refName}\`.`,
+        executed: true,
+      };
+    }
+    case "github_list_workflow_runs": {
+      const repo = await resolveRepositoryArgs(args, context);
+
+      if (!repo) {
+        return createMissingRepositoryResult("list workflow runs");
+      }
+
+      const workflowId = requiredArg(args, ["workflow_id", "workflowId", "workflow", "file", "name"]);
+      const runs = await listGithubWorkflowRuns({
+        ...repo,
+        branch: firstArg(args, ["branch", "ref"]),
+        event: firstArg(args, ["event"]),
+        page: numberArg(args, ["page"]),
+        perPage: numberArg(args, ["per_page", "perPage", "limit"]),
+        status: firstArg(args, ["status", "state"]),
+        workflowId,
+      });
+
+      return {
+        content: formatWorkflowRuns(workflowId, runs),
+        directAnswer: formatWorkflowRunsAnswer(workflowId, runs),
+        executed: true,
+        sources: runs.runs.slice(0, 12).map((run) => ({ title: `Run #${run.runNumber}`, url: run.htmlUrl })),
+      };
+    }
   }
+
+  return {
+    content: `Unknown GitHub tool request was ignored: ${tool}`,
+    executed: false,
+  };
 }
 
 async function getRepositoryArgs(args: Record<string, string>, context: GithubToolExecutionContext): Promise<RepositoryArgs> {
@@ -268,6 +416,8 @@ async function resolveRepositoryArgs(args: Record<string, string>, context: Gith
     return undefined;
   }
 
+  // Repository inference uses the signed-in account's repo list so a loose name
+  // resolves only when there is a clear match inside the user's real access set.
   const repos = await listGithubRepositories({
     perPage: 100,
     sort: "updated",
@@ -422,6 +572,7 @@ function parseCommitFiles(args: Record<string, string>): GithubCommitFileInput[]
   const rawFiles = firstArg(args, ["files_json", "files", "changes", "items"]);
 
   if (rawFiles) {
+    // Accept both a bare array and { files: [...] } so tool calls can stay compact.
     const parsed = JSON.parse(rawFiles) as unknown;
     const items = Array.isArray(parsed)
       ? parsed
@@ -612,6 +763,105 @@ function formatCodeSearch(result: Awaited<ReturnType<typeof searchGithubCode>>) 
   ].join("\n");
 }
 
+function formatReleaseNotes(notes: Awaited<ReturnType<typeof generateGithubReleaseNotes>>) {
+  return [`Name: ${notes.name}`, "", notes.body].join("\n");
+}
+
+function formatReleaseNotesAnswer(notes: Awaited<ReturnType<typeof generateGithubReleaseNotes>>) {
+  return [`**${notes.name}**`, "", notes.body].join("\n");
+}
+
+function formatRelease(release: Awaited<ReturnType<typeof createGithubRelease>>) {
+  return [
+    `Release: ${release.name || release.tagName}`,
+    `Tag: ${release.tagName}`,
+    `Draft: ${release.draft ? "yes" : "no"}`,
+    `Prerelease: ${release.prerelease ? "yes" : "no"}`,
+    release.publishedAt ? `Published: ${release.publishedAt}` : "",
+    `URL: ${release.htmlUrl}`,
+  ].filter(Boolean).join("\n");
+}
+
+function formatReleaseAnswer(release: Awaited<ReturnType<typeof createGithubRelease>>) {
+  const state = release.draft ? "draft release" : release.prerelease ? "prerelease" : "release";
+
+  return `Created ${state} **[${release.name || release.tagName}](${release.htmlUrl})** for tag \`${release.tagName}\`.`;
+}
+
+function formatReleaseList(owner: string, repo: string, releases: Awaited<ReturnType<typeof listGithubReleases>>) {
+  if (releases.length === 0) {
+    return `No releases returned for ${owner}/${repo}.`;
+  }
+
+  return [
+    `Repository: ${owner}/${repo}`,
+    `Releases: ${releases.length}`,
+    ...releases.map((release, index) => `${index + 1}. ${release.tagName} - ${release.name || "untitled"} (${release.draft ? "draft" : release.prerelease ? "prerelease" : "published"})\n   ${release.htmlUrl}`),
+  ].join("\n");
+}
+
+function formatReleaseListAnswer(owner: string, repo: string, releases: Awaited<ReturnType<typeof listGithubReleases>>) {
+  if (releases.length === 0) {
+    return `No GitHub releases were returned for **${owner}/${repo}**.`;
+  }
+
+  return [
+    `Releases for **${owner}/${repo}**:`,
+    "",
+    ...releases.map((release, index) => `${index + 1}. **[${release.tagName}](${release.htmlUrl})** - ${release.name || "Untitled"} (${release.draft ? "draft" : release.prerelease ? "prerelease" : "published"}).`),
+  ].join("\n");
+}
+
+function formatWorkflowList(owner: string, repo: string, result: Awaited<ReturnType<typeof listGithubWorkflows>>) {
+  if (result.workflows.length === 0) {
+    return `No workflows returned for ${owner}/${repo}.`;
+  }
+
+  return [
+    `Repository: ${owner}/${repo}`,
+    `Workflows returned: ${result.workflows.length}`,
+    `Total workflows: ${result.totalCount}`,
+    ...result.workflows.map((workflow, index) => `${index + 1}. ${workflow.name} (${workflow.state})\n   ID: ${workflow.id}\n   Path: ${workflow.path}\n   ${workflow.htmlUrl}`),
+  ].join("\n");
+}
+
+function formatWorkflowListAnswer(owner: string, repo: string, result: Awaited<ReturnType<typeof listGithubWorkflows>>) {
+  if (result.workflows.length === 0) {
+    return `No GitHub Actions workflows were returned for **${owner}/${repo}**.`;
+  }
+
+  return [
+    `GitHub Actions workflows for **${owner}/${repo}**:`,
+    "",
+    ...result.workflows.map((workflow, index) => `${index + 1}. **[${workflow.name}](${workflow.htmlUrl})** - \`${workflow.path}\`, ${workflow.state}, id \`${workflow.id}\`.`),
+  ].join("\n");
+}
+
+function formatWorkflowRuns(workflowId: string, result: Awaited<ReturnType<typeof listGithubWorkflowRuns>>) {
+  if (result.runs.length === 0) {
+    return `No workflow runs returned for ${workflowId}.`;
+  }
+
+  return [
+    `Workflow: ${workflowId}`,
+    `Runs returned: ${result.runs.length}`,
+    `Total runs: ${result.totalCount}`,
+    ...result.runs.map((run, index) => `${index + 1}. #${run.runNumber} ${run.name || "Workflow run"} - ${run.status || "unknown"}${run.conclusion ? ` / ${run.conclusion}` : ""}\n   Branch: ${run.branch || "unknown"} @ ${run.headSha.slice(0, 12)}\n   ${run.htmlUrl}`),
+  ].join("\n");
+}
+
+function formatWorkflowRunsAnswer(workflowId: string, result: Awaited<ReturnType<typeof listGithubWorkflowRuns>>) {
+  if (result.runs.length === 0) {
+    return `No workflow runs were returned for \`${workflowId}\`.`;
+  }
+
+  return [
+    `Recent runs for \`${workflowId}\`:`,
+    "",
+    ...result.runs.map((run, index) => `${index + 1}. **[Run #${run.runNumber}](${run.htmlUrl})** - ${run.name || "Workflow run"}, ${run.status || "unknown"}${run.conclusion ? ` / ${run.conclusion}` : ""}, branch \`${run.branch || "unknown"}\`.`),
+  ].join("\n");
+}
+
 function formatPermissions(permissions: { admin: boolean; pull: boolean; push: boolean }) {
   return [
     permissions.pull ? "pull" : "",
@@ -661,6 +911,22 @@ function numberArg(args: Record<string, string>, names: string[]) {
   const value = raw ? Number(raw) : undefined;
 
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function jsonObjectArg(args: Record<string, string>, names: string[]) {
+  const raw = firstArg(args, names);
+
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = JSON.parse(raw) as unknown;
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${names[0]} must be a JSON object.`);
+  }
+
+  return parsed as Record<string, unknown>;
 }
 
 function booleanArg(args: Record<string, string>, names: string[], fallback: boolean) {
