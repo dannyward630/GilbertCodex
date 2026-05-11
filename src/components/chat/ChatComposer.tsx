@@ -1,4 +1,4 @@
-import { type ChangeEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUp,
@@ -520,21 +520,39 @@ export function ChatComposer({
     });
   }
 
+  function addAttachmentFiles(files: File[]) {
+    if (files.length === 0) {
+      return;
+    }
+
+    const draftAttachments = files.map((file, index) => ({
+      id: createDraftAttachmentId(index),
+      mimeType: file.type || "application/octet-stream",
+      name: file.name || "Attachment",
+      size: file.size,
+      status: "loading" as const,
+    }));
+
+    setAttachments((currentAttachments) => [...currentAttachments, ...draftAttachments]);
+    void prepareAttachments(files, draftAttachments);
+  }
+
   function handleFileSelect(event: ChangeEvent<HTMLInputElement>) {
     const selectedFiles = Array.from(event.target.files ?? []);
-    if (selectedFiles.length > 0) {
-      const draftAttachments = selectedFiles.map((file, index) => ({
-        id: createDraftAttachmentId(index),
-        mimeType: file.type || "application/octet-stream",
-        name: file.name || "Attachment",
-        size: file.size,
-        status: "loading" as const,
-      }));
-
-      setAttachments((currentAttachments) => [...currentAttachments, ...draftAttachments]);
-      void prepareAttachments(selectedFiles, draftAttachments);
-    }
+    addAttachmentFiles(selectedFiles);
     event.target.value = "";
+    setOpenMenu(null);
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLFormElement>) {
+    const pastedImages = getPastedImageFiles(event.clipboardData);
+
+    if (pastedImages.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    addAttachmentFiles(pastedImages);
     setOpenMenu(null);
   }
 
@@ -759,6 +777,7 @@ export function ChatComposer({
         event.preventDefault();
         submitMessage();
       }}
+      onPaste={handleComposerPaste}
     >
       <input
         ref={fileInputRef}
@@ -1054,7 +1073,7 @@ export function ChatComposer({
             {voiceBusy ? <LoaderCircle size={18} aria-hidden="true" /> : voiceState === "listening" ? <MicOff size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
           </button>
           {isGenerating && onStopGeneration ? (
-            <button className="send-button send-button-stop" type="button" aria-label="Stop response" title="Stop response" onClick={onStopGeneration}>
+            <button className="send-button send-button-stop" type="button" aria-label="Stop response" title="Stop response" onClick={() => onStopGeneration()}>
               <Square size={14} aria-hidden="true" />
             </button>
           ) : null}
@@ -2068,4 +2087,61 @@ function createDraftFromAttachment(attachment: ChatAttachment, index: number): C
     size: attachment.size,
     status: "ready",
   };
+}
+
+function getPastedImageFiles(clipboardData: DataTransfer) {
+  const files: File[] = [];
+
+  for (const item of Array.from(clipboardData.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) {
+      continue;
+    }
+
+    const file = item.getAsFile();
+
+    if (file) {
+      files.push(normalizePastedImageFile(file, files.length));
+    }
+  }
+
+  if (files.length > 0) {
+    return files;
+  }
+
+  return Array.from(clipboardData.files)
+    .filter((file) => file.type.startsWith("image/"))
+    .map((file, index) => normalizePastedImageFile(file, index));
+}
+
+function normalizePastedImageFile(file: File, index: number) {
+  if (file.name.trim()) {
+    return file;
+  }
+
+  const mimeType = file.type || "image/png";
+  const extension = imageExtensionFromMimeType(mimeType);
+
+  return new File([file], `pasted-image-${Date.now()}-${index + 1}.${extension}`, {
+    lastModified: file.lastModified || Date.now(),
+    type: mimeType,
+  });
+}
+
+function imageExtensionFromMimeType(mimeType: string) {
+  switch (mimeType.toLowerCase()) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    case "image/svg+xml":
+      return "svg";
+    case "image/bmp":
+      return "bmp";
+    case "image/png":
+    default:
+      return "png";
+  }
 }

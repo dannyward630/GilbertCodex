@@ -23,6 +23,33 @@ const COMMON_SOURCE_TYPO_PATTERNS = [
   },
 ];
 
+const TAILWIND_COLOR_NAMES = [
+  "slate",
+  "gray",
+  "zinc",
+  "neutral",
+  "stone",
+  "red",
+  "orange",
+  "amber",
+  "yellow",
+  "lime",
+  "green",
+  "emerald",
+  "teal",
+  "cyan",
+  "sky",
+  "blue",
+  "indigo",
+  "violet",
+  "purple",
+  "fuchsia",
+  "pink",
+  "rose",
+].join("|");
+const TAILWIND_COLOR_SHADE_VALUES = new Set(["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"]);
+const TAILWIND_DURATION_VALUES = new Set(["75", "100", "150", "200", "300", "500", "700", "1000"]);
+
 export function collectTextQualityWarnings(path: string, content: string) {
   const warnings: string[] = [];
 
@@ -35,9 +62,46 @@ export function collectTextQualityWarnings(path: string, content: string) {
   if (isCssLikePath(path)) {
     const shortHexWarnings = collectSuspiciousFourDigitHexWarnings(content);
     warnings.push(...shortHexWarnings);
+    warnings.push(...collectSuspiciousTailwindTokenWarnings(content));
   }
 
   return dedupeWarnings(warnings);
+}
+
+function collectSuspiciousTailwindTokenWarnings(content: string) {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const colorTokenPattern = new RegExp(
+    `(?:^|[\\s"'\\\`])((?:(?:dark|hover|focus|active|disabled|visited|checked|group-hover|peer-checked|sm|md|lg|xl|2xl):)*(?:bg|text|border|from|to|via|placeholder|ring|outline|decoration|accent|caret|fill|stroke)-(${TAILWIND_COLOR_NAMES})-(\\d{2,3}))(?![\\w-])`,
+    "gi",
+  );
+  const durationTokenPattern = /(?:^|[\s"'`])((?:(?:hover|focus|active|motion-safe|motion-reduce|sm|md|lg|xl|2xl):)*duration-(\d{2,4}))(?![\w-])/gi;
+  let colorMatch: RegExpExecArray | null;
+
+  while ((colorMatch = colorTokenPattern.exec(content))) {
+    const token = colorMatch[1];
+    const color = colorMatch[2];
+    const shade = colorMatch[3];
+
+    if (!TAILWIND_COLOR_SHADE_VALUES.has(shade) && !seen.has(token)) {
+      seen.add(token);
+      warnings.push(`Suspicious Tailwind color class \`${token}\`: \`${color}-${shade}\` is not a default Tailwind shade. Did you mean a shade like ${color}-50, ${color}-100, ${color}-200, ${color}-400, or ${color}-500?`);
+    }
+  }
+
+  let durationMatch: RegExpExecArray | null;
+
+  while ((durationMatch = durationTokenPattern.exec(content))) {
+    const token = durationMatch[1];
+    const value = durationMatch[2];
+
+    if (!TAILWIND_DURATION_VALUES.has(value) && !seen.has(token)) {
+      seen.add(token);
+      warnings.push(`Suspicious Tailwind duration class \`${token}\`: ${value} is not a default transition duration. Did you mean duration-75, duration-100, duration-150, duration-200, or duration-300?`);
+    }
+  }
+
+  return warnings;
 }
 
 export function formatTextQualityWarnings(warnings: string[]) {

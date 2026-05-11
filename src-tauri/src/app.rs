@@ -78,6 +78,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::github::github_poll_device_login,
             commands::github::github_read_file,
             commands::github::github_search_code,
+            commands::app_info::open_external_url,
             commands::settings::settings_get_user_config,
             commands::settings::settings_open_user_config,
             commands::settings::workspace_dependencies_diagnose,

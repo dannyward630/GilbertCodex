@@ -94,6 +94,30 @@
   opacity: 0.74;
 }
 
+.response-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.response-recovery-actions button {
+  min-height: 32px;
+  padding: 0 11px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.response-recovery-actions button:hover,
+.response-recovery-actions button:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 38%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 34%, var(--surface-raised));
+}
+
 .message-block[data-role="user"][data-status="queued"] .message-content {
   border: 1px solid color-mix(in srgb, var(--blue) 34%, transparent);
   background:

@@ -1,8 +1,9 @@
-import { Children, isValidElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
+import { openExternalUrl } from "../../app/tauriClient";
 import { copyTextToClipboard } from "../../lib/clipboard";
 import { normalizeMarkdownForDisplay } from "../../lib/markdown";
 import { OpenableImage } from "./MessageAttachments";
@@ -70,6 +71,25 @@ function CodeBlock({ className, code, language }: CodeBlockProps) {
 }
 
 const markdownComponents: Components = {
+  a({ children, href, ...props }) {
+    function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+      if (!href || !isExternalUserLink(href)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      void openExternalUrl(href).catch((error) => {
+        console.warn("Could not open external link", error);
+      });
+    }
+
+    return (
+      <a {...props} href={href} onClick={handleClick} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    );
+  },
   img({ alt, src }) {
     if (!src) {
       return null;
@@ -105,6 +125,10 @@ const markdownComponents: Components = {
     );
   },
 };
+
+function isExternalUserLink(href: string) {
+  return /^(?:https?:|mailto:)/i.test(href.trim());
+}
 
 export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {
   const displayContent = useMemo(() => normalizeMarkdownForDisplay(content), [content]);

@@ -21,7 +21,6 @@ export type ToolRegistryId =
   | "thinking"
   | "testingTools"
   | "typescriptTools"
-  | "vectorTools"
   | "webSearch"
   | "workflowAutomation";
 
@@ -50,7 +49,6 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   thinking: true,
   testingTools: true,
   typescriptTools: true,
-  vectorTools: true,
   webSearch: true,
   workflowAutomation: true,
 };

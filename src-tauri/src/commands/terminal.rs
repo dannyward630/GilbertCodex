@@ -20,11 +20,134 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(windows)]
+const WINDOWS_POWERSHELL_COMPAT_PRELUDE: &str = r#"
+Remove-Item Alias:curl -ErrorAction SilentlyContinue
+Remove-Item Alias:wget -ErrorAction SilentlyContinue
+function global:__gilbert_count_or_default {
+    param([object]$Value, [int]$Default)
+    $raw = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $Default
+    }
+    if ($raw.StartsWith('-')) {
+        $raw = $raw.Substring(1)
+    }
+    $parsed = 0
+    if ([int]::TryParse($raw, [ref]$parsed)) {
+        return [Math]::Max(0, [Math]::Abs($parsed))
+    }
+    return $Default
+}
+function global:head {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position=0)]
+        [Alias('n')]
+        [object]$Count = 10,
+        [Parameter(Position=1, ValueFromRemainingArguments=$true)]
+        [string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)]
+        $InputObject
+    )
+    begin { $items = New-Object System.Collections.Generic.List[object] }
+    process { [void]$items.Add($InputObject) }
+    end {
+        $take = __gilbert_count_or_default $Count 10
+        if ($items.Count -gt 0) {
+            $items | Select-Object -First $take
+            return
+        }
+        if (($Path -eq $null -or $Path.Count -eq 0) -and $Count -is [string] -and (Test-Path -LiteralPath $Count)) {
+            Get-Content -LiteralPath $Count -TotalCount $take
+            return
+        }
+        if ($Path -ne $null -and $Path.Count -gt 0) {
+            Get-Content -LiteralPath $Path -TotalCount $take
+        }
+    }
+}
+function global:tail {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position=0)]
+        [Alias('n')]
+        [object]$Count = 10,
+        [Parameter(Position=1, ValueFromRemainingArguments=$true)]
+        [string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)]
+        $InputObject
+    )
+    begin { $items = New-Object System.Collections.Generic.List[object] }
+    process { [void]$items.Add($InputObject) }
+    end {
+        $take = __gilbert_count_or_default $Count 10
+        if ($items.Count -gt 0) {
+            $items | Select-Object -Last $take
+            return
+        }
+        if (($Path -eq $null -or $Path.Count -eq 0) -and $Count -is [string] -and (Test-Path -LiteralPath $Count)) {
+            Get-Content -LiteralPath $Count -Tail $take
+            return
+        }
+        if ($Path -ne $null -and $Path.Count -gt 0) {
+            Get-Content -LiteralPath $Path -Tail $take
+        }
+    }
+}
+function global:grep {
+    [CmdletBinding()]
+    param(
+        [Alias('i')]
+        [switch]$IgnoreCase,
+        [Alias('n')]
+        [switch]$LineNumber,
+        [Alias('v')]
+        [switch]$InvertMatch,
+        [Parameter(Position=0)]
+        [string]$Pattern,
+        [Parameter(Position=1, ValueFromRemainingArguments=$true)]
+        [string[]]$Path,
+        [Parameter(ValueFromPipeline=$true)]
+        $InputObject
+    )
+    begin { $items = New-Object System.Collections.Generic.List[object] }
+    process { [void]$items.Add($InputObject) }
+    end {
+        if ([string]::IsNullOrWhiteSpace($Pattern)) {
+            return
+        }
+        $selectParams = @{ Pattern = $Pattern }
+        if (-not $IgnoreCase) {
+            $selectParams['CaseSensitive'] = $true
+        }
+        if ($InvertMatch) {
+            $selectParams['NotMatch'] = $true
+        }
+        if ($items.Count -gt 0) {
+            $items | Select-String @selectParams
+            return
+        }
+        if ($Path -ne $null -and $Path.Count -gt 0) {
+            Select-String @selectParams -Path $Path
+        }
+    }
+}
+function global:which {
+    [CmdletBinding()]
+    param([Parameter(Position=0)][string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+    Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+}
+"#;
+
 const MAX_BUFFERED_CHUNKS: usize = 1_500;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
 const STREAM_READ_BYTES: usize = 8 * 1024;
 const DEFAULT_RUN_TIMEOUT_MS: u64 = 45_000;
-const MAX_RUN_TIMEOUT_MS: u64 = 180_000;
+const MAX_RUN_TIMEOUT_MS: u64 = 600_000;
 const MAX_RUN_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Default)]
@@ -195,7 +318,7 @@ pub fn terminal_create_session(
             if mode == TerminalSessionMode::Interactive {
                 "terminal"
             } else {
-                "command sandbox"
+                "command runner"
             },
             path_to_string(&working_directory)
         ),
@@ -638,7 +761,7 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
         match shell {
             TerminalShell::PowerShell => {
                 let mut command = Command::new("powershell.exe");
-                let normalized_input = normalize_windows_powershell_command(input);
+                let normalized_input = create_windows_powershell_command(input);
                 command.creation_flags(CREATE_NO_WINDOW);
                 command.args([
                     "-NoLogo",
@@ -732,7 +855,15 @@ fn create_interactive_shell_command(
         let mut command = match shell {
             TerminalShell::PowerShell => {
                 let mut command = CommandBuilder::new("powershell.exe");
-                command.args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"]);
+                command.args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-NoExit",
+                    "-Command",
+                    WINDOWS_POWERSHELL_COMPAT_PRELUDE,
+                ]);
                 command
             }
             TerminalShell::Cmd => {
@@ -781,7 +912,7 @@ fn create_pty_shell_command(
         let mut command = match shell {
             TerminalShell::PowerShell => {
                 let mut command = CommandBuilder::new("powershell.exe");
-                let normalized_input = normalize_windows_powershell_command(input);
+                let normalized_input = create_windows_powershell_command(input);
                 command.args([
                     "-NoLogo",
                     "-NoProfile",
@@ -955,6 +1086,12 @@ fn normalize_windows_powershell_command(input: &str) -> String {
     };
 
     format!("{leading}{replacement}{rest}")
+}
+
+#[cfg(windows)]
+fn create_windows_powershell_command(input: &str) -> String {
+    let normalized_input = normalize_windows_powershell_command(input);
+    format!("{WINDOWS_POWERSHELL_COMPAT_PRELUDE}\n{normalized_input}")
 }
 
 fn read_terminal_stream_to_buffer<R>(
@@ -1282,6 +1419,174 @@ impl TerminalOutputCleaner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_working_directory() -> String {
+        env!("CARGO_MANIFEST_DIR").to_string()
+    }
+
+    fn run_test_command(command: &str, shell: TerminalShell) -> TerminalRunCommandResponse {
+        run_command_blocking(TerminalRunCommandRequest {
+            command: command.to_string(),
+            shell: Some(shell),
+            timeout_ms: Some(10_000),
+            working_directory: Some(test_working_directory()),
+        })
+        .expect("terminal command should run")
+    }
+
+    #[test]
+    fn command_runner_captures_stdout() {
+        #[cfg(windows)]
+        let response = run_test_command("Write-Output terminal-ok", TerminalShell::PowerShell);
+        #[cfg(not(windows))]
+        let response = run_test_command("printf terminal-ok", TerminalShell::Sh);
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            response.stdout.contains("terminal-ok"),
+            "stdout was {:?}",
+            response.stdout
+        );
+    }
+
+    #[test]
+    fn command_runner_captures_stderr_and_exit_code() {
+        #[cfg(windows)]
+        let response = run_test_command(
+            "[Console]::Error.WriteLine('terminal-error'); exit 7",
+            TerminalShell::PowerShell,
+        );
+        #[cfg(not(windows))]
+        let response = run_test_command("printf terminal-error >&2; exit 7", TerminalShell::Sh);
+
+        assert_eq!(response.exit_code, Some(7));
+        assert!(!response.timed_out);
+        assert!(
+            response.stderr.contains("terminal-error"),
+            "stderr was {:?}",
+            response.stderr
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_executes_cmd_wrapper_from_powershell_shell() {
+        let response =
+            run_test_command("cmd /c \"echo terminal-cmd-ok\"", TerminalShell::PowerShell);
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            response.stdout.contains("terminal-cmd-ok"),
+            "stdout was {:?}",
+            response.stdout
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_command_normalizes_node_package_shims() {
+        assert_eq!(
+            normalize_windows_powershell_command("npm install"),
+            "npm.cmd install"
+        );
+        assert_eq!(
+            normalize_windows_powershell_command("npx vite --version"),
+            "npx.cmd vite --version"
+        );
+        assert_eq!(
+            normalize_windows_powershell_command("pnpm test"),
+            "pnpm.cmd test"
+        );
+        assert_eq!(
+            normalize_windows_powershell_command("yarn build"),
+            "yarn.cmd build"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_executes_npm_shim_when_available() {
+        let npm_available = Command::new("cmd.exe")
+            .args(["/Q", "/C", "where npm.cmd"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+
+        if !npm_available {
+            return;
+        }
+
+        let response = run_test_command("npm --version", TerminalShell::PowerShell);
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            !response.stdout.trim().is_empty(),
+            "stdout was {:?}",
+            response.stdout
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_command_supports_common_inspection_helpers() {
+        let head_response = run_test_command(
+            "'alpha','beta','gamma' | head -2",
+            TerminalShell::PowerShell,
+        );
+        assert_eq!(head_response.exit_code, Some(0));
+        assert!(head_response.stdout.contains("alpha"));
+        assert!(head_response.stdout.contains("beta"));
+        assert!(!head_response.stdout.contains("gamma"));
+
+        let tail_response = run_test_command(
+            "'alpha','beta','gamma' | tail -2",
+            TerminalShell::PowerShell,
+        );
+        assert_eq!(tail_response.exit_code, Some(0));
+        assert!(!tail_response.stdout.contains("alpha"));
+        assert!(tail_response.stdout.contains("beta"));
+        assert!(tail_response.stdout.contains("gamma"));
+
+        let grep_response = run_test_command(
+            "'alpha','beta','gamma' | grep beta",
+            TerminalShell::PowerShell,
+        );
+        assert_eq!(grep_response.exit_code, Some(0));
+        assert!(!grep_response.stdout.contains("alpha"));
+        assert!(grep_response.stdout.contains("beta"));
+        assert!(!grep_response.stdout.contains("gamma"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_command_prefers_curl_exe_alias() {
+        let curl_available = Command::new("cmd.exe")
+            .args(["/Q", "/C", "where curl.exe"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+
+        if !curl_available {
+            return;
+        }
+
+        let response = run_test_command("curl --version | head -1", TerminalShell::PowerShell);
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            response.stdout.to_ascii_lowercase().contains("curl"),
+            "stdout was {:?}",
+            response.stdout
+        );
+    }
 
     #[test]
     fn terminal_output_cleaner_strips_split_ansi_sequences() {

@@ -5,9 +5,10 @@ import "@xterm/xterm/css/xterm.css";
 import { PanelBottomClose, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { createTerminalSession, drainTerminalSession, killTerminalSession, resizeTerminalSession, writeTerminalSession } from "../../app/tauriClient";
 import { getAvailableTerminalShells, getDefaultTerminalShell, terminalShellLabel } from "../../lib/terminalShells";
-import type { TerminalOutputChunk, TerminalShellId } from "../../types/terminal";
+import type { TerminalAttachedSession, TerminalOutputChunk, TerminalShellId } from "../../types/terminal";
 
 interface TerminalPanelProps {
+  attachedSession?: TerminalAttachedSession | null;
   desktopRuntime: boolean;
   height: number;
   open: boolean;
@@ -16,7 +17,7 @@ interface TerminalPanelProps {
   workingDirectory?: string;
 }
 
-type TerminalStatus = "connected" | "error" | "exited" | "starting" | "stopped" | "unavailable";
+type TerminalStatus = "connected" | "error" | "exited" | "running" | "starting" | "stopped" | "unavailable";
 
 const MIN_TERMINAL_HEIGHT = 184;
 const MAX_TERMINAL_HEIGHT = 640;
@@ -46,16 +47,19 @@ const XTERM_THEME = {
   yellow: "#f2c978",
 };
 
-export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
+export function TerminalPanel({ attachedSession, desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [shell, setShell] = useState<TerminalShellId>(() => getDefaultTerminalShell());
   const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
+  const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [pendingWorkingDirectory, setPendingWorkingDirectory] = useState<string | null>(null);
   const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
   const shellOptions = useMemo(() => getAvailableTerminalShells(), []);
   const autoStartedRef = useRef(false);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastRequestedWorkingDirectoryRef = useRef((workingDirectory ?? "").trim());
+  const ownedSessionIdRef = useRef<string | null>(null);
+  const replayedAttachedSessionRef = useRef<string | null>(null);
   const pendingTerminalTextRef = useRef("");
   const pendingWorkingDirectoryRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -77,6 +81,10 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
       return "Ready";
     }
 
+    if (status === "running") {
+      return "Running";
+    }
+
     if (status === "exited") {
       return "Exited";
     }
@@ -96,7 +104,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     return () => {
       const activeSessionId = sessionIdRef.current;
 
-      if (activeSessionId) {
+      if (activeSessionId && activeSessionId === ownedSessionIdRef.current) {
         void killTerminalSession(activeSessionId).catch(() => undefined);
       }
     };
@@ -255,7 +263,9 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
         }
 
         sessionIdRef.current = null;
+        ownedSessionIdRef.current = null;
         setSessionId(null);
+        setActiveCommand(null);
         pendingTerminalTextRef.current = "";
         terminalRef.current?.reset();
         terminalRef.current?.clear();
@@ -269,7 +279,9 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
         });
 
         sessionIdRef.current = response.sessionId;
+        ownedSessionIdRef.current = response.sessionId;
         setSessionId(response.sessionId);
+        setActiveCommand(null);
         setSessionWorkingDirectory(response.workingDirectory);
         pendingWorkingDirectoryRef.current = null;
         setPendingWorkingDirectory(null);
@@ -311,13 +323,59 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   }, [sessionWorkingDirectory, workingDirectory, writeSystemMessage]);
 
   useEffect(() => {
-    if (!open || !desktopRuntime || sessionId || autoStartedRef.current) {
+    if (!attachedSession?.sessionId || !desktopRuntime) {
+      return;
+    }
+
+    const previousOwnedSessionId = ownedSessionIdRef.current;
+    const switching = sessionIdRef.current !== attachedSession.sessionId;
+
+    if (previousOwnedSessionId && previousOwnedSessionId !== attachedSession.sessionId) {
+      void killTerminalSession(previousOwnedSessionId).catch(() => undefined);
+    }
+
+    autoStartedRef.current = true;
+    ownedSessionIdRef.current = null;
+    sessionIdRef.current = attachedSession.sessionId;
+    setSessionId(attachedSession.sessionId);
+    setStatus("running");
+    setActiveCommand(attachedSession.command ?? null);
+
+    if (attachedSession.shell) {
+      setShell(attachedSession.shell);
+    }
+
+    if (attachedSession.workingDirectory) {
+      setSessionWorkingDirectory(attachedSession.workingDirectory);
+      pendingWorkingDirectoryRef.current = null;
+      setPendingWorkingDirectory(null);
+    }
+
+    if (switching) {
+      pendingTerminalTextRef.current = "";
+      terminalRef.current?.reset();
+      terminalRef.current?.clear();
+    }
+
+    if (replayedAttachedSessionRef.current !== attachedSession.sessionId) {
+      replayedAttachedSessionRef.current = attachedSession.sessionId;
+      writeSystemMessage(`Attached to background command: ${attachedSession.command ?? attachedSession.sessionId}`);
+
+      if (attachedSession.initialOutput?.trim()) {
+        writeSystemMessage("Recent output captured before attach:");
+        writeTerminalText(attachedSession.initialOutput.endsWith("\n") ? attachedSession.initialOutput : `${attachedSession.initialOutput}\n`);
+      }
+    }
+  }, [attachedSession, desktopRuntime, writeSystemMessage, writeTerminalText]);
+
+  useEffect(() => {
+    if (!open || !desktopRuntime || sessionId || attachedSession?.sessionId || autoStartedRef.current) {
       return;
     }
 
     autoStartedRef.current = true;
     void startSession(false);
-  }, [desktopRuntime, open, sessionId, startSession]);
+  }, [attachedSession?.sessionId, desktopRuntime, open, sessionId, startSession]);
 
   useEffect(() => {
     if (!open || !sessionId) {
@@ -342,7 +400,11 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           setSessionWorkingDirectory(response.workingDirectory);
         }
 
-        if (response.exitCode !== null && response.exitCode !== undefined) {
+        setActiveCommand(response.activeCommand ?? null);
+
+        if (response.commandRunning) {
+          setStatus("running");
+        } else if (response.exitCode !== null && response.exitCode !== undefined) {
           setStatus("exited");
         } else {
           setStatus("connected");
@@ -387,7 +449,9 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
 
     setSessionId(null);
     sessionIdRef.current = null;
+    ownedSessionIdRef.current = null;
     setStatus("stopped");
+    setActiveCommand(null);
     writeSystemMessage("Terminal session stopped.");
   }
 
@@ -480,6 +544,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           <SquareTerminal size={18} aria-hidden="true" />
           <strong>Terminal</strong>
           <span data-status={status}>{statusLabel}</span>
+          {activeCommand ? <em title={activeCommand}>{activeCommand}</em> : null}
         </div>
         <label className="terminal-shell-select">
           <span className="sr-only">Shell</span>
@@ -501,7 +566,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           />
         </label>
         <div className="terminal-actions">
-          <button type="button" aria-label="Restart terminal session" title="Restart terminal session" onClick={() => void startSession(true, pendingWorkingDirectoryRef.current ?? undefined)}>
+          <button type="button" aria-label="Restart terminal session" title="Restart terminal session" disabled={Boolean(attachedSession?.sessionId && sessionId === attachedSession.sessionId)} onClick={() => void startSession(true, pendingWorkingDirectoryRef.current ?? undefined)}>
             <RotateCw size={16} aria-hidden="true" />
           </button>
           <button type="button" aria-label="Stop terminal session" title="Stop terminal session" disabled={!sessionId} onClick={() => void stopSession()}>

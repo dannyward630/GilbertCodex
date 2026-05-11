@@ -8,6 +8,7 @@ interface ThinkingDisclosureProps {
   content?: string;
   isPrivate?: boolean;
   isThinking?: boolean;
+  liveDetail?: string;
   onOpenActivity?: () => void;
   progressLabel?: string;
   startedAt?: string;
@@ -19,6 +20,7 @@ export function ThinkingDisclosure({
   content,
   isPrivate = false,
   isThinking = false,
+  liveDetail,
   onOpenActivity,
   progressLabel,
   startedAt,
@@ -66,6 +68,16 @@ export function ThinkingDisclosure({
         <span className="thinking-inline-title">{progressLabel && isThinking ? `${summary} ${progressLabel}` : summary}</span>
         <ChevronRight className="thinking-inline-chevron" size={15} aria-hidden="true" />
       </button>
+      {isThinking && liveDetail ? (
+        <div className="thinking-live-detail" role="status" aria-live="polite">
+          <span>{liveDetail}</span>
+          <div className="thinking-live-bars" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -12,7 +12,7 @@ Gilbert Codex has a local Settings > Discord setup page and a desktop bridge run
 
 For the default slash-command path, the desktop app can:
 
-- Start a local receiver at `http://127.0.0.1:8787/discord/interactions`.
+- Start a local receiver at `http://127.0.0.1:<bridgePort>/discord/interactions` (the bridge port is configured in Settings > Discord; it must match the port Discord and your tunnel reach).
 - Verify Discord `X-Signature-Ed25519` and `X-Signature-Timestamp` headers.
 - Respond to Discord `PING` validation requests.
 - Start `ngrok` in the background when configured.
@@ -91,7 +91,7 @@ Use this path when users should type a slash command and get a response from Gil
    - Enable Discord bridge.
    - Select Slash chat.
    - Keep Tunnel provider set to `ngrok`.
-   - Keep Local port set to `8787` unless that port is already in use.
+   - Keep Local port on the app default unless that port is already in use on your machine (change it in Settings > Discord if it conflicts).
    - Keep ngrok executable set to `ngrok`, or paste the full path to the ngrok executable.
    - Set Response style to Channel or Ephemeral. Thread is reserved for a later richer Discord workflow.
    - Add Allowed guild IDs and Allowed channel IDs if you want to restrict where the bridge responds.

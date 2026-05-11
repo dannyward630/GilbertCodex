@@ -19,7 +19,7 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.2.2",
+  version: "0.2.3",
   phase: "Public alpha",
   runtime: "Browser preview",
 };
@@ -154,6 +154,15 @@ export async function getAppInfo(): Promise<AppInfo> {
   } catch {
     return fallbackAppInfo;
   }
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!isTauriDesktopRuntime()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  await invoke<void>("open_external_url", { url });
 }
 
 export async function checkForAppUpdate(): Promise<AppUpdateCheckResponse> {

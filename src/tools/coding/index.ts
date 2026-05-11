@@ -10,4 +10,3 @@ export {
   formatReactNativeSetupReport,
 } from "./codingGenerators";
 export { describeCodingTools } from "./codingToolDescriptions";
-export { formatEmbeddingReport } from "./vectorTools";

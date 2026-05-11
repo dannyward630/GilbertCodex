@@ -113,15 +113,26 @@ function createEditedContent(content: string, args: Record<string, string>) {
   throw new Error("edit_file needs old_text/new_text, start_line/end_line/content, or start_char/end_char/content.");
 }
 
+interface TextReplacementMatch {
+  end: number;
+  flexibleWhitespace: boolean;
+  start: number;
+}
+
 function replaceExactText(content: string, oldText: string, newText: string, args: Record<string, string>) {
   if (!oldText) {
     throw new Error("edit_file old_text cannot be empty.");
   }
 
-  const matches = findAllOccurrences(content, oldText);
+  const exactMatches = findAllOccurrences(content, oldText).map((start) => ({
+    end: start + oldText.length,
+    flexibleWhitespace: false,
+    start,
+  }));
+  const matches = exactMatches.length > 0 ? exactMatches : findWhitespaceFlexibleOccurrences(content, oldText);
 
   if (matches.length === 0) {
-    throw new Error("edit_file could not find old_text exactly. Use view_code to inspect the target lines, then try a narrower edit.");
+    throw new Error("edit_file could not find old_text exactly or by whitespace-flexible matching. Use view_code to inspect the target lines, then try a narrower edit or a line-range edit.");
   }
 
   const occurrence = optionalNumberArg(args, ["occurrence"]);
@@ -144,19 +155,20 @@ function replaceExactText(content: string, oldText: string, newText: string, arg
   let cursor = 0;
   let nextContent = "";
 
-  for (const index of selectedMatches) {
-    nextContent += content.slice(cursor, index);
-    nextContent += newText;
-    cursor = index + oldText.length;
+  for (const match of selectedMatches) {
+    nextContent += content.slice(cursor, match.start);
+    nextContent += match.flexibleWhitespace ? newText.trim() : newText;
+    cursor = match.end;
   }
 
   nextContent += content.slice(cursor);
+  const usedFlexibleWhitespace = selectedMatches.some((match) => match.flexibleWhitespace);
 
   return {
     changed: nextContent !== content,
     content: nextContent,
-    operation: `exact text replacement (${selectedMatches.length} match${selectedMatches.length === 1 ? "" : "es"})`,
-    previewStartLine: lineNumberAtOffset(content, selectedMatches[0]),
+    operation: `${usedFlexibleWhitespace ? "whitespace-flexible" : "exact"} text replacement (${selectedMatches.length} match${selectedMatches.length === 1 ? "" : "es"})`,
+    previewStartLine: lineNumberAtOffset(content, selectedMatches[0].start),
     replacements: selectedMatches.length,
   };
 }
@@ -322,6 +334,62 @@ function findAllOccurrences(content: string, needle: string) {
   }
 
   return matches;
+}
+
+function findWhitespaceFlexibleOccurrences(content: string, needle: string): TextReplacementMatch[] {
+  const trimmedNeedle = needle.trim();
+
+  if (!shouldAttemptWhitespaceFlexibleMatch(trimmedNeedle)) {
+    return [];
+  }
+
+  const pattern = createWhitespaceFlexiblePattern(trimmedNeedle);
+
+  if (!pattern) {
+    return [];
+  }
+
+  const matches: TextReplacementMatch[] = [];
+  const expression = new RegExp(pattern, "g");
+  let match: RegExpExecArray | null;
+
+  while ((match = expression.exec(content))) {
+    matches.push({
+      end: match.index + match[0].length,
+      flexibleWhitespace: true,
+      start: match.index,
+    });
+
+    if (match[0].length === 0) {
+      expression.lastIndex += 1;
+    }
+  }
+
+  return matches;
+}
+
+function shouldAttemptWhitespaceFlexibleMatch(needle: string) {
+  return needle.length > 0 && /\s/.test(needle) && countNonWhitespaceChunks(needle) >= 3;
+}
+
+function createWhitespaceFlexiblePattern(needle: string) {
+  const parts = needle.split(/(\s+)/).filter((part) => part.length > 0);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return parts
+    .map((part) => /\s+/.test(part) ? "\\s+" : escapeRegExp(part))
+    .join("");
+}
+
+function countNonWhitespaceChunks(value: string) {
+  return value.split(/\s+/).filter(Boolean).length;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function lineNumberAtOffset(content: string, offset: number) {

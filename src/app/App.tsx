@@ -63,6 +63,7 @@ import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage 
 import { buildComputerFileIndex, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../tools/computer/files";
 import {
   createLocalComputerProgress,
+  createApprovalSessionDecisionKey,
   DEEP_RESEARCH_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY,
   hasLocalComputerToolCalls,
   runLocalComputerToolCalls,
@@ -94,12 +95,14 @@ import {
   withWebSearchProgress,
 } from "./chatRuntime";
 import { mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortProjectsByUpdatedAt } from "./projectState";
+import { refreshWorkspaceContext } from "../tools/workspaceContext";
 import { createChatSourcesFromWebResults, createWebSearchContextMessage, MAX_WEB_SEARCH_RESULTS, searchDuckDuckGo } from "../services/webSearchClient";
 import {
   getAppInfo,
   getDefaultTerminalWorkingDirectory,
   isTauriDesktopRuntime,
   listenForDiscordInteractions,
+  openExternalUrl,
   sendDiscordInteractionResponse,
   startDiscordBridge,
   stopDiscordBridge,
@@ -136,6 +139,7 @@ import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { PrimaryRoute } from "../types/navigation";
 import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
+import type { TerminalAttachedSession } from "../types/terminal";
 import { isDeepResearchThinking } from "../types/settings";
 import type { AppearanceMode, ProviderSettings } from "../types/settings";
 import { normalizeToolRegistrySettings } from "../types/tools";
@@ -375,11 +379,42 @@ function BulkDeleteChatsDialog({
   );
 }
 
+function isUserExternalHref(href: string) {
+  return /^(?:https?:|mailto:)/i.test(href);
+}
+
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authHasAccounts, setAuthHasAccounts] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function handleDocumentLinkClick(event: MouseEvent) {
+      if (event.defaultPrevented || event.button !== 0 || !(event.target instanceof Element)) {
+        return;
+      }
+
+      const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.hasAttribute("download")) {
+        return;
+      }
+
+      const href = anchor.getAttribute("href")?.trim() ?? "";
+      if (!isUserExternalHref(href)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      void openExternalUrl(href).catch((error) => {
+        console.warn("Could not open external link", error);
+      });
+    }
+
+    document.addEventListener("click", handleDocumentLinkClick, true);
+    return () => document.removeEventListener("click", handleDocumentLinkClick, true);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -479,13 +514,14 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     name: "Gilbert Codex",
     phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.2.2",
+    version: "0.2.3",
   });
   const [sendingChatId, setSendingChatId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>("general");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalAttachedSession, setTerminalAttachedSession] = useState<TerminalAttachedSession | null>(null);
   const [browserPreviewTarget, setBrowserPreviewTarget] = useState<{ id: number; url: string } | null>(null);
   const [terminalHeight, setTerminalHeight] = useState(284);
   const [defaultTerminalWorkingDirectory, setDefaultTerminalWorkingDirectory] = useState("");
@@ -759,6 +795,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   useEffect(() => {
     localWorkspaceRef.current = localWorkspace;
     saveLocalWorkspaceSettings(localWorkspace);
+    void refreshWorkspaceContext(localWorkspace);
   }, [localWorkspace]);
 
   useEffect(() => {
@@ -1417,6 +1454,24 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setTerminalOpen((open) => !open);
   }
 
+  function attachLiveTerminalSession(toolCalls?: ChatToolCall[]) {
+    const liveTerminalCall = [...(toolCalls ?? [])].reverse().find((toolCall) => toolCall.terminal?.live && toolCall.terminal.sessionId);
+    const terminal = liveTerminalCall?.terminal;
+
+    if (!liveTerminalCall || !terminal?.sessionId) {
+      return;
+    }
+
+    setTerminalAttachedSession({
+      command: terminal.command ?? liveTerminalCall.label,
+      initialOutput: liveTerminalCall.output,
+      sessionId: terminal.sessionId,
+      shell: terminal.shell,
+      workingDirectory: terminal.workingDirectory,
+    });
+    setTerminalOpen(true);
+  }
+
   function handleTogglePin(chatId: string) {
     setChats((currentChats) =>
       sortChatsByUpdatedAt(
@@ -1785,8 +1840,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
-  function handleStopGeneration(messageId?: string) {
-    stopActiveGeneration({ messageId, restoreDraft: !messageId });
+  function handleStopGeneration(messageId?: unknown) {
+    const requestedMessageId = typeof messageId === "string" ? messageId : undefined;
+    const targetMessageId = requestedMessageId ?? activeGenerationRef.current?.messageId;
+    stopActiveGeneration({ messageId: targetMessageId, restoreDraft: !targetMessageId });
   }
 
   function stopActiveGeneration({ messageId, restoreDraft }: { messageId?: string; restoreDraft: boolean }) {
@@ -2503,7 +2560,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       toolSettings.codeEdit ||
       toolSettings.fileCreation ||
       toolSettings.fileSafety ||
-      toolSettings.vectorTools ||
       toolSettings.testingTools ||
       toolSettings.typescriptTools ||
       toolSettings.sqlTools ||
@@ -2726,7 +2782,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         terminal: false,
         testingTools: false,
         typescriptTools: false,
-        vectorTools: false,
         webSearch: false,
       },
     });
@@ -2739,17 +2794,26 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     const workspaceKey = createApprovalWorkspaceSessionKey(workspaceSettings);
     const workspaceDecisions = sessionApprovalDecisionsRef.current[workspaceKey] ?? {};
+    const exactDecision: AgentApprovalDecision = {
+      editedArgs: decision.editedArgs,
+      note: decision.note,
+      scope: "session",
+      status: decision.status,
+    };
+    const reusableDecision: AgentApprovalDecision = {
+      note: decision.note,
+      scope: "session",
+      status: "approved",
+    };
+    const reusableKey = createApprovalSessionDecisionKey(approval);
+    const shouldReuseForToolSession = decision.status === "approved" && !decision.editedArgs;
 
     sessionApprovalDecisionsRef.current = {
       ...sessionApprovalDecisionsRef.current,
       [workspaceKey]: {
         ...workspaceDecisions,
-        [approval.id]: {
-          editedArgs: decision.editedArgs,
-          note: decision.note,
-          scope: "session",
-          status: decision.status,
-        },
+        [approval.id]: exactDecision,
+        ...(shouldReuseForToolSession ? { [reusableKey]: reusableDecision } : {}),
       },
     };
   }
@@ -2781,6 +2845,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     messageId,
     messagesForProvider,
     onExternalUpdate,
+    previousToolCalls,
     prompt,
     requestId,
     resumeToolCallContent,
@@ -2792,6 +2857,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     messageId: string;
     messagesForProvider: ChatMessage[];
     onExternalUpdate?: (update: DiscordStreamUpdate) => void;
+    previousToolCalls?: ChatToolCall[];
     prompt: string;
     requestId: number;
     resumeToolCallContent?: string;
@@ -2934,6 +3000,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         assistantContent: resumeToolCallContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
+        previousToolCalls,
         onToolCallUpdate: (_callNumber, toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
 
@@ -2970,6 +3037,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       totalExecutedToolCalls += toolRun.executedCount;
       allToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
+      attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", `${totalExecutedToolCalls} ran`);
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
@@ -3267,6 +3335,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       totalExecutedToolCalls += toolRun.executedCount;
       const completedToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
       allToolCalls = [...allToolCalls, ...completedToolCalls];
+      attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", deepResearch ? `${totalExecutedToolCalls} deep research tools ran` : `${totalExecutedToolCalls} ran`);
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
@@ -4543,7 +4612,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const resolvedApproval: AgentApproval = {
       ...approval,
       editedArgs: decision.editedArgs,
-      resolutionNote: decision.note ?? (decision.scope === "session" ? "Allowed for this app session." : undefined),
+      resolutionNote: decision.note ?? (decision.scope === "session" ? "Allowed for this workspace session." : undefined),
       resolvedAt,
       status: decision.status,
     };
@@ -4615,7 +4684,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           detail: decision.status === "denied"
             ? "The user denied the pending tool action."
             : decision.scope === "session"
-              ? "The user approved this exact tool action for the current app session."
+              ? "The user approved this tool for the current workspace session."
               : "The user approved the pending tool action.",
           id: createId("agent-event"),
           label: "Approval resolved",
@@ -4711,6 +4780,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         controller,
         messageId,
         messagesForProvider,
+        previousToolCalls: approval.tool === "planning_handoff" ? undefined : assistantMessage.toolCalls,
         prompt,
         requestId,
         resumeToolCallContent: approval.tool === "planning_handoff" ? undefined : resumeToolCallContent,
@@ -5980,6 +6050,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onToggleTerminal={handleToggleTerminal}
         onTogglePin={handleTogglePin}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        terminalAttachedSession={terminalAttachedSession}
         terminalHeight={terminalHeight}
         terminalOpen={terminalOpen}
         terminalWorkingDirectory={localWorkspace.enabled && localWorkspace.roots[0] ? localWorkspace.roots[0] : defaultTerminalWorkingDirectory}

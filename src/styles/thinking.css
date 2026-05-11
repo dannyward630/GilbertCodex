@@ -30,7 +30,7 @@
 }
 
 .thinking-popover {
-  width: min(420px, calc(100vw - 36px));
+  width: min(420px, calc(100vw - 36px), calc(100cqw - 20px));
   padding: 10px;
   border-radius: 16px;
 }
@@ -387,6 +387,28 @@
   flex: 0 0 auto;
   color: var(--text-dim);
   transition: transform 140ms ease;
+}
+
+.thinking-live-detail {
+  display: grid;
+  gap: 8px;
+  width: min(620px, 100%);
+  margin-left: 26px;
+  padding: 9px 11px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 66%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.thinking-live-detail > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thinking-disclosure[data-open="true"] .thinking-inline-chevron {

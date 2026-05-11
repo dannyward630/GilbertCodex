@@ -3,6 +3,7 @@ import { normalizeToolRegistrySettings } from "../../types/tools";
 import { describeCodingTools } from "../../tools/coding";
 import { describeColorTools } from "../../tools/color";
 import { describeFileCreationTools } from "../../tools/fileCreation";
+import { isTauriDesktopRuntime } from "../../app/tauriClient";
 import type { ProviderSettings } from "../../types/settings";
 import { createGithubRuntimeToolInstructions } from "./githubToolPrompt";
 
@@ -31,6 +32,11 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
   const sections = [
     "Runtime tools are available through compact tool_call blocks. Use them when they materially improve correctness, especially for bug fixing, code edits, current facts, official docs, changelogs, APIs, command evidence, color accuracy, design data, or source-backed answers.",
     `Enabled runtime tools: ${enabledTools.join(", ")}.`,
+    "Batching rule: when you already know several independent reads, searches, web lookups, GitHub inventory calls, or code views are needed, emit all of those tool_call blocks in the same assistant pass instead of asking for one tool at a time. The app runs safe independent read/search/web batches concurrently and returns one combined evidence message.",
+    "Mutation safety rule: never emit repeated write_file/edit_file/inline_edit/delete_file calls for the same path in one tool pass. Existing source/text files should be read first, edited once with a precise edit, then verified; after source edits the app may run an automatic syntax/build check. If that check reports even one syntax error, inspect the exact file/line and make a narrow follow-up edit instead of rewriting the file. Use create_files for brand-new multi-file batches instead of many separate write_file calls. Terminal commands (run_terminal, run_tests, typescript_check) always run one at a time.",
+    "Build failure rule: when a build/typecheck/test command fails and names a local source file, fix that reported file/line first. Do not pivot to package config, PostCSS/Vite theories, or web research unless the same local source fix still fails after rerunning the command.",
+    "GitHub mutation rule: independent GitHub mutations to different repositories run concurrently. Mutations to the same repository (commits, branches, PRs, releases) stay serial.",
+    "Dependency rule: keep mutating actions, terminal commands, installs, tests, and edits after the evidence they depend on. Do not batch a write/delete/commit after a read unless the write can be determined without seeing the read output.",
     isDeepResearchThinking(settings.thinking)
       ? "Deep Research mode is active. The app can run many focused web_search and local tool calls in batches. Avoid repeated equivalent searches, gather enough evidence to act, then synthesize instead of asking for tools forever."
       : "Standard thinking mode should use the fewest focused tool calls that can answer correctly, then synthesize from the results.",
@@ -61,20 +67,36 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
     tools.fileSearch ? "Use recall_context for architecture notes or previous project instructions. Prefer search_files before guessing file names or locations." : "",
     tools.codeView ? "Prefer view_code with start_line/end_line or start_char/end_char before precise edits." : "",
     tools.codeEdit
-      ? "For existing source/text files, prefer view_code followed by edit_file/inline_edit over whole-file write_file rewrites. edit_file supports exact replacement, line-range replacement, line inserts, and character edits; include expected_text when possible so stale edits are refused instead of guessed. Use write_file mainly for new files or intentional full-file replacement after reading the current file."
+      ? "For existing source/text files, prefer view_code followed by edit_file/inline_edit over whole-file write_file rewrites. edit_file supports exact replacement, line-range replacement, line inserts, and character edits; include expected_text when possible so stale edits are refused instead of guessed. Use write_file mainly for new files or intentional full-file replacement after reading the current file. If an edit fails, do not retry by rewriting the full file; inspect the current lines and make one narrow follow-up edit."
       : "",
     tools.fileCreation ? "Use create_files for multi-file batches with files_json instead of emitting many separate write_file calls." : "",
     tools.terminal
       ? "run_terminal executes the local platform shell inside an enabled local workspace root: PowerShell/cmd on Windows, or Bash/Zsh/sh on macOS and Linux. Use it for tests, builds, package installs, formatters, setup checks, and command evidence. Set cwd instead of prepending cd/chdir."
       : "",
     tools.terminal
+      ? "For Node/React/npm projects, first inspect package.json plus nearby README/config when the project shape is unknown. npm run executes scripts from the package root and puts local node_modules/.bin on PATH, so prefer package scripts such as npm run typecheck, npm run build, npm run check, npm run dev, or npm run preview when they exist. Set cwd to the package folder."
+      : "",
+    tools.terminal && tools.browserPreview
+      ? "Do not edit package scripts only to add --open for dev servers. Start the dev server, use the printed localhost URL, and open it with open_browser_preview instead."
+      : "",
+    tools.terminal
+      ? "Terminal timeout arguments are seconds when named timeout or timeout_seconds; use timeout_ms only for millisecond values. Package installs often need timeout 300 or higher."
+      : "",
+    tools.terminal
+      ? "When shell is PowerShell, do not use Bash-only && or ||. Use semicolons plus if ($?) { ... } else { ... }, or explicitly request shell=cmd for cmd-style chaining. Common evidence helpers such as curl, grep, head, tail, and which are available in the PowerShell terminal; prefer rg for code search when possible."
+      : "",
+    tools.terminal
       ? "Do not use terminal here-strings, Set-Content, Out-File, redirection, or replacement scripts for source edits while edit_file/write_file/create_files are enabled."
       : "",
     tools.browserPreview ? "open_browser_preview opens an HTTP(S) URL in the in-app browser preview. Use it after starting a dev server or when visual verification matters." : "",
+    tools.browserPreview && isTauriDesktopRuntime()
+      ? "browser_automation drives the in-app preview on the Tauri desktop runtime. Actions: inspect (default, returns visible text + links), open (just navigate), click_link (text matches a link), assert_text (check that text appears). Use it to verify a running dev server, check rendered content, or follow a link without leaving the agent."
+      : "",
     tools.terminal && tools.codeEdit
       ? "create_tool can write a reusable platform shell script under .gilbert/tools in the workspace; run_tool executes it. Use this only when a reusable helper materially helps."
       : "",
     createRelevantToolExamples(settings, latestUserPrompt),
+    "When emitting tools, output only the compact tool_call blocks needed for that pass; do not add a visible interim explanation before or after them.",
     "After tool results arrive, continue from the evidence and do not print raw tool calls.",
     "Visible answers should be normal Markdown: concise headings, bullets or numbered lists, Markdown links, and fenced code blocks for code, logs, diffs, or command output. If you use a pipe table, include a complete GFM delimiter row for every column.",
   ].filter(Boolean);
@@ -134,8 +156,6 @@ export function createLocalToolNames(settings: ProviderSettings) {
     tools.pdfTools ? "create_chat_pdf" : "",
     tools.codeEdit ? "inline_edit" : "",
     tools.colorTools ? "lookup_color" : "",
-    tools.vectorTools ? "vector_embed_text" : "",
-    tools.vectorTools ? "vector_search" : "",
     tools.testingTools ? "run_tests" : "",
     tools.testingTools ? "create_unit_test" : "",
     tools.typescriptTools ? "typescript_check" : "",
@@ -175,6 +195,7 @@ export function createLocalToolNames(settings: ProviderSettings) {
     tools.sourceControl ? "github_list_workflow_runs" : "",
     tools.terminal ? "run_terminal" : "",
     tools.browserPreview ? "open_browser_preview" : "",
+    tools.browserPreview && isTauriDesktopRuntime() ? "browser_automation" : "",
     tools.terminal && tools.codeEdit ? "create_tool" : "",
     tools.terminal ? "run_tool" : "",
   ].filter(Boolean);
@@ -186,6 +207,40 @@ function createRelevantToolExamples(settings: ProviderSettings, latestUserPrompt
 
   if (tools.webSearch && /\b(web|search|research|latest|current|official|docs?|source|cite|api|model|provider)\b/i.test(latestUserPrompt)) {
     examples.push("web_search example:\n<tool_call>\nweb_search\n<arg_key>query</arg_key><arg_value>official docs query</arg_value>\n</tool_call>");
+  }
+
+  if ((tools.webSearch || tools.codeView || tools.fileSearch || tools.sourceControl) && /\b(research|audit|inspect|debug|fix|compare|docs?|official|repo|code|files?)\b/i.test(latestUserPrompt)) {
+    examples.push([
+      "batched independent calls example:",
+      tools.codeView
+        ? [
+            "<tool_call>",
+            "read_file",
+            "<arg_key>path</arg_key><arg_value>C:\\path\\to\\project\\package.json</arg_value>",
+            "</tool_call>",
+            "<tool_call>",
+            "read_file",
+            "<arg_key>path</arg_key><arg_value>C:\\path\\to\\project\\README.md</arg_value>",
+            "</tool_call>",
+          ].join("\n")
+        : "",
+      !tools.codeView && tools.fileSearch
+        ? [
+            "<tool_call>",
+            "search_files",
+            "<arg_key>query</arg_key><arg_value>package scripts README entry point</arg_value>",
+            "</tool_call>",
+          ].join("\n")
+        : "",
+      tools.webSearch
+        ? [
+            "<tool_call>",
+            "web_search",
+            "<arg_key>query</arg_key><arg_value>official docs for the API or package behavior</arg_value>",
+            "</tool_call>",
+          ].join("\n")
+        : "",
+    ].filter(Boolean).join("\n"));
   }
 
   if (tools.sourceControl && /\b(github|repo|repository|branch|commit|push|pull|pr|pull request|source control|release|workflow|actions?)\b/i.test(latestUserPrompt)) {
@@ -203,7 +258,9 @@ function createRelevantToolExamples(settings: ProviderSettings, latestUserPrompt
   }
 
   if (tools.browserPreview && /\b(browser|preview|visual|localhost|screen|ui)\b/i.test(latestUserPrompt)) {
-    examples.push("open_browser_preview example:\n<tool_call>\nopen_browser_preview\n<arg_key>url</arg_key><arg_value>http://localhost:5173/</arg_value>\n</tool_call>");
+    examples.push(
+      "open_browser_preview example (use the exact URL from dev-server terminal output when available):\n<tool_call>\nopen_browser_preview\n<arg_key>url</arg_key><arg_value>http://localhost/</arg_value>\n</tool_call>",
+    );
   }
 
   if (tools.colorTools && /\b(color|colour|palette|css|brand|hex)\b/i.test(latestUserPrompt)) {

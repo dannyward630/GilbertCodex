@@ -567,6 +567,10 @@ function formatPreviewTitle(value?: string) {
     const url = new URL(value);
     const path = url.pathname === "/" ? "" : url.pathname;
 
+    if ((url.protocol === "http:" || url.protocol === "https:") && isLocalHostName(url.hostname)) {
+      return path ? `Local site${path}` : "Local site";
+    }
+
     return `${url.host}${path}`;
   } catch {
     return value;
@@ -750,21 +754,43 @@ async function findAvailableLocalPreview() {
 }
 
 async function probeUrl(url: string) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), LOCAL_PROBE_TIMEOUT_MS);
+  async function fetchWithMode(mode: RequestMode): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), LOCAL_PROBE_TIMEOUT_MS);
+
+    try {
+      return await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        mode,
+        credentials: "omit",
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
 
   try {
-    await fetch(url, {
-      cache: "no-store",
-      mode: "no-cors",
-      signal: controller.signal,
-    });
+    const corsResponse = await fetchWithMode("cors");
 
-    return true;
+    if (corsResponse.ok) {
+      return true;
+    }
+
+    if (corsResponse.status > 0 && corsResponse.status < 600) {
+      return true;
+    }
+  } catch {
+    // CORS, network failure, or abort — fall through to opaque probe
+  }
+
+  try {
+    const opaqueResponse = await fetchWithMode("no-cors");
+
+    return opaqueResponse.type === "opaque" || opaqueResponse.ok;
   } catch {
     return false;
-  } finally {
-    window.clearTimeout(timeout);
   }
 }
 

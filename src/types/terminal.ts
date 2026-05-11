@@ -42,6 +42,14 @@ export interface TerminalRunCommandResponse {
   workingDirectory: string;
 }
 
+export interface TerminalAttachedSession {
+  command?: string;
+  initialOutput?: string;
+  sessionId: string;
+  shell?: TerminalShellId;
+  workingDirectory?: string;
+}
+
 export interface TerminalDrainResponse {
   activeCommand?: string | null;
   chunks: TerminalOutputChunk[];

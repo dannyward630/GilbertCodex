@@ -279,10 +279,6 @@ export function formatTokenCount(tokens: number) {
 export function createMessageContextSurface(message: Pick<ChatMessage, "content"> & Partial<ChatMessage>) {
   const sections: string[] = [];
 
-  if (message.reasoning?.trim()) {
-    sections.push(`THINKING TRACE\n${limitContextSurfaceValue(message.reasoning, 10_000)}`);
-  }
-
   if (message.toolCalls?.length) {
     sections.push(
       [

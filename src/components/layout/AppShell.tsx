@@ -9,6 +9,7 @@ import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
+import type { TerminalAttachedSession } from "../../types/terminal";
 import type { SettingsSectionId } from "../../pages/settings/types";
 
 interface AppShellProps {
@@ -42,6 +43,7 @@ interface AppShellProps {
   searchOpen: boolean;
   sidebarOpen: boolean;
   terminalHeight: number;
+  terminalAttachedSession?: TerminalAttachedSession | null;
   terminalOpen: boolean;
   terminalWorkingDirectory?: string;
 }
@@ -77,6 +79,7 @@ export function AppShell({
   searchOpen,
   sidebarOpen,
   terminalHeight,
+  terminalAttachedSession,
   terminalOpen,
   terminalWorkingDirectory,
 }: AppShellProps) {
@@ -188,6 +191,7 @@ export function AppShell({
         <main className="app-main">{children}</main>
       </div>
       <TerminalPanel
+        attachedSession={terminalAttachedSession}
         desktopRuntime={desktopRuntime}
         height={terminalHeight}
         open={terminalOpen}

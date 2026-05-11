@@ -15,6 +15,9 @@ target/
 src-tauri/target/
 src-tauri/.tauri/
 
+# Claude / Cursor local agent settings (may contain machine-specific paths)
+.claude/
+
 # Local secrets
 .env
 .env.*
@@ -26,6 +29,9 @@ src-tauri/.tauri/
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 *.local
 
 # Logs and diagnostics

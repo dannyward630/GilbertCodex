@@ -18,6 +18,9 @@ import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
 
 const STREAM_FLUSH_MS = 80;
 const MAX_STREAM_REASONING_CHARS = 80_000;
+const PROVIDER_RESPONSE_START_TIMEOUT_MS = 120_000;
+const PROVIDER_STREAM_READ_TIMEOUT_MS = 90_000;
+const PROVIDER_STREAM_PROGRESS_TIMEOUT_MS = 120_000;
 const TRIMMED_REASONING_PREFIX = "[Earlier reasoning trimmed to keep the app responsive.]\n\n";
 const STREAM_OPTIONS_PROVIDER_IDS = new Set<ModelProviderId>(["deepseek", "groq", "openai", "openrouter", "xai"]);
 const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
@@ -235,8 +238,97 @@ export class ProviderEmptyResponseError extends Error {
   }
 }
 
+class ProviderTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderTimeoutError";
+  }
+}
+
 export function isProviderEmptyResponseError(error: unknown) {
   return error instanceof ProviderEmptyResponseError;
+}
+
+function createProviderTimeout(parentSignal: AbortSignal | undefined, timeoutMs: number, message: string) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort(new ProviderTimeoutError(message));
+  }, timeoutMs);
+
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  return {
+    clear: () => {
+      window.clearTimeout(timeoutId);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+    signal: controller.signal,
+    throwIfTimedOut: () => {
+      if (timedOut) {
+        throw new ProviderTimeoutError(message);
+      }
+    },
+  };
+}
+
+function readProviderStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  message: string,
+) {
+  return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: number | null = null;
+    const cleanup = () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      signal?.removeEventListener("abort", abortFromSignal);
+    };
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const cancelReader = (reason?: unknown) => {
+      void reader.cancel(reason).catch(() => undefined);
+    };
+    const abortFromSignal = () => {
+      const abortError = new DOMException("The operation was aborted.", "AbortError");
+      cancelReader(signal?.reason ?? abortError);
+      settle(() => reject(abortError));
+    };
+
+    if (signal?.aborted) {
+      abortFromSignal();
+      return;
+    }
+
+    timeoutId = window.setTimeout(() => {
+      const timeoutError = new ProviderTimeoutError(message);
+      cancelReader(timeoutError);
+      settle(() => reject(timeoutError));
+    }, timeoutMs);
+
+    signal?.addEventListener("abort", abortFromSignal, { once: true });
+    reader.read().then(
+      (chunk) => settle(() => resolve(chunk)),
+      (error) => settle(() => reject(error)),
+    );
+  });
 }
 
 export async function sendProviderMessage(settings: ProviderSettings, messages: ChatMessage[], options: ProviderRequestOptions = {}) {
@@ -339,21 +431,35 @@ export async function streamProviderMessage(
 
   assertUsableSettings(settings.provider, apiKey, model);
 
-  const response = await fetch(
-    joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions"),
-    {
-      body: JSON.stringify(
-        provider.apiStyle === "anthropic-messages"
-          ? createAnthropicRequestBody(settings, messages, model, true)
-          : useResponsesApi
-            ? createResponsesRequestBody(settings, messages, model, true)
-          : createProviderStreamRequestBody(settings, messages, model),
-      ),
-      headers: createProviderHeaders(settings.provider, apiKey),
-      method: "POST",
-      signal: options.signal,
-    },
+  const requestTimeout = createProviderTimeout(
+    options.signal,
+    PROVIDER_RESPONSE_START_TIMEOUT_MS,
+    `${provider.label} timed out before starting a streaming response within ${formatTimeoutSeconds(PROVIDER_RESPONSE_START_TIMEOUT_MS)} seconds.`,
   );
+  let response: Response;
+
+  try {
+    response = await fetch(
+      joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions"),
+      {
+        body: JSON.stringify(
+          provider.apiStyle === "anthropic-messages"
+            ? createAnthropicRequestBody(settings, messages, model, true)
+            : useResponsesApi
+              ? createResponsesRequestBody(settings, messages, model, true)
+            : createProviderStreamRequestBody(settings, messages, model),
+        ),
+        headers: createProviderHeaders(settings.provider, apiKey),
+        method: "POST",
+        signal: requestTimeout.signal,
+      },
+    );
+  } catch (error) {
+    requestTimeout.throwIfTimedOut();
+    throw error;
+  } finally {
+    requestTimeout.clear();
+  }
 
   if (!response.ok) {
     const payload = (await readJson(response)) as ProviderChatResponse | AnthropicMessageResponse;
@@ -374,6 +480,7 @@ export async function streamProviderMessage(
   let flushTimer: number | null = null;
   let lastFlushedContent = "";
   let lastFlushedReasoning = "";
+  let lastMeaningfulStreamEventAt = Date.now();
 
   function flushSnapshot(force = false) {
     if (flushTimer) {
@@ -411,7 +518,7 @@ export async function streamProviderMessage(
 
   function applyStreamDelta(delta: ProviderStreamDelta | null) {
     if (!delta) {
-      return;
+      return false;
     }
 
     const reasoningDelta = settings.thinking.enabled ? delta.reasoningDelta : "";
@@ -429,12 +536,20 @@ export async function streamProviderMessage(
       content = nextContent;
       reasoning = nextReasoning;
       scheduleSnapshot();
+      return true;
     }
+
+    return false;
   }
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readProviderStreamChunk(
+        reader,
+        options.signal,
+        PROVIDER_STREAM_READ_TIMEOUT_MS,
+        `${provider.label} timed out after sending no stream data for ${formatTimeoutSeconds(PROVIDER_STREAM_READ_TIMEOUT_MS)} seconds.`,
+      );
 
       if (done) {
         break;
@@ -445,7 +560,13 @@ export async function streamProviderMessage(
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        applyStreamDelta(parseProviderStreamLine(settings.provider, line, useResponsesApi));
+        if (applyStreamDelta(parseProviderStreamLine(settings.provider, line, useResponsesApi))) {
+          lastMeaningfulStreamEventAt = Date.now();
+        }
+      }
+
+      if (Date.now() - lastMeaningfulStreamEventAt > PROVIDER_STREAM_PROGRESS_TIMEOUT_MS) {
+        throw new ProviderTimeoutError(`${provider.label} timed out after keeping the stream open without answer text or reasoning for ${formatTimeoutSeconds(PROVIDER_STREAM_PROGRESS_TIMEOUT_MS)} seconds.`);
       }
     }
 
@@ -1083,6 +1204,10 @@ function appendStreamText(currentText: string, nextChunk: string) {
   }
 
   return currentText + nextChunk;
+}
+
+function formatTimeoutSeconds(timeoutMs: number) {
+  return Math.round(timeoutMs / 1000);
 }
 
 function limitReasoningText(reasoning: string) {

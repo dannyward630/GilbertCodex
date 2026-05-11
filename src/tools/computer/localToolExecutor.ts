@@ -36,7 +36,6 @@ import {
   createSqlSchemaFile,
   createUnitTestFile,
   formatDependencyAuditReport,
-  formatEmbeddingReport,
   formatReactNativeSetupReport,
   isCodingToolName,
 } from "../coding";
@@ -48,7 +47,11 @@ import type { GithubToolName } from "../github";
 import { executeWebSearchTool, isWebToolName } from "../web/webToolExecutor";
 
 const LOCAL_TOOL_PROGRESS_ID = "local-computer-tools";
-const MAX_LOCAL_TOOL_CALLS_PER_PASS = 8;
+const MAX_LOCAL_TOOL_CALLS_PER_PASS = 12;
+const MAX_PARALLEL_LOCAL_TOOL_CALLS_PER_PASS = 8;
+const MAX_PARALLEL_LOCAL_TOOL_MUTATIONS_PER_PASS = 4;
+const MAX_LOCAL_SOURCE_FILE_MUTATIONS_PER_PASS = 6;
+const MAX_DEEP_RESEARCH_SOURCE_FILE_MUTATIONS_PER_PASS = 10;
 const MAX_TOOL_CALL_SCAN_CHARS: number | null = null;
 const MAX_TOOL_RESULTS_CHARS: number | null = null;
 const MAX_TOOL_CALL_OUTPUT_CHARS: number | null = null;
@@ -63,6 +66,9 @@ const DEFAULT_READ_BYTES = 16 * 1024 * 1024;
  */
 export interface LocalComputerToolExecutionPolicy {
   maxCallsPerPass: number | null;
+  maxParallelCallsPerPass?: number | null;
+  maxParallelMutationsPerPass?: number | null;
+  maxSourceFileMutationsPerPass?: number | null;
   maxToolCallOutputChars: number | null;
   maxToolResultsChars: number | null;
   scanFromEndChars: number | null;
@@ -70,26 +76,34 @@ export interface LocalComputerToolExecutionPolicy {
 
 export const STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY: LocalComputerToolExecutionPolicy = {
   maxCallsPerPass: MAX_LOCAL_TOOL_CALLS_PER_PASS,
+  maxParallelCallsPerPass: MAX_PARALLEL_LOCAL_TOOL_CALLS_PER_PASS,
+  maxParallelMutationsPerPass: MAX_PARALLEL_LOCAL_TOOL_MUTATIONS_PER_PASS,
+  maxSourceFileMutationsPerPass: MAX_LOCAL_SOURCE_FILE_MUTATIONS_PER_PASS,
   maxToolCallOutputChars: MAX_TOOL_CALL_OUTPUT_CHARS,
   maxToolResultsChars: MAX_TOOL_RESULTS_CHARS,
   scanFromEndChars: MAX_TOOL_CALL_SCAN_CHARS,
 };
 
 export const DEEP_RESEARCH_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY: LocalComputerToolExecutionPolicy = {
-  maxCallsPerPass: 16,
+  maxCallsPerPass: 20,
+  maxParallelCallsPerPass: 10,
+  maxParallelMutationsPerPass: 6,
+  maxSourceFileMutationsPerPass: MAX_DEEP_RESEARCH_SOURCE_FILE_MUTATIONS_PER_PASS,
   maxToolCallOutputChars: null,
   maxToolResultsChars: null,
   scanFromEndChars: null,
 };
 const DEFAULT_TERMINAL_TIMEOUT_MS = 45_000;
-const MAX_TERMINAL_TIMEOUT_MS = 180_000;
+const MAX_TERMINAL_TIMEOUT_MS = 600_000;
 const BACKGROUND_TERMINAL_PROBE_MS = 18_000;
 const BACKGROUND_TERMINAL_FAST_RETURN_MS = 3_800;
 const BACKGROUND_TERMINAL_MIN_READY_MS = 900;
 const FAST_TERMINAL_COMMAND_TIMEOUT_MS = 12_000;
+const FAST_EVIDENCE_COMMAND_TIMEOUT_MS = 20_000;
 const MAX_TERMINAL_LIVE_OUTPUT_CHARS = 256 * 1024;
 const MAX_TERMINAL_RESULT_OUTPUT_CHARS = 256 * 1024;
 const TERMINAL_TOOL_POLL_INTERVAL_MS = 120;
+const AUTO_SYNTAX_CHECK_TIMEOUT_MS = 300_000;
 const DEV_SERVER_PROBE_INTERVAL_MS = 650;
 const DEV_SERVER_PROBE_TIMEOUT_MS = 650;
 const GILBERT_TOOL_DIRECTORY = ".gilbert/tools";
@@ -212,6 +226,45 @@ interface TerminalToolProgress {
 type ToolCallUpdateHandler = (callNumber: number, toolCall: ChatToolCall) => void;
 type TerminalProgressHandler = (progress: TerminalToolProgress) => void;
 
+type PreparedLocalToolItem =
+  | {
+      call: ParsedLocalComputerToolCall;
+      callNumber: number;
+      kind: "ready";
+      settings: LocalWorkspaceSettings;
+    }
+  | {
+      call: ParsedLocalComputerToolCall;
+      callNumber: number;
+      kind: "skipped";
+      output: string;
+      status: Extract<ChatToolCall["status"], "skipped" | "waiting_approval">;
+    }
+  | {
+      approval: AgentApproval;
+      call: ParsedLocalComputerToolCall;
+      callNumber: number;
+      kind: "approval";
+    }
+  | {
+      call: ParsedLocalComputerToolCall;
+      callNumber: number;
+      kind: "cached";
+      output: string;
+      terminal?: ChatToolCall["terminal"];
+    };
+
+type ReadyLocalToolItem = Extract<PreparedLocalToolItem, { kind: "ready" }>;
+
+interface CompletedLocalToolItem {
+  browserPreviewUrl?: string;
+  call: ParsedLocalComputerToolCall;
+  callNumber: number;
+  errorDetail?: string;
+  result?: LocalComputerToolCallResult;
+  toolCall: ChatToolCall;
+}
+
 export interface LocalSubagentTask {
   id?: string;
   prompt: string;
@@ -294,6 +347,7 @@ export async function runLocalComputerToolCalls({
   executionPolicy = STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY,
   onToolCallUpdate,
   onRunSubagents,
+  previousToolCalls,
   signal,
   toolSettings,
   webSearchMaxResults,
@@ -305,6 +359,7 @@ export async function runLocalComputerToolCalls({
   executionPolicy?: LocalComputerToolExecutionPolicy;
   onToolCallUpdate?: ToolCallUpdateHandler;
   onRunSubagents?: SubagentRunHandler;
+  previousToolCalls?: ChatToolCall[];
   settings: LocalWorkspaceSettings;
   signal?: AbortSignal;
   toolSettings: ToolRegistrySettings;
@@ -317,6 +372,7 @@ export async function runLocalComputerToolCalls({
   const sections: string[] = [
     "AGENT TOOL RESULTS",
     "The app executed the requested file and web tools. Use these results as real evidence and answer normally. Do not include tool XML or tool JSON in the final answer.",
+    "Tool result format: each block starts with \"TOOL <n>: <tool_name>\" on its own line and a bracketed marker shows the outcome. No marker = ran successfully. [skipped] = the call was blocked or refused before running (adjust args / unblock / pick a different tool). [error] = the call tried and failed (read the error and decide whether to retry with adjustments). [waiting_approval] = paused until the user reviews. [reused] = result was cached from a prior pass in the same approval-gated run; trust it as if it just ran.",
     `Requested calls: ${calls.length}`,
     `Workspace scope: ${settings.scope}`,
     `Workspace roots: ${roots.length > 0 ? roots.join(" | ") : "none"}`,
@@ -341,7 +397,7 @@ export async function runLocalComputerToolCalls({
           : "Terminal policy: run_terminal, create_tool, and run_tool may run inside the selected/current workspace roots without approval prompts."
       : "Terminal policy: terminal tools are disabled in Toolbox.",
     tools.codeEdit || tools.fileCreation
-      ? "Source edit policy: use view_code plus edit_file/inline_edit for existing source/text files, and reserve write_file/create_files for new files or intentional full-file replacement after reading the current file. Terminal commands that directly write source files through here-strings, Set-Content, Out-File, Tee-Object, or redirection are rejected so code edits stay structured and reviewable."
+      ? "Source edit policy: use view_code plus edit_file/inline_edit for existing source/text files, and reserve write_file/create_files for new files or intentional full-file replacement after reading the current file. The runtime allows only one direct mutation per file path in a single tool pass and may run an automatic syntax/build check after source edits; inspect exact errors and continue in a later pass before touching the same file again. Terminal commands that directly write source files through here-strings, Set-Content, Out-File, Tee-Object, or redirection are rejected so code edits stay structured and reviewable."
       : "",
     tools.webSearch
       ? "Web policy: web_search may run on demand for current facts, docs, debugging, source-backed answers, official API/library behavior, changelogs, error messages, brand/design facts, or color specs that are not in the local color database."
@@ -369,27 +425,52 @@ export async function runLocalComputerToolCalls({
   const toolCalls: ChatToolCall[] = [];
   const approvalRequests: AgentApproval[] = [];
   const directAnswers: string[] = [];
+  const mutatedFilePaths: string[] = [];
+  let syntaxCheckSettings = settings;
   let directAnswerEligible = calls.length > 0 && calls.every((call) => isDirectGithubAnswerTool(call.tool));
 
   if (roots.length === 0) {
     sections.push("No workspace roots are available. Local file and terminal tools will be skipped, but web_search and GitHub tools can still run.");
   }
 
+  const preparedItems: PreparedLocalToolItem[] = [];
+  const fileMutationPassState = createLocalFileMutationPassState(executionPolicy);
+  const previousCompletedByCall = buildPreviousCompletedMap(previousToolCalls);
+
   for (const [index, call] of calls.entries()) {
     const callNumber = index + 1;
+
+    // Resume-pass dedup: if this call already completed successfully in the
+    // prior pass (same resumeToolCallContent re-parsed here), reuse the prior
+    // output instead of re-running it. Only triggered when previousToolCalls
+    // is supplied by the resume path.
+    const previousCompletion = previousCompletedByCall.get(callNumber);
+    if (previousCompletion && typeof previousCompletion.output === "string") {
+      preparedItems.push({
+        call,
+        callNumber,
+        kind: "cached",
+        output: previousCompletion.output,
+        terminal: previousCompletion.terminal,
+      });
+      continue;
+    }
 
     if (settings.permissionMode === "read-only" && needsApproval(call)) {
       const blockedOutput = "Blocked by read-only mode.";
       directAnswerEligible = false;
-      sections.push(`\nTOOL ${callNumber}: ${call.tool}\n${blockedOutput}`);
-      const blockedToolCall = createToolCallRecord(call, callNumber, "skipped", blockedOutput);
-      toolCalls.push(blockedToolCall);
-      onToolCallUpdate?.(callNumber, blockedToolCall);
+      preparedItems.push({
+        call,
+        callNumber,
+        kind: "skipped",
+        output: blockedOutput,
+        status: "skipped",
+      });
       continue;
     }
 
     const approvalRequest = createToolApprovalRequest(call, callNumber, settings);
-    const approvalDecision = approvalRequest ? approvalDecisions?.[approvalRequest.id] : undefined;
+    const approvalDecision = approvalRequest ? getApprovalDecision(approvalRequest, approvalDecisions) : undefined;
     const executableCall = approvalDecision?.editedArgs ? applyApprovalEditedArgs(call, approvalDecision.editedArgs) : call;
     // Approved review actions resume with workspace write permissions for only
     // this call; the user's saved permission mode is left unchanged.
@@ -397,78 +478,158 @@ export async function runLocalComputerToolCalls({
       ? {
           ...settings,
           permissionMode: "full-workspace" as const,
-        }
+      }
       : settings;
-
-    if (approvalRequest && !approvalDecision) {
-      directAnswerEligible = false;
-      approvalRequests.push(approvalRequest);
-      sections.push(`\nTOOL ${callNumber}: ${call.tool}\nWaiting for approval: ${approvalRequest.preview ?? approvalRequest.title}`);
-      const waitingToolCall = createToolCallRecord(call, callNumber, "waiting_approval", approvalRequest.preview);
-      toolCalls.push(waitingToolCall);
-      onToolCallUpdate?.(callNumber, waitingToolCall);
-      break;
-    }
 
     if (approvalRequest && approvalDecision?.status === "denied") {
       directAnswerEligible = false;
       const deniedOutput = approvalDecision.note ? `Denied by user: ${approvalDecision.note}` : "Denied by user.";
-      sections.push(`\nTOOL ${callNumber}: ${call.tool}\n${deniedOutput}`);
-      const deniedToolCall = createToolCallRecord(call, callNumber, "skipped", deniedOutput);
-      toolCalls.push(deniedToolCall);
-      onToolCallUpdate?.(callNumber, deniedToolCall);
+      preparedItems.push({
+        call,
+        callNumber,
+        kind: "skipped",
+        output: deniedOutput,
+        status: "skipped",
+      });
       continue;
     }
 
-    const activeToolCall = createToolCallRecord(executableCall, callNumber, "active");
-    onToolCallUpdate?.(callNumber, activeToolCall);
+    const mutationGuardReason = registerLocalFileMutationForPass(executableCall, fileMutationPassState);
 
-    try {
-      throwIfAborted(signal);
-      const result = await executeLocalComputerToolCall(executableCall, effectiveSettings, roots, userPrompt, webSearchMaxResults, tools, signal, (progress) => {
-        onToolCallUpdate?.(
-          callNumber,
-          createToolCallRecord(executableCall, callNumber, "active", progress.output, progress.terminal),
-        );
-      }, onRunSubagents);
-      executedCount += result.executed ? 1 : 0;
-      browserPreviewUrl = result.browserPreviewUrl ?? browserPreviewUrl;
-      sources.push(...(result.sources ?? []));
-      if (result.executed && result.directAnswer && isDirectGithubAnswerTool(executableCall.tool)) {
-        directAnswers.push(result.directAnswer);
-      } else if (result.executed) {
-        directAnswerEligible = false;
-      }
-      sections.push(`\nTOOL ${callNumber}: ${call.tool}\n${result.content}`);
-      const completedToolCall = createToolCallRecord(
-        executableCall,
+    if (mutationGuardReason) {
+      directAnswerEligible = false;
+      preparedItems.push({
+        call: executableCall,
         callNumber,
-        result.executed ? "complete" : "skipped",
-        limitToolCallOutput(result.content, executionPolicy.maxToolCallOutputChars),
-        result.terminal,
-      );
-      toolCalls.push(completedToolCall);
-      onToolCallUpdate?.(callNumber, completedToolCall);
-    } catch (error) {
-      if (isAbortError(error)) {
-        throw error;
-      }
+        kind: "skipped",
+        output: mutationGuardReason,
+        status: "skipped",
+      });
+      continue;
+    }
 
-      const detail = formatToolExecutionError(executableCall.tool, error);
-      if (isDirectGithubAnswerTool(executableCall.tool)) {
-        directAnswers.push(formatDirectGithubErrorAnswer(executableCall.tool, detail));
+    if (approvalRequest && !approvalDecision) {
+      directAnswerEligible = false;
+      approvalRequests.push(approvalRequest);
+      preparedItems.push({
+        approval: approvalRequest,
+        call,
+        callNumber,
+        kind: "approval",
+      });
+      // Continue classifying remaining calls so independent reads still run
+      // concurrently with the pending approval card, while repeated mutations
+      // to the same file are still fused off for this pass.
+      continue;
+    }
+
+    preparedItems.push({
+      call: executableCall,
+      callNumber,
+      kind: "ready",
+      settings: effectiveSettings,
+    });
+  }
+
+  const completedItems = await executePreparedLocalToolItems({
+    executionPolicy,
+    items: preparedItems,
+    onRunSubagents,
+    onToolCallUpdate,
+    roots,
+    signal,
+    toolSettings: tools,
+    userPrompt,
+    webSearchMaxResults,
+  });
+
+  for (const item of preparedItems) {
+    if (item.kind === "skipped") {
+      sections.push(formatToolResultSection(item.callNumber, item.call.tool, "skipped", item.output));
+      const skippedToolCall = createToolCallRecord(item.call, item.callNumber, item.status, item.output);
+      toolCalls.push(skippedToolCall);
+      onToolCallUpdate?.(item.callNumber, skippedToolCall);
+      continue;
+    }
+
+    if (item.kind === "approval") {
+      const waitingOutput = item.approval.preview ?? item.approval.title;
+      sections.push(formatToolResultSection(item.callNumber, item.call.tool, "waiting_approval", waitingOutput));
+      const waitingToolCall = createToolCallRecord(item.call, item.callNumber, "waiting_approval", waitingOutput);
+      toolCalls.push(waitingToolCall);
+      onToolCallUpdate?.(item.callNumber, waitingToolCall);
+      continue;
+    }
+
+    if (item.kind === "cached") {
+      sections.push(formatToolResultSection(item.callNumber, item.call.tool, "reused", item.output));
+      const cachedToolCall = createToolCallRecord(item.call, item.callNumber, "complete", item.output, item.terminal);
+      toolCalls.push(cachedToolCall);
+      onToolCallUpdate?.(item.callNumber, cachedToolCall);
+      // Already counted in the prior pass — do not double-count or re-emit
+      // sources/browserPreviewUrl (those flowed in the original pass too).
+      continue;
+    }
+
+    const completed = completedItems.get(item.callNumber);
+
+    if (!completed) {
+      continue;
+    }
+
+    toolCalls.push(completed.toolCall);
+    browserPreviewUrl = completed.browserPreviewUrl ?? browserPreviewUrl;
+
+    if (completed.errorDetail) {
+      if (isDirectGithubAnswerTool(completed.call.tool)) {
+        directAnswers.push(formatDirectGithubErrorAnswer(completed.call.tool, completed.errorDetail));
       } else {
         directAnswerEligible = false;
       }
-      sections.push(`\nTOOL ${callNumber}: ${call.tool}\nError: ${detail}`);
-      const failedToolCall = createToolCallRecord(executableCall, callNumber, "error", detail);
-      toolCalls.push(failedToolCall);
-      onToolCallUpdate?.(callNumber, failedToolCall);
+      sections.push(formatToolResultSection(completed.callNumber, completed.call.tool, "error", completed.errorDetail));
+      continue;
     }
+
+    const result = completed.result;
+
+    if (!result) {
+      continue;
+    }
+
+    executedCount += result.executed ? 1 : 0;
+    sources.push(...(result.sources ?? []));
+    if (result.executed && result.directAnswer && isDirectGithubAnswerTool(completed.call.tool)) {
+      directAnswers.push(result.directAnswer);
+    } else if (result.executed) {
+      directAnswerEligible = false;
+    }
+    const mutatedPath = result.executed ? getLocalFileMutationPath(completed.call) : "";
+    if (mutatedPath) {
+      mutatedFilePaths.push(mutatedPath);
+      syntaxCheckSettings = item.settings;
+    }
+    const sectionStatus: ToolSectionStatus = result.executed ? "complete" : "skipped";
+    sections.push(formatToolResultSection(completed.callNumber, completed.call.tool, sectionStatus, result.content));
   }
 
   const deniedCount = Math.max(calls.length - executedCount, 0);
   const waitingForApproval = approvalRequests.some((approval) => approval.status === "pending");
+  if (!waitingForApproval && mutatedFilePaths.length > 0) {
+    const syntaxCheck = await runAutomaticSyntaxCheckAfterMutations({
+      paths: mutatedFilePaths,
+      roots,
+      settings: syntaxCheckSettings,
+      signal,
+      tools,
+    });
+
+    if (syntaxCheck) {
+      sections.push(`\nAUTO SYNTAX CHECK\n${syntaxCheck.content}`);
+      if (syntaxCheck.executed) {
+        directAnswerEligible = false;
+      }
+    }
+  }
   const detail = waitingForApproval ? `${executedCount} ran, waiting for approval` : deniedCount > 0 ? `${executedCount} ran, ${deniedCount} blocked` : `${executedCount} ran`;
 
   return {
@@ -483,6 +644,548 @@ export async function runLocalComputerToolCalls({
     toolCalls,
     waitingForApproval,
   };
+}
+
+export function createApprovalSessionDecisionKey(approval: Pick<AgentApproval, "kind" | "tool">) {
+  return `session:${approval.kind}:${approval.tool}`;
+}
+
+function getApprovalDecision(approval: AgentApproval, approvalDecisions?: Record<string, AgentApprovalDecision>) {
+  return approvalDecisions?.[approval.id] ?? approvalDecisions?.[createApprovalSessionDecisionKey(approval)];
+}
+
+type ToolSectionStatus = "complete" | "skipped" | "error" | "waiting_approval" | "reused";
+
+function formatToolResultSection(callNumber: number, tool: string, status: ToolSectionStatus, body: string) {
+  // Successful results stay unmarked so the existing "TOOL N: tool" pattern
+  // the model is used to remains the default. Every other outcome gets an
+  // explicit bracketed status so the model can branch on it without parsing
+  // the body string.
+  const marker = status === "complete" ? "" : ` [${status}]`;
+  return `\nTOOL ${callNumber}${marker}: ${tool}\n${body}`;
+}
+
+function buildPreviousCompletedMap(previousToolCalls: ChatToolCall[] | undefined) {
+  const map = new Map<number, ChatToolCall>();
+
+  if (!previousToolCalls || previousToolCalls.length === 0) {
+    return map;
+  }
+
+  for (const toolCall of previousToolCalls) {
+    if (toolCall.status !== "complete") {
+      continue;
+    }
+
+    const callNumber = extractStampedCallNumber(toolCall.id);
+
+    if (callNumber === null) {
+      continue;
+    }
+
+    // The first matching toolCall wins; later passes append to the message's
+    // toolCalls array, so an earlier-pass complete entry is the authoritative
+    // result for that callNumber.
+    if (!map.has(callNumber)) {
+      map.set(callNumber, toolCall);
+    }
+  }
+
+  return map;
+}
+
+function extractStampedCallNumber(id: string): number | null {
+  // Stamped form from chatRuntime.stampLocalToolCallIds: "local-tool-<pass>-local-tool-<call>"
+  const stamped = id.match(/-local-tool-(\d+)$/);
+
+  if (stamped) {
+    return Number(stamped[1]);
+  }
+
+  // Unstamped form straight from createToolCallRecord: "local-tool-<call>"
+  const unstamped = id.match(/^local-tool-(\d+)$/);
+
+  if (unstamped) {
+    return Number(unstamped[1]);
+  }
+
+  return null;
+}
+
+interface LocalFileMutationPassState {
+  maxMutations: number | null;
+  mutationCount: number;
+  seenPaths: Set<string>;
+}
+
+function createLocalFileMutationPassState(executionPolicy: LocalComputerToolExecutionPolicy): LocalFileMutationPassState {
+  const rawMax = executionPolicy.maxSourceFileMutationsPerPass ?? MAX_LOCAL_SOURCE_FILE_MUTATIONS_PER_PASS;
+  const maxMutations = rawMax === null ? null : Math.max(1, Math.floor(rawMax));
+
+  return {
+    maxMutations,
+    mutationCount: 0,
+    seenPaths: new Set<string>(),
+  };
+}
+
+function registerLocalFileMutationForPass(call: ParsedLocalComputerToolCall, state: LocalFileMutationPassState) {
+  const mutationPath = getLocalFileMutationPath(call);
+
+  if (!mutationPath) {
+    return "";
+  }
+
+  const normalizedPath = normalizeMutationPath(mutationPath);
+
+  if (!normalizedPath) {
+    return "";
+  }
+
+  const toolName = formatToolName(call.tool);
+
+  if (state.seenPaths.has(normalizedPath)) {
+    return [
+      `Skipped ${toolName}: ${mutationPath} was already targeted by an earlier mutation in this same tool pass.`,
+      "Only one write/edit/delete is allowed per file per pass. Inspect the current file and use one precise edit in the next pass if another change is still needed.",
+    ].join("\n");
+  }
+
+  if (state.maxMutations !== null && state.mutationCount >= state.maxMutations) {
+    return [
+      `Skipped ${toolName}: this pass already reached the source-file mutation limit of ${state.maxMutations}.`,
+      "Use create_files for brand-new multi-file batches, or verify the current state before emitting more edits in the next pass.",
+    ].join("\n");
+  }
+
+  state.seenPaths.add(normalizedPath);
+  state.mutationCount += 1;
+  return "";
+}
+
+function getLocalFileMutationPath(call: ParsedLocalComputerToolCall) {
+  if (!SAME_PATH_MUTATION_TOOL_NAMES.has(call.tool)) {
+    return "";
+  }
+
+  return firstArg(call.args, ["path", "file_path", "file", "target_path", "filename", "name"]) ?? "";
+}
+
+async function runAutomaticSyntaxCheckAfterMutations({
+  paths,
+  roots,
+  settings,
+  signal,
+  tools,
+}: {
+  paths: string[];
+  roots: string[];
+  settings: LocalWorkspaceSettings;
+  signal?: AbortSignal;
+  tools: ToolRegistrySettings;
+}) {
+  const candidatePaths = Array.from(new Set(paths.filter(isSyntaxCheckCandidatePath)));
+
+  if (candidatePaths.length === 0 || roots.length === 0) {
+    return null;
+  }
+
+  const root = roots.find((candidate) => candidatePaths.some((path) => isPathInsideRoot(path, candidate))) ?? roots[0];
+  const command = await inferSyntaxCheckCommand(root, candidatePaths);
+
+  if (!command) {
+    return {
+      content: [
+        `Skipped: edited ${candidatePaths.length} source file(s), but no package typecheck/build/check command could be inferred.`,
+        "The next assistant pass should inspect package.json or run an explicit syntax/build command before finalizing.",
+      ].join("\n"),
+      executed: false,
+    };
+  }
+
+  const result = await executeTerminalCommandTool(
+    {
+      args: {
+        command,
+        cwd: root,
+        timeout_ms: String(AUTO_SYNTAX_CHECK_TIMEOUT_MS),
+      },
+      raw: "",
+      tool: "run_terminal",
+    },
+    settings,
+    roots,
+    signal,
+    undefined,
+    tools,
+  );
+
+  return {
+    content: [
+      `Edited source files: ${candidatePaths.length}`,
+      `Command: ${command}`,
+      result.content,
+    ].join("\n"),
+    executed: result.executed,
+  };
+}
+
+async function executePreparedLocalToolItems({
+  executionPolicy,
+  items,
+  onRunSubagents,
+  onToolCallUpdate,
+  roots,
+  signal,
+  toolSettings,
+  userPrompt,
+  webSearchMaxResults,
+}: {
+  executionPolicy: LocalComputerToolExecutionPolicy;
+  items: PreparedLocalToolItem[];
+  onRunSubagents?: SubagentRunHandler;
+  onToolCallUpdate?: ToolCallUpdateHandler;
+  roots: string[];
+  signal?: AbortSignal;
+  toolSettings: ToolRegistrySettings;
+  userPrompt: string;
+  webSearchMaxResults: number;
+}) {
+  const completedItems = new Map<number, CompletedLocalToolItem>();
+  const maxParallelReads = normalizeParallelToolLimit(executionPolicy.maxParallelCallsPerPass);
+  const maxParallelMutations = normalizeParallelToolLimit(
+    executionPolicy.maxParallelMutationsPerPass ?? Math.min(maxParallelReads, MAX_PARALLEL_LOCAL_TOOL_MUTATIONS_PER_PASS),
+  );
+  let index = 0;
+
+  while (index < items.length) {
+    const item = items[index];
+
+    if (item.kind !== "ready") {
+      index += 1;
+      continue;
+    }
+
+    const firstClass = getCallParallelClass(item.call);
+
+    if (firstClass === "serial") {
+      const completed = await executePreparedLocalToolItem({
+        item,
+        executionPolicy,
+        onRunSubagents,
+        onToolCallUpdate,
+        roots,
+        signal,
+        toolSettings,
+        userPrompt,
+        webSearchMaxResults,
+      });
+      completedItems.set(completed.callNumber, completed);
+      index += 1;
+      continue;
+    }
+
+    const cap = firstClass === "read" ? maxParallelReads : maxParallelMutations;
+    const group: ReadyLocalToolItem[] = [item];
+    let lookahead = index + 1;
+
+    while (lookahead < items.length && group.length < cap) {
+      const candidate = items[lookahead];
+
+      if (candidate.kind !== "ready") {
+        // Approval/skipped items don't break the read or mutation group —
+        // they'll be surfaced by the caller's aggregation loop.
+        lookahead += 1;
+        continue;
+      }
+
+      const candidateClass = getCallParallelClass(candidate.call);
+
+      if (candidateClass !== firstClass) {
+        break;
+      }
+
+      if (firstClass === "mutation" && group.some((existing) => !canCoExecuteMutations(existing.call, candidate.call))) {
+        break;
+      }
+
+      group.push(candidate);
+      lookahead += 1;
+    }
+
+    const concurrency = Math.min(cap, group.length);
+    const groupResults = group.length === 1
+      ? [
+          await executePreparedLocalToolItem({
+            item: group[0],
+            executionPolicy,
+            onRunSubagents,
+            onToolCallUpdate,
+            roots,
+            signal,
+            toolSettings,
+            userPrompt,
+            webSearchMaxResults,
+          }),
+        ]
+      : await mapWithConcurrency(group, concurrency, (groupItem) =>
+          executePreparedLocalToolItem({
+            item: groupItem,
+            executionPolicy,
+            onRunSubagents,
+            onToolCallUpdate,
+            roots,
+            signal,
+            toolSettings,
+            userPrompt,
+            webSearchMaxResults,
+          }),
+        );
+
+    for (const completed of groupResults) {
+      completedItems.set(completed.callNumber, completed);
+    }
+
+    index = lookahead;
+  }
+
+  return completedItems;
+}
+
+async function executePreparedLocalToolItem({
+  item,
+  executionPolicy,
+  onRunSubagents,
+  onToolCallUpdate,
+  roots,
+  signal,
+  toolSettings,
+  userPrompt,
+  webSearchMaxResults,
+}: {
+  executionPolicy: LocalComputerToolExecutionPolicy;
+  item: ReadyLocalToolItem;
+  onRunSubagents?: SubagentRunHandler;
+  onToolCallUpdate?: ToolCallUpdateHandler;
+  roots: string[];
+  signal?: AbortSignal;
+  toolSettings: ToolRegistrySettings;
+  userPrompt: string;
+  webSearchMaxResults: number;
+}): Promise<CompletedLocalToolItem> {
+  const activeToolCall = createToolCallRecord(item.call, item.callNumber, "active");
+  onToolCallUpdate?.(item.callNumber, activeToolCall);
+
+  try {
+    throwIfAborted(signal);
+    const result = await executeLocalComputerToolCall(item.call, item.settings, roots, userPrompt, webSearchMaxResults, toolSettings, signal, (progress) => {
+      onToolCallUpdate?.(
+        item.callNumber,
+        createToolCallRecord(item.call, item.callNumber, "active", progress.output, progress.terminal),
+      );
+    }, onRunSubagents);
+    const completedToolCall = createToolCallRecord(
+      item.call,
+      item.callNumber,
+      result.executed ? "complete" : "skipped",
+      limitToolCallOutput(result.content, executionPolicy.maxToolCallOutputChars),
+      result.terminal,
+    );
+    onToolCallUpdate?.(item.callNumber, completedToolCall);
+
+    return {
+      browserPreviewUrl: result.browserPreviewUrl,
+      call: item.call,
+      callNumber: item.callNumber,
+      result,
+      toolCall: completedToolCall,
+    };
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    const errorDetail = formatToolExecutionError(item.call.tool, error);
+    const failedToolCall = createToolCallRecord(item.call, item.callNumber, "error", errorDetail);
+    onToolCallUpdate?.(item.callNumber, failedToolCall);
+
+    return {
+      call: item.call,
+      callNumber: item.callNumber,
+      errorDetail,
+      toolCall: failedToolCall,
+    };
+  }
+}
+
+function normalizeParallelToolLimit(limit: number | null | undefined) {
+  if (limit === null || limit === undefined || !Number.isFinite(limit)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.floor(limit));
+}
+
+function canExecuteLocalToolInParallel(call: ParsedLocalComputerToolCall) {
+  if (needsApproval(call)) {
+    return false;
+  }
+
+  return (
+    call.tool === "web_search" ||
+    call.tool === "lookup_color" ||
+    call.tool === "read_file" ||
+    call.tool === "view_code" ||
+    call.tool === "search_files" ||
+    call.tool === "recall_context" ||
+    call.tool === "list_directory" ||
+    call.tool === "git_status" ||
+    call.tool === "git_diff" ||
+    call.tool === "git_log" ||
+    call.tool === "github_status" ||
+    call.tool === "github_list_repositories" ||
+    call.tool === "github_get_repository" ||
+    call.tool === "github_list_branches" ||
+    call.tool === "github_list_tree" ||
+    call.tool === "github_read_file" ||
+    call.tool === "github_search_code" ||
+    call.tool === "github_generate_release_notes" ||
+    call.tool === "github_list_releases" ||
+    call.tool === "github_list_workflows" ||
+    call.tool === "github_list_workflow_runs" ||
+    call.tool === "codebase_health_scan" ||
+    call.tool === "dependency_audit" ||
+    call.tool === "react_native_setup_check"
+  );
+}
+
+const ALWAYS_SERIAL_MUTATION_TOOL_NAMES = new Set<string>([
+  "run_terminal",
+  "run_tests",
+  "typescript_check",
+  "run_tool",
+  "create_tool",
+]);
+
+const SAME_PATH_MUTATION_TOOL_NAMES = new Set<string>([
+  "write_file",
+  "edit_file",
+  "inline_edit",
+  "delete_file",
+  "create_text_file",
+  "create_markdown_file",
+  "create_code_file",
+  "create_react_file",
+  "create_html_file",
+  "create_pdf_file",
+  "create_chat_pdf",
+  "create_sql_schema",
+  "create_sql_migration",
+  "create_react_native_screen",
+  "create_unit_test",
+  "create_api_route",
+]);
+
+const GITHUB_REPO_MUTATION_TOOL_NAMES = new Set<string>([
+  "github_commit_files",
+  "github_create_branch",
+  "github_create_pull_request",
+  "github_create_release",
+  "github_dispatch_workflow",
+]);
+
+function isMutationParallelizable(call: ParsedLocalComputerToolCall) {
+  if (!needsApproval(call)) {
+    return false;
+  }
+
+  return !ALWAYS_SERIAL_MUTATION_TOOL_NAMES.has(call.tool);
+}
+
+function normalizeMutationPath(rawPath: string | undefined) {
+  if (!rawPath) {
+    return "";
+  }
+
+  return rawPath.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function getMutationConflictKey(call: ParsedLocalComputerToolCall) {
+  if (SAME_PATH_MUTATION_TOOL_NAMES.has(call.tool)) {
+    const path = firstArg(call.args, ["path", "file_path", "file", "target_path", "filename", "name"]);
+    const normalized = normalizeMutationPath(path);
+    return normalized ? `file:${normalized}` : null;
+  }
+
+  if (LOCAL_GIT_TOOL_NAMES.has(call.tool as LocalGitToolName)) {
+    const cwd = firstArg(call.args, ["cwd", "working_directory", "directory", "path"]);
+    return `git:${normalizeMutationPath(cwd)}`;
+  }
+
+  if (GITHUB_REPO_MUTATION_TOOL_NAMES.has(call.tool)) {
+    const repository = firstArg(call.args, ["repository", "repo", "repo_full_name", "full_name"]);
+    return `github:${(repository ?? "").trim().toLowerCase()}`;
+  }
+
+  return null;
+}
+
+function canCoExecuteMutations(a: ParsedLocalComputerToolCall, b: ParsedLocalComputerToolCall) {
+  const keyA = getMutationConflictKey(a);
+  const keyB = getMutationConflictKey(b);
+
+  if (keyA === null || keyB === null) {
+    return false;
+  }
+
+  if (keyA === keyB) {
+    return false;
+  }
+
+  if (keyA.startsWith("file:") && keyB.startsWith("file:")) {
+    const pathA = keyA.slice("file:".length);
+    const pathB = keyB.slice("file:".length);
+
+    if (pathA === pathB) {
+      return false;
+    }
+
+    if (pathA.startsWith(`${pathB}/`) || pathB.startsWith(`${pathA}/`)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+type CallParallelClass = "read" | "mutation" | "serial";
+
+function getCallParallelClass(call: ParsedLocalComputerToolCall): CallParallelClass {
+  if (canExecuteLocalToolInParallel(call)) {
+    return "read";
+  }
+
+  if (isMutationParallelizable(call)) {
+    return "mutation";
+  }
+
+  return "serial";
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
 }
 
 function createToolCallRecord(
@@ -976,32 +1679,6 @@ async function executeLocalComputerToolCall(
         onTerminalProgress,
       );
     }
-    case "vector_embed_text": {
-      const text = firstArg(call.args, ["text", "content", "query", "value"]) || userPrompt;
-      return {
-        content: formatEmbeddingReport(text),
-        executed: true,
-      };
-    }
-    case "vector_search": {
-      if (roots.length === 0) {
-        return skipNoRoots();
-      }
-
-      const query = firstArg(call.args, ["query", "q", "text"]) || userPrompt;
-      const limit = numberArg(call.args, ["limit"], 24);
-      let results = await searchComputerFiles(query, limit, roots);
-
-      if (results.length === 0) {
-        await buildComputerFileIndex(roots, settings.scope).catch(() => undefined);
-        results = await searchComputerFiles(query, limit, roots);
-      }
-
-      return {
-        content: formatSearchResults(query, results),
-        executed: true,
-      };
-    }
     case "recall_context": {
       if (roots.length === 0) {
         return skipNoRoots();
@@ -1253,7 +1930,7 @@ async function executeLocalGitToolCall(
 
   const timeoutMs = terminalTimeoutFromArgs(call.args);
   const result = onTerminalProgress
-    ? await runTerminalCommandWithProgress({
+    ? await runTerminalCommandWithBestProgressRunner({
         command,
         onProgress: onTerminalProgress,
         shell,
@@ -1508,8 +2185,9 @@ async function executeTerminalCommandTool(
     };
   }
 
-  const timeoutMs = terminalTimeoutFromArgs(call.args);
   const runInBackground = booleanArg(call.args, ["background", "persistent", "keep_alive", "keepAlive", "dev_server", "devServer"], isLikelyDevServerCommand(command));
+  const requestedTimeoutMs = terminalTimeoutFromArgs(call.args);
+  const timeoutMs = runInBackground ? requestedTimeoutMs : effectiveTerminalTimeoutMs(command, requestedTimeoutMs);
   const result: TerminalRunCommandResponse & { sessionId?: string } = runInBackground
     ? await runTerminalCommandInBackgroundProbe({
         command,
@@ -1519,7 +2197,7 @@ async function executeTerminalCommandTool(
         workingDirectory,
       })
     : onTerminalProgress
-    ? await runTerminalCommandWithProgress({
+    ? await runTerminalCommandWithBestProgressRunner({
         command,
         onProgress: onTerminalProgress,
         shell,
@@ -1540,6 +2218,7 @@ async function executeTerminalCommandTool(
     runInBackground ? result.sessionId ? `Background session: running (${result.sessionId})` : "Background session: command completed before returning" : "",
     preparedCommand.rebasedFromCommand ? `Working directory resolved from command: ${workingDirectory}` : "",
     browserPreviewUrl ? `Browser preview URL: ${browserPreviewUrl}` : "",
+    createTerminalFailureRecoveryHint(command, result, roots),
   ].filter(Boolean).join("\n");
 
   return {
@@ -1904,7 +2583,7 @@ async function runCustomTerminalTool(
   const command = createCustomToolCommand(shell, toolPath, args);
   const timeoutMs = terminalTimeoutFromArgs(call.args);
   const result = onTerminalProgress
-    ? await runTerminalCommandWithProgress({
+    ? await runTerminalCommandWithBestProgressRunner({
         command,
         onProgress: onTerminalProgress,
         shell,
@@ -2035,8 +2714,6 @@ function formatToolName(tool: LocalComputerToolName) {
     search_files: "Search files",
     typescript_check: "TypeScript check",
     unknown: "Unknown tool",
-    vector_embed_text: "Vector embed text",
-    vector_search: "Vector search",
     view_code: "View code",
     web_search: "Web search",
     write_file: "Write file",
@@ -2440,14 +3117,6 @@ function normalizeToolName(command: string, args: Record<string, string>): Local
 
   if (["inline_edit", "inline-edit", "edit_inline", "edit-inline"].includes(normalized)) {
     return "inline_edit";
-  }
-
-  if (["embed", "embedding", "vector_embed", "vector-embed", "embed_text"].includes(normalized)) {
-    return "vector_embed_text";
-  }
-
-  if (["semantic_search", "semantic-search", "vector_search", "vector-search"].includes(normalized)) {
-    return "vector_search";
   }
 
   if (["recall", "recall_context", "recall-context", "context_recall", "context-recall", "memory_search", "memory-search", "context_search", "context-search", "search_context", "search-context"].includes(normalized)) {
@@ -3241,6 +3910,7 @@ async function runTerminalCommandInBackgroundProbe({
     releaseAbortKill();
     await killTerminalSession(session.sessionId).catch(() => undefined);
   } else {
+    releaseAbortKill();
     appendChunks([
       {
         id: `background-${Date.now()}`,
@@ -3411,6 +4081,40 @@ async function runTerminalCommandWithProgress({
   };
 }
 
+async function runTerminalCommandWithBestProgressRunner({
+  command,
+  onProgress,
+  shell,
+  signal,
+  timeoutMs,
+  workingDirectory,
+}: {
+  command: string;
+  onProgress: TerminalProgressHandler;
+  shell: TerminalShellId;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  workingDirectory: string;
+}) {
+  return shouldUseBufferedTerminalCommand(command, timeoutMs)
+    ? await runTerminalCommandFastWithProgress({
+        command,
+        onProgress,
+        shell,
+        signal,
+        timeoutMs,
+        workingDirectory,
+      })
+    : await runTerminalCommandWithProgress({
+        command,
+        onProgress,
+        shell,
+        signal,
+        timeoutMs,
+        workingDirectory,
+      });
+}
+
 async function runTerminalCommandFastWithProgress({
   command,
   onProgress,
@@ -3433,7 +4137,7 @@ async function runTerminalCommandFastWithProgress({
       outputTruncated: false,
       shell,
       timedOut: false,
-      transcript: "[system] Running through the fast command runner...\n",
+      transcript: "[system] Running through the stable command runner...\n",
       workingDirectory,
     }),
     terminal: {
@@ -3489,26 +4193,53 @@ function formatFastTerminalTranscript(result: TerminalRunCommandResponse) {
   return parts.length > 0 ? limitToolResultBlock(parts.join("\n"), MAX_TERMINAL_LIVE_OUTPUT_CHARS) : "[system] Command completed with no output.";
 }
 
-function shouldUseFastTerminalCommand(command: string, timeoutMs: number) {
+function shouldUseBufferedTerminalCommand(command: string, timeoutMs: number) {
   const normalized = normalizeCommandForFastPath(command);
+  const unwrapped = unwrapWindowsShellWrapper(normalized);
 
-  if (!normalized || isLikelyDevServerCommand(normalized)) {
+  if (!normalized || isLikelyDevServerCommand(unwrapped)) {
     return false;
   }
 
-  if (/^git\s+(?:status|diff|log|branch|show|rev-parse|remote|ls-files|describe)\b/i.test(normalized)) {
+  if (looksLikePackageLifecycleCommand(unwrapped)) {
     return true;
   }
 
-  if (/^(?:pwd|whoami|hostname|git\s+--version|node\s+--version|npm(?:\.cmd)?\s+--version|pnpm(?:\.cmd)?\s+--version|yarn(?:\.cmd)?\s+--version|python\s+--version|py\s+--version|cargo\s+--version|rustc\s+--version)\b/i.test(normalized)) {
+  if (/^git\s+(?:status|diff|log|branch|show|rev-parse|remote|ls-files|describe)\b/i.test(unwrapped)) {
     return true;
   }
 
-  if (/^(?:get-location|write-output|echo)\b/i.test(normalized)) {
+  if (/^(?:pwd|whoami|hostname|git\s+--version|node\s+--version|npm(?:\.cmd)?\s+--version|pnpm(?:\.cmd)?\s+--version|yarn(?:\.cmd)?\s+--version|python\s+--version|py\s+--version|cargo\s+--version|rustc\s+--version)\b/i.test(unwrapped)) {
     return true;
   }
 
-  return timeoutMs <= FAST_TERMINAL_COMMAND_TIMEOUT_MS && !looksLikeStreamingCommand(normalized);
+  if (/^(?:get-location|write-output|echo)\b/i.test(unwrapped)) {
+    return true;
+  }
+
+  if (looksLikeQuickEvidenceCommand(unwrapped)) {
+    return true;
+  }
+
+  return timeoutMs <= FAST_TERMINAL_COMMAND_TIMEOUT_MS && !looksLikeStreamingCommand(unwrapped);
+}
+
+function effectiveTerminalTimeoutMs(command: string, timeoutMs: number) {
+  const normalized = normalizeCommandForFastPath(command);
+  const unwrapped = unwrapWindowsShellWrapper(normalized);
+
+  if (looksLikeQuickEvidenceCommand(unwrapped)) {
+    return Math.min(timeoutMs, FAST_EVIDENCE_COMMAND_TIMEOUT_MS);
+  }
+
+  return timeoutMs;
+}
+
+function looksLikeQuickEvidenceCommand(command: string) {
+  return (
+    /^(?:curl(?:\.exe)?|wget(?:\.exe)?|iwr|invoke-webrequest|irm|invoke-restmethod|rg|grep|findstr|select-string|get-content|cat|type|head|tail|ls|dir|get-childitem|where(?:\.exe)?|which)\b/i.test(command) ||
+    /\|\s*(?:head|tail|grep|select-string|findstr)\b/i.test(command)
+  );
 }
 
 function normalizeCommandForFastPath(command: string) {
@@ -3516,6 +4247,17 @@ function normalizeCommandForFastPath(command: string) {
     .replace(/\s+(?:1?>|2>|2>&1|2>&\s*1|>>)\s*[^&|;]+/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function unwrapWindowsShellWrapper(command: string) {
+  return command
+    .replace(/^cmd(?:\.exe)?\s+\/[dqsc]+\s+"?([\s\S]*?)"?$/i, "$1")
+    .replace(/^powershell(?:\.exe)?\s+(?:-[a-z]+\s+)*"?([\s\S]*?)"?$/i, "$1")
+    .trim();
+}
+
+function looksLikePackageLifecycleCommand(command: string) {
+  return /^(?:(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:install|ci|add|update|rebuild|dedupe|run\s+(?:build|typecheck|check|lint|test|test:unit|format|format:check)|test)\b|cargo\s+(?:check|test|build)\b|\.?\\?gradlew(?:\.bat)?\s+(?:test|check|build|assemble\w*)\b)/i.test(command);
 }
 
 function looksLikeStreamingCommand(command: string) {
@@ -3568,6 +4310,7 @@ function createTerminalToolMetadata(command: string, result: TerminalRunCommandR
     exitCode: result.exitCode,
     live: Boolean(result.sessionId && result.exitCode === null && !result.timedOut),
     outputTruncated: result.outputTruncated,
+    sessionId: result.sessionId,
     shell: result.shell,
     timedOut: result.timedOut,
     workingDirectory: result.workingDirectory,
@@ -3633,6 +4376,41 @@ function formatTerminalRunResult(command: string, result: TerminalRunCommandResp
     .join("\n");
 }
 
+function createTerminalFailureRecoveryHint(command: string, result: TerminalRunCommandResponse, roots: string[]) {
+  if (result.timedOut || result.exitCode === null || result.exitCode === 0 || !looksLikeVerificationCommand(command)) {
+    return "";
+  }
+
+  const combinedOutput = `${result.stdout}\n${result.stderr}`;
+  const reportedPath = findFirstReportedLocalSourcePath(combinedOutput, roots);
+
+  return [
+    "Failure recovery:",
+    reportedPath
+      ? `- The failing command reported a local source file: ${reportedPath}. Inspect that file/line first and fix the exact syntax or class typo before changing project config.`
+      : "- The failing command reported a local build/test error. Inspect the first local source error in STDOUT/STDERR before changing project config or researching unrelated causes.",
+    "- Use view_code plus one narrow edit_file/inline_edit change, then rerun the same command.",
+  ].join("\n");
+}
+
+function looksLikeVerificationCommand(command: string) {
+  const normalized = unwrapWindowsShellWrapper(normalizeCommandForFastPath(command));
+  return /(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:run\s+)?(?:build|check|typecheck|lint|test|test:unit)\b|(?:vite|tsc|eslint|vitest|jest|playwright)\b|cargo\s+(?:check|test|build)\b|gradlew(?:\.bat)?\s+(?:test|check|build|assemble\w*)\b/i.test(normalized);
+}
+
+function findFirstReportedLocalSourcePath(output: string, roots: string[]) {
+  const candidates = Array.from(output.matchAll(/[A-Z]:[\\/][^\r\n"'<>|]+?\.(?:css|scss|sass|less|js|jsx|ts|tsx|json|html|vue|svelte|rs|py|java|kt)(?::\d+)?(?::\d+)?/gi))
+    .map((match) => match[0].replace(/:(?:undefined|NaN|\d+)(?::(?:undefined|NaN|\d+))?$/i, ""));
+
+  for (const candidate of candidates) {
+    if (roots.length === 0 || roots.some((root) => isPathInsideRoot(candidate, root))) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
 function formatTerminalStream(label: string, content: string) {
   const normalized = content.replace(/\r\n/g, "\n").trimEnd();
 
@@ -3670,9 +4448,12 @@ function terminalShellFromArgs(args: Record<string, string>): TerminalShellId {
 }
 
 function terminalTimeoutFromArgs(args: Record<string, string>) {
+  const explicitTimeout = optionalNumberArg(args, ["timeout"]);
   const seconds = optionalNumberArg(args, ["timeout_seconds", "timeoutSeconds", "seconds"]);
   const milliseconds = optionalNumberArg(args, ["timeout_ms", "timeoutMs", "milliseconds"]);
-  return clamp(milliseconds ?? (seconds === undefined ? DEFAULT_TERMINAL_TIMEOUT_MS : seconds * 1000), 1_000, MAX_TERMINAL_TIMEOUT_MS);
+  const inferredTimeout = explicitTimeout === undefined ? undefined : explicitTimeout * 1000;
+
+  return clamp(milliseconds ?? inferredTimeout ?? (seconds === undefined ? DEFAULT_TERMINAL_TIMEOUT_MS : seconds * 1000), 1_000, MAX_TERMINAL_TIMEOUT_MS);
 }
 
 function getDirectFileMutationReason(command: string, settings?: ToolRegistrySettings) {
@@ -4141,6 +4922,50 @@ async function inferTypeScriptCommand(root: string) {
   return "";
 }
 
+async function inferSyntaxCheckCommand(root: string, paths: string[]) {
+  const packageJson = await readPackageJson(root);
+
+  if (packageJson?.scripts?.typecheck) {
+    return packageManagerCommand("run typecheck");
+  }
+
+  if (packageJson?.scripts?.check) {
+    return packageManagerCommand("run check");
+  }
+
+  if (packageJson?.scripts?.build) {
+    return packageManagerCommand("run build");
+  }
+
+  if (packageJson?.scripts?.lint) {
+    return packageManagerCommand("run lint");
+  }
+
+  if (await textFileExists(joinLocalPath(root, ["tsconfig.json"]))) {
+    return packageBinCommand("tsc", "--noEmit");
+  }
+
+  const singleNodeCheckPath = paths.length === 1 && isNodeCheckableJavaScriptPath(paths[0]) ? paths[0] : "";
+
+  if (singleNodeCheckPath) {
+    return `${getHostPlatform() === "windows" ? "node.exe" : "node"} --check ${quoteShellArg(singleNodeCheckPath, getDefaultTerminalShell())}`;
+  }
+
+  if (await textFileExists(joinLocalPath(root, ["Cargo.toml"]))) {
+    return "cargo check";
+  }
+
+  return "";
+}
+
+function isSyntaxCheckCandidatePath(path: string) {
+  return /\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx|json|css|scss|sass|less|html|svelte|vue|rs|go|py|java|kt|swift)$/i.test(path);
+}
+
+function isNodeCheckableJavaScriptPath(path: string) {
+  return /\.(?:cjs|js|mjs)$/i.test(path);
+}
+
 function packageManagerCommand(args: string) {
   return `${getHostPlatform() === "windows" ? "npm.cmd" : "npm"} ${args}`;
 }
@@ -4281,10 +5106,6 @@ function getDisabledToolReason(tool: LocalComputerToolName, settings: ToolRegist
 
   if (tool === "typescript_check" && !tools.typescriptTools) {
     return "TypeScript tools are disabled in Toolbox.";
-  }
-
-  if ((tool === "vector_embed_text" || tool === "vector_search") && !tools.vectorTools) {
-    return "vector tools are disabled in Toolbox.";
   }
 
   if ((tool === "create_api_route" || tool === "codebase_health_scan" || tool === "dependency_audit") && !tools.codeGeneration) {

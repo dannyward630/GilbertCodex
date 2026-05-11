@@ -13,9 +13,7 @@ export type CodingToolName =
   | "prevent_duplicate_file_create"
   | "react_native_setup_check"
   | "run_tests"
-  | "typescript_check"
-  | "vector_embed_text"
-  | "vector_search";
+  | "typescript_check";
 
 export const CODING_TOOL_NAMES = new Set<CodingToolName>([
   "check_duplicate_file",
@@ -33,8 +31,6 @@ export const CODING_TOOL_NAMES = new Set<CodingToolName>([
   "react_native_setup_check",
   "run_tests",
   "typescript_check",
-  "vector_embed_text",
-  "vector_search",
 ]);
 
 export interface GeneratedCodingFile {

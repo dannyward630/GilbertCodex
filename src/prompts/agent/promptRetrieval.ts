@@ -3,13 +3,15 @@ import { PROMPT_CATALOG, createPromptChunkSearchText, type PromptChunk } from ".
 import { cosineSimilarity, createPromptEmbedding, createPromptTermSet, type PromptEmbedding } from "./promptEmbedding";
 import { isDeepResearchThinking } from "../../types/settings";
 import { normalizeToolRegistrySettings } from "../../types/tools";
+import { getDetectedProjectTypes } from "../../tools/workspaceContext";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
 
-const STANDARD_SKILL_TOKEN_BUDGET = 1600;
-const DEEP_RESEARCH_SKILL_TOKEN_BUDGET = 2300;
-const MAX_RETRIEVED_CHUNKS = 6;
+const STANDARD_SKILL_TOKEN_BUDGET = 2200;
+const DEEP_RESEARCH_SKILL_TOKEN_BUDGET = 2900;
+const MAX_RETRIEVED_CHUNKS = 7;
 const MIN_RELEVANCE_SCORE = 0.055;
+const HIGH_PRIORITY_FLOOR_EXEMPTION = 75;
 
 interface IndexedPromptChunk {
   chunk: PromptChunk;
@@ -84,7 +86,25 @@ export function selectPromptChunks(context: AgentPromptRetrievalContext): Select
       tokens,
     };
   })
-    .filter((entry) => entry.chunk.alwaysInclude || forcedChunkIds.has(entry.chunk.id) || (isChunkAllowed(entry.chunk, context) && entry.score >= MIN_RELEVANCE_SCORE))
+    .filter((entry) => {
+      if (entry.chunk.alwaysInclude || forcedChunkIds.has(entry.chunk.id)) {
+        return true;
+      }
+
+      if (!isChunkAllowed(entry.chunk, context)) {
+        return false;
+      }
+
+      // High-priority chunks (project recipes, runtime tooling) skip the
+      // similarity floor — they carry load-bearing instructions and should
+      // surface whenever the chunk is allowed by toggles, even on short or
+      // generic prompts.
+      if (entry.chunk.priority >= HIGH_PRIORITY_FLOOR_EXEMPTION) {
+        return true;
+      }
+
+      return entry.score >= MIN_RELEVANCE_SCORE;
+    })
     .sort((left, right) => {
       if (left.chunk.alwaysInclude !== right.chunk.alwaysInclude) {
         return left.chunk.alwaysInclude ? -1 : 1;
@@ -174,7 +194,7 @@ function getForcedChunkIds(context: AgentPromptRetrievalContext) {
     forced.add("tool.web-search");
   }
 
-  if (tools.fileCreation && /\b(create|write|file|markdown|react|html|pdf|artifact|folder)\b/i.test(context.query)) {
+  if (tools.fileCreation && isFileCreationLike(context.query)) {
     forced.add("tool.file-creation");
   }
 
@@ -190,7 +210,30 @@ function getForcedChunkIds(context: AgentPromptRetrievalContext) {
     forced.add("skill.coding-agent-workflow");
   }
 
+  const detectedTypes = getDetectedProjectTypes();
+  const promptText = context.latestUserPrompt;
+
+  if (detectedTypes.has("node") || detectedTypes.has("tauri") || isNodeLike(promptText)) {
+    forced.add("skill.language-node");
+  }
+
+  if (detectedTypes.has("python") || isPythonLike(promptText)) {
+    forced.add("skill.language-python");
+  }
+
   return forced;
+}
+
+function isFileCreationLike(query: string) {
+  return /\b(create|write|file|markdown|react|html|pdf|artifact|folder|app|project|scaffold|init|setup|generate|build me|new|todo|crud|cli|server|api)\b/i.test(query);
+}
+
+function isNodeLike(prompt: string) {
+  return /\b(node|nodejs|node\.js|npm|pnpm|yarn|bun|package\.json|express|next\.?js|vite|react|tauri|expo|react native|typescript|tsx|jsx|monorepo)\b/i.test(prompt);
+}
+
+function isPythonLike(prompt: string) {
+  return /\b(python|py|pip|pipenv|poetry|uv|venv|virtualenv|pyproject|requirements\.txt|django|flask|fastapi|pytest|mypy|ruff|conda)\b/i.test(prompt);
 }
 
 function isChunkAllowed(chunk: PromptChunk, context: AgentPromptRetrievalContext) {
@@ -259,7 +302,6 @@ function getEnabledToolNames(settings: ProviderSettings) {
     tools.codeEdit ? "write_file" : "",
     tools.fileCreation ? "create_files" : "",
     tools.fileSafety ? "delete_file" : "",
-    tools.vectorTools ? "vector_search" : "",
     tools.testingTools ? "run_tests" : "",
     tools.typescriptTools ? "typescript_check" : "",
     tools.terminal ? "run_terminal" : "",
@@ -279,7 +321,6 @@ function hasAnyLocalTool(settings: ProviderSettings) {
     tools.fileSafety ||
     tools.pdfTools ||
     tools.colorTools ||
-    tools.vectorTools ||
     tools.testingTools ||
     tools.typescriptTools ||
     tools.sqlTools ||

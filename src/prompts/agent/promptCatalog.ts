@@ -1,6 +1,8 @@
 import codingWorkflow from "./instructions/coding/SKILL.md?raw";
 import coreInstructions from "./instructions/core.md?raw";
 import frontendQuality from "./instructions/frontend/SKILL.md?raw";
+import nodeProjectSkill from "./instructions/languages/node/SKILL.md?raw";
+import pythonProjectSkill from "./instructions/languages/python/SKILL.md?raw";
 import planningMode from "./instructions/planning/SKILL.md?raw";
 import researchFacts from "./instructions/research/SKILL.md?raw";
 import codeReview from "./instructions/review/SKILL.md?raw";
@@ -127,6 +129,64 @@ export const PROMPT_CATALOG: PromptChunk[] = [
     maxTokens: 260,
     priority: 62,
     title: "File Creation Tools",
+  },
+  {
+    content: nodeProjectSkill,
+    id: "skill.language-node",
+    keywords: [
+      "node",
+      "nodejs",
+      "node.js",
+      "npm",
+      "pnpm",
+      "yarn",
+      "bun",
+      "package.json",
+      "javascript",
+      "typescript",
+      "react",
+      "next",
+      "nextjs",
+      "vite",
+      "express",
+      "tauri",
+      "expo",
+      "react native",
+      "monorepo",
+      "workspaces",
+    ],
+    kind: "skill",
+    maxTokens: 340,
+    priority: 78,
+    title: "Node Project Recipe",
+  },
+  {
+    content: pythonProjectSkill,
+    id: "skill.language-python",
+    keywords: [
+      "python",
+      "py",
+      "pip",
+      "pipenv",
+      "poetry",
+      "uv",
+      "venv",
+      "virtualenv",
+      "pyproject",
+      "requirements.txt",
+      "django",
+      "flask",
+      "fastapi",
+      "pytest",
+      "mypy",
+      "ruff",
+      "conda",
+      "anaconda",
+    ],
+    kind: "skill",
+    maxTokens: 340,
+    priority: 78,
+    title: "Python Project Recipe",
   },
 ];
 

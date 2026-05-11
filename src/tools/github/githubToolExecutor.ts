@@ -204,13 +204,33 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
     }
     case "github_search_code": {
       const maybeRepo = await maybeRepositoryArgsWithInference(args, context);
-      const result = await searchGithubCode({
+      const requestedPerPage = numberArg(args, ["per_page", "perPage", "limit"]);
+      const searchRequest = {
         ...maybeRepo,
         branch: firstArg(args, ["branch", "ref"]),
         page: numberArg(args, ["page"]),
-        perPage: numberArg(args, ["per_page", "perPage", "limit"]),
+        perPage: requestedPerPage,
         query: requiredArg(args, ["query", "q", "search", "text"]),
-      });
+      };
+      let result = await searchGithubCode(searchRequest);
+
+      // GitHub's code search frequently times out on broad queries and returns
+      // `incomplete_results=true`. Retry once with half the page size so the
+      // server can finish before its internal timeout.
+      if (result.incompleteResults) {
+        const retryPerPage = Math.max(10, Math.floor((requestedPerPage ?? 30) / 2));
+
+        if (!requestedPerPage || retryPerPage < requestedPerPage) {
+          const retryResult = await searchGithubCode({
+            ...searchRequest,
+            perPage: retryPerPage,
+          });
+
+          if (!retryResult.incompleteResults || retryResult.items.length > result.items.length) {
+            result = retryResult;
+          }
+        }
+      }
 
       return {
         content: formatCodeSearch(result),
@@ -752,15 +772,20 @@ function formatReadFile(file: Awaited<ReturnType<typeof readGithubFile>>) {
 }
 
 function formatCodeSearch(result: Awaited<ReturnType<typeof searchGithubCode>>) {
+  const incompleteHint = result.incompleteResults
+    ? "Incomplete results: GitHub timed out before searching every shard even after a smaller-page retry. Refine the query (add path:, repo:, or extension: filters) for full coverage."
+    : "";
+
   if (result.items.length === 0) {
-    return `Matches: 0\nTotal count: ${result.totalCount}`;
+    return [`Matches: 0\nTotal count: ${result.totalCount}`, incompleteHint].filter(Boolean).join("\n");
   }
 
   return [
     `Matches returned: ${result.items.length}`,
     `Total count: ${result.totalCount}${result.incompleteResults ? " (incomplete)" : ""}`,
     ...result.items.map((item, index) => `${index + 1}. ${item.repositoryFullName}:${item.path} (${item.sha.slice(0, 12)})\n   ${item.htmlUrl}`),
-  ].join("\n");
+    incompleteHint,
+  ].filter(Boolean).join("\n");
 }
 
 function formatReleaseNotes(notes: Awaited<ReturnType<typeof generateGithubReleaseNotes>>) {

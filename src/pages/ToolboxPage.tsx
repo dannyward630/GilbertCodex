@@ -162,17 +162,6 @@ const currentTools: ToolSurface[] = [
     summary: "Generate chat, notes, and Markdown-backed PDFs directly from the agent tool path.",
   },
   {
-    capabilities: ["vector_embed_text", "vector_search", "Semantic"],
-    detail: "Embeddings",
-    icon: Database,
-    id: "vectorTools",
-    label: "Vector Tools",
-    phase: "Current",
-    rail: "Retrieval",
-    status: "Active",
-    summary: "Create local text embeddings and run semantic workspace search through the file index.",
-  },
-  {
     capabilities: ["run_tests", "create_unit_test", "Reports"],
     detail: "Project checks",
     icon: Workflow,

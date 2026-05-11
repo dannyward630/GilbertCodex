@@ -6,6 +6,7 @@ import {
   type SelectedPromptChunk,
 } from "./promptRetrieval";
 import { createRuntimeToolPrompt } from "./runtimeToolPrompt";
+import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "../../tools/workspaceContext";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
 
@@ -34,6 +35,7 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings }: Agent
   const selectedChunkIds = new Set(selectedChunks.map((entry) => entry.chunk.id));
   const sections = [
     formatCurrentRuntimeContext(),
+    formatCurrentWorkspaceContext(),
     ...selectedChunks.map((entry) => formatPromptChunk(entry)),
     formatConfiguredSystemPrompt(settings.systemPrompt),
     formatUserInstructions(settings.userInstructions),
@@ -83,6 +85,10 @@ function formatCurrentRuntimeContext() {
     "Treat this date/time as authoritative for relative dates such as today, tomorrow, yesterday, latest, recent, currently, and now.",
     "For current, latest, changing, or source-backed facts, use provided web context or call web_search when that tool is enabled. If live web evidence is unavailable, say what could not be verified instead of relying on stale model memory.",
   ].join("\n");
+}
+
+function formatCurrentWorkspaceContext() {
+  return formatWorkspaceContextForPrompt(getWorkspaceContextSnapshot());
 }
 
 function formatConfiguredSystemPrompt(systemPrompt: string) {

@@ -240,7 +240,7 @@ function ApprovalPanel({
               <button
                 type="button"
                 data-variant="session"
-                title="Allow this exact action for this app session"
+                title="Allow this tool for this workspace session"
                 onClick={() => onResolve(approval.id, { scope: "session", status: "approved" })}
               >
                 <Pin size={14} aria-hidden="true" />

@@ -818,8 +818,6 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.fileSafety ? "prevent_duplicate_file_create" : "",
     tools.pdfTools ? "create_chat_pdf" : "",
     tools.codeEdit ? "inline_edit" : "",
-    tools.vectorTools ? "vector_embed_text" : "",
-    tools.vectorTools ? "vector_search" : "",
     tools.testingTools ? "run_tests" : "",
     tools.testingTools ? "create_unit_test" : "",
     tools.typescriptTools ? "typescript_check" : "",

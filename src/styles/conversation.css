@@ -243,7 +243,7 @@
 .conversation-body[data-browser-expanded="true"] .browser-preview-panel {
   position: absolute;
   inset: calc(var(--conversation-header-height, 54px) + 10px) 10px 10px;
-  z-index: 25;
+  z-index: 80;
   height: auto;
   margin: 0;
 }

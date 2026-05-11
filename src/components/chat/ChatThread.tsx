@@ -5,9 +5,10 @@ import { MessageActions } from "./MessageActions";
 import { MessageBlock } from "./MessageBlock";
 import { PlanReviewCard } from "./PlanReviewCard";
 import { ThinkingDisclosure } from "../thinking/ThinkingDisclosure";
+import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import type { AppInfo } from "../../types/app";
 import type { AgentApprovalDecision } from "../../types/agentRun";
-import type { ChatContextCompaction, ChatMessageSource, ChatSummary } from "../../types/chat";
+import type { ChatContextCompaction, ChatMessage, ChatMessageSource, ChatSummary } from "../../types/chat";
 
 const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
 const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
@@ -145,7 +146,8 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
         const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, message.reasoning) : { content: message.content, reasoning: message.reasoning };
         const hasVisibleContent = displayMessage.content.trim().length > 0;
         const hasVisibleAttachment = Boolean(message.attachments?.length);
-        const hasThinkingIndicator = message.role === "assistant" && Boolean(message.thinking || displayMessage.reasoning?.trim());
+        const activity = message.role === "assistant" ? getAssistantActivity(message) : null;
+        const hasThinkingIndicator = message.role === "assistant" && Boolean(message.thinking || displayMessage.reasoning?.trim() || activity);
         const showPlanReview = shouldShowPlanReviewCard(message);
 
         if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasThinkingIndicator && !showPlanReview) {
@@ -166,8 +168,10 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                   completedAt={message.thinking?.completedAt}
                   content={displayMessage.reasoning}
                   isPrivate
-                  isThinking={Boolean(message.thinking && !message.thinking.completedAt)}
+                  isThinking={Boolean(message.isStreaming || (message.thinking && !message.thinking.completedAt) || activity?.active)}
+                  liveDetail={activity?.detail}
                   onOpenActivity={onOpenActivity}
+                  progressLabel={activity?.label}
                   startedAt={message.thinking?.startedAt}
                 />
               ) : null}
@@ -191,12 +195,70 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                 onRegenerateResponse={onRegenerateResponse}
                 onStopGeneration={onStopGeneration}
               />
+              {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? (
+                <ResponseRecoveryActions messageId={message.id} onOpenActivity={onOpenActivity} onRegenerateResponse={onRegenerateResponse} />
+              ) : null}
             </MessageBlock>
           </Fragment>
         );
       })}
     </div>
   );
+}
+
+function ResponseRecoveryActions({
+  messageId,
+  onOpenActivity,
+  onRegenerateResponse,
+}: {
+  messageId: string;
+  onOpenActivity?: () => void;
+  onRegenerateResponse?: (messageId: string) => void | Promise<void>;
+}) {
+  return (
+    <div className="response-recovery-actions">
+      <button type="button" onClick={() => void onRegenerateResponse?.(messageId)}>
+        Continue response
+      </button>
+      {onOpenActivity ? (
+        <button type="button" onClick={onOpenActivity}>
+          Open activity
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function getAssistantActivity(message: ChatMessage) {
+  const activeProgress = [...(message.progress ?? [])].reverse().find((item) => item.status === "active");
+  const activeTool = [...(message.toolCalls ?? [])].reverse().find((toolCall) => toolCall.status === "active");
+  const waitingTool = [...(message.toolCalls ?? [])].reverse().find((toolCall) => toolCall.status === "waiting_approval");
+  const toolCount = message.toolCalls?.length ?? 0;
+  const completeTools = message.toolCalls?.filter((toolCall) => toolCall.status === "complete").length ?? 0;
+  const activeTools = message.toolCalls?.filter((toolCall) => toolCall.status === "active").length ?? 0;
+  const errorTools = message.toolCalls?.filter((toolCall) => toolCall.status === "error" || toolCall.status === "skipped").length ?? 0;
+  const webStatus = message.webSearch?.enabled ? message.webSearch.status : undefined;
+  const active = Boolean(message.isStreaming || activeProgress || activeTool || webStatus === "active");
+
+  if (!active && !toolCount && !activeProgress && !waitingTool && webStatus !== "error") {
+    return null;
+  }
+
+  const label = activeProgress?.label ?? activeTool?.label ?? waitingTool?.label ?? (webStatus === "active" ? "Searching web" : toolCount ? "Reviewing tool results" : "Working");
+  const details = [
+    activeProgress?.detail,
+    activeTool?.detail,
+    waitingTool ? "Waiting for your approval in Activity." : "",
+    toolCount ? `${toolCount} tools: ${completeTools} complete${activeTools ? `, ${activeTools} running` : ""}${errorTools ? `, ${errorTools} blocked` : ""}` : "",
+    webStatus === "active" ? "Web search is still running." : "",
+    webStatus === "error" ? message.webSearch?.error ?? "Web search failed." : "",
+  ].filter(Boolean);
+
+  return {
+    active,
+    detail: details.join(" "),
+    label,
+  };
 }
 
 function DiscordMessageSource({ source }: { source: ChatMessageSource }) {

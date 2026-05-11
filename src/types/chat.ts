@@ -107,6 +107,7 @@ export interface ChatToolCallTerminal {
   exitCode?: number | null;
   live?: boolean;
   outputTruncated?: boolean;
+  sessionId?: string;
   shell?: TerminalShellId;
   timedOut?: boolean;
   workingDirectory?: string;

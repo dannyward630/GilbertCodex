@@ -21,7 +21,7 @@ Delivered:
 - Discord slash-command bridge setup and runtime with chat-mode selection, Discord application fields, signed interaction receiver, ngrok-backed public URL discovery, incoming channel webhook storage, GitHub-to-Discord event options, generated GitHub payload URL, and setup checklist copying.
 - Local computer workspace context with folder selection, browser folder fallback, file indexing, file search, read, and write helpers.
 - Typed file creation tools for TXT, Markdown, code, React, HTML, PDF, notes, duplicate-safe writes, delete-file safety, and multi-file batches.
-- Coding tool pack for chat PDF generation, inline edits, vectors, tests, TypeScript checks, SQL files, React Native screens, unit tests, API routes, dependency reports, and codebase health scans.
+- Coding tool pack for chat PDF generation, inline edits, context recall, tests, TypeScript checks, SQL files, React Native screens, unit tests, API routes, dependency reports, and codebase health scans.
 - Terminal panel for desktop PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
 - Toolbox feature toggles for provider, planning, thinking, web search, local Git/GitHub source control, local computer, terminal, browser preview, and future tools.
 - Confirmation dialogs for destructive chat deletion and settings reset flows.
@@ -35,6 +35,7 @@ Delivered:
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.
 - Customer-facing Windows installer path with branded light/dark-safe NSIS artwork, WebView2 runtime checks, install-scope selection, Start menu metadata, license metadata, and a documented `npm.cmd run app:installer` build flow.
+- Version 0.2.3 Terminal Stability Pack prep for PowerShell compatibility helpers, npm shim handling, live background command attachment, buffered command progress, longer verification timeouts, approval-resume dedupe, workspace-aware prompt context, Node/Python project recipes, browser-preview probing, pasted-image attachments, and external-link handoff hardening.
 - Version 0.2.2 Stability Pack 1 prep for signed updater follow-through, interactive PTY/xterm terminal stability, account-scoped database storage, safer GitHub token isolation, richer Git review/commit/push controls, web-search timeout hardening, generated chat titles, targeted response stopping, and provider stream snapshot handling.
 - Version 0.2.1 hotfix prep for GitHub browser auth reliability, clearer OAuth setup, safer missing-update-feed handling, release workflow tag resolution, and tool-run continuation fixes.
 - Version 0.0.2 release prep for local Git review UX, broader GitHub release/workflow tooling, update checks, contributor infrastructure, and refreshed README media.

@@ -98,10 +98,30 @@
   background: rgba(120, 196, 151, 0.11);
 }
 
+.terminal-title span[data-status="running"] {
+  color: #add7ff;
+  border-color: rgba(143, 199, 255, 0.32);
+  background: rgba(143, 199, 255, 0.12);
+}
+
 .terminal-title span[data-status="error"] {
   color: #ffaaa2;
   border-color: rgba(255, 107, 95, 0.3);
   background: rgba(255, 107, 95, 0.1);
+}
+
+.terminal-title em {
+  display: block;
+  max-width: min(360px, 32vw);
+  min-width: 0;
+  overflow: hidden;
+  color: #8d98a4;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-shell-select {
