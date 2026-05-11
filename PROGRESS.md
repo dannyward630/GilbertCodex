@@ -34,6 +34,8 @@ Delivered:
 - Source documentation standards plus JSDoc/Rust doc coverage for key runtime, tool, GitHub, web-search, and workspace APIs.
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.
+- Customer-facing Windows installer path with branded light/dark-safe NSIS artwork, WebView2 runtime checks, install-scope selection, Start menu metadata, license metadata, and a documented `npm.cmd run app:installer` build flow.
+- Version 0.2.1 hotfix prep for GitHub browser auth reliability, clearer OAuth setup, safer missing-update-feed handling, release workflow tag resolution, and tool-run continuation fixes.
 - Version 0.0.2 release prep for local Git review UX, broader GitHub release/workflow tooling, update checks, contributor infrastructure, and refreshed README media.
 - macOS/Linux port groundwork documented in `docs/platform/README.md`, with native verification still outstanding.
 
@@ -61,7 +63,7 @@ Delivered:
 - Improve ignored-folder handling in local workspace indexing.
 - Add model/provider profiles for local, OpenRouter, and future backends.
 - Add exportable conversation and task summaries.
-- Add code signing, automatic updates, and multi-platform release artifacts.
+- Add code signing, signed automatic update artifacts, and multi-platform release artifacts.
 - Finish macOS and Linux native verification, packaging, and any required platform-specific fixes.
 
 ## Open Questions

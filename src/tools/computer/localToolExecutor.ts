@@ -339,7 +339,7 @@ export async function runLocalComputerToolCalls({
           : "Terminal policy: run_terminal, create_tool, and run_tool may run inside the selected/current workspace roots without approval prompts."
       : "Terminal policy: terminal tools are disabled in Toolbox.",
     tools.codeEdit || tools.fileCreation
-      ? "Source edit policy: use edit_file, write_file, or create_files for source/text changes. Terminal commands that directly write source files through here-strings, Set-Content, Out-File, Tee-Object, or redirection are rejected so code edits stay structured and reviewable."
+      ? "Source edit policy: use view_code plus edit_file/inline_edit for existing source/text files, and reserve write_file/create_files for new files or intentional full-file replacement after reading the current file. Terminal commands that directly write source files through here-strings, Set-Content, Out-File, Tee-Object, or redirection are rejected so code edits stay structured and reviewable."
       : "",
     tools.webSearch
       ? "Web policy: web_search may run on demand for current facts, docs, debugging, source-backed answers, official API/library behavior, changelogs, error messages, brand/design facts, or color specs that are not in the local color database."
@@ -1412,6 +1412,13 @@ function getGitRunPolicy(settings: LocalWorkspaceSettings, roots: string[], work
     return {
       allowed: false,
       reason: "read-only mode blocks Git mutations.",
+    };
+  }
+
+  if (roots.length === 0 || !workingDirectory) {
+    return {
+      allowed: false,
+      reason: "no project workspace folder is selected.",
     };
   }
 
@@ -3621,7 +3628,18 @@ function isAbsoluteLocalPath(path: string) {
 }
 
 function resolveTerminalWorkingDirectory(args: Record<string, string>, roots: string[]) {
-  return firstArg(args, ["cwd", "working_directory", "workingDirectory", "directory_path", "folder_path"]) || roots[0];
+  const fallbackRoot = roots[0] ?? "";
+  const requestedDirectory = firstArg(args, ["cwd", "working_directory", "workingDirectory", "directory_path", "folder_path"]);
+
+  if (!requestedDirectory) {
+    return fallbackRoot;
+  }
+
+  if (isAbsoluteLocalPath(requestedDirectory)) {
+    return requestedDirectory;
+  }
+
+  return resolveTerminalDirectoryPath(requestedDirectory, fallbackRoot) ?? requestedDirectory;
 }
 
 function getTerminalRunPolicy(settings: LocalWorkspaceSettings, roots: string[], workingDirectory: string) {
@@ -3643,6 +3661,13 @@ function getTerminalRunPolicy(settings: LocalWorkspaceSettings, roots: string[],
     return {
       allowed: false,
       reason: "Ask first mode needs explicit user confirmation before running terminal commands.",
+    };
+  }
+
+  if (roots.length === 0 || !workingDirectory) {
+    return {
+      allowed: false,
+      reason: "no project workspace folder is selected.",
     };
   }
 

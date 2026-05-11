@@ -8,7 +8,7 @@ Last updated: May 10, 2026.
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| Windows x64 | Verified alpha | The current public release and local verification were done on Windows. |
+| Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
 | macOS | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for macOS, but the desktop app still needs someone on macOS to run, package, and finish any native issues. |
 | Linux | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for Linux, but the desktop app still needs someone on Linux to run, package, and finish any native issues. |
 
@@ -16,6 +16,7 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 
 ## What Has Been Ported
 
+- Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
 - Tauri bundle targets are configured broadly so host-platform packages can be produced by each OS.
 - The desktop terminal supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
@@ -24,6 +25,16 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
 - Browser automation uses a platform-appropriate user agent.
 - Setup docs now use cross-platform `npm` commands, with a Windows `npm.cmd` note where useful.
+
+## Windows Packaging
+
+Use this command on Windows to build the customer installer:
+
+```powershell
+npm.cmd run app:installer
+```
+
+See [Windows Installer](../INSTALLER.md) for the bundled dependency notes, release checklist, and signing status.
 
 ## What Still Needs Native Testers
 

@@ -238,11 +238,15 @@
 
 .terminal-prompt {
   flex: 0 0 auto;
+  max-width: min(46vw, 520px);
   min-width: 34px;
+  overflow: hidden;
   color: #9ed4ff;
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-command-row input {

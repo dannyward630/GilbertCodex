@@ -1,6 +1,6 @@
 {
   "name": "gilbert-codex",
-  "version": "0.0.2",
+  "version": "0.2.1",
   "description": "GUI-first local desktop agent workspace built with React, Tauri, and Rust.",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,10 @@
     "check": "npm run build && npm run rust:fmt:check && npm run rust:check",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "installer:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-installer-assets.ps1",
+    "app:installer": "npm run installer:assets && tauri build --bundles nsis",
+    "app:release": "npm run installer:assets && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json"
   },
   "engines": {
     "node": ">=18"

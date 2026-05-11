@@ -98,6 +98,7 @@ pub struct TerminalDrainResponse {
     pub exit_code: Option<i32>,
     pub last_command_completed: bool,
     pub last_command_exit_code: Option<i32>,
+    pub working_directory: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -144,6 +145,11 @@ pub enum TerminalOutputStream {
     Stdout,
     #[serde(rename = "system")]
     System,
+}
+
+#[tauri::command]
+pub fn terminal_get_default_working_directory() -> String {
+    path_to_string(default_working_directory())
 }
 
 #[tauri::command]
@@ -350,6 +356,7 @@ pub fn terminal_drain_session(
         exit_code: session.exited,
         last_command_completed: session.last_command_completed,
         last_command_exit_code: session.last_command_exit_code,
+        working_directory: path_to_string(&session.working_directory),
     })
 }
 
@@ -838,11 +845,7 @@ fn resolve_working_directory(path: Option<String>) -> Result<PathBuf, String> {
 }
 
 fn default_working_directory() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    manifest_dir
-        .parent()
-        .map(Path::to_path_buf)
+    default_user_terminal_directory()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -851,6 +854,16 @@ fn default_home_directory() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+fn default_user_terminal_directory() -> Option<PathBuf> {
+    let home = default_home_directory()?;
+
+    if home.is_dir() {
+        return Some(home);
+    }
+
+    None
 }
 
 fn normalize_input_path(path: &Path) -> PathBuf {

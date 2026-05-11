@@ -34,6 +34,8 @@ const DEFAULT_TREE_LIMIT: usize = 900;
 const MAX_TREE_LIMIT: usize = 5_000;
 const DEFAULT_READ_BYTES: usize = 1024 * 1024;
 const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
+const GITHUB_HTTP_TIMEOUT_SECS: u64 = 18;
+const GITHUB_HTTP_CONNECT_TIMEOUT_SECS: u64 = 8;
 
 /// Shared lock for the local GitHub account store.
 #[derive(Default)]
@@ -692,7 +694,9 @@ pub async fn github_begin_device_login(
         .body(body)
         .send()
         .await
-        .map_err(|error| format!("GitHub browser login could not start: {error}"))?;
+        .map_err(|error| {
+            format!("GitHub browser login could not reach {GITHUB_DEVICE_CODE_URL}: {error}")
+        })?;
     let status = response.status();
     let body = response
         .text()
@@ -758,7 +762,9 @@ pub async fn github_poll_device_login(
         .body(body)
         .send()
         .await
-        .map_err(|error| format!("GitHub browser login poll failed: {error}"))?;
+        .map_err(|error| {
+            format!("GitHub browser login poll could not reach {GITHUB_OAUTH_TOKEN_URL}: {error}")
+        })?;
     let status = response.status();
     let body = response
         .text()
@@ -1638,7 +1644,8 @@ fn load_access_token(
 fn github_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(25))
+        .connect_timeout(Duration::from_secs(GITHUB_HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(GITHUB_HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|error| format!("Could not create GitHub client: {error}"))
 }

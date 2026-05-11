@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Download, RefreshCw, RotateCcw } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, RefreshCw, RotateCcw } from "lucide-react";
 import { checkForAppUpdate, installAppUpdate, type AppUpdateCheckResponse } from "../../app/tauriClient";
 
-type AppUpdateStage = "idle" | "checking" | "available" | "not-available" | "downloading" | "restarting" | "error";
+type AppUpdateStage = "idle" | "checking" | "available" | "not-available" | "feed-missing" | "downloading" | "restarting" | "error";
 
 interface AppUpdateProgress {
   contentLength: number | null;
@@ -58,10 +58,23 @@ export function useAppUpdateController(desktopRuntime: boolean): AppUpdateContro
 
       try {
         const result = await checkForAppUpdate();
-        setUpdate(result.available ? result : null);
-        setStage(result.available ? "available" : silent ? "idle" : "not-available");
+        setUpdate(result.available || result.feedStatus === "missing" ? result : null);
+        setStage(result.available ? "available" : silent ? "idle" : result.feedStatus === "missing" ? "feed-missing" : "not-available");
       } catch (checkError) {
+        const missingFeedMessage = getMissingFeedMessage(checkError);
         setUpdate(null);
+        if (missingFeedMessage) {
+          setUpdate({
+            available: false,
+            currentVersion: "unknown",
+            feedStatus: "missing",
+            message: missingFeedMessage,
+          });
+          setStage(silent ? "idle" : "feed-missing");
+          busyRef.current = false;
+          return;
+        }
+
         if (!silent) {
           setError(checkError instanceof Error ? checkError.message : "Update check failed.");
           setStage("error");
@@ -138,7 +151,7 @@ export function useAppUpdateController(desktopRuntime: boolean): AppUpdateContro
   }, [desktopRuntime, runCheck]);
 
   useEffect(() => {
-    if (stage !== "not-available") {
+    if (stage !== "not-available" && stage !== "feed-missing") {
       return;
     }
 
@@ -169,7 +182,16 @@ export function AppUpdateIndicator({ controller }: AppUpdateIndicatorProps) {
   const label = getUpdateLabel(controller);
   const title = getUpdateTitle(controller);
   const actionAvailable = controller.stage === "available";
-  const Icon = controller.stage === "not-available" ? CheckCircle2 : controller.stage === "restarting" ? RotateCcw : controller.stage === "checking" ? RefreshCw : Download;
+  const Icon =
+    controller.stage === "not-available"
+      ? CheckCircle2
+      : controller.stage === "feed-missing"
+        ? AlertCircle
+        : controller.stage === "restarting"
+          ? RotateCcw
+          : controller.stage === "checking"
+            ? RefreshCw
+            : Download;
 
   return (
     <button
@@ -203,6 +225,10 @@ function getUpdateLabel(controller: AppUpdateController) {
     return "Up to date";
   }
 
+  if (controller.stage === "feed-missing") {
+    return "No update feed";
+  }
+
   if (controller.stage === "downloading") {
     return "Updating";
   }
@@ -224,9 +250,26 @@ function getUpdateTitle(controller: AppUpdateController) {
     return controller.error ?? "Update failed. Click to check again.";
   }
 
+  if (controller.stage === "feed-missing") {
+    return controller.update?.message ?? "No signed update feed is published yet.";
+  }
+
   if (controller.stage === "downloading") {
     return controller.percent === null ? "Downloading update" : `Downloading update ${controller.percent}%`;
   }
 
   return getUpdateLabel(controller);
+}
+
+function getMissingFeedMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (!message) {
+    return null;
+  }
+
+  if (/valid release JSON|release JSON|latest\.json|ReleaseNotFound|404|Not Found/i.test(message)) {
+    return "No signed update feed is published yet. Publish a release with latest.json and signed updater artifacts before desktop installs can update automatically.";
+  }
+
+  return null;
 }

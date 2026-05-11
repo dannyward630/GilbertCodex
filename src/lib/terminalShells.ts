@@ -17,10 +17,10 @@ const SHELL_LABELS = {
 
 const SHELL_PROMPTS = {
   bash: "$",
-  cmd: "CMD",
-  powershell: "PS",
-  sh: "sh",
-  zsh: "zsh",
+  cmd: "CMD>",
+  powershell: "PS>",
+  sh: "$",
+  zsh: "%",
 } satisfies Record<TerminalShellId, string>;
 
 type NavigatorWithUserAgentData = Navigator & {
@@ -91,7 +91,21 @@ export function terminalShellLabel(shell: TerminalShellId) {
   return SHELL_LABELS[shell];
 }
 
-export function terminalPrompt(shell: TerminalShellId) {
+export function terminalPrompt(shell: TerminalShellId, workingDirectory?: string) {
+  const cwd = workingDirectory?.trim();
+
+  if (cwd) {
+    if (shell === "powershell") {
+      return `PS ${cwd}>`;
+    }
+
+    if (shell === "cmd") {
+      return `${cwd}>`;
+    }
+
+    return `${cwd} ${SHELL_PROMPTS[shell]}`;
+  }
+
   return SHELL_PROMPTS[shell];
 }
 

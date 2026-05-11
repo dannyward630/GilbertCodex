@@ -298,8 +298,7 @@ pub struct ComputerDeleteFileResult {
 /// Returns the user's default workspace path when the host can determine one.
 #[tauri::command]
 pub fn computer_get_default_workspace() -> Option<String> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.parent().map(path_to_string)
+    default_user_workspace_directory().map(path_to_string)
 }
 
 /// Lists host drives or root folders for workspace selection.
@@ -944,6 +943,23 @@ fn list_system_roots() -> Vec<ComputerDrive> {
 
         roots
     }
+}
+
+fn default_user_workspace_directory() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let documents = home.join("Documents");
+
+    if documents.is_dir() {
+        return Some(documents);
+    }
+
+    if home.is_dir() {
+        return Some(home);
+    }
+
+    std::env::current_dir().ok()
 }
 
 fn normalize_roots(roots: Vec<String>) -> Vec<PathBuf> {

@@ -1288,6 +1288,14 @@
   flex-wrap: wrap;
 }
 
+.github-oauth-actions {
+  flex-wrap: wrap;
+}
+
+.github-doc-link {
+  text-decoration: none;
+}
+
 .github-login-button {
   min-width: 190px;
 }
@@ -1308,6 +1316,12 @@
   color: #ff8a80;
   border-color: color-mix(in srgb, #ff8a80 30%, transparent);
   background: color-mix(in srgb, #ff8a80 10%, transparent);
+}
+
+.github-status-banner[data-kind="warning"] {
+  color: #ffd27a;
+  border-color: color-mix(in srgb, #ffd27a 30%, transparent);
+  background: color-mix(in srgb, #ffd27a 10%, transparent);
 }
 
 .github-repo-grid {

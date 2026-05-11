@@ -252,6 +252,12 @@
   background: rgba(157, 58, 48, 0.24);
 }
 
+.app-update-indicator[data-stage="feed-missing"] {
+  color: #fff0cf;
+  border-color: rgba(222, 168, 82, 0.44);
+  background: rgba(157, 114, 48, 0.24);
+}
+
 .app-update-indicator span {
   min-width: 0;
   overflow: hidden;

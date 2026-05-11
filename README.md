@@ -29,13 +29,13 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The latest Windows public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.0.2).
+The latest Windows public alpha is available from [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.2.1).
 
-Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
+Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.0.2 release notes](docs/releases/v0.0.2.md) for included capabilities, setup notes, known limitations, visual assets, and checksum details.
+See [v0.2.1 release notes](docs/releases/v0.2.1.md) for included hotfixes, setup notes, known limitations, and checksum details.
 
 ## Product Shape
 
@@ -54,6 +54,7 @@ See [v0.0.2 release notes](docs/releases/v0.0.2.md) for included capabilities, s
 |-- .github/               Issue forms, PR template, CODEOWNERS, CI, and Dependabot
 |-- public/                 Static app assets
 |-- docs/                   Project docs, tool contracts, and publishing checklists
+|   |-- INSTALLER.md        Windows customer installer build and release checklist
 |   |-- platform/           Platform support matrix and macOS/Linux port checklist
 |-- src/                    React frontend
 |   |-- app/                App composition, auth, runtime helpers, Tauri clients
@@ -67,6 +68,7 @@ See [v0.0.2 release notes](docs/releases/v0.0.2.md) for included capabilities, s
 |-- src-tauri/              Tauri 2 and Rust host layer
 |   |-- capabilities/       Window and runtime permissions
 |   |-- icons/              App icon assets generated from the project logo
+|   |-- windows/            Branded NSIS installer artwork
 |   |-- src/commands/       Auth, app info, computer, Discord, GitHub, terminal, and web commands
 |   |-- src/core/           Rust provider, job, storage, and agent scaffolding
 |   `-- tauri.conf.json     Desktop app configuration
@@ -126,6 +128,14 @@ npm run rust:check
 ```
 
 On Windows PowerShell, `npm.cmd` is also supported if local script execution policy blocks the `npm` shim.
+
+Build the Windows customer installer:
+
+```powershell
+npm.cmd run app:installer
+```
+
+See [Windows Installer](docs/INSTALLER.md) for what is bundled, what stays local, and the release checklist.
 
 ## Local Data And Secrets
 

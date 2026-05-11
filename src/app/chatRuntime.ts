@@ -57,6 +57,27 @@ export function looksLikeOnlyToolPrelude(content: string) {
   );
 }
 
+export function isToolResultFallbackAnswer(content: string) {
+  return (
+    content.includes("## Answer From Completed Tool Results") ||
+    content.includes("## Tool Run Needs Continuation") ||
+    content.includes("provider still did not return separate visible answer text")
+  );
+}
+
+/** Detects internal recovery prose that should be retried, not shown as an answer. */
+export function looksLikeInternalToolRecoveryAnswer(content: string) {
+  const normalized = content.trim().toLowerCase();
+
+  return (
+    isToolResultFallbackAnswer(content) ||
+    normalized.includes("use continue response to keep this same run moving") ||
+    normalized.includes("instead of leaving the chat blank") ||
+    /\b(provider|app)\b[\s\S]{0,160}\b(visible answer|tool results?|completed tool|saved evidence)\b/.test(normalized) ||
+    /\b(original request|what ran|evidence)\b[\s\S]{0,240}\b(executed|completed|tool call)\b/.test(normalized)
+  );
+}
+
 /** Creates a recovery turn that forces the model to answer from completed tool evidence. */
 export function createLocalToolFinalInstruction(prompt: string) {
   return [
@@ -65,6 +86,8 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "Use the agent tool results already provided as the evidence for your answer.",
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
     "If more evidence is truly required, emit concrete tool calls now. Otherwise write the final answer now.",
+    "Do not describe the tool loop, provider behavior, saved evidence, continuation state, recovery state, or why an answer was missing.",
+    "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Cite web sources with Markdown links when the tool results include URLs.",
     "Do not output raw tool_call XML or JSON as prose.",
@@ -78,6 +101,8 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     `Original user request: ${prompt}`,
     detail,
     "Use the tool results already provided as evidence and write the best final answer now.",
+    "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
+    "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Do not emit more tool_call XML or JSON. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
@@ -116,6 +141,10 @@ export function createInterruptedResponseContinuationInstruction(prompt: string,
 export function isInterruptedAssistantMessage(message: ChatMessage) {
   if (message.role !== "assistant" || message.isStreaming) {
     return false;
+  }
+
+  if (isToolResultFallbackAnswer(message.content)) {
+    return true;
   }
 
   if (message.status === "error" || message.agentRunStatus === "failed" || message.agentRunStatus === "running" || message.agentRunStatus === "queued") {

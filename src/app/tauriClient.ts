@@ -19,7 +19,7 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.0.2",
+  version: "0.2.1",
   phase: "Public alpha",
   runtime: "Browser preview",
 };
@@ -116,6 +116,8 @@ export interface AppUpdateCheckResponse {
   body?: string | null;
   currentVersion: string;
   date?: string | null;
+  feedStatus?: "ready" | "missing";
+  message?: string | null;
   target?: string | null;
   version?: string | null;
 }
@@ -159,6 +161,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateCheckResponse> {
     return {
       available: false,
       currentVersion: fallbackAppInfo.version,
+      feedStatus: "ready",
     };
   }
 
@@ -303,6 +306,14 @@ function createWorkspaceDependencyPreviewDiagnostic(message: string): WorkspaceD
 
 export async function createTerminalSession(request: TerminalCreateSessionRequest): Promise<TerminalCreateSessionResponse> {
   return invoke<TerminalCreateSessionResponse>("terminal_create_session", { request });
+}
+
+export async function getDefaultTerminalWorkingDirectory(): Promise<string> {
+  if (!isTauriDesktopRuntime()) {
+    return "";
+  }
+
+  return invoke<string>("terminal_get_default_working_directory");
 }
 
 /** Runs a command through the native terminal session manager. */

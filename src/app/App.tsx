@@ -82,6 +82,8 @@ import {
   getPlanningInputRequests,
   isAbortError,
   isInterruptedAssistantMessage,
+  isToolResultFallbackAnswer,
+  looksLikeInternalToolRecoveryAnswer,
   looksLikeOnlyToolPrelude,
   markPlanningInputAnswered,
   mergeChatSources,
@@ -93,6 +95,7 @@ import { mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortPr
 import { createChatSourcesFromWebResults, createWebSearchContextMessage, MAX_WEB_SEARCH_RESULTS, searchDuckDuckGo } from "../services/webSearchClient";
 import {
   getAppInfo,
+  getDefaultTerminalWorkingDirectory,
   isTauriDesktopRuntime,
   listenForDiscordInteractions,
   sendDiscordInteractionResponse,
@@ -169,6 +172,16 @@ interface DiscordStreamUpdate {
   sources?: ChatSource[];
   status?: string;
   toolCall?: ChatToolCall;
+}
+
+interface AssistantToolResponse {
+  approvalRequests?: AgentApproval[];
+  content: string;
+  pendingToolCallContent?: string;
+  progress?: ChatProgressItem;
+  reasoning?: string;
+  toolCalls?: ChatToolCall[];
+  waitingForApproval?: boolean;
 }
 
 type SessionApprovalDecisionMap = Record<string, AgentApprovalDecision>;
@@ -454,7 +467,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     name: "Gilbert Codex",
     phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.0.2",
+    version: "0.2.1",
   });
   const [sendingChatId, setSendingChatId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -463,6 +476,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [browserPreviewTarget, setBrowserPreviewTarget] = useState<{ id: number; url: string } | null>(null);
   const [terminalHeight, setTerminalHeight] = useState(284);
+  const [defaultTerminalWorkingDirectory, setDefaultTerminalWorkingDirectory] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [noticeDialog, setNoticeDialog] = useState<{ description?: string; title: string } | null>(null);
   const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
@@ -536,6 +550,26 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     void prepareDesktopNotifications();
+  }, [isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) {
+      return;
+    }
+
+    let disposed = false;
+
+    void getDefaultTerminalWorkingDirectory()
+      .then((path) => {
+        if (!disposed) {
+          setDefaultTerminalWorkingDirectory(path);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+    };
   }, [isDesktopRuntime]);
 
   useEffect(() => {
@@ -2440,18 +2474,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     requestId: number;
     resumeToolCallContent?: string;
     workspaceSettings: LocalWorkspaceSettings;
-  }) {
+  }): Promise<AssistantToolResponse> {
     let messages = messagesForProvider;
     let localProgress: ChatProgressItem | undefined;
-    let finalResponse: {
-      approvalRequests?: AgentApproval[];
-      content: string;
-      pendingToolCallContent?: string;
-      progress?: ChatProgressItem;
-      reasoning?: string;
-      toolCalls?: ChatToolCall[];
-      waitingForApproval?: boolean;
-    } = {
+    let finalResponse: AssistantToolResponse = {
       content: "",
       reasoning: undefined,
       toolCalls: undefined,
@@ -2470,7 +2496,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : MAX_LOCAL_TOOL_PASSES;
     const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : MAX_LOCAL_TOOL_EXECUTIONS;
 
-    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
+    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], _detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
       if (allToolCalls.length === 0 || isRequestInactive(requestId, controller)) {
         return null;
       }
@@ -2498,55 +2524,67 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         },
         temperature: Math.min(baseSynthesisSettings.temperature, 0.25),
       };
-      const synthesisInstruction = createLocalToolBudgetFinalInstruction(
-        prompt,
+      const synthesisRetries = [
+        "",
         [
-          `The app already gathered ${totalExecutedToolCalls} local tool result${totalExecutedToolCalls === 1 ? "" : "s"}.`,
-          detail,
-          "Tools are disabled for this synthesis pass. Use the saved tool outputs above and write the visible final answer now.",
+          "The previous final-answer attempt exposed internal runtime state instead of answering the user.",
+          "Rewrite only the user-facing answer. Do not mention the app, provider, tool loop, tool calls, saved evidence, continuation, fallback, or recovery.",
         ].join("\n"),
-      );
-      const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings);
+      ];
 
-      if (synthesisCompaction.contextCompaction) {
-        const compactionProgress = createContextCompactionProgress(synthesisCompaction);
+      for (const retryInstruction of synthesisRetries) {
+        const synthesisInstruction = createLocalToolBudgetFinalInstruction(
+          prompt,
+          [
+            `The prior tool pass supplied ${totalExecutedToolCalls} observation${totalExecutedToolCalls === 1 ? "" : "s"} for this request.`,
+            "Use those observations silently as evidence and write only the visible answer the user asked for.",
+            retryInstruction,
+          ].filter(Boolean).join("\n"),
+        );
+        const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings);
 
-        updateGeneratedMessage(chatId, messageId, (message) => ({
-          ...withContextCompactionMarker(message, synthesisCompaction.contextCompaction),
-          progress: withContextCompactionProgress(compactionProgress, message.progress),
-        }));
-      }
+        if (synthesisCompaction.contextCompaction) {
+          const compactionProgress = createContextCompactionProgress(synthesisCompaction);
 
-      try {
-        recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings);
-        const response = await sendProviderMessage(synthesisSettings, synthesisCompaction.messages, {
-          signal: controller.signal,
-        });
-        recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage);
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...withContextCompactionMarker(message, synthesisCompaction.contextCompaction),
+            progress: withContextCompactionProgress(compactionProgress, message.progress),
+          }));
+        }
 
-        if (isRequestInactive(requestId, controller)) {
+        try {
+          recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings);
+          const response = await sendProviderMessage(synthesisSettings, synthesisCompaction.messages, {
+            signal: controller.signal,
+          });
+          recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage);
+
+          if (isRequestInactive(requestId, controller)) {
+            return null;
+          }
+
+          const content = sanitizeLocalToolCallsForDisplay(response.content, toolExecutionPolicy).trim();
+
+          if (!content || looksLikeOnlyToolPrelude(content) || looksLikeInternalToolRecoveryAnswer(content)) {
+            continue;
+          }
+
+          return {
+            content,
+            progress: localProgress,
+            reasoning: response.reasoning ?? fallbackReasoning,
+            toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+          };
+        } catch (error) {
+          if (isAbortError(error) || isRequestInactive(requestId, controller)) {
+            throw error;
+          }
+
           return null;
         }
-
-        const content = sanitizeLocalToolCallsForDisplay(response.content, toolExecutionPolicy).trim();
-
-        if (!content || looksLikeOnlyToolPrelude(content)) {
-          return null;
-        }
-
-        return {
-          content,
-          progress: localProgress,
-          reasoning: response.reasoning ?? fallbackReasoning,
-          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        };
-      } catch (error) {
-        if (isAbortError(error) || isRequestInactive(requestId, controller)) {
-          throw error;
-        }
-
-        return null;
       }
+
+      return null;
     }
 
     if (resumeToolCallContent) {
@@ -2719,7 +2757,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
+          content: createToolFinalAnswerUnavailableMessage(),
           progress: localProgress,
           reasoning: undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -2782,7 +2820,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
+          content: createToolFinalAnswerUnavailableMessage(),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -2805,7 +2843,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             }
 
             return {
-              content: createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
+              content: createToolFinalAnswerUnavailableMessage(),
               progress: localProgress,
               reasoning: assistantResponse.reasoning,
               toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -2954,7 +2992,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy) || createToolResultFallbackAnswer(prompt, allToolCalls, totalExecutedToolCalls),
+          content: sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy) || createToolFinalAnswerUnavailableMessage(),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3011,51 +3049,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function createToolResultFallbackAnswer(prompt: string, toolCalls: ChatToolCall[], executedToolCalls: number) {
-    const completedCalls = toolCalls.filter((toolCall) => toolCall.status === "complete");
-    const erroredCalls = toolCalls.filter((toolCall) => toolCall.status === "error");
-    const skippedCalls = toolCalls.filter((toolCall) => toolCall.status === "skipped");
-    const latestEvidence = [...toolCalls]
-      .reverse()
-      .filter((toolCall) => toolCall.output?.trim())
-      .slice(0, 8)
-      .reverse()
-      .map(formatFallbackToolEvidence);
-
+  function createToolFinalAnswerUnavailableMessage() {
     return [
-      "## Answer From Completed Tool Results",
-      "Gilbert completed the tool work, but the provider still did not return separate visible answer text. Instead of leaving the chat blank, here is the saved evidence from the completed run.",
-      [
-        `I ran ${executedToolCalls} tool call${executedToolCalls === 1 ? "" : "s"} for this request.`,
-        completedCalls.length > 0 ? `${completedCalls.length} completed successfully.` : "",
-        erroredCalls.length > 0 ? `${erroredCalls.length} errored.` : "",
-        skippedCalls.length > 0 ? `${skippedCalls.length} skipped.` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-      "### Original Request",
-      prompt.trim() ? `> ${prompt.trim().replace(/\n/g, "\n> ")}` : "> No prompt text was saved.",
-      "### What Ran",
-      [
-        `- Executed: ${executedToolCalls}`,
-        `- Completed: ${completedCalls.length}`,
-        `- Errors: ${erroredCalls.length}`,
-        `- Skipped: ${skippedCalls.length}`,
-      ].join("\n"),
-      latestEvidence.length > 0 ? ["### Evidence", ...latestEvidence].join("\n\n") : "### Evidence\n\nNo readable tool output was saved with this response.",
-      "You can ask a follow-up and Gilbert will continue from this saved evidence.",
+      "I finished the background work for this request, but the final write-up did not come back cleanly.",
+      "Use Continue response to retry from the saved Activity without rerunning completed work.",
     ].join("\n\n");
-  }
-
-  function formatFallbackToolEvidence(toolCall: ChatToolCall) {
-    const output = toolCall.output?.trim() ?? "";
-    const trimmedOutput = output.length > 1_200 ? `${output.slice(0, 1_200).trim()}\n\n[Output trimmed.]` : output;
-
-    return [`#### ${toolCall.label}`, "```text", escapeMarkdownFenceContent(trimmedOutput), "```"].join("\n");
-  }
-
-  function escapeMarkdownFenceContent(content: string) {
-    return content.replace(/```/g, "'''");
   }
 
   function appendAutoCompactionContinuation(messages: ChatMessage[], prompt: string, executedToolCalls: number) {
@@ -3170,8 +3168,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         "user",
         [
           "RETRY AFTER EMPTY PROVIDER RESPONSE",
-          "The previous stream returned reasoning or transport activity but no final answer text.",
-          "Answer the latest real user request above now. Keep hidden reasoning brief and produce visible final text.",
+          "The previous stream produced no visible final answer.",
+          hasLocalToolEvidence(messages)
+            ? "Previously gathered observations are already present above. Use them silently: emit the next needed tool_call only if work is unfinished, or write the direct final answer if it is done."
+            : "Answer the latest real user request above now.",
+          "Keep hidden reasoning brief and produce visible text. Do not leave the visible answer blank.",
+          "Do not mention provider behavior, app recovery, saved evidence, tool loops, continuation, or fallback text.",
         ].join("\n\n"),
       );
       const retryMessages = [...compactedMessages, retryInstruction];
@@ -3184,17 +3186,32 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
+  function hasLocalToolEvidence(messages: ChatMessage[]) {
+    return messages.some(
+      (message) =>
+        message.content.includes("AGENT TOOL RESULTS") ||
+        message.content.includes("LOCAL COMPUTER TOOL RESULTS") ||
+        message.toolCalls?.some((toolCall) => toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped"),
+    );
+  }
+
   function createEmptyResponseRetrySettings(settings: ProviderSettings): ProviderSettings {
+    const retrySettings: ProviderSettings = {
+      ...settings,
+      maxTokens: Math.max(settings.maxTokens, LOCAL_TOOL_FINAL_MIN_TOKENS),
+      temperature: Math.min(settings.temperature, 0.25),
+    };
+
     if (!settings.thinking.enabled) {
-      return settings;
+      return retrySettings;
     }
 
     return {
-      ...settings,
-      temperature: Math.min(settings.temperature, 0.25),
+      ...retrySettings,
       thinking: {
         ...settings.thinking,
-        effort: "low",
+        enabled: false,
+        effort: "minimal",
       },
     };
   }
@@ -3318,7 +3335,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function createInterruptedResponseContextMessages(message: ChatMessage, prompt: string) {
-    const content = message.content.includes("I reached the agent tool budget for this run") ? "" : message.content;
+    const content = message.content.includes("I reached the agent tool budget for this run") || isToolResultFallbackAnswer(message.content) ? "" : message.content;
     const assistantContext: ChatMessage = {
       ...message,
       agentRunStatus: undefined,
@@ -5552,7 +5569,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         terminalHeight={terminalHeight}
         terminalOpen={terminalOpen}
-        terminalWorkingDirectory={localWorkspace.roots[0]}
+        terminalWorkingDirectory={localWorkspace.enabled && localWorkspace.roots[0] ? localWorkspace.roots[0] : defaultTerminalWorkingDirectory}
       >
         <div className="route-stack">
           <div className="route-panel" data-active={activeRoute === "chat"} data-route="chat" aria-hidden={activeRoute !== "chat"}>

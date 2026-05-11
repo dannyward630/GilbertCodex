@@ -37,6 +37,8 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   const autoStartedRef = useRef(false);
   const outputRef = useRef<HTMLDivElement>(null);
   const startingRef = useRef(false);
+  const lastRequestedWorkingDirectoryRef = useRef((workingDirectory ?? "").trim());
+  const pendingWorkingDirectoryRef = useRef<string | null>(null);
 
   const statusLabel = useMemo(() => {
     if (!desktopRuntime) {
@@ -89,7 +91,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   }, []);
 
   const startSession = useCallback(
-    async (replace = false) => {
+    async (replace = false, workingDirectoryOverride?: string) => {
       if (startingRef.current) {
         return;
       }
@@ -104,6 +106,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
       setStatus("starting");
 
       const previousSessionId = replace ? sessionId : null;
+      const nextWorkingDirectory = (workingDirectoryOverride ?? sessionWorkingDirectory).trim();
 
       if (previousSessionId) {
         try {
@@ -119,11 +122,13 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
       try {
         const response = await createTerminalSession({
           shell,
-          workingDirectory: sessionWorkingDirectory.trim() || undefined,
+          workingDirectory: nextWorkingDirectory || undefined,
         });
 
         setSessionId(response.sessionId);
         setSessionWorkingDirectory(response.workingDirectory);
+        setSessionCommandRunning(false);
+        pendingWorkingDirectoryRef.current = null;
         setStatus("connected");
         appendOutput(response.initialOutput);
       } catch (error) {
@@ -138,10 +143,34 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
   );
 
   useEffect(() => {
-    if (!sessionId && workingDirectory) {
-      setSessionWorkingDirectory(workingDirectory);
+    const nextWorkingDirectory = workingDirectory?.trim() ?? "";
+
+    if (nextWorkingDirectory === lastRequestedWorkingDirectoryRef.current) {
+      return;
     }
-  }, [sessionId, workingDirectory]);
+
+    lastRequestedWorkingDirectoryRef.current = nextWorkingDirectory;
+
+    if (!nextWorkingDirectory || nextWorkingDirectory === sessionWorkingDirectory.trim()) {
+      return;
+    }
+
+    if (!sessionId) {
+      setSessionWorkingDirectory(nextWorkingDirectory);
+      return;
+    }
+
+    if (sessionCommandRunning || status === "starting") {
+      if (pendingWorkingDirectoryRef.current !== nextWorkingDirectory) {
+        pendingWorkingDirectoryRef.current = nextWorkingDirectory;
+        appendOutput([createLocalOutput("system", `Project changed. Terminal will switch to ${nextWorkingDirectory} when the current command finishes.\n`)]);
+      }
+      return;
+    }
+
+    appendOutput([createLocalOutput("system", `Switching terminal to project folder: ${nextWorkingDirectory}\n`)]);
+    void startSession(true, nextWorkingDirectory);
+  }, [appendOutput, createLocalOutput, sessionCommandRunning, sessionId, sessionWorkingDirectory, startSession, status, workingDirectory]);
 
   useEffect(() => {
     if (!open || !desktopRuntime || sessionId || autoStartedRef.current) {
@@ -151,6 +180,22 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     autoStartedRef.current = true;
     void startSession(false);
   }, [desktopRuntime, open, sessionId, startSession]);
+
+  useEffect(() => {
+    const pendingWorkingDirectory = pendingWorkingDirectoryRef.current;
+
+    if (!pendingWorkingDirectory || sessionCommandRunning || status === "starting") {
+      return;
+    }
+
+    if (pendingWorkingDirectory === sessionWorkingDirectory.trim()) {
+      pendingWorkingDirectoryRef.current = null;
+      return;
+    }
+
+    appendOutput([createLocalOutput("system", `Switching terminal to project folder: ${pendingWorkingDirectory}\n`)]);
+    void startSession(Boolean(sessionId), pendingWorkingDirectory);
+  }, [appendOutput, createLocalOutput, sessionCommandRunning, sessionId, sessionWorkingDirectory, startSession, status]);
 
   useEffect(() => {
     if (!open || !sessionId) {
@@ -175,6 +220,10 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
         nextPollIntervalMs = commandRunning ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
         appendOutput(response.chunks);
         setSessionCommandRunning(commandRunning);
+
+        if (response.workingDirectory) {
+          setSessionWorkingDirectory(response.workingDirectory);
+        }
 
         if (response.exitCode !== null && response.exitCode !== undefined) {
           setStatus("exited");
@@ -235,7 +284,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     setCommand("");
     setHistoryIndex(null);
     setHistory((currentHistory) => [...currentHistory.filter((item) => item !== nextCommand), nextCommand].slice(-100));
-    appendOutput([createLocalOutput("stdin", `${terminalPrompt(shell)}> ${nextCommand}\n`)]);
+    appendOutput([createLocalOutput("stdin", `${terminalPrompt(shell, sessionWorkingDirectory)} ${nextCommand}\n`)]);
 
     if (nextCommand.toLowerCase() === "clear" || nextCommand.toLowerCase() === "cls") {
       setOutput([]);
@@ -243,6 +292,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
 
     try {
       await writeTerminalSession(sessionId, nextCommand);
+      setSessionCommandRunning(true);
       setStatus("connected");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -263,6 +313,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
     }
 
     setSessionId(null);
+    setSessionCommandRunning(false);
     setStatus("stopped");
     appendOutput([createLocalOutput("system", "Terminal session stopped.\n")]);
   }
@@ -398,7 +449,7 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           />
         </label>
         <div className="terminal-actions">
-          <button type="button" aria-label="Restart terminal session" title="Restart terminal session" onClick={() => void startSession(true)}>
+          <button type="button" aria-label="Restart terminal session" title="Restart terminal session" onClick={() => void startSession(true, pendingWorkingDirectoryRef.current ?? undefined)}>
             <RotateCw size={16} aria-hidden="true" />
           </button>
           <button type="button" aria-label="Stop terminal session" title="Stop terminal session" disabled={!sessionId} onClick={() => void stopSession()}>
@@ -426,7 +477,9 @@ export function TerminalPanel({ desktopRuntime, height, open, onClose, onHeightC
           void submitCommand();
         }}
       >
-        <span className="terminal-prompt">{terminalPrompt(shell)}</span>
+        <span className="terminal-prompt" title={terminalPrompt(shell, sessionWorkingDirectory)}>
+          {terminalPrompt(shell, sessionWorkingDirectory)}
+        </span>
         <input
           aria-label="Terminal command"
           value={command}

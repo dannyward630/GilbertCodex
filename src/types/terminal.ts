@@ -48,4 +48,5 @@ export interface TerminalDrainResponse {
   exitCode?: number | null;
   lastCommandCompleted?: boolean;
   lastCommandExitCode?: number | null;
+  workingDirectory?: string;
 }

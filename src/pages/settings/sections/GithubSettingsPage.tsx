@@ -6,13 +6,15 @@ import type { SettingsStatusMessage } from "../types";
 interface GithubSettingsPageProps {
   accountDetail: string;
   fullAccessScopes: string[];
-  githubBusy: boolean;
+  githubCheckingAccess: boolean;
   githubConnection: GithubConnectionState;
+  githubDisconnecting: boolean;
   githubDeviceLogin: GithubDeviceLoginSession | null;
   githubDevicePolling: boolean;
   githubOauthClientId: string;
   githubRepos: GithubRepository[];
   githubRequestedScope: string;
+  githubStartingLogin: boolean;
   githubStatus: SettingsStatusMessage | null;
   hasFullGithubAccess: boolean;
   missingGithubScopes: string[];
@@ -27,13 +29,15 @@ interface GithubSettingsPageProps {
 export function GithubSettingsPage({
   accountDetail,
   fullAccessScopes,
-  githubBusy,
+  githubCheckingAccess,
   githubConnection,
+  githubDisconnecting,
   githubDeviceLogin,
   githubDevicePolling,
   githubOauthClientId,
   githubRepos,
   githubRequestedScope,
+  githubStartingLogin,
   githubStatus,
   hasFullGithubAccess,
   missingGithubScopes,
@@ -44,6 +48,13 @@ export function GithubSettingsPage({
   onStartBrowserLogin,
   onUpdateGithubOauthClientId,
 }: GithubSettingsPageProps) {
+  const hasGithubOauthClientId = Boolean(githubOauthClientId.trim());
+  const loginStatusNote = githubDevicePolling
+    ? "Finish or cancel the current GitHub browser sign-in before changing the Client ID."
+    : hasGithubOauthClientId
+      ? "Client ID saved locally. No client secret is used for device-flow sign-in."
+      : "Client ID required before GitHub browser sign-in. Create an OAuth App with Device Flow enabled.";
+
   return (
     <>
       <SettingsSectionHeading detail="Connected source control access, OAuth scopes, repository preview, and token health." icon={Github} title="GitHub" />
@@ -110,17 +121,17 @@ export function GithubSettingsPage({
           ) : null}
 
           <div className="settings-actions-row github-action-bar">
-            <button className="settings-primary-button github-login-button" type="button" disabled={githubBusy || githubDevicePolling || !githubOauthClientId.trim()} onClick={onStartBrowserLogin}>
+            <button className="settings-primary-button github-login-button" type="button" disabled={githubStartingLogin || githubDevicePolling} onClick={onStartBrowserLogin}>
               <LogIn size={16} aria-hidden="true" />
-              {githubDevicePolling ? "Waiting for GitHub" : githubConnection.connected ? "Reconnect GitHub" : "Continue with GitHub"}
+              {githubDevicePolling ? "Waiting for GitHub" : githubStartingLogin ? "Starting GitHub" : githubConnection.connected ? "Reconnect GitHub" : "Continue with GitHub"}
             </button>
-            <button className="settings-ghost-button" type="button" disabled={githubBusy || githubDevicePolling} onClick={onCheckAccess}>
+            <button className="settings-ghost-button" type="button" disabled={githubCheckingAccess || githubStartingLogin || githubDevicePolling} onClick={onCheckAccess}>
               <CheckCircle2 size={16} aria-hidden="true" />
-              Check access
+              {githubCheckingAccess ? "Checking access" : "Check access"}
             </button>
-            <button className="settings-ghost-button" type="button" disabled={githubBusy || githubDevicePolling || !githubConnection.connected} onClick={onDisconnect}>
+            <button className="settings-ghost-button" type="button" disabled={githubDisconnecting || githubStartingLogin || githubDevicePolling || !githubConnection.connected} onClick={onDisconnect}>
               <Trash2 size={16} aria-hidden="true" />
-              Disconnect
+              {githubDisconnecting ? "Disconnecting" : "Disconnect"}
             </button>
           </div>
 
@@ -144,12 +155,26 @@ export function GithubSettingsPage({
             <span>Client ID</span>
             <input
               autoComplete="off"
-              disabled={githubBusy || githubDevicePolling}
+              disabled={githubDevicePolling}
               placeholder="Paste GitHub Client ID"
               value={githubOauthClientId}
               onChange={(event) => onUpdateGithubOauthClientId(event.target.value)}
             />
+            <small className="settings-field-note" data-kind={hasGithubOauthClientId ? "ready" : "error"}>
+              {loginStatusNote}
+            </small>
           </label>
+
+          <div className="settings-actions-row github-oauth-actions">
+            <a className="settings-ghost-button github-doc-link" href="https://github.com/settings/developers" rel="noreferrer" target="_blank">
+              <ExternalLink size={16} aria-hidden="true" />
+              Create OAuth App
+            </a>
+            <a className="settings-ghost-button github-doc-link" href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps" rel="noreferrer" target="_blank">
+              <ExternalLink size={16} aria-hidden="true" />
+              Device flow docs
+            </a>
+          </div>
 
           <div className="github-scope-summary">
             <ShieldCheck size={16} aria-hidden="true" />

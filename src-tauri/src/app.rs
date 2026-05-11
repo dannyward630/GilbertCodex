@@ -81,6 +81,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::settings::workspace_dependencies_reinstall,
             commands::terminal::terminal_create_session,
             commands::terminal::terminal_drain_session,
+            commands::terminal::terminal_get_default_working_directory,
             commands::terminal::terminal_kill_session,
             commands::terminal::terminal_run_command,
             commands::terminal::terminal_write_session,

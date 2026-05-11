@@ -50,6 +50,8 @@ import { ProvidersSettingsPage } from "./sections/ProvidersSettingsPage";
 import type { LiveModelCatalogStatus, SettingsPageProps, SettingsStatusMessage } from "./types";
 
 const GITHUB_FULL_ACCESS_SCOPES = getRequiredGithubOAuthScopes();
+type GithubActionState = "disconnect" | "idle" | "login" | "refresh";
+const GITHUB_DEVICE_LOGIN_START_TIMEOUT_MS = 18_000;
 
 function isOfflineCatalogError(error: string | null | undefined) {
   const normalizedError = error?.toLowerCase().trim();
@@ -106,7 +108,7 @@ export function SettingsPage({
   const [clearKeyConfirmOpen, setClearKeyConfirmOpen] = useState(false);
   const [githubDisconnectConfirmOpen, setGithubDisconnectConfirmOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [githubBusy, setGithubBusy] = useState(false);
+  const [githubActionState, setGithubActionState] = useState<GithubActionState>("idle");
   const [githubConnection, setGithubConnection] = useState<GithubConnectionState>({ connected: false, scopes: [] });
   const [githubDeviceLogin, setGithubDeviceLogin] = useState<GithubDeviceLoginSession | null>(null);
   const [githubDevicePolling, setGithubDevicePolling] = useState(false);
@@ -134,6 +136,9 @@ export function SettingsPage({
   const githubRequestedScope = getDefaultGithubOAuthScope();
   const missingGithubScopes = getMissingGithubFullAccessScopes(githubConnection);
   const hasFullGithubAccess = githubConnection.connected && missingGithubScopes.length === 0;
+  const githubStartingLogin = githubActionState === "login";
+  const githubCheckingAccess = githubActionState === "refresh";
+  const githubDisconnecting = githubActionState === "disconnect";
   const liveProviderModelStatusText = formatLiveCatalogStatus(activeProvider.label, activeProviderBaseUrl, liveProviderModelStatus, liveProviderModelError, liveProviderModelCount);
   const githubAccountDetail = githubConnection.connected ? formatGithubAccountDetail(githubConnection) : "";
 
@@ -238,6 +243,7 @@ export function SettingsPage({
   function updateGithubOauthClientId(clientId: string) {
     setGithubOauthClientId(clientId);
     saveGithubOAuthClientId(clientId);
+    setGithubStatus(null);
   }
 
   function scheduleGithubDevicePoll(session: GithubDeviceLoginSession, clientId: string, runId: number, intervalSeconds: number) {
@@ -326,7 +332,7 @@ export function SettingsPage({
     const clientId = githubOauthClientId.trim();
 
     if (!clientId) {
-      setGithubStatus({ kind: "error", text: "Add a GitHub OAuth app client ID first." });
+      setGithubStatus({ kind: "error", text: "Paste a GitHub OAuth App Client ID first, or use Create OAuth App in the OAuth card." });
       return;
     }
 
@@ -335,13 +341,17 @@ export function SettingsPage({
     const runId = githubDeviceRunRef.current;
 
     clearGithubDeviceTimer();
-    setGithubBusy(true);
+    setGithubActionState("login");
     setGithubDeviceLogin(null);
     setGithubDevicePolling(false);
-    setGithubStatus(null);
+    setGithubStatus({ kind: "warning", text: "Contacting GitHub to start browser sign-in..." });
 
     try {
-      const session = await beginGithubDeviceLogin({ clientId });
+      const session = await withTimeout(
+        beginGithubDeviceLogin({ clientId }),
+        GITHUB_DEVICE_LOGIN_START_TIMEOUT_MS,
+        "GitHub browser login did not start in time. Check your internet connection, confirm Device Flow is enabled on the OAuth App, then try again.",
+      );
 
       if (!mountedRef.current || githubDeviceRunRef.current !== runId) {
         return;
@@ -369,7 +379,7 @@ export function SettingsPage({
       }
     } finally {
       if (mountedRef.current && githubDeviceRunRef.current === runId) {
-        setGithubBusy(false);
+        setGithubActionState((current) => (current === "login" ? "idle" : current));
       }
     }
   }
@@ -401,7 +411,7 @@ export function SettingsPage({
       return;
     }
 
-    setGithubBusy(true);
+    setGithubActionState("refresh");
 
     try {
       const connection = await getGithubState();
@@ -444,7 +454,7 @@ export function SettingsPage({
       }
     } finally {
       if (mountedRef.current) {
-        setGithubBusy(false);
+        setGithubActionState((current) => (current === "refresh" ? "idle" : current));
       }
     }
   }
@@ -613,7 +623,7 @@ export function SettingsPage({
   async function confirmDisconnectGithub() {
     githubDeviceRunRef.current += 1;
     clearGithubDeviceTimer();
-    setGithubBusy(true);
+    setGithubActionState("disconnect");
     setGithubDeviceLogin(null);
     setGithubDevicePolling(false);
     setGithubStatus(null);
@@ -635,7 +645,7 @@ export function SettingsPage({
       }
     } finally {
       if (mountedRef.current) {
-        setGithubBusy(false);
+        setGithubActionState((current) => (current === "disconnect" ? "idle" : current));
       }
     }
   }
@@ -674,13 +684,15 @@ export function SettingsPage({
         <GithubSettingsPage
           accountDetail={githubAccountDetail}
           fullAccessScopes={GITHUB_FULL_ACCESS_SCOPES}
-          githubBusy={githubBusy}
+          githubCheckingAccess={githubCheckingAccess}
           githubConnection={githubConnection}
+          githubDisconnecting={githubDisconnecting}
           githubDeviceLogin={githubDeviceLogin}
           githubDevicePolling={githubDevicePolling}
           githubOauthClientId={githubOauthClientId}
           githubRepos={githubRepos}
           githubRequestedScope={githubRequestedScope}
+          githubStartingLogin={githubStartingLogin}
           githubStatus={githubStatus}
           hasFullGithubAccess={hasFullGithubAccess}
           missingGithubScopes={missingGithubScopes}
@@ -801,4 +813,15 @@ function getMissingGithubFullAccessScopes(connection: GithubConnectionState) {
   }
 
   return getMissingRequiredGithubOAuthScopes(connection.scopes);
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+
+    promise
+      .then(resolve)
+      .catch(reject)
+      .finally(() => window.clearTimeout(timeoutId));
+  });
 }

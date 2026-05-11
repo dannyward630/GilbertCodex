@@ -61,7 +61,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
     tools.fileSearch ? "Use recall_context for architecture notes or previous project instructions. Prefer search_files before guessing file names or locations." : "",
     tools.codeView ? "Prefer view_code with start_line/end_line or start_char/end_char before precise edits." : "",
     tools.codeEdit
-      ? "edit_file supports exact replacement, line-range replacement, line inserts, and character edits. Include expected_text for targeted edits when possible so stale edits are refused instead of guessed."
+      ? "For existing source/text files, prefer view_code followed by edit_file/inline_edit over whole-file write_file rewrites. edit_file supports exact replacement, line-range replacement, line inserts, and character edits; include expected_text when possible so stale edits are refused instead of guessed. Use write_file mainly for new files or intentional full-file replacement after reading the current file."
       : "",
     tools.fileCreation ? "Use create_files for multi-file batches with files_json instead of emitting many separate write_file calls." : "",
     tools.terminal
