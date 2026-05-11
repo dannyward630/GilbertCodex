@@ -46,7 +46,7 @@ Use [Branching And Release Model](docs/BRANCHING.md) and [Contribution Process](
 - Merge into `main` only after the `testing` branch has been validated.
 - Create `release/*` and `hotfix/*` branches only when the release or urgent fix exists.
 - Fill out the pull request template and include commands run.
-- Use the issue forms for bugs, feature requests, and platform support reports.
+- Use [docs/ISSUES.md](docs/ISSUES.md) and the issue forms for bugs, alpha tester feedback, feature requests, and platform support reports.
 
 ## Project Standards
 

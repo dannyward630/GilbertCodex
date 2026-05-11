@@ -1,0 +1,73 @@
+name: Alpha tester feedback
+description: Share install, setup, or first-task feedback from the public alpha.
+title: "[Alpha feedback]: "
+labels: ["help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Gilbert Codex. This form is for early alpha feedback that may not be a clean bug yet. Do not include provider keys, GitHub tokens, local databases, private repo contents, or sensitive terminal output.
+  - type: dropdown
+    id: test-type
+    attributes:
+      label: What did you test?
+      options:
+        - Windows installer
+        - Windows source run
+        - macOS source run
+        - Linux source run
+        - Real coding task
+        - Docs or setup flow
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.0.2 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 x64, macOS 15 arm64, Ubuntu 24.04 x64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you try?
+      description: Include install/run commands or the task you asked Gilbert Codex to do.
+      placeholder: |
+        1. Downloaded ...
+        2. Opened ...
+        3. Asked it to ...
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened?
+      description: What worked, what felt confusing, and what failed?
+    validations:
+      required: true
+  - type: textarea
+    id: expectation
+    attributes:
+      label: What would have made this smoother?
+      description: Mention missing docs, unclear UI, setup friction, or expected behavior.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized screenshots or logs
+      description: Remove secrets, private paths, private repository names, and sensitive terminal output before posting.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed provider keys, tokens, local databases, private workspace data, and sensitive terminal output.
+          required: true

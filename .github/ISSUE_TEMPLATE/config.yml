@@ -6,3 +6,6 @@ contact_links:
   - name: Contribution guide
     url: https://github.com/UrbanWafflezz/GilbertCodex/blob/main/CONTRIBUTING.md
     about: Read setup, branch, and pull request expectations before contributing.
+  - name: Issue guide
+    url: https://github.com/UrbanWafflezz/GilbertCodex/blob/main/docs/ISSUES.md
+    about: Choose the best issue type and see what details help maintainers reproduce problems.
