@@ -106,3 +106,22 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           assetNamePattern: Gilbert-Codex-[version]-[arch][setup][ext]
+
+      - name: Upload installer checksum
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.release_tag.outputs.tag }}"
+          $installer = Get-ChildItem -LiteralPath "src-tauri/target/release/bundle/nsis" -Filter "Gilbert-Codex-*-setup.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "Could not find the NSIS setup executable to checksum."
+          }
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
+          $checksumPath = "$($installer.FullName).sha256"
+          "$hash  $($installer.Name)" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
+          gh release upload $tag $checksumPath --clobber

@@ -33,7 +33,7 @@ npm.cmd run app:release
 
 The release build merges `src-tauri/tauri.updater.conf.json`, which enables Tauri updater artifacts without forcing every local installer build to have signing secrets.
 
-The GitHub `Release` workflow builds the Windows NSIS installer with the same updater config, reads the release body from `docs/releases/<tag>.md` when that file exists, and uploads the installer, `.sig` file, and `latest.json` feed to GitHub Releases. Add these repository secrets before publishing an auto-update release:
+The GitHub `Release` workflow builds the Windows NSIS installer with the same updater config, reads the release body from `docs/releases/<tag>.md` when that file exists, computes a SHA-256 checksum, and uploads the installer, `.sha256` file, `.sig` file, and `latest.json` feed to GitHub Releases. Add these repository secrets before publishing an auto-update release:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key is password-protected
@@ -63,8 +63,8 @@ Before publishing an installer:
 2. Run `npm.cmd run check`.
 3. Run `npm.cmd run audit:prod`.
 4. Run `npm.cmd run app:release`, or run the GitHub `Release` workflow for the tagged version.
-5. Confirm GitHub Releases includes the setup executable, matching `.sig`, and `latest.json`.
-6. Compute SHA-256 for the generated setup executable.
+5. Confirm GitHub Releases includes the setup executable, matching `.sha256`, matching `.sig`, and `latest.json`.
+6. Confirm the SHA-256 in `docs/releases/<tag>.md` matches the uploaded `.sha256` file.
 7. Launch the packaged app from a real install on Windows.
 8. Use the in-app update checker against the published release feed.
 9. Update `docs/releases/<tag>.md` with file name, size, checksum, signing status, updater feed status, validation status, and known limits before pushing the release tag.
