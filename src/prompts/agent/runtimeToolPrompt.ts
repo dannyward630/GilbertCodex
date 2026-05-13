@@ -3,6 +3,7 @@ import { normalizeToolRegistrySettings } from "../../types/tools";
 import { describeCodingTools } from "../../tools/coding";
 import { describeColorTools } from "../../tools/color";
 import { describeFileCreationTools } from "../../tools/fileCreation";
+import { listWorkflowDefinitions } from "../../tools/workflows";
 import { isTauriDesktopRuntime } from "../../app/tauriClient";
 import { getEnabledMcpServers, isOpenAiMcpPassthroughAvailable } from "../../services/mcpTools";
 import type { ProviderSettings } from "../../types/settings";
@@ -38,10 +39,13 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
   const sections = [
     "Runtime tools are available through compact tool_call blocks. Use them when they materially improve correctness, especially for bug fixing, code edits, current facts, official docs, changelogs, APIs, command evidence, color accuracy, design data, or source-backed answers.",
     `Enabled runtime tools: ${enabledTools.join(", ")}.`,
+    tools.workflowAutomation
+      ? `Workflow rule: for goal-level work such as repo audits, feature implementation, research-backed patches, health sweeps, PR prep, MCP usage, or monitor briefs, start with one workflow_run call with a clear goal. Do not begin these tasks by spraying many read_file/list_directory calls; let the workflow select the minimal primitive reads and edits. Available workflows: ${formatWorkflowCatalog()}.`
+      : "Workflow automation is disabled in Toolbox; use the enabled primitive tools directly.",
     "Fresh evidence rule: for local coding, project creation, app startup, debugging, file edits, package installs, tests, or UI verification, do not rely on workspace context, index snippets, project memory, or prior chat memory as proof. Use tools to inspect the current filesystem and command output.",
     "Read-reread-verify rule: before editing an existing file, read_file/view_code the current target. After a write/edit/create operation, re-read the changed file or list the created folder, then run the smallest relevant verification command. For runnable apps, start or inspect the dev server before saying it works.",
     "Batching rule: when you already know several independent reads, searches, web lookups, GitHub inventory calls, or code views are needed, emit all of those tool_call blocks in the same assistant pass instead of asking for one tool at a time. The app runs safe independent read/search/web batches concurrently and returns one combined evidence message.",
-    "Mutation safety rule: never emit repeated write_file/edit_file/delete_file/rename_path/move_path calls for the same path in one tool pass. Existing source/text files should be read first, edited once with edit_file/inline_edit, then verified; use rename_path or move_path for file/folder name and location changes inside enabled roots. After source edits the app may run an automatic syntax/build check. If that check reports even one syntax error, inspect the exact file/line and make a narrow follow-up edit instead of rewriting the file. Use create_files for brand-new multi-file batches instead of many separate write_file calls. Terminal commands always run one at a time.",
+    "Mutation safety rule: never emit repeated write_file/edit_file/delete_file/rename_path/move_path calls for the same path in one tool pass. Existing source/text files should be read first, edited once with edit_file/inline_edit, then verified; use rename_path or move_path for file/folder name and location changes inside enabled roots. After source edits the app may run an automatic syntax/build check. If that check reports even one syntax error, inspect the exact file/line and make a narrow follow-up edit instead of rewriting the file. Use create_files for brand-new multi-file batches and edit_files for batched edits to multiple existing files; both count as a single source-file mutation against the per-pass cap. The runtime caps source-file mutations at 12 per assistant pass (20 in Deep Research) — when you need more, batch with create_files/edit_files. Terminal commands always run one at a time.",
     "Simple scaffold stop rule: for a request that is only to create/install/build/run a Hello World or starter Vite React app, stop after create_vite_project, npm install, npm run build, and npm run dev succeed. Do not keep editing for polish, redesign, or a better-looking page unless the user asked for design work or a command failed.",
     "Empty selected root rule: if the selected workspace root exists but is empty and the user asked for a new Vite/React starter app, scaffold directly into that root with create_vite_project. Do not read guessed starter files, do not inspect the parent folder, and do not retry outside the workspace.",
     "Build failure rule: when a build/typecheck/test command fails and names a local source file, fix that reported file/line first. Do not pivot to package config, PostCSS/Vite theories, or web research unless the same local source fix still fails after rerunning the command.",
@@ -84,13 +88,14 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
     tools.fileSearch ? "Use recall_context for architecture notes or previous project instructions. Prefer search_files before guessing file names or locations." : "",
     tools.codeView ? "Prefer view_code with start_line/end_line or start_char/end_char before precise edits." : "",
     tools.codeEdit
-      ? "For existing source/text files, use view_code followed by edit_file/inline_edit. Do not use write_file for normal edits. edit_file supports exact replacement, whitespace-aware multi-line old_text recovery, old_str/new_str aliases, line-range replacement, line inserts, and character edits; include expected_text when possible so stale edits are refused instead of guessed. write_file is create-only by default and can replace an existing file only with replace_entire_file=true plus expected_sha256 from a fresh read. Use rename_path with path/new_name for file or folder name changes, and move_path with from_path/to_path for moves inside enabled roots. If an edit result says [skipped] or [error], read the message: it tells you the resolved path, the workspace roots, and the suggested fix. Apply that fix and retry instead of ending the answer or rewriting the full file."
+      ? "For existing source/text files, use view_code followed by edit_file/inline_edit. Do not use write_file for normal edits. edit_file supports exact replacement, whitespace-aware multi-line old_text recovery, old_str/new_str aliases, line-range replacement, line inserts, and character edits; include expected_text when possible so stale edits are refused instead of guessed. write_file is create-only by default and can replace an existing file only with replace_entire_file=true plus expected_sha256 from a fresh read; for full replacements it accepts content, new_text, new_content, file_content, full_file_content, replacement_text, css, or stylesheet as the full file body. Use rename_path with path/new_name for file or folder name changes, and move_path with from_path/to_path for moves inside enabled roots. If an edit result says [skipped] or [error], read the message: it tells you the resolved path, the workspace roots, and the suggested fix. Apply that fix and retry instead of ending the answer or rewriting the full file."
       : "",
     tools.codeEdit
       ? "JSX/TSX edit transport rule: raw < and > characters are normal source code, not a reason to force-overwrite an existing file. If fallback XML tool-call markup becomes ambiguous, use edit_file with a narrow line range/exact replacement or wrap multi-line arg_value source in CDATA. Never switch to full-file overwrite because JSX was hard to serialize."
       : "",
     tools.fileCreation ? "Use create_vite_project for new Vite React apps. It creates package.json, Vite config, index.html, src/main, src/App, CSS, and TypeScript files when requested in one reliable scaffold. When the user has already selected or opened a fresh project folder, omit project_path so the scaffold lands directly in that folder; do not create a same-named child folder unless the user explicitly asks for one and do not inspect the parent directory. Existing projects are not re-scaffolded for normal edits; inspect and edit them precisely, or use repair_missing=true only to fill missing starter files while preserving existing files. After a new scaffold succeeds, run npm install, npm run build, then npm run dev with cwd set to the returned project path before finalizing. If no workspace roots are selected, ask the user to pick a folder; in Full computer scope, use the user's explicit project_path instead of guessing a drive root." : "",
     tools.fileCreation ? "Use create_files for other multi-file batches with files_json instead of emitting many separate write_file calls." : "",
+    tools.codeEdit ? "Use edit_files for batched edits to multiple existing files in one tool call (edits or edits_json with each entry holding path plus old_text/new_text or full content). One edit_files call counts as a single mutation against the per-pass cap." : "",
     tools.terminal
       ? "run_terminal executes the local platform shell inside an enabled local workspace root: PowerShell/cmd on Windows, or Bash/Zsh/sh on macOS and Linux. Use it for tests, builds, package installs, formatters, setup checks, and command evidence. Set cwd instead of prepending cd/chdir."
       : "",
@@ -132,7 +137,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? "create_tool can write a reusable custom tool under .gilbert/tools in the workspace. Set language/runtime to python, typescript, javascript, powershell, cmd, bash, zsh, or sh; run_tool executes it later by tool_name. Prefer args_json for structured input so Python/Node/TypeScript tools can parse one JSON argument."
       : "",
     createRelevantToolExamples(settings, latestUserPrompt),
-    "When using tools, call the available native tools directly when the provider supports them. If the provider only supports the fallback text protocol, output only the compact tool_call blocks needed for that pass; do not add a visible interim explanation before or after them.",
+    "When using tools, always output only the compact tool_call blocks needed for that pass; provider-native tool calling is intentionally disabled until native tool_result round-tripping exists. Do not add a visible interim explanation before or after tool calls.",
     "After tool results arrive, continue from the evidence and do not print raw tool calls.",
     "Tool activity integrity: never write a fake activity transcript. Do not claim an edit, terminal command, file read, web search, or tool status happened unless an actual tool result in the conversation says it happened. If work requires a tool, use the tool instead of narrating that you will use one.",
     "Protocol privacy: never explain, debate, or show how to format tool calls. Do not mention XML, arg_key, arg_value, tool_call syntax, batching mechanics, cwd choices, shell choices, or timeout choices in visible prose.",
@@ -197,9 +202,10 @@ function createLocalGitRuntimeToolInstructions() {
 function createRuntimeToolUsageMap(tools: ReturnType<typeof normalizeToolRegistrySettings>) {
   return [
     "Runtime tool usage map:",
+    tools.workflowAutomation ? "- workflow_run: goal-level orchestrated workflows that gather evidence, sequence primitives, preserve approvals, and hand off to direct primitive tools only when needed." : "",
     tools.fileSearch ? "- recall_context/search_files: find project memory, filenames, symbols, and relevant code before guessing." : "",
     tools.codeView ? "- view_code/read_file: inspect exact source before editing; use line or character windows for precision." : "",
-    tools.codeEdit ? "- edit_file/inline_edit: modify existing files with exact old_text/new_text or old_str/new_str replacements, line ranges/inserts, and character ranges. write_file: create a new file; existing-file replacement requires replace_entire_file=true plus expected_sha256 from a fresh read. rename_path/move_path: file or folder names and locations." : "",
+    tools.codeEdit ? "- edit_file/inline_edit: modify existing files with exact old_text/new_text or old_str/new_str replacements, line ranges/inserts, and character ranges. edit_files: batch the same kind of edit across multiple existing files in one call (preferred over many separate edit_file calls). write_file: create a new file; existing-file replacement requires replace_entire_file=true plus expected_sha256 from a fresh read. rename_path/move_path: file or folder names and locations." : "",
     tools.fileCreation ? "- create_vite_project: create complete runnable Vite React or React TypeScript starter projects in one call; for existing projects it may only fill missing starter files when repair_missing=true and must preserve existing files. create_files: batch create multiple files in one call (preferred over many separate write_file calls)." : "",
     tools.terminal ? "- run_terminal: run builds, tests, package installs, formatters, lints, evidence commands, and managed dev servers. The command runs verbatim; any --port/--host you pass is honored exactly." : "",
     tools.terminal && tools.codeEdit ? "- create_tool/run_tool: create reusable Python, TypeScript, JavaScript/Node, or shell helpers under .gilbert/tools, then execute them with optional args or args_json. Use a new descriptive tool name; do not shadow built-in read, edit, write, terminal, Git, web, or MCP tools to work around malformed arguments." : "",
@@ -212,11 +218,18 @@ function createRuntimeToolUsageMap(tools: ReturnType<typeof normalizeToolRegistr
   ].filter(Boolean).join("\n");
 }
 
+function formatWorkflowCatalog() {
+  return listWorkflowDefinitions()
+    .map((workflow) => `${workflow.id} (${workflow.title})`)
+    .join(", ");
+}
+
 /** Returns the exact tool names the model may call for the current Toolbox state. */
 export function createLocalToolNames(settings: ProviderSettings) {
   const tools = normalizeToolRegistrySettings(settings.tools);
 
   return [
+    tools.workflowAutomation ? "workflow_run" : "",
     tools.fileSearch ? "recall_context" : "",
     tools.weatherTools ? "weather" : "",
     tools.fileSearch ? "search_files" : "",
@@ -225,6 +238,7 @@ export function createLocalToolNames(settings: ProviderSettings) {
     tools.fileBrowser ? "list_directory" : "",
     tools.fileBrowser ? "build_index" : "",
     tools.codeEdit ? "edit_file" : "",
+    tools.codeEdit ? "edit_files" : "",
     tools.codeEdit ? "write_file" : "",
     tools.codeEdit ? "rename_path" : "",
     tools.codeEdit ? "move_path" : "",
@@ -277,11 +291,15 @@ function createRelevantToolExamples(settings: ProviderSettings, latestUserPrompt
   const tools = normalizeToolRegistrySettings(settings.tools);
   const examples: string[] = [];
 
+  if (tools.workflowAutomation && /\b(workflow|audit|implement|fix|patch|research|health|check|validate|pr|pull request|branch|monitor|mcp|tool sprawl|repo)\b/i.test(latestUserPrompt)) {
+    examples.push("workflow_run example:\n<tool_call>\nworkflow_run\n<arg_key>goal</arg_key><arg_value>Inspect the repo and produce a safe plan for the requested change.</arg_value>\n<arg_key>mode</arg_key><arg_value>plan</arg_value>\n</tool_call>");
+  }
+
   if (tools.webSearch && /\b(web|search|research|latest|current|official|docs?|source|cite|api|model|provider)\b/i.test(latestUserPrompt)) {
     examples.push("web_search example:\n<tool_call>\nweb_search\n<arg_key>query</arg_key><arg_value>official docs query</arg_value>\n</tool_call>");
   }
 
-  if ((tools.webSearch || tools.codeView || tools.fileSearch || tools.sourceControl) && /\b(research|audit|inspect|debug|fix|compare|docs?|official|repo|code|files?)\b/i.test(latestUserPrompt)) {
+  if (!tools.workflowAutomation && (tools.webSearch || tools.codeView || tools.fileSearch || tools.sourceControl) && /\b(research|audit|inspect|debug|fix|compare|docs?|official|repo|code|files?)\b/i.test(latestUserPrompt)) {
     examples.push([
       "batched independent calls example:",
       tools.codeView

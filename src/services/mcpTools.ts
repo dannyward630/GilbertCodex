@@ -2,6 +2,7 @@ import { normalizeMcpServerLabel, normalizeMcpSettings, parseMcpList } from "../
 import { normalizeToolRegistrySettings } from "../types/tools";
 import type { McpServerConfig } from "../types/mcp";
 import type { ProviderSettings } from "../types/settings";
+import { FORCE_XML_TOOL_PROTOCOL } from "./toolSchemaAdapters";
 
 export interface OpenAIResponsesMcpTool {
   allowed_tools?: string[];
@@ -15,6 +16,10 @@ export interface OpenAIResponsesMcpTool {
 }
 
 export function isOpenAiMcpPassthroughAvailable(settings: ProviderSettings) {
+  if (FORCE_XML_TOOL_PROTOCOL) {
+    return false;
+  }
+
   const tools = normalizeToolRegistrySettings(settings.tools);
   const mcp = normalizeMcpSettings(settings.mcp);
 

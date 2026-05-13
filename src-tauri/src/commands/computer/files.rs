@@ -496,7 +496,20 @@ fn pick_folder_blocking(start_path: Option<String>) -> Result<Option<String>, St
 /// Lists a single directory. A caller-supplied limit is explicit; by default
 /// the model sees every readable entry in that directory.
 #[tauri::command]
-pub fn computer_list_directory(
+pub async fn computer_list_directory(
+    request: ComputerDirectoryRequest,
+) -> Result<ComputerDirectoryListing, String> {
+    tauri::async_runtime::spawn_blocking(move || computer_list_directory_blocking(request))
+        .await
+        .map_err(|error| {
+            format!(
+                "The directory listing worker stopped unexpectedly: {}",
+                error
+            )
+        })?
+}
+
+fn computer_list_directory_blocking(
     request: ComputerDirectoryRequest,
 ) -> Result<ComputerDirectoryListing, String> {
     let path = normalize_input_path(&request.path);
@@ -1148,7 +1161,15 @@ pub fn computer_search_file_index(
 /// one; the default path returns the entire text file so long files are not
 /// silently clipped.
 #[tauri::command]
-pub fn computer_read_text_file(
+pub async fn computer_read_text_file(
+    request: ComputerReadFileRequest,
+) -> Result<ComputerReadFileResult, String> {
+    tauri::async_runtime::spawn_blocking(move || computer_read_text_file_blocking(request))
+        .await
+        .map_err(|error| format!("The file read worker stopped unexpectedly: {}", error))?
+}
+
+fn computer_read_text_file_blocking(
     request: ComputerReadFileRequest,
 ) -> Result<ComputerReadFileResult, String> {
     let path = normalize_input_path(&request.path);

@@ -199,6 +199,7 @@ export interface ChatMessage {
   planning?: ChatPlanning;
   progress?: ChatProgressItem[];
   reasoning?: string;
+  responseThinking?: string;
   role: ChatRole;
   source?: ChatMessageSource;
   sources?: ChatSource[];

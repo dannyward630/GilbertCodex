@@ -1,24 +1,23 @@
 /**
- * Native-function-calling schema registry + provider-specific adapters.
+ * Local runtime tool schema registry + dormant native adapters.
  *
- * The model client passes `tools` to providers that support native function
- * calling. When a tool isn't in this registry (or the provider/model doesn't
- * support native tools), the existing XML-prompt path takes over — both
- * paths funnel into the same `parseLocalComputerToolCalls` downstream.
+ * The model client can build provider `tools` payloads for a future native
+ * path, but live requests now force the XML-prompt path for all
+ * local tools; these schemas remain for validation and future native support.
  *
  * Schemas are hand-rolled JSON Schema 7. No ajv/zod dep — we have ~25 tools
  * and the shapes are flat (`type: "string|integer|boolean"`, no `$ref`s).
  */
 
 import type { ProviderSettings } from "../types/settings";
-import { isOpenRouterFreeModel } from "../lib/models";
-import { openRouterModelHasReliableNativeTools } from "./openRouterRouting";
 import { normalizeToolRegistrySettings } from "../types/tools";
+import { listWorkflowDefinitions } from "../tools/workflows";
 
 export type JsonSchemaScalar = "string" | "integer" | "number" | "boolean";
 export type JsonSchemaType = JsonSchemaScalar | "object" | "array";
 
 export interface JsonSchemaProperty {
+  additionalProperties?: boolean;
   description?: string;
   enum?: Array<string | number>;
   items?: JsonSchemaProperty;
@@ -63,6 +62,13 @@ export interface OpenAIResponsesFunctionTool {
   type: "function";
 }
 
+/**
+ * Reliability mode: provider-native local tools stay off until ChatMessage can
+ * persist tool-call ids and send real provider-native tool_result blocks on the
+ * following turn. The XML path is the single live protocol for local tools.
+ */
+export const FORCE_XML_TOOL_PROTOCOL = true;
+
 const PATH_PROP: JsonSchemaProperty = {
   description: "Absolute or workspace-relative path to the target file or folder.",
   type: "string",
@@ -89,6 +95,40 @@ function obj(properties: Record<string, JsonSchemaProperty>, required: string[] 
  * pure improvement (cheap models will use the structured call).
  */
 const LOCAL_TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
+  workflow_run: {
+    description:
+      "Run a higher-level Gilbert workflow that sequences internal primitive tools for a goal such as repo inspection, feature planning, research-backed patching, health checks, PR prep, MCP usage, or monitor briefs. Prefer this for goal-level tasks instead of calling many fine-grained tools first.",
+    name: "workflow_run",
+    parameters: obj(
+      {
+        approval_policy: {
+          description: "Approval behavior for this run. Use inherit so the active workspace permission mode stays authoritative.",
+          enum: ["inherit"],
+          type: "string",
+        },
+        goal: {
+          description: "The user's concrete goal in plain language.",
+          type: "string",
+        },
+        inputs: {
+          additionalProperties: true,
+          description: "Optional structured inputs for the workflow, such as paths, commands, repository names, or constraints.",
+          type: "object",
+        },
+        mode: {
+          description: "How assertively to run the workflow. auto selects the safest behavior; plan gathers evidence; execute may require approval; monitor creates a repeatable brief.",
+          enum: ["auto", "plan", "execute", "monitor"],
+          type: "string",
+        },
+        workflow_id: {
+          description: "Optional workflow definition id. Omit to let Gilbert select the best workflow from the goal.",
+          enum: listWorkflowDefinitions().map((workflow) => workflow.id),
+          type: "string",
+        },
+      },
+      ["goal"],
+    ),
+  },
   web_search: {
     description:
       "Search the web for current facts, official docs, package behavior, error messages, or external sources. Use only when local files cannot answer.",
@@ -276,8 +316,13 @@ const LOCAL_TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
         content: { description: "Full file contents.", type: "string" },
         create_parent_dirs: { description: "Create missing parent directories. Default true.", type: "boolean" },
         expected_sha256: { description: "Required for replacing an existing file: sha256 returned by the latest full read_file/view_code of that file.", type: "string" },
+        file_content: { description: "Alias for content. Full file contents.", type: "string" },
+        full_file_content: { description: "Alias for content. Full file contents.", type: "string" },
+        new_content: { description: "Alias for content. Full replacement contents.", type: "string" },
+        new_text: { description: "Alias for content when replace_entire_file=true. Full replacement text.", type: "string" },
         overwrite: { description: "Overwrite an existing file. Default true.", type: "boolean" },
         path: PATH_PROP,
+        replacement_text: { description: "Alias for content. Full replacement text.", type: "string" },
         replace_entire_file: { description: "Set true only when intentionally replacing the whole current file. Normal edits must use edit_file instead.", type: "boolean" },
       },
       ["path", "content"],
@@ -378,16 +423,85 @@ const LOCAL_TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   },
   create_files: {
     description:
-      "Create multiple new files in one call. files_json is a JSON array of {path, content, createParentDirs?, overwrite?} entries. Missing parent folders are created by default.",
+      "Create multiple files in one call. Prefer files as an array of {path, content, kind?, language?, create_parent_dirs?, overwrite?, duplicate_strategy?}. Missing parent folders are created by default.",
     name: "create_files",
     parameters: obj(
       {
+        files: {
+          description: "Array of file specs. Use this instead of files_json when native function calling supports arrays.",
+          items: {
+            additionalProperties: true,
+            properties: {
+              content: { description: "Full file contents.", type: "string" },
+              create_parent_dirs: { description: "Create missing parent directories. Default true.", type: "boolean" },
+              duplicate_strategy: { description: "When target exists: fail, increment, or skip. Default fail.", type: "string" },
+              kind: { description: "code, react, html, markdown, or text.", type: "string" },
+              language: { description: "Optional code language or extension hint.", type: "string" },
+              overwrite: { description: "Overwrite existing files only when intentionally replacing them. Default false.", type: "boolean" },
+              path: PATH_PROP,
+              title: { description: "Optional title/name for generated document defaults.", type: "string" },
+            },
+            required: ["path", "content"],
+            type: "object",
+          },
+          type: "array",
+        },
         files_json: {
-          description: "JSON-encoded array of file specs.",
+          description: "Fallback JSON-encoded array of file specs. Use only when files array is unavailable.",
           type: "string",
         },
       },
-      ["files_json"],
+      [],
+    ),
+  },
+  edit_files: {
+    description:
+      "Edit multiple existing files in one call. Counts as a single source-file mutation against the per-pass cap. Two accepted shapes: (1) edits as an array of {path, old_text, new_text} entries (or {path, content} for full-file rewrite with optional expected_sha256); (2) parallel-array form: `paths` plus a single `old_text`+`new_text` (broadcast same edit across every path) or matching arrays `old_texts`+`new_texts`. Use shape 1 for heterogeneous edits, shape 2 for the same find/replace across many files.",
+    name: "edit_files",
+    parameters: obj(
+      {
+        edits: {
+          description: "Shape 1: array of edit entries. Use this instead of edits_json when native function calling supports arrays.",
+          items: {
+            additionalProperties: true,
+            properties: {
+              content: { description: "Full file contents for a deliberate rewrite. Use only when old_text is omitted.", type: "string" },
+              end_char: { description: "1-based end character for character-range edits.", type: "integer" },
+              end_line: { description: "1-based end line (inclusive) for line-range edits.", type: "integer" },
+              expected_sha256: { description: "Optional sha256 from a fresh read; required for safe full-file rewrites.", type: "string" },
+              expected_text: { description: "Optional guard text that must already match before applying the edit.", type: "string" },
+              insert_at_line: { description: "1-based line at which to insert content.", type: "integer" },
+              new_text: { description: "Replacement text. Empty string deletes the matched text.", type: "string" },
+              occurrence: { description: "1-based occurrence to replace when old_text appears multiple times.", type: "integer" },
+              old_text: { description: "Exact text to find and replace within the file.", type: "string" },
+              path: PATH_PROP,
+              start_char: { description: "1-based start character for character-range edits.", type: "integer" },
+              start_line: { description: "1-based start line for line-range edits.", type: "integer" },
+            },
+            required: ["path"],
+            type: "object",
+          },
+          type: "array",
+        },
+        edits_json: {
+          description: "Shape 1 fallback: JSON-encoded array of edit entries. Use only when edits array is unavailable.",
+          type: "string",
+        },
+        paths: {
+          description: "Shape 2 (broadcast): array of file paths to apply the same old_text/new_text across. Pair with old_text+new_text (single value) or old_texts+new_texts (matching arrays).",
+          items: { type: "string" },
+          type: "array",
+        },
+        old_text: {
+          description: "Shape 2 (broadcast): exact text to find in every path listed in `paths`. Use old_texts (array) for per-file search texts.",
+          type: "string",
+        },
+        new_text: {
+          description: "Shape 2 (broadcast): replacement text applied to every path listed in `paths`. Use new_texts (array) for per-file replacements.",
+          type: "string",
+        },
+      },
+      [],
     ),
   },
   create_vite_project: {
@@ -775,13 +889,14 @@ export function selectNativeToolNames(settings: ProviderSettings): string[] {
 }
 
 function isToolEnabledForRequest(name: string, tools: ReturnType<typeof normalizeToolRegistrySettings>): boolean {
+  if (name === "workflow_run") return tools.workflowAutomation;
   if (name === "web_search") return tools.webSearch;
   if (name === "lookup_color") return tools.colorTools;
   if (name === "open_browser_preview") return tools.browserPreview;
   if (name === "view_code" || name === "read_file") return tools.codeView;
   if (name === "list_directory" || name === "build_index") return tools.fileBrowser;
   if (name === "search_files" || name === "recall_context") return tools.fileSearch;
-  if (name === "edit_file" || name === "inline_edit" || name === "write_file" || name === "move_path" || name === "rename_path") {
+  if (name === "edit_file" || name === "edit_files" || name === "inline_edit" || name === "write_file" || name === "move_path" || name === "rename_path") {
     return tools.codeEdit;
   }
   if (name === "create_files" || name === "create_pdf_file" || name === "create_vite_project") return tools.fileCreation;
@@ -796,47 +911,10 @@ function isToolEnabledForRequest(name: string, tools: ReturnType<typeof normaliz
 }
 
 /**
- * Whether the current provider+model is known to support native function
- * calling well. When false, the caller skips the native path and the model
- * falls back to the existing XML-prompt route. (Cheap free models tend to
- * choke on the native API even when the provider claims support.)
+ * Whether this request should send provider-native local tools. This is false
+ * for every provider until the chat store can round-trip tool_use ids as real
+ * provider-native tool_result content blocks on the following turn.
  */
-export function modelSupportsNativeTools(settings: ProviderSettings, model: string): boolean {
-  if (isNativeToolsDisabledByEnv()) {
-    return false;
-  }
-
-  const provider = settings.provider;
-  const normalized = model.trim().toLowerCase();
-
-  // Anthropic native tools are first-class — every modern Claude supports them.
-  if (provider === "anthropic") {
-    return true;
-  }
-
-  // OpenAI: GPT-4 / GPT-4o / GPT-4.1 / o-series all support function calling.
-  if (provider === "openai") {
-    return true;
-  }
-
-  // OpenRouter: free models are flaky. Use the curated allow-list of known
-  // native-tools-capable model families; anything not on the list falls back
-  // to the XML-prompt path.
-  if (provider === "openrouter") {
-    if (isOpenRouterFreeModel(normalized)) {
-      return false;
-    }
-    return openRouterModelHasReliableNativeTools(normalized);
-  }
-
-  // DeepSeek, Groq, xAI: most chat-completions-compatible models work, but
-  // there are exceptions. We accept native by default; if the call fails the
-  // caller can flip the env kill-switch.
-  return true;
-}
-
-function isNativeToolsDisabledByEnv(): boolean {
-  const raw = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-    ?.VITE_GILBERT_CODEX_DISABLE_NATIVE_TOOLS;
-  return raw === "1" || raw === "true" || raw === "TRUE";
+export function modelSupportsNativeTools(_settings: ProviderSettings, _model: string): boolean {
+  return false;
 }

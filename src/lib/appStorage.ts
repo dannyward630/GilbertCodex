@@ -726,6 +726,7 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     isStreaming: false,
     progress: normalizeProgressItems(message.progress),
     role: message.role === "assistant" ? "assistant" : "user",
+    responseThinking: normalizeOptionalText(message.responseThinking),
     source: normalizeChatMessageSource(message.source) ?? legacyDiscordMessage?.source,
     status: message.status === "error" ? "error" : undefined,
     toolCalls: normalizeToolCalls(message.toolCalls),

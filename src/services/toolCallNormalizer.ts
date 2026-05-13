@@ -1,9 +1,8 @@
 /**
- * Converts provider-native tool calls (Anthropic `tool_use` blocks, OpenAI
+ * Dormant bridge for provider-native tool calls (Anthropic `tool_use` blocks, OpenAI
  * `tool_calls` array) into the same `<tool_call>` XML shape that the existing
- * `parseLocalComputerToolCalls` parser already understands. This keeps the
- * downstream executor unchanged — native function calling becomes a pure
- * upgrade to the request/response edges of the model client.
+ * `parseLocalComputerToolCalls` parser already understands. Live requests do
+ * not send native tools; this remains for the later proper-native path.
  */
 
 export interface AnthropicToolUseBlock {

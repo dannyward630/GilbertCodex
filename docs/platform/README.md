@@ -2,13 +2,13 @@
 
 This document tracks what is known about running Gilbert Codex on Windows, macOS, and Linux.
 
-Last updated: May 10, 2026.
+Last updated: May 13, 2026.
 
 ## Current Support State
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
+| Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer and the v0.3.0 modular tool-runtime update. |
 | macOS | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for macOS, but the desktop app still needs someone on macOS to run, package, and finish any native issues. |
 | Linux | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for Linux, but the desktop app still needs someone on Linux to run, package, and finish any native issues. |
 
@@ -21,6 +21,8 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 - Tauri bundle targets are configured broadly so host-platform packages can be produced by each OS.
 - The desktop terminal supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
 - Local tool command inference chooses platform-appropriate package manager, Gradle, TypeScript, and custom-tool commands.
+- The v0.3.0 tool executor is split into platform-neutral parser, registry, policy, terminal, workspace, file-mutation, Git, GitHub, MCP, browser, weather, and web-search modules.
+- The workflow layer is source-portable TypeScript and uses `xstate`, but native terminal, browser preview, file picker, and packaging behavior still need OS-specific verification.
 - Custom reusable tools can use `.ps1`, `.cmd`, or `.sh` scripts depending on the selected shell.
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
 - Browser automation uses a platform-appropriate user agent.

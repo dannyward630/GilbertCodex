@@ -38,6 +38,17 @@ export interface PreparedFileCreationWrite {
   title?: string;
 }
 
+export interface FileCreationPrepareFailure {
+  index?: number;
+  path?: string;
+  reason: string;
+}
+
+export interface FileCreationWritePlan {
+  failures: FileCreationPrepareFailure[];
+  writes: PreparedFileCreationWrite[];
+}
+
 export interface FileCreationWriteResult extends PreparedFileCreationWrite {
   write: ComputerWriteFileResult;
 }

@@ -1,6 +1,6 @@
 import { createPlanningAnswersMessage } from "../services/planningClient";
 import { formatWebSearchProviderLabel } from "../services/webSearchClient";
-import { createLocalComputerToolCallPreviews, hasLocalComputerToolCalls } from "../tools/computer/localToolExecutor";
+import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../tools/computer/localToolExecutor";
 import type { LocalComputerToolExecutionPolicy } from "../tools/computer/localToolExecutor";
 import type {
   ChatMessage,
@@ -211,7 +211,7 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
     `Original user request: ${prompt}`,
     "The previous visible response discussed how to format, batch, or emit tool calls instead of using the app tools.",
     "Do not explain the hidden tool protocol, do not mention XML, arg_key, arg_value, batching mechanics, cwd choices, shell choices, timeout choices, or step-by-step tool formatting.",
-    "If a tool is needed, call it now. Prefer native tool calling when the provider supports it; otherwise emit only the compact tool_call block with complete arguments and no surrounding prose.",
+    "If a tool is needed, call it now by emitting only the compact tool_call block with complete arguments and no surrounding prose. Provider-native tool calling is intentionally disabled until native tool_result round-tripping exists.",
     "If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected protocol narration excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -497,6 +497,11 @@ export function createActiveLocalToolCalls(content: string, passIndex: number, e
       status: "active",
     },
   ];
+}
+
+/** Uses hidden provider reasoning as tool-request input when Anthropic-style thinking contains XML calls. */
+export function createAssistantToolRequestContent(content: string, reasoning?: string, executionPolicy?: LocalComputerToolExecutionPolicy) {
+  return createLocalComputerToolRequestContent(content, reasoning, executionPolicy);
 }
 
 /** Merges source lists while preserving first-seen order and avoiding duplicate URLs. */

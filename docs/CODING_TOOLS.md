@@ -2,13 +2,19 @@
 
 Gilbert Codex now has a broader coding tool pack layered on top of local workspace access. These tools are still bounded by selected roots, Toolbox toggles, and permission mode.
 
+## Workflow Layer
+
+- `workflow_run`: runs a higher-level workflow definition for goal-level tasks such as `agent-workflow-audit`, `plan-patch-verify`, `research-backed-patch`, `repo-health-sweep`, `branch-pr-prep`, `mcp-tool-usage`, and `monitor-brief`.
+- Workflows sequence existing primitive tools instead of inventing one new model-facing tool per product task. Direct tools remain available as primitives and compatibility aliases for old chats and fallback providers.
+- `workflow_run` accepts `goal`, optional `workflow_id`, optional `inputs`, `mode` (`auto`, `plan`, `execute`, or `monitor`), and `approval_policy=inherit`.
+- Mutating workflows inherit the active workspace permission mode. The first v1 workflows are intentionally evidence-first and hand off to guarded primitive tools for edits, terminal commands, Git mutation, MCP mutation, or publishing.
+- Provider-native local tools are intentionally disabled for now. Every model uses the same XML `tool_call` protocol until Gilbert can persist native tool-call ids and send provider-native `tool_result` content on the next turn.
+
 ## Safety And Files
 
 - `delete_file`: deletes one file only. It refuses folders and requires `confirm_delete=true`.
 - `rename_path`: renames one file or folder inside the enabled workspace roots.
 - `move_path`: moves one file or folder from `from_path` to `to_path` inside the enabled workspace roots.
-- `check_duplicate_file`: checks whether one path or a `files_json` batch would collide with existing files.
-- `prevent_duplicate_file_create`: returns safe unique path suggestions before a create batch.
 - File creation defaults to `overwrite=false`. Use `duplicate_strategy=increment` for safe auto-renaming or `duplicate_strategy=skip` to skip existing files.
 - Workspace-relative paths are resolved under the selected root. If a generated batch repeats the selected project folder name as its first segment, Gilbert rebases that segment to the open folder instead of treating it as a path outside the workspace.
 - `create_vite_project` writes into the selected workspace root when `project_path` is omitted. Use `project_path` only when the requested project should intentionally live in a child or different folder.
@@ -18,7 +24,6 @@ Gilbert Codex now has a broader coding tool pack layered on top of local workspa
 
 ## PDF And Inline Editing
 
-- `create_chat_pdf`: creates a PDF from chat text, Markdown, notes, or a supplied transcript.
 - `inline_edit`: alias for precise edit behavior with `old_text/new_text`, Codex-style `old_string/new_string`, Anthropic-style `old_str/new_str`, line ranges, inserts, or character ranges.
 
 ## Edit Syntax
@@ -32,7 +37,7 @@ Use `view_code` before edits when exact placement matters. `edit_file` and `inli
 
 Out-of-range line and character coordinates are rejected so stale edits do not silently move to the wrong place. Multiple exact text edits to the same file can run sequentially in one tool pass; unanchored line, character, full-file, and delete mutations still require a fresh pass before touching the same path again.
 
-`write_file` is create-only by default for existing paths. To intentionally replace an existing file, read it first and pass `replace_entire_file=true` plus the `expected_sha256` returned by the fresh read. Normal code changes should use `edit_file`/`inline_edit` so the model sends only the changed text, not the whole file.
+`write_file` is create-only by default for existing paths. To intentionally replace an existing file, read it first and pass `replace_entire_file=true` plus the `expected_sha256` returned by the fresh read. Full replacement bodies may arrive as `content`, `new_text`, `new_content`, `file_content`, `full_file_content`, `replacement_text`, `css`, or `stylesheet`. Normal code changes should use `edit_file`/`inline_edit` so the model sends only the changed text, not the whole file.
 
 JSX/TSX markup is valid edit content. If a fallback XML tool call has trouble carrying raw `<` and `>` characters, use a smaller line-range edit, exact `old_str/new_str`, or CDATA-wrapped `arg_value` content. Do not force-overwrite an existing file because JSX was hard to serialize.
 
@@ -110,8 +115,6 @@ Mutating GitHub tools are routed through the same approval path as local edits a
 
 ## Vectors
 
-- `vector_embed_text`: creates the same style of local hashed embedding summary used by the file index.
-- `vector_search`: runs semantic workspace search through the local vector file index.
 - `search_files`: searches the local index with hybrid scoring across file names, paths, text previews, and vectors. Results include match kind, matched terms, line hints when a preview line matched, and snippet text.
 - `recall_context`: searches loaded `GILBERT.md` project memory files and the same hybrid code index together. Use it for fast codebase orientation, remembered project rules, architecture notes, and finding the right files before editing.
 
@@ -119,15 +122,6 @@ The search path is intentionally both keyword and semantic. This follows the sam
 
 ## Coding Helpers
 
-- `run_tests`: infers a test command from `package.json`, Cargo, or Gradle, or runs an explicit command.
-- `typescript_check`: infers TypeScript checking from `package.json` or `tsconfig.json`.
-- `create_sql_schema`: creates a SQL schema file.
-- `create_sql_migration`: creates a timestamped SQL migration file.
-- `create_react_native_screen`: creates a React Native screen component.
-- `react_native_setup_check`: reports React Native or Expo signals from `package.json`.
-- `create_unit_test`: creates a starter unit-test file.
-- `create_api_route`: creates a Next.js or Express-style API route.
-- `codebase_health_scan`: summarizes root project signals and recommended checks.
-- `dependency_audit`: summarizes dependencies and scripts from `package.json`.
+Specialized helper names from older prompt packs are treated as compatibility aliases only when the parser can route them to real primitives. New product work should use `workflow_run` for goal-level orchestration, then `search_files`, `read_file`/`view_code`, `edit_file`/`edit_files`, `create_files`, `run_terminal`, Git/GitHub tools, MCP tools, web/weather, or browser preview as the concrete primitive action.
 
-The extra tools are intentionally small and composable. The model should use them before reaching for raw terminal commands when a structured file, check, or report is enough.
+The extra runtime behavior is intentionally small and composable. The model should use workflow definitions to sequence primitives instead of relying on prompt-only tool names.

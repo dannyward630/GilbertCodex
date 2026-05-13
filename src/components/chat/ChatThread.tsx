@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, ExternalLink, Globe2 } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
-import { MessageArtifacts, MessageAttachments, OpenableImage } from "./MessageAttachments";
+import { MessageArtifacts, MessageAttachments } from "./MessageAttachments";
 import { MessageActions } from "./MessageActions";
 import { MessageBlock } from "./MessageBlock";
 import { PlanReviewCard } from "./PlanReviewCard";
-import { ThinkingDisclosure } from "../thinking/ThinkingDisclosure";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import type { AppInfo } from "../../types/app";
 import type { AgentApprovalDecision } from "../../types/agentRun";
@@ -41,7 +41,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   const shouldStickToBottomRef = useRef(true);
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
   const streamMarker = scrollAnchorMessage
-    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
     : `empty:${chat.messages.length}`;
 
   useEffect(() => {
@@ -144,14 +144,16 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
         }
 
         const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, message.reasoning) : { content: message.content, reasoning: message.reasoning };
+        const responseThinking = message.role === "assistant" ? getVisibleResponseThinking(message.responseThinking, displayMessage.content) : "";
         const hasVisibleContent = displayMessage.content.trim().length > 0;
+        const hasVisibleResponseThinking = responseThinking.length > 0;
+        const messageSources = message.role === "assistant" ? getMessageSources(message, displayMessage.content) : [];
+        const showMessageSources = message.role === "assistant" && !message.isStreaming && hasVisibleContent && messageSources.length > 0;
         const hasVisibleAttachment = Boolean(message.attachments?.length);
         const hasVisibleArtifact = Boolean(message.artifacts?.length);
-        const activity = message.role === "assistant" ? getAssistantActivity(message) : null;
-        const hasThinkingIndicator = message.role === "assistant" && Boolean(message.thinking || displayMessage.reasoning?.trim() || activity);
         const showPlanReview = shouldShowPlanReviewCard(message);
 
-        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasVisibleArtifact && !hasThinkingIndicator && !showPlanReview) {
+        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleResponseThinking && !hasVisibleAttachment && !hasVisibleArtifact && !showPlanReview) {
           return null;
         }
 
@@ -163,22 +165,16 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
               <ContextCompactionDivider key={`${message.id}-${compaction.compactedAt}`} compaction={compaction} />
             ))}
             <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
-              {hasThinkingIndicator ? (
-                <ThinkingDisclosure
-                  activityMode={message.mode === "plan" || message.planning ? "planning" : "thinking"}
-                  completedAt={message.thinking?.completedAt}
-                  content={displayMessage.reasoning}
-                  isPrivate
-                  isThinking={Boolean(message.isStreaming || (message.thinking && !message.thinking.completedAt) || activity?.active)}
-                  liveDetail={activity?.detail}
-                  onOpenActivity={onOpenActivity}
-                  progressLabel={activity?.label}
-                  startedAt={message.thinking?.startedAt}
-                />
-              ) : null}
               <MessageAttachments attachments={message.attachments} />
               <MessageArtifacts artifacts={message.artifacts} />
               {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
+              {hasVisibleResponseThinking || showMessageSources ? (
+                <ResponseMetaRow
+                  sources={showMessageSources ? messageSources : []}
+                  thinkingContent={hasVisibleResponseThinking ? responseThinking : ""}
+                  thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
+                />
+              ) : null}
               {showPlanReview ? (
                 <PlanReviewCard
                   content={displayMessage.content}
@@ -191,7 +187,6 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
               ) : displayMessage.content.trim() || message.isStreaming ? (
                 <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
               ) : null}
-              {shouldShowWebImageSources(message) ? <WebImageSources sources={message.sources ?? []} /> : null}
               <MessageActions
                 canRegenerate={canRegenerateMessage(chat, messageIndex)}
                 message={actionMessage}
@@ -209,34 +204,213 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   );
 }
 
-function WebImageSources({ sources }: { sources: ChatSource[] }) {
-  const imageSources = sources.filter((source) => source.sourceType === "image" && (source.thumbnailUrl || source.imageUrl)).slice(0, 6);
+function ResponseMetaRow({ sources, thinkingContent, thinkingStreaming }: { sources: ChatSource[]; thinkingContent: string; thinkingStreaming?: boolean }) {
+  const [thinkingExpanded, setThinkingExpanded] = useState(true);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const hasThinking = thinkingContent.trim().length > 0;
+  const visibleSources = getUniqueMessageSources(sources);
+  const hasSources = visibleSources.length > 0;
+  const hostPreview = getSourceHostPreview(visibleSources);
 
-  if (imageSources.length === 0) {
+  if (!hasThinking && !hasSources) {
     return null;
   }
 
   return (
-    <div className="web-image-strip" aria-label="Web image results">
-      {imageSources.map((source) => (
-        <div className="web-image-card" key={source.id ?? source.url}>
-          <OpenableImage alt={source.title} caption={source.detail ?? source.title} className="web-image-button" src={source.thumbnailUrl || source.imageUrl || source.url} />
-          <a href={source.url} rel="noreferrer" target="_blank">{source.title}</a>
+    <section className="response-meta" data-has-sources={hasSources} data-thinking-streaming={Boolean(thinkingStreaming)} aria-label="Response details">
+      <div className="response-meta-controls">
+        {hasThinking ? (
+          <button className="response-thinking-toggle" type="button" aria-expanded={thinkingExpanded} onClick={() => setThinkingExpanded((current) => !current)}>
+            <span className="response-thinking-label">
+              <span className="response-thinking-dot" aria-hidden="true" />
+              Thinking{thinkingStreaming ? "..." : ""}
+            </span>
+            <span className="response-thinking-action">
+              {thinkingExpanded ? "Collapse" : "Expand"}
+              {thinkingExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+            </span>
+          </button>
+        ) : null}
+        {hasSources ? (
+          <button className="message-sources-toggle" type="button" aria-expanded={sourcesExpanded} onClick={() => setSourcesExpanded((current) => !current)}>
+            <span className="message-sources-title">
+              <Globe2 size={15} aria-hidden="true" />
+              <strong>Sources</strong>
+              <small>{visibleSources.length}</small>
+            </span>
+            <span className="message-sources-preview" aria-hidden="true">
+              {hostPreview.map((host) => (
+                <span key={host}>{host}</span>
+              ))}
+            </span>
+            <span className="message-sources-action">
+              {sourcesExpanded ? "Hide" : "Show"}
+              {sourcesExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+            </span>
+          </button>
+        ) : null}
+      </div>
+      {hasThinking && thinkingExpanded ? (
+        <div className="response-thinking-body">
+          <MarkdownMessage content={thinkingContent} isStreaming={thinkingStreaming} />
         </div>
-      ))}
-    </div>
+      ) : null}
+      {hasSources && sourcesExpanded ? (
+        <div className="message-sources-list">
+          {visibleSources.map((source, index) => (
+            <a className="message-source-link" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank">
+              <span className="message-source-index" aria-hidden="true">{index + 1}</span>
+              <span>
+                <strong>{cleanSourceTitle(source.title, source.url)}</strong>
+                <small>{formatMessageSourceDetail(source)}</small>
+              </span>
+              <ExternalLink size={13} aria-hidden="true" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
-function shouldShowWebImageSources(message: ChatMessage) {
-  return (
-    message.role === "assistant" &&
-    message.webSearch?.enabled &&
-    message.webSearch.status === "complete" &&
-    message.mode !== "plan" &&
-    !message.toolCalls?.length &&
-    Boolean(message.sources?.some((source) => source.sourceType === "image" && (source.thumbnailUrl || source.imageUrl)))
-  );
+function getMessageSources(message: ChatMessage, visibleContent: string) {
+  return getUniqueMessageSources([...(message.sources ?? []), ...extractMessageSources(visibleContent)]);
+}
+
+function getSourceHostPreview(sources: ChatSource[]) {
+  const hosts: string[] = [];
+  const seenHosts = new Set<string>();
+
+  for (const source of sources) {
+    const host = formatMessageSourceHost(source.url);
+
+    if (seenHosts.has(host)) {
+      continue;
+    }
+
+    seenHosts.add(host);
+    hosts.push(host);
+
+    if (hosts.length >= 3) {
+      break;
+    }
+  }
+
+  if (sources.length > hosts.length) {
+    hosts.push(`+${sources.length - hosts.length}`);
+  }
+
+  return hosts;
+}
+
+function getUniqueMessageSources(sources: ChatSource[]) {
+  const seenUrls = new Set<string>();
+  const uniqueSources: ChatSource[] = [];
+
+  for (const source of sources) {
+    const normalizedUrl = normalizeMessageSourceUrl(source.url);
+
+    if (!normalizedUrl || seenUrls.has(normalizedUrl)) {
+      continue;
+    }
+
+    seenUrls.add(normalizedUrl);
+    uniqueSources.push({ ...source, url: normalizedUrl });
+  }
+
+  return uniqueSources;
+}
+
+function extractMessageSources(content: string): ChatSource[] {
+  const sources = new Map<string, ChatSource>();
+  const body = stripCodeForSourceScan(content);
+  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
+  const bareUrlPattern = /(^|[\s(])(https?:\/\/[^\s<>)]+)/gi;
+
+  for (const match of body.matchAll(markdownLinkPattern)) {
+    addMessageSource(sources, match[2], match[1]);
+  }
+
+  for (const match of body.matchAll(bareUrlPattern)) {
+    addMessageSource(sources, match[2]);
+  }
+
+  return [...sources.values()];
+}
+
+function addMessageSource(sources: Map<string, ChatSource>, rawUrl: string, title?: string) {
+  const url = normalizeMessageSourceUrl(rawUrl);
+
+  if (!url || !isExternalMessageSourceUrl(url) || sources.has(url)) {
+    return;
+  }
+
+  sources.set(url, {
+    sourceType: "web",
+    title: cleanSourceTitle(title, url),
+    url,
+  });
+}
+
+function normalizeMessageSourceUrl(rawUrl: string) {
+  const trimmedUrl = rawUrl.trim().replace(/[.,;:!?]+$/g, "");
+
+  try {
+    return new URL(trimmedUrl).href;
+  } catch {
+    return "";
+  }
+}
+
+function isExternalMessageSourceUrl(url: string) {
+  try {
+    const { hostname, protocol } = new URL(url);
+    const host = hostname.toLowerCase();
+
+    return (
+      (protocol === "http:" || protocol === "https:") &&
+      host !== "localhost" &&
+      host !== "0.0.0.0" &&
+      host !== "127.0.0.1" &&
+      host !== "::1" &&
+      !host.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function formatMessageSourceDetail(source: ChatSource) {
+  const host = formatMessageSourceHost(source.url);
+  const detail = source.detail?.trim();
+
+  if (!detail || detail === source.url || detail === host) {
+    return host;
+  }
+
+  return `${host} - ${detail}`;
+}
+
+function formatMessageSourceHost(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "Web source";
+  }
+}
+
+function cleanSourceTitle(title: string | undefined, url: string) {
+  const cleanedTitle = (title ?? "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleanedTitle || formatMessageSourceHost(url);
+}
+
+function stripCodeForSourceScan(value: string) {
+  return value.replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
 }
 
 function ResponseRecoveryActions({
@@ -260,65 +434,6 @@ function ResponseRecoveryActions({
       ) : null}
     </div>
   );
-}
-
-function getAssistantActivity(message: ChatMessage) {
-  const activeProgress = [...(message.progress ?? [])].reverse().find((item) => item.status === "active");
-  const activeTool = [...(message.toolCalls ?? [])].reverse().find((toolCall) => toolCall.status === "active");
-  const waitingTool = [...(message.toolCalls ?? [])].reverse().find((toolCall) => toolCall.status === "waiting_approval");
-  const toolCount = message.toolCalls?.length ?? 0;
-  const completeTools = message.toolCalls?.filter((toolCall) => toolCall.status === "complete").length ?? 0;
-  const activeTools = message.toolCalls?.filter((toolCall) => toolCall.status === "active").length ?? 0;
-  const errorTools = message.toolCalls?.filter((toolCall) => toolCall.status === "error" || toolCall.status === "skipped").length ?? 0;
-  const webStatus = message.webSearch?.enabled ? message.webSearch.status : undefined;
-  const active = Boolean(message.isStreaming || activeProgress || activeTool || webStatus === "active");
-
-  if (!active && !toolCount && !activeProgress && !waitingTool && webStatus !== "error") {
-    return null;
-  }
-
-  const label = activeProgress?.label ?? activeTool?.label ?? waitingTool?.label ?? (webStatus === "active" ? "Searching web" : toolCount ? "Reviewing tool results" : "Working");
-  const details = [
-    activeProgress?.detail,
-    activeTool ? formatAssistantActivityToolDetail(activeTool) : "",
-    waitingTool ? "Waiting for your approval in Activity." : "",
-    toolCount ? `${toolCount} tools: ${completeTools} complete${activeTools ? `, ${activeTools} running` : ""}${errorTools ? `, ${errorTools} blocked` : ""}` : "",
-    webStatus === "active" ? "Web search is still running." : "",
-    webStatus === "error" ? message.webSearch?.error ?? "Web search failed." : "",
-  ].filter(Boolean);
-
-  return {
-    active,
-    detail: details.join(" "),
-    label,
-  };
-}
-
-function formatAssistantActivityToolDetail(toolCall: NonNullable<ChatSummary["messages"][number]["toolCalls"]>[number]) {
-  const fileChangeSummary = formatAssistantActivityFileChangeSummary(toolCall.fileChanges);
-  const liveOutput = toolCall.status === "active" ? cleanAssistantActivityText(toolCall.output) : "";
-
-  return [liveOutput, fileChangeSummary, toolCall.detail].filter(Boolean).join(" ");
-}
-
-function formatAssistantActivityFileChangeSummary(fileChanges: NonNullable<ChatSummary["messages"][number]["toolCalls"]>[number]["fileChanges"]) {
-  if (!fileChanges?.length) {
-    return "";
-  }
-
-  const additions = fileChanges.reduce((total, change) => total + change.additions, 0);
-  const deletions = fileChanges.reduce((total, change) => total + change.deletions, 0);
-  return `${fileChanges.length === 1 ? "1 file" : `${fileChanges.length} files`} changed, +${additions} -${deletions}.`;
-}
-
-function cleanAssistantActivityText(content?: string) {
-  const normalized = content?.replace(/\s+/g, " ").trim();
-
-  if (!normalized) {
-    return "";
-  }
-
-  return normalized.length > 180 ? `${normalized.slice(0, 179).trimEnd()}...` : normalized;
 }
 
 function DiscordMessageSource({ source }: { source: ChatMessageSource }) {
@@ -396,6 +511,27 @@ function separateDisplayThinking(content: string, existingReasoning?: string) {
 
 function removeInternalAssistantStatusMessage(content: string) {
   return INTERNAL_ASSISTANT_STATUS_MESSAGES.has(content.trim()) ? "" : content;
+}
+
+function getVisibleResponseThinking(responseThinking: string | undefined, visibleContent: string) {
+  const thinking = responseThinking?.trim() ?? "";
+
+  if (!thinking || sameNormalizedVisibleText(thinking, visibleContent)) {
+    return "";
+  }
+
+  return thinking;
+}
+
+function sameNormalizedVisibleText(left: string, right: string) {
+  const normalizedLeft = normalizeVisibleText(left);
+  const normalizedRight = normalizeVisibleText(right);
+
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function normalizeVisibleText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function getScrollAnchorMessage(chat: ChatSummary) {

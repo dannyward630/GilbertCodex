@@ -99,6 +99,7 @@ export function createRecoverableLocalEditRetryInstruction(
   recoverableFailure?: RecoverableToolFailureContext,
 ) {
   const latestFailedSection = extractFirstFailedToolSection(contextMessage);
+  const pathGuidance = createFailedPathGuidance([contextMessage, recoverableFailure?.output ?? ""].filter(Boolean).join("\n"));
 
   return [
     "RECOVERABLE LOCAL EDIT FAILURE",
@@ -108,12 +109,56 @@ export function createRecoverableLocalEditRetryInstruction(
     recoverableFailure?.retryInstruction ? `Runtime retry instruction: ${recoverableFailure.retryInstruction}` : "",
     "The last edit/write/create action failed or produced blocking quality warnings, but this is recoverable. Continue the same task now instead of writing a prose promise.",
     "Do not say the failed file was changed, do not paste manual replacement instructions, and do not summarize the tool error as the final answer unless access is truly blocked.",
+    pathGuidance,
     "A valid edit_file call must include path plus exactly one edit shape: old_text/new_text, old_str/new_str, start_line/end_line/content, insert_at_line/content, insert_line/new_str, or start_char/end_char/content.",
     "A valid write_file call must include both path and content. write_file is for new files by default; for existing files, switch to edit_file unless the user truly requested full replacement. Full-file replacement requires replace_entire_file=true and expected_sha256 from a fresh read_file/view_code result.",
+    "If full-file replacement was blocked and the result includes a current sha256, retry the same write_file with replace_entire_file=true and expected_sha256 set to that value only if replacing the whole file is truly intended.",
     "If JSX/TSX characters such as < and > made the fallback text protocol ambiguous, do not force-overwrite the file. Retry with edit_file using a small line range, exact old_str/new_str, or XML-safe CDATA-wrapped arg_value content.",
-    "If text or whitespace did not match, call view_code or read_file for the current target lines, then retry with one precise edit_file or inline_edit call using a line range, character range, or narrower old_text. inline_edit uses the same structured edit backend, so do not merely say you will use it.",
+    "If text or whitespace did not match, call view_code or read_file for the current target lines using the exact failed path, then retry with one precise edit_file or inline_edit call using a line range, character range, or narrower old_text. inline_edit uses the same structured edit backend, so do not merely say you will use it.",
+    "If read_file/view_code says file not found, do not repeatedly try nearby sibling paths. Use search_files with the basename from the failed path or list_directory on the nearest known parent directory, then retry with the discovered exact path.",
     "If a written file returned quality warnings, inspect or edit that file and fix the warnings before finalizing.",
     "If the result shows editing is impossible because access is blocked, explain that plainly. Otherwise emit the next needed tool_call now.",
     latestFailedSection ? `Last failed tool result:\n${latestFailedSection}` : "",
   ].filter(Boolean).join("\n\n");
+}
+
+function createFailedPathGuidance(value: string) {
+  const paths = extractMentionedPaths(value);
+  if (paths.length === 0) {
+    return "";
+  }
+
+  const basenames = [...new Set(paths.map(basenameFromPath).filter(Boolean))];
+
+  return [
+    `Path recovery rule: preserve exact failed paths including nested folders. Mentioned path${paths.length === 1 ? "" : "s"}: ${paths.join(" | ")}.`,
+    basenames.length > 0 ? `If a path is not found, search_files for basename${basenames.length === 1 ? "" : "s"}: ${basenames.join(", ")}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
+function extractMentionedPaths(value: string) {
+  const matches = value.match(/[A-Za-z]:[\\/][^\r\n]+/g) ?? [];
+  const seen = new Set<string>();
+  const output: string[] = [];
+
+  for (const match of matches) {
+    const normalized = match
+      .replace(/\s+\|.*$/, "")
+      .replace(/\s+(?:Operation|Changed|Replacements|Bytes written|Index refresh|Preview lines):.*$/i, "")
+      .replace(/[).,;]+$/, "")
+      .trim();
+
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    output.push(normalized);
+  }
+
+  return output.slice(0, 6);
+}
+
+function basenameFromPath(path: string) {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
 }

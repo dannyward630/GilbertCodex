@@ -11,8 +11,10 @@ import {
 import type {
   FileCreationExecutionSummary,
   FileCreationKind,
+  FileCreationPrepareFailure,
   FileCreationToolCall,
   FileCreationToolName,
+  FileCreationWritePlan,
   PreparedFileCreationWrite,
 } from "./fileCreationTypes";
 import { ensureFinalNewline, normalizeMarkdownDocument, normalizeTextDocument } from "./markdownContent";
@@ -50,21 +52,38 @@ interface RawBatchFile {
 }
 
 export function prepareFileCreationWrites(toolCall: FileCreationToolCall, roots: string[]) {
-  const writes =
-    toolCall.tool === "create_files"
-      ? parseBatchFiles(toolCall.args).map((file) => createPreparedWrite(toolNameForBatchFile(file), batchArgsToRecord(file), roots))
-      : [createPreparedWrite(toolCall.tool, toolCall.args, roots)];
-  const totalChars = writes.reduce((sum, write) => sum + write.content.length, 0);
+  const plan = prepareFileCreationWritePlan(toolCall, roots);
 
-  if (MAX_BATCH_FILES !== null && writes.length > MAX_BATCH_FILES) {
-    throw new Error(`create_files can create at most ${MAX_BATCH_FILES} files per call.`);
+  if (plan.failures.length > 0) {
+    throw new Error(formatPrepareFailures(plan.failures));
+  }
+
+  return plan.writes;
+}
+
+export function prepareFileCreationWritePlan(toolCall: FileCreationToolCall, roots: string[]): FileCreationWritePlan {
+  const plan = toolCall.tool === "create_files"
+    ? prepareBatchFileWrites(toolCall.args, roots)
+    : {
+        failures: [],
+        writes: [createPreparedWrite(toolCall.tool, toolCall.args, roots)],
+      };
+  const failures = [...plan.failures];
+  const plannedWrites = plan.writes;
+  const totalChars = plannedWrites.reduce((sum, write) => sum + write.content.length, 0);
+
+  if (MAX_BATCH_FILES !== null && plannedWrites.length > MAX_BATCH_FILES) {
+    failures.push({ reason: `create_files can create at most ${MAX_BATCH_FILES} files per call.` });
   }
 
   if (MAX_TOTAL_CONTENT_CHARS !== null && totalChars > MAX_TOTAL_CONTENT_CHARS) {
-    throw new Error("The requested file batch is too large. Split it into smaller create_files calls.");
+    failures.push({ reason: "The requested file batch is too large. Split it into smaller create_files calls." });
   }
 
-  return writes;
+  return {
+    failures,
+    writes: plannedWrites,
+  };
 }
 
 export function formatFileCreationSummary(summary: FileCreationExecutionSummary) {
@@ -92,7 +111,7 @@ export function describeFileCreationTools() {
     "create_vite_project defaults to the selected workspace folder; project_name controls package/display naming and does not create a child folder unless project_path is explicitly provided.",
     "All file creators accept content, text, body, or markdown. Code creators can receive fenced Markdown and will extract the best matching code fence before writing.",
     "create_code_file supports any programming language when the path has the desired extension; language can also infer common extensions such as ts, js, py, rs, go, java, html, css, json, yaml, sql, swift, kotlin, php, ruby, and shell.",
-    "create_files accepts files_json as an array or { files: [...] } with path, kind/tool/type, content/markdown/text, language, title, overwrite, and createParentDirs. Missing parent folders are created by default.",
+    "create_files accepts files as an array or files_json as an array/{ files: [...] } with path, kind/tool/type, content/markdown/text, language, title, overwrite, duplicate_strategy, and createParentDirs. Missing parent folders are created by default. If a retry hits files already created with the same content, they are treated as already handled instead of poisoning the batch.",
     "Workspace-relative paths resolve under the selected root. If a generated batch repeats the selected project folder name as its first path segment, Gilbert rebases that segment to the open folder.",
     "create_pdf_file renders Markdown headings, lists, tables, rules, code blocks, and notes into a clean valid PDF file; do not include decorative divider spam in the content.",
     "When no workspace is selected, PDF creation returns a downloadable chat artifact instead of requiring a filesystem folder.",
@@ -170,6 +189,66 @@ function parseBatchFiles(args: Record<string, string>) {
   }
 
   return files as RawBatchFile[];
+}
+
+function prepareBatchFileWrites(args: Record<string, string>, roots: string[]): FileCreationWritePlan {
+  const failures: FileCreationPrepareFailure[] = [];
+  let files: RawBatchFile[];
+
+  try {
+    files = parseBatchFiles(args);
+  } catch (error) {
+    return {
+      failures: [{ reason: error instanceof Error ? error.message : String(error) }],
+      writes: [],
+    };
+  }
+
+  const writes: PreparedFileCreationWrite[] = [];
+
+  files.forEach((file, index) => {
+    if (!isRawBatchFile(file)) {
+      failures.push({
+        index,
+        reason: "Batch item must be an object with path/content fields.",
+      });
+      return;
+    }
+
+    try {
+      writes.push(createPreparedWrite(toolNameForBatchFile(file), batchArgsToRecord(file), roots));
+    } catch (error) {
+      failures.push({
+        index,
+        path: batchFilePath(file),
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  return {
+    failures,
+    writes,
+  };
+}
+
+function isRawBatchFile(value: unknown): value is RawBatchFile {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function batchFilePath(file: RawBatchFile) {
+  const value = file.path ?? file.file_path ?? file.filePath ?? file.file;
+  return value === undefined ? undefined : String(value);
+}
+
+function formatPrepareFailures(failures: FileCreationPrepareFailure[]) {
+  return [
+    `create_files could not prepare ${failures.length} item${failures.length === 1 ? "" : "s"}.`,
+    ...failures.map((failure) => {
+      const location = failure.index === undefined ? "batch" : `item ${failure.index + 1}`;
+      return `- ${location}${failure.path ? ` (${failure.path})` : ""}: ${failure.reason}`;
+    }),
+  ].join("\n");
 }
 
 function batchArgsToRecord(file: RawBatchFile): Record<string, string> {

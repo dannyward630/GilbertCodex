@@ -54,7 +54,7 @@ import {
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
-import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
+import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, prefersLiveModelCatalog, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
@@ -182,6 +182,8 @@ interface LiveModelCatalogCacheEntry {
 const GIT_STATUS_REFRESH_INTERVAL_MS = 15_000;
 const LIVE_MODEL_CATALOG_READY_CACHE_MS = 5 * 60 * 1000;
 const LIVE_MODEL_CATALOG_ERROR_CACHE_MS = 60 * 1000;
+const LOCAL_MODEL_CATALOG_READY_CACHE_MS = 5_000;
+const LOCAL_MODEL_CATALOG_ERROR_CACHE_MS = 2_000;
 
 function modelFromValue(modelValue: string, providerId: ChatModelOption["provider"], discoveredModels?: ProviderModelMetadata[]): ChatModelOption {
   const normalizedValue = modelValue.trim();
@@ -211,7 +213,7 @@ function getLiveModelCatalogProviders(settings: ProviderSettings) {
 }
 
 function shouldLoadLiveModelCatalogProvider(provider: ProviderSettings["provider"], activeProvider: ProviderSettings["provider"]) {
-  return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === activeProvider);
+  return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === activeProvider || prefersLiveModelCatalog(provider));
 }
 
 function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
@@ -237,12 +239,19 @@ function fingerprintSecret(secret: string) {
   return `${secret.length}:${(hash >>> 0).toString(36)}`;
 }
 
-function isFreshLiveModelCatalogCache(entry: LiveModelCatalogCacheEntry | undefined, requestKey: string) {
+function isFreshLiveModelCatalogCache(entry: LiveModelCatalogCacheEntry | undefined, requestKey: string, provider: ProviderSettings["provider"]) {
   if (!entry || entry.key !== requestKey) {
     return false;
   }
 
-  const maxAge = entry.status === "ready" ? LIVE_MODEL_CATALOG_READY_CACHE_MS : LIVE_MODEL_CATALOG_ERROR_CACHE_MS;
+  const maxAge =
+    entry.status === "ready"
+      ? prefersLiveModelCatalog(provider)
+        ? LOCAL_MODEL_CATALOG_READY_CACHE_MS
+        : LIVE_MODEL_CATALOG_READY_CACHE_MS
+      : prefersLiveModelCatalog(provider)
+        ? LOCAL_MODEL_CATALOG_ERROR_CACHE_MS
+        : LIVE_MODEL_CATALOG_ERROR_CACHE_MS;
 
   return Date.now() - entry.checkedAt < maxAge;
 }
@@ -463,7 +472,7 @@ export function ChatComposer({
       const cachedCatalog = liveModelCatalogCache.current[provider.id];
       const cachedStatus = cachedCatalog?.status;
 
-      if (cachedStatus && isFreshLiveModelCatalogCache(cachedCatalog, requestKey)) {
+      if (cachedStatus && isFreshLiveModelCatalogCache(cachedCatalog, requestKey, provider.id)) {
         setLiveModelCatalogStatus((current) => (current[provider.id] === cachedStatus ? current : { ...current, [provider.id]: cachedStatus }));
         return [];
       }

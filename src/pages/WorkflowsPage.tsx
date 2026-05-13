@@ -39,6 +39,7 @@ interface WorkflowTemplate {
   steps: string[];
   summary: string;
   webSearch?: boolean;
+  workflowId: string;
 }
 
 interface CapabilityGap {
@@ -77,6 +78,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     steps: ["Inspect runtime", "Rank gaps", "Plan patch"],
     summary: "Find the next product gaps across the real agent loop instead of only the visible UI.",
     webSearch: true,
+    workflowId: "agent-workflow-audit",
   },
   {
     cta: "Start feature",
@@ -89,6 +91,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     requires: ["planning", "codeView", "codeEdit", "terminal", "testingTools"],
     steps: ["Plan", "Patch", "Verify"],
     summary: "The default coding lane: scoped edits, approval-aware execution, and verification evidence.",
+    workflowId: "plan-patch-verify",
   },
   {
     cta: "Research patch",
@@ -102,6 +105,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     steps: ["Research", "Ground", "Patch"],
     summary: "For fast-moving APIs, product patterns, docs, and ecosystem changes.",
     webSearch: true,
+    workflowId: "research-backed-patch",
   },
   {
     cta: "Run checks",
@@ -114,6 +118,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     requires: ["terminal", "testingTools", "typescriptTools", "codeView"],
     steps: ["Status", "Checks", "Report"],
     summary: "A quick confidence pass before shipping or handing work to another contributor.",
+    workflowId: "repo-health-sweep",
   },
   {
     cta: "Prep branch",
@@ -126,6 +131,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     requires: ["sourceControl", "terminal", "codeView"],
     steps: ["Diff", "Validate", "Draft"],
     summary: "Turns local work into reviewable context without hiding risk or unrelated changes.",
+    workflowId: "branch-pr-prep",
   },
   {
     cta: "Make brief",
@@ -139,6 +145,7 @@ const workflowTemplates: WorkflowTemplate[] = [
     steps: ["Define signal", "Choose proof", "Notify rule"],
     summary: "Shapes future recurring jobs while the actual scheduler remains a missing runtime piece.",
     webSearch: true,
+    workflowId: "monitor-brief",
   },
 ];
 
@@ -473,7 +480,11 @@ function createWorkflowPrompt(template: WorkflowTemplate, localWorkspace: LocalW
     ? `Workspace: ${localWorkspace.roots.length ? localWorkspace.roots.join(", ") : "current configured workspace"} (${formatWorkspaceScope(localWorkspace)}).`
     : "Workspace tools are currently off; ask before assuming local files are available.";
 
-  return `${template.prompt}\n\n${workspaceLine}`;
+  return [
+    `Start the ${template.workflowId} workflow with workflow_run before using direct primitive tools.`,
+    `Workflow goal: ${template.prompt}`,
+    workspaceLine,
+  ].join("\n\n");
 }
 
 function getMissingTools(requiredTools: ToolRegistryId[], settings: ToolRegistrySettings) {

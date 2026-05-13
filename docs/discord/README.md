@@ -2,7 +2,7 @@
 
 This guide explains how to prepare Discord so users can chat with Gilbert Codex from Discord.
 
-Last verified: May 12, 2026.
+Last verified: May 13, 2026.
 
 Platform note: this bridge is verified on Windows. macOS and Linux have partial source support and need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -23,6 +23,8 @@ For the default slash-command path, the desktop app can:
 - Edit the original Discord interaction response while Gilbert works, then replace it with the final answer.
 - Use the same web-search, local-tool, project, and computer-access settings that are enabled inside Gilbert Codex.
 - Convert Gilbert's richer Markdown into Discord-safe Markdown before posting back to Discord.
+
+v0.3.0 uses the same shared XML local-tool protocol in Discord-initiated chats as it does in the desktop chat UI. Some hosted models can still have tool-call issues even when normal Discord chat works; local models through LM Studio or Ollama work when the selected local endpoint/model follows Gilbert's shared tool protocol.
 
 A plain Discord incoming webhook cannot read user messages; it only posts messages into a channel. Use one of these paths:
 
@@ -276,5 +278,6 @@ Use this path when Gilbert or another system only needs to post into Discord.
 - Auto-start starts the bridge when the app opens if Discord bridge is enabled, Slash chat is selected, and the Application ID/Public Key are present.
 - Discord responses stream by repeatedly editing the original interaction response, with throttling to avoid noisy Discord updates.
 - Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass Toolbox or local computer access settings.
+- Discord requests use the same v0.3.0 modular tool runtime and workflow/tool approval boundaries as in-app requests.
 - Bot gateway mode is still future runtime work.
 - Incoming Discord webhooks are still one-way notification paths.

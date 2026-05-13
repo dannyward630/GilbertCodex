@@ -70,7 +70,39 @@ export function preserveArgValue(key: string, value: string) {
   // content. Idempotent: any number of openers/closers collapse cleanly.
   const decoded = stripCdataWrappers(value);
 
-  if (["body", "code", "content", "expected_string", "expected_text", "files_json", "items", "manifest", "markdown", "migration", "new_str", "new_string", "new_text", "old_str", "old_string", "old_text", "replacement", "schema", "sql", "test", "text", "tsx"].includes(key)) {
+  if ([
+    "body",
+    "code",
+    "content",
+    "contents",
+    "css",
+    "expected_string",
+    "expected_text",
+    "file_content",
+    "files_json",
+    "full_content",
+    "full_file_content",
+    "items",
+    "manifest",
+    "markdown",
+    "migration",
+    "new_content",
+    "new_str",
+    "new_string",
+    "new_text",
+    "old_str",
+    "old_string",
+    "old_text",
+    "replacement",
+    "replacement_text",
+    "schema",
+    "source",
+    "sql",
+    "stylesheet",
+    "test",
+    "text",
+    "tsx",
+  ].includes(key)) {
     return decoded.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
   }
 
@@ -160,6 +192,34 @@ export function throwIfAborted(signal?: AbortSignal) {
 
 export function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+export function readLocalToolErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function normalizeToolErrorMessage(error: unknown) {
+  if (isAbortError(error)) {
+    return "The operation was cancelled.";
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return "Unknown tool error.";
+}
+
+export function isMissingLocalPathError(message: string) {
+  return /\b(?:not found|no such file|cannot find|does not exist|os error 2|system cannot find)\b/i.test(message);
+}
+
+export function isMissingTextFileError(message: string) {
+  return /\b(?:cannot find|not found|no such file|os error 2|system cannot find)\b/i.test(message);
 }
 
 export function limitToolResults(content: string, maxChars: number | null) {

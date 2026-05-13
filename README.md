@@ -11,9 +11,9 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ![Gilbert Codex animated desktop preview](docs/assets/readme/gilbert-codex-readme-demo.gif)
 
-| Focused chat workspace | Live activity, tools, and sources |
+| Focused chat workspace | Live tool activity and artifacts |
 | --- | --- |
-| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex chat with activity rail, tool calls, artifacts, and sources](docs/assets/readme/gilbert-codex-activity.png) |
+| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex chat with activity rail, tool-call ledger, artifacts, and run details](docs/assets/readme/gilbert-codex-activity.png) |
 
 | Tool registry | Local settings |
 | --- | --- |
@@ -21,7 +21,11 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ## Current Status
 
-Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, local Git source control, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
+Gilbert Codex is in an early public alpha desktop foundation phase. The app currently includes local account sign-in, a chat workspace, project-scoped local state, multi-provider model streaming, planning mode, web search, local computer file context, modular local tools, workflow automation, local Git source control, GitHub source control, Discord slash-command bridge setup/runtime, terminal sessions, browser preview, tool toggles, settings, desktop notifications, and a Tauri command bridge.
+
+The v0.3.0 update is a major tool-runtime and release-readiness pass after `09d34f17`: the old local tool executor has been split into focused modules, `workflow_run` now sequences higher-level evidence-gathering workflows, provider-native local tools are intentionally disabled behind the shared XML protocol until native tool-result persistence is ready, and the activity UI now emphasizes visible tool-call status over raw thinking traces.
+
+Known issue for this build: some hosted models have trouble with tool calls even when normal chat works. Some emit malformed tool XML/JSON, some ignore tool instructions, and some OpenAI-compatible routes do not behave like the upstream provider. Other models work correctly, and local models through LM Studio or Ollama work when the selected endpoint/model follows Gilbert's shared tool protocol.
 
 Platform status: Windows x64 is the verified alpha target. macOS and Linux now have partial source support, but they still need contributors on those operating systems to run the app, package it, and finish any native port issues. See [Platform Support And Porting Notes](docs/platform/README.md).
 
@@ -35,7 +39,7 @@ Download the Windows x64 setup executable, run it, and configure provider keys o
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.3.0 release notes](docs/releases/v0.3.0.md) for the major alpha update, updater status, setup notes, known limitations, and checksum details.
+See [v0.3.0 release notes](docs/releases/v0.3.0.md) for the major alpha update, tool/model compatibility notes, updater status, setup notes, known limitations, validation commands, and checksum details.
 
 ## Product Shape
 
@@ -43,13 +47,14 @@ See [v0.3.0 release notes](docs/releases/v0.3.0.md) for the major alpha update, 
 - Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
 - Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, targeted stop controls, and local persistence.
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Tools: web search, local Git status/diff/stage/commit/push/pull/branch tools, review-panel Git commit/push actions, GitHub repository/release/workflow tools, local file indexing, file read/write/delete helpers, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, context recall, testing, TypeScript, SQL, React Native, PDF, browser folder fallback, interactive PTY terminal sessions, terminal-backed background command attachment, browser preview, and Toolbox feature toggles.
-- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
+- Tools: `workflow_run`, web search, weather, color lookup, local Git status/diff/stage/commit/push/pull/branch tools, GitHub repository/release/workflow tools, MCP discovery/call tools, local file indexing, file read/write/delete helpers, precise `edit_file`/`edit_files`/`inline_edit`, duplicate-safe typed TXT/Markdown/code/React/HTML/PDF file creation, batch file creation, context recall, browser folder fallback, interactive PTY terminal sessions, terminal-backed background command attachment, browser preview, browser automation, and Toolbox feature toggles.
+- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, approval cards for risky tools, source-write guardrails that prefer structured edits over shell-generated file writes, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
 - Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and web-search controls.
 
 ## Coming Next
 
-- Stability Pack follow-ups: more provider/runtime tests, safer local tool recovery, durable long-running jobs, and clearer update/install diagnostics.
+- Stability Pack follow-ups: broader provider/model compatibility tests, safer local tool recovery, durable long-running jobs, and clearer update/install diagnostics.
+- Native tool-result persistence: provider-native local tools can come back after Gilbert can persist native tool-call IDs and send provider-native tool-result content on later turns.
 - Model selector revamp: provider profiles, model capability badges, context-window hints, local/cloud filtering, and faster switching between coding, planning, reasoning, and multimodal models.
 - Multimodal creation tools: image generation/editing, image-to-code workflows, video generation job tracking, thumbnails, and saved media artifacts.
 - Messaging integrations: WhatsApp support research focused on compliant Business Platform flows, plus stronger Discord/GitHub notification routing.

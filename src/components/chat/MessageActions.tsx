@@ -44,7 +44,8 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
   const [menuOpen, setMenuOpen] = useState(false);
   const timeLabel = formatMessageTime(message.createdAt);
   const fullTimeLabel = formatMessageDateTime(message.createdAt);
-  const copyDisabled = !message.content.trim();
+  const copyContent = [message.responseThinking, message.content].filter((part) => part?.trim()).join("\n\n");
+  const copyDisabled = !copyContent.trim();
   const showRegenerate = Boolean(canRegenerate && onRegenerateResponse && message.role === "assistant" && !message.isStreaming);
   const regenerateLabel = isInterruptedAssistantMessage(message) ? "Continue response" : "Regenerate response";
   const showStop = Boolean(onStopGeneration && message.role === "assistant" && message.isStreaming);
@@ -77,7 +78,7 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
       return;
     }
 
-    const didCopy = await copyTextToClipboard(message.content);
+    const didCopy = await copyTextToClipboard(copyContent);
 
     if (!didCopy) {
       return;

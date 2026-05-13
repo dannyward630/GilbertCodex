@@ -39,6 +39,8 @@ const CONTEXT_DIRECTORY_LISTING_LIMIT = 40;
 const CONTEXT_GIT_CHANGED_FILE_LIMIT = 36;
 const LOCAL_WORKSPACE_CONTEXT_MAX_CHARS = 24_000;
 const SEARCH_PREVIEW_MAX_CHARS = 360;
+const COMPUTER_LIST_DIRECTORY_TIMEOUT_MS = 8_000;
+const COMPUTER_READ_TEXT_FILE_TIMEOUT_MS = 12_000;
 
 interface ComputerGitStatusOptions {
   force?: boolean;
@@ -232,12 +234,17 @@ export async function listComputerDirectory(path: string, limit?: number) {
     throw new Error("Open or drop a folder first so Gilbert can browse it.");
   }
 
-  return await invoke<ComputerDirectoryListing>("computer_list_directory", {
-    request: {
-      ...(limit === undefined ? {} : { limit }),
-      path,
+  return await invokeComputerCommand<ComputerDirectoryListing>(
+    "computer_list_directory",
+    {
+      request: {
+        ...(limit === undefined ? {} : { limit }),
+        path,
+      },
     },
-  });
+    COMPUTER_LIST_DIRECTORY_TIMEOUT_MS,
+    `List directory ${path}`,
+  );
 }
 
 /** Builds the hybrid file index for the selected workspace scope. */
@@ -425,11 +432,53 @@ export async function readComputerTextFile(path: string, maxBytes?: number) {
     throw new Error("Open or drop a folder first so Gilbert can read files.");
   }
 
-  return await invoke<ComputerReadFileResult>("computer_read_text_file", {
-    request: {
-      ...(maxBytes === undefined ? {} : { maxBytes }),
-      path,
+  return await invokeComputerCommand<ComputerReadFileResult>(
+    "computer_read_text_file",
+    {
+      request: {
+        ...(maxBytes === undefined ? {} : { maxBytes }),
+        path,
+      },
     },
+    COMPUTER_READ_TEXT_FILE_TIMEOUT_MS,
+    `Read file ${path}`,
+  );
+}
+
+function invokeComputerCommand<T>(command: string, args: Record<string, unknown>, timeoutMs: number, label: string): Promise<T> {
+  const safeTimeoutMs = Math.max(1_000, timeoutMs);
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timeoutId: ReturnType<typeof setTimeout> = globalThis.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(new Error(`${label} did not respond within ${Math.round(safeTimeoutMs / 1000)} seconds.`));
+    }, safeTimeoutMs);
+
+    invoke<T>(command, args).then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        globalThis.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        globalThis.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -1066,32 +1115,16 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
         "create_code_file",
         "create_react_file",
         "create_html_file",
-        "create_pdf_file",
         "create_files",
         "create_vite_project",
       ]
     : [];
   const codingTools = [
     tools.fileSafety ? "delete_file" : "",
-    tools.fileSafety ? "check_duplicate_file" : "",
-    tools.fileSafety ? "prevent_duplicate_file_create" : "",
-    tools.pdfTools ? "create_chat_pdf" : "",
-    tools.pdfTools ? "list_pdfs" : "",
-    tools.pdfTools ? "read_pdf" : "",
-    tools.pdfTools ? "edit_pdf_text" : "",
     tools.codeEdit ? "inline_edit" : "",
-    tools.testingTools ? "run_tests" : "",
-    tools.testingTools ? "create_unit_test" : "",
-    tools.typescriptTools ? "typescript_check" : "",
-    tools.sqlTools ? "create_sql_schema" : "",
-    tools.sqlTools ? "create_sql_migration" : "",
-    tools.reactNativeTools ? "create_react_native_screen" : "",
-    tools.reactNativeTools ? "react_native_setup_check" : "",
-    tools.codeGeneration ? "codebase_health_scan" : "",
-    tools.codeGeneration ? "dependency_audit" : "",
-    tools.codeGeneration ? "create_api_route" : "",
   ];
   const runtimeTools = [
+    tools.workflowAutomation ? "workflow_run" : "",
     tools.codeView ? "view_code" : "",
     tools.codeView ? "read_file" : "",
     tools.fileBrowser ? "list_directory" : "",
@@ -1099,6 +1132,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.fileSearch ? "search_files" : "",
     tools.fileBrowser ? "build_index" : "",
     tools.codeEdit ? "edit_file" : "",
+    tools.codeEdit ? "edit_files" : "",
     tools.codeEdit ? "write_file" : "",
     tools.codeEdit ? "rename_path" : "",
     tools.codeEdit ? "move_path" : "",
@@ -1118,8 +1152,14 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.sourceControl ? "git_checkout" : "",
     tools.terminal ? "run_terminal" : "",
     tools.browserPreview ? "open_browser_preview" : "",
+    tools.browserPreview ? "browser_automation" : "",
     tools.terminal && tools.codeEdit ? "create_tool" : "",
     tools.terminal ? "run_tool" : "",
+    tools.mcpServers ? "mcp_list_servers" : "",
+    tools.mcpServers ? "mcp_list_tools" : "",
+    tools.mcpServers ? "mcp_call_tool" : "",
+    tools.mcpServers ? "mcp_set_server" : "",
+    tools.mcpServers ? "mcp_remove_server" : "",
   ].filter(Boolean);
   const permissionRules = {
     "ask-first": "Ask before editing, deleting, moving, or running anything. Viewing and indexing are allowed.",
@@ -1136,9 +1176,9 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
       "Automatic workspace context is intentionally capped and may include only root metadata, a shallow listing, bounded project memory, and existing index hits. It is a map, not the territory.",
       "Workspace context, index hits, and project memory are hints, not proof. For local code/project work, call tools for fresh evidence: list/search/read current files before deciding, re-read/list changed files after writes, and run the relevant command before claiming the app works.",
       "Auto full mode is the no-approval workspace mode: file edits, writes, custom tools, terminal commands, and mutating source-control actions may run inside the enabled roots without stopping for approval. Review and Ask first modes still require confirmation for mutating tools.",
-      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, rename_path/move_path for file or folder renames, create_vite_project for complete new Vite React projects only, git_init/git_status/git_diff/git_stage/git_commit/git_push for local version-control work when Source Control is enabled, run_terminal for local project commands when Terminal is enabled, create_tool/run_tool for reusable Python, TypeScript, JavaScript/Node, or shell helpers, and open_browser_preview to inspect a local app URL or tracked background dev-server session in the in-app browser.",
+      "Use workflow_run for goal-level lanes such as repo audits, plan-patch-verify work, research-backed patches, repo health sweeps, PR prep, MCP usage, and monitor briefs. Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, rename_path/move_path for file or folder renames, create_vite_project for complete new Vite React projects only, git_init/git_status/git_diff/git_stage/git_commit/git_push for local version-control work when Source Control is enabled, run_terminal for local project commands when Terminal is enabled, create_tool/run_tool for reusable Python, TypeScript, JavaScript/Node, or shell helpers, and open_browser_preview to inspect a local app URL or tracked background dev-server session in the in-app browser.",
       "For existing Vite/React apps, use edit_file/inline_edit instead of re-scaffolding. If the selected workspace root exists but is empty and the user asked for a new Vite/React starter app, scaffold directly into that root and do not inspect the parent folder. create_vite_project with repair_missing=true may fill missing starter files after an interrupted scaffold, but it preserves every existing file. For plain Hello World/starter app requests, finalize after scaffold, install, build, and dev-server startup succeed instead of continuing to polish.",
-      "Edit syntax: read existing files with view_code first, then use edit_file/inline_edit with old_text/new_text (old_string/new_string and old_str/new_str also work), start_line/end_line/content, insert_at_line/content, insert_line/new_str, or start_char/end_char/content. Use rename_path with path and new_name to rename a file or folder in place, and move_path with from_path/to_path to move within enabled roots. write_file, create_files, and move_path create missing parent folders by default when the destination stays inside enabled roots. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text or expected_string when available so Gilbert can refuse the edit if the file changed. Multiple exact text edits to the same file may run sequentially in one pass; unanchored/full-file mutations still require a fresh pass. write_file is create-only by default and can replace an existing file only with replace_entire_file=true plus expected_sha256 from a fresh full read.",
+      "Edit syntax: read existing files with view_code first, then use edit_file/inline_edit with old_text/new_text (old_string/new_string and old_str/new_str also work), start_line/end_line/content, insert_at_line/content, insert_line/new_str, or start_char/end_char/content. Use rename_path with path and new_name to rename a file or folder in place, and move_path with from_path/to_path to move within enabled roots. write_file, create_files, and move_path create missing parent folders by default when the destination stays inside enabled roots. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text or expected_string when available so Gilbert can refuse the edit if the file changed. Multiple exact text edits to the same file may run sequentially in one pass; unanchored/full-file mutations still require a fresh pass. write_file is create-only by default and can replace an existing file only with replace_entire_file=true plus expected_sha256 from a fresh full read; for full replacements the file body can be content, new_text, new_content, file_content, full_file_content, replacement_text, css, or stylesheet.",
       tools.fileCreation ? describeFileCreationTools() : "",
       describeCodingTools(),
       "For reusable one-off automation, create_tool writes a Python, TypeScript, JavaScript/Node, PowerShell, cmd, Bash, Zsh, or sh tool under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output. Prefer args_json for structured inputs. Use new descriptive helper names; do not shadow built-in read, edit, write, terminal, Git, web, or MCP tools to work around malformed arguments.",

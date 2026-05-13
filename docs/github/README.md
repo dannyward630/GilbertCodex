@@ -1,8 +1,8 @@
 # GitHub Integration Setup
 
-This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, and draft pull requests.
+This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, and workflow automation.
 
-Last verified: May 12, 2026.
+Last verified: May 13, 2026.
 
 Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -146,6 +146,10 @@ Search UrbanWafflezz/GilbertCodex for github_create_pull_request.
 Create a branch, update docs, and open a draft PR.
 ```
 
+```text
+Trigger the release workflow for v0.3.0 and show me the latest runs.
+```
+
 Mutating operations such as commits, releases, workflow dispatches, and pull requests go through the app's tool approval path when permission mode requires review.
 
 ## Supported GitHub Tool Surface
@@ -166,6 +170,8 @@ Mutating operations such as commits, releases, workflow dispatches, and pull req
 - `github_list_workflows`: list GitHub Actions workflows.
 - `github_dispatch_workflow`: trigger workflow_dispatch workflows.
 - `github_list_workflow_runs`: inspect workflow runs.
+
+For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 
 See the broader tool contract in:
 ../CODING_TOOLS.md
