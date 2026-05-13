@@ -60,6 +60,8 @@ Delivered:
 
 ## Next Hardening Work
 
+Roadmap highlights for GitHub readers live in [docs/ROADMAP.md](docs/ROADMAP.md). The current upcoming themes are the tool runtime rewrite, new voice mode, sidebar layout redo, activity card redesign, stronger web/research flows, richer GitHub/source-control cards, multimodal tools, and release maturity.
+
 - Move provider secrets and stored GitHub access tokens to OS-backed secure storage.
 - Add unit tests around chat utilities, storage normalization, provider request creation, attachment handling, and tool-call parsing.
 - Add more provider-contract tests for reasoning payloads, model fallback normalization, live catalog merging, and model-specific tool-call compatibility.

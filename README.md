@@ -53,12 +53,17 @@ See [v0.3.0 release notes](docs/releases/v0.3.0.md) for the major alpha update, 
 
 ## Coming Next
 
-- Stability Pack follow-ups: broader provider/model compatibility tests, safer local tool recovery, durable long-running jobs, and clearer update/install diagnostics.
-- Native tool-result persistence: provider-native local tools can come back after Gilbert can persist native tool-call IDs and send provider-native tool-result content on later turns.
-- Model selector revamp: provider profiles, model capability badges, context-window hints, local/cloud filtering, and faster switching between coding, planning, reasoning, and multimodal models.
+The next public roadmap is focused on making Gilbert feel faster, clearer, and more capable in real coding sessions. See the full [roadmap](docs/ROADMAP.md) for the active direction.
+
+- Tool runtime rewrite: a stricter schema-driven tool protocol, cleaner tool execution pipeline, fewer malformed calls, better batching, and durable long-running job state.
+- New voice mode: a real voice-first chat flow with push-to-talk, interruptible capture, transcript review, and provider/local speech options that respect the app's local-first posture.
+- Sidebar and workspace layout redo: cleaner project navigation, better chat organization, faster switching, and a denser layout for users with lots of workspaces.
+- Activity card and inspector redesign: clearer tool timelines, grouped approvals, artifacts, sources, terminal details, and progress states without exposing raw protocol noise.
+- Web and research upgrades: stronger search quality, source cards, browser-preview handoff, thinking/planning mode web context, and better citation surfaces.
+- Model and provider UX: provider profiles, model capability badges, context-window hints, local/cloud filters, and task-focused presets for coding, planning, research, and multimodal work.
+- GitHub and source-control polish: richer local diff review cards, PR handoff helpers, issue/release workflows, CI visibility, and contributor-friendly starter issues.
 - Multimodal creation tools: image generation/editing, image-to-code workflows, video generation job tracking, thumbnails, and saved media artifacts.
-- Messaging integrations: WhatsApp support research focused on compliant Business Platform flows, plus stronger Discord/GitHub notification routing.
-- Collaboration polish: richer source-control review cards, PR handoff helpers, issue templates, roadmap labels, and contributor-friendly first tasks.
+- Release maturity: signed updater work, clearer installer diagnostics, macOS/Linux packaging help, and better public alpha validation notes.
 
 ## Repository Layout
 
@@ -69,6 +74,7 @@ See [v0.3.0 release notes](docs/releases/v0.3.0.md) for the major alpha update, 
 |-- docs/                   Project docs, tool contracts, and publishing checklists
 |   |-- INSTALLER.md        Windows customer installer build and release checklist
 |   |-- platform/           Platform support matrix and macOS/Linux port checklist
+|   `-- ROADMAP.md          Upcoming product and contributor roadmap
 |-- src/                    React frontend
 |   |-- app/                App composition, auth, runtime helpers, Tauri clients
 |   |-- components/         Reusable UI grouped by product area
