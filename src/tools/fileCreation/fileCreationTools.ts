@@ -8,7 +8,6 @@ import {
   normalizeLanguage,
   profileForTool,
 } from "./fileTypeRegistry";
-import { createPdfFileContent } from "./pdfFileCreator";
 import type {
   FileCreationExecutionSummary,
   FileCreationKind,
@@ -18,16 +17,22 @@ import type {
 } from "./fileCreationTypes";
 import { ensureFinalNewline, normalizeMarkdownDocument, normalizeTextDocument } from "./markdownContent";
 
-const MAX_BATCH_FILES = 50;
-const MAX_TOTAL_CONTENT_CHARS = 2_000_000;
+const MAX_BATCH_FILES: number | null = null;
+const MAX_TOTAL_CONTENT_CHARS: number | null = null;
 
 interface RawBatchFile {
   content?: unknown;
   createParentDirs?: unknown;
   create_parent_dirs?: unknown;
+  directory?: unknown;
+  directoryPath?: unknown;
+  directory_path?: unknown;
   file?: unknown;
   filePath?: unknown;
   file_path?: unknown;
+  folder?: unknown;
+  folderPath?: unknown;
+  folder_path?: unknown;
   kind?: unknown;
   duplicateStrategy?: unknown;
   duplicate_strategy?: unknown;
@@ -51,11 +56,11 @@ export function prepareFileCreationWrites(toolCall: FileCreationToolCall, roots:
       : [createPreparedWrite(toolCall.tool, toolCall.args, roots)];
   const totalChars = writes.reduce((sum, write) => sum + write.content.length, 0);
 
-  if (writes.length > MAX_BATCH_FILES) {
+  if (MAX_BATCH_FILES !== null && writes.length > MAX_BATCH_FILES) {
     throw new Error(`create_files can create at most ${MAX_BATCH_FILES} files per call.`);
   }
 
-  if (totalChars > MAX_TOTAL_CONTENT_CHARS) {
+  if (MAX_TOTAL_CONTENT_CHARS !== null && totalChars > MAX_TOTAL_CONTENT_CHARS) {
     throw new Error("The requested file batch is too large. Split it into smaller create_files calls.");
   }
 
@@ -70,7 +75,7 @@ export function formatFileCreationSummary(summary: FileCreationExecutionSummary)
     `   Created: ${result.write.created ? "yes" : "no"}`,
     `   Bytes written: ${result.write.bytesWritten}`,
     `   Markdown-aware: ${result.markdownAware ? "yes" : "no"}`,
-    `   Preview: ${result.preview.replace(/\s+/g, " ").slice(0, 220)}`,
+    `   Preview: ${result.preview.replace(/\s+/g, " ")}`,
   ]);
 
   return [
@@ -82,11 +87,15 @@ export function formatFileCreationSummary(summary: FileCreationExecutionSummary)
 
 export function describeFileCreationTools() {
   return [
-    "File creation tools: create_text_file, create_markdown_file, create_code_file, create_react_file, create_html_file, create_pdf_file, create_files.",
+    "File creation tools: create_vite_project, create_text_file, create_markdown_file, create_code_file, create_react_file, create_html_file, create_pdf_file, create_files.",
+    "Use create_vite_project for new Vite React apps because it writes the complete runnable scaffold in one operation before install/build/dev verification.",
+    "create_vite_project defaults to the selected workspace folder; project_name controls package/display naming and does not create a child folder unless project_path is explicitly provided.",
     "All file creators accept content, text, body, or markdown. Code creators can receive fenced Markdown and will extract the best matching code fence before writing.",
     "create_code_file supports any programming language when the path has the desired extension; language can also infer common extensions such as ts, js, py, rs, go, java, html, css, json, yaml, sql, swift, kotlin, php, ruby, and shell.",
-    "create_files accepts files_json as an array or { files: [...] } with path, kind/tool/type, content/markdown/text, language, title, overwrite, and createParentDirs.",
-    "create_pdf_file renders Markdown-like headings, lists, code blocks, and notes into a valid local PDF file.",
+    "create_files accepts files_json as an array or { files: [...] } with path, kind/tool/type, content/markdown/text, language, title, overwrite, and createParentDirs. Missing parent folders are created by default.",
+    "Workspace-relative paths resolve under the selected root. If a generated batch repeats the selected project folder name as its first path segment, Gilbert rebases that segment to the open folder.",
+    "create_pdf_file renders Markdown headings, lists, tables, rules, code blocks, and notes into a clean valid PDF file; do not include decorative divider spam in the content.",
+    "When no workspace is selected, PDF creation returns a downloadable chat artifact instead of requiring a filesystem folder.",
   ].join("\n");
 }
 
@@ -97,8 +106,9 @@ function createPreparedWrite(tool: FileCreationToolName, args: Record<string, st
   const path = resolveTargetPath(args, roots, profile.defaultExtension, title);
   const extension = extensionFromPath(path) || profile.defaultExtension;
   const kind = tool === "create_code_file" ? inferKindFromExtension(extension) : profile.kind;
-  const content = createContentForKind(kind, path, args, title, language ?? profile.language);
-  const normalizedContent = kind === "pdf" ? content : ensureFinalNewline(content);
+  const rawContent = rawContentFromArgs(args);
+  const content = createContentForKind(kind, path, rawContent, title, language ?? profile.language);
+  const normalizedContent = ensureFinalNewline(content);
   const lineCount = normalizedContent.split(/\n/).length;
 
   return {
@@ -111,7 +121,7 @@ function createPreparedWrite(tool: FileCreationToolName, args: Record<string, st
     language: language ?? profile.language ?? extensionForLanguage(extension) ?? (kind === "code" ? extension : undefined),
     lineCount,
     markdownAware: true,
-    mimeType: kind === "pdf" ? "application/pdf" : mimeTypeForExtension(extension),
+    mimeType: mimeTypeForExtension(extension),
     overwrite: booleanArg(args, ["overwrite"], false),
     path,
     preview: createPreview(kind, normalizedContent),
@@ -119,9 +129,7 @@ function createPreparedWrite(tool: FileCreationToolName, args: Record<string, st
   };
 }
 
-function createContentForKind(kind: FileCreationKind, path: string, args: Record<string, string>, title?: string, language?: string) {
-  const content = rawContentFromArgs(args);
-
+function createContentForKind(kind: FileCreationKind, path: string, content: string, title?: string, language?: string) {
   switch (kind) {
     case "markdown":
       return normalizeMarkdownDocument(content, title);
@@ -131,8 +139,6 @@ function createContentForKind(kind: FileCreationKind, path: string, args: Record
       return createReactFileContent(path, content, title);
     case "html":
       return createHtmlFileContent(content, title);
-    case "pdf":
-      return createPdfFileContent(content, title);
     case "code":
       return createCodeFileContent(path, content, language);
   }
@@ -169,6 +175,7 @@ function parseBatchFiles(args: Record<string, string>) {
 function batchArgsToRecord(file: RawBatchFile): Record<string, string> {
   const entries: Array<[string, unknown]> = [
     ["path", file.path ?? file.file_path ?? file.filePath ?? file.file],
+    ["directory_path", file.directory_path ?? file.directoryPath ?? file.directory ?? file.folder_path ?? file.folderPath ?? file.folder],
     ["content", file.content ?? file.markdown ?? file.text],
     ["title", file.title ?? file.name],
     ["language", file.language],
@@ -182,10 +189,6 @@ function batchArgsToRecord(file: RawBatchFile): Record<string, string> {
 
 function toolNameForBatchFile(file: RawBatchFile): FileCreationToolName {
   const rawKind = String(file.tool ?? file.kind ?? file.type ?? "").trim().toLowerCase().replace(/^file\./, "");
-
-  if (rawKind.includes("pdf")) {
-    return "create_pdf_file";
-  }
 
   if (rawKind.includes("react") || rawKind.includes("tsx") || rawKind.includes("jsx")) {
     return "create_react_file";
@@ -210,10 +213,10 @@ function resolveTargetPath(args: Record<string, string>, roots: string[], extens
   const explicitPath = firstArg(args, ["path", "file_path", "file"]);
 
   if (explicitPath) {
-    return ensurePathExtension(explicitPath, extension);
+    return ensurePathExtension(resolveWorkspacePath(explicitPath, roots), extension);
   }
 
-  const directory = firstArg(args, ["directory_path", "folder_path", "directory", "folder"]) || roots[0];
+  const directory = resolveWorkspacePath(firstArg(args, ["directory_path", "folder_path", "directory", "folder"]) || roots[0], roots);
 
   if (!directory) {
     throw new Error("File creation requires a path, or a selected workspace root plus title/name.");
@@ -227,12 +230,8 @@ function rawContentFromArgs(args: Record<string, string>) {
   return firstArg(args, ["content", "markdown", "body", "text", "value"]) ?? "";
 }
 
-function createPreview(kind: FileCreationKind, content: string) {
-  if (kind === "pdf") {
-    return "%PDF document";
-  }
-
-  return content.split(/\n/).slice(0, 4).join(" ").trim();
+function createPreview(_kind: FileCreationKind, content: string) {
+  return content;
 }
 
 function firstArg(args: Record<string, string>, names: string[]) {
@@ -283,6 +282,54 @@ function normalizeArgName(name: string) {
 function joinLocalPath(root: string, parts: string[]) {
   const separator = root.includes("\\") ? "\\" : "/";
   return [root.replace(/[\\/]+$/, ""), ...parts.map((part) => part.replace(/^[\\/]+|[\\/]+$/g, ""))].join(separator);
+}
+
+function resolveWorkspacePath(path: string | undefined, roots: string[]) {
+  const trimmed = (path ?? "").trim();
+
+  if (!trimmed || roots.length === 0 || isAbsoluteLocalPath(trimmed) || trimmed.startsWith("browser-folder://")) {
+    return trimmed;
+  }
+
+  const parts = trimmed
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((part) => part && part !== ".");
+
+  if (parts.includes("..")) {
+    throw new Error("Workspace-relative paths cannot contain '..'.");
+  }
+
+  const rootName = pathBaseName(roots[0]);
+  if (parts.length >= 1 && pathSegmentMatchesRoot(parts[0], rootName)) {
+    parts.shift();
+  }
+
+  return parts.length > 0 ? joinLocalPath(roots[0], parts) : roots[0];
+}
+
+function isAbsoluteLocalPath(path: string) {
+  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\") || path.startsWith("//") || path.startsWith("/");
+}
+
+function pathBaseName(path: string) {
+  const lastBackslash = path.lastIndexOf("\\");
+  const lastSlash = path.lastIndexOf("/");
+  const index = Math.max(lastBackslash, lastSlash);
+
+  return index >= 0 ? path.slice(index + 1) : path;
+}
+
+function pathSegmentMatchesRoot(segment: string, rootName: string) {
+  const left = comparablePathSegment(segment);
+  const right = comparablePathSegment(rootName);
+  return left.length > 0 && left === right;
+}
+
+function comparablePathSegment(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function slugify(value: string) {

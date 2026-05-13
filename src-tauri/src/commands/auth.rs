@@ -1,4 +1,7 @@
-use crate::core::storage::{self, SYSTEM_NAMESPACE};
+use crate::core::{
+    fs_utils::{delete_legacy_file_and_empty_parent as delete_legacy_file, path_to_string},
+    storage::{self, SYSTEM_NAMESPACE},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -542,33 +545,4 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or_default()
-}
-
-fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
-}
-
-fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(path).map_err(|error| {
-        format!(
-            "Could not remove the old {label} at {}: {error}",
-            path_to_string(path)
-        )
-    })?;
-
-    if let Some(parent) = path.parent() {
-        let is_empty = fs::read_dir(parent)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-
-        if is_empty {
-            let _ = fs::remove_dir(parent);
-        }
-    }
-
-    Ok(())
 }

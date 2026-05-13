@@ -45,6 +45,7 @@ export interface ComputerDirectoryListing {
 export interface ComputerFileIndexSummary {
   builtAt?: number;
   entryCount: number;
+  ignoredEntries: number;
   roots: string[];
   scannedDirectories: number;
   skippedEntries: number;
@@ -55,6 +56,7 @@ export interface ComputerFileIndexProgress {
   currentPath?: string;
   done: boolean;
   entryCount: number;
+  ignoredEntries: number;
   requestId: number;
   roots: string[];
   scannedDirectories: number;
@@ -84,6 +86,14 @@ export interface ComputerGitStatus {
 export interface ComputerGitActionResult {
   message: string;
   output?: string;
+  status: ComputerGitStatus;
+}
+
+export interface ComputerGitWorktreeResult {
+  branchName: string;
+  message: string;
+  output?: string;
+  path: string;
   status: ComputerGitStatus;
 }
 
@@ -124,6 +134,8 @@ export interface ComputerReadFileResult {
   modifiedAt?: number;
   name: string;
   path: string;
+  /** Lowercase hex SHA-256 of the fully loaded file bytes. Omitted for truncated reads. */
+  sha256?: string;
   size: number;
   truncated: boolean;
 }
@@ -133,10 +145,21 @@ export interface ComputerWriteFileResult {
   created: boolean;
   modifiedAt?: number;
   path: string;
+  /** Lowercase hex SHA-256 of the bytes actually written. */
+  sha256?: string;
+  /** Line-ending family applied to the written bytes ("crlf" or "lf"). */
+  eol?: "crlf" | "lf";
 }
 
 export interface ComputerDeleteFileResult {
   bytesDeleted: number;
   deleted: boolean;
   path: string;
+}
+
+export interface ComputerMovePathResult {
+  fromPath: string;
+  kind: ComputerFileKind;
+  moved: boolean;
+  toPath: string;
 }

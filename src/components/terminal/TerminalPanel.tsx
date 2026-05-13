@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { PanelBottomClose, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { createTerminalSession, drainTerminalSession, killTerminalSession, resizeTerminalSession, writeTerminalSession } from "../../app/tauriClient";
@@ -18,33 +18,65 @@ interface TerminalPanelProps {
 }
 
 type TerminalStatus = "connected" | "error" | "exited" | "running" | "starting" | "stopped" | "unavailable";
+type ResolvedTerminalTheme = "dark" | "light";
 
 const MIN_TERMINAL_HEIGHT = 184;
 const MAX_TERMINAL_HEIGHT = 640;
 const POLL_INTERVAL_MS = 90;
 const RESIZE_STEP = 28;
 
-const XTERM_THEME = {
-  background: "#101215",
-  black: "#1c2229",
-  blue: "#8fc7ff",
-  brightBlack: "#66717d",
-  brightBlue: "#add7ff",
-  brightCyan: "#9be7ff",
-  brightGreen: "#b8e6c8",
-  brightMagenta: "#d7c0ff",
-  brightRed: "#ffb5ad",
-  brightWhite: "#ffffff",
-  brightYellow: "#ffe1a3",
-  cursor: "#d7ecff",
-  cyan: "#7bd8f7",
-  foreground: "#e9edf2",
-  green: "#91d7a7",
-  magenta: "#c7a9ff",
-  red: "#ff8f85",
-  selectionBackground: "#31506d",
-  white: "#d9dee5",
-  yellow: "#f2c978",
+const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
+  dark: {
+    background: "#101215",
+    black: "#1c2229",
+    blue: "#8fc7ff",
+    brightBlack: "#66717d",
+    brightBlue: "#add7ff",
+    brightCyan: "#9be7ff",
+    brightGreen: "#b8e6c8",
+    brightMagenta: "#d7c0ff",
+    brightRed: "#ffb5ad",
+    brightWhite: "#ffffff",
+    brightYellow: "#ffe1a3",
+    cursor: "#d7ecff",
+    cursorAccent: "#101215",
+    cyan: "#7bd8f7",
+    foreground: "#e9edf2",
+    green: "#91d7a7",
+    magenta: "#c7a9ff",
+    red: "#ff8f85",
+    scrollbarSliderBackground: "rgba(255, 255, 255, 0.26)",
+    scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.38)",
+    selectionBackground: "#31506d",
+    white: "#d9dee5",
+    yellow: "#f2c978",
+  },
+  light: {
+    background: "#f8fafc",
+    black: "#1f2937",
+    blue: "#0969da",
+    brightBlack: "#667085",
+    brightBlue: "#1f7edc",
+    brightCyan: "#0a7ea4",
+    brightGreen: "#1a7f37",
+    brightMagenta: "#8a3ffc",
+    brightRed: "#d1242f",
+    brightWhite: "#ffffff",
+    brightYellow: "#9a6700",
+    cursor: "#175e9e",
+    cursorAccent: "#ffffff",
+    cyan: "#087990",
+    foreground: "#17202b",
+    green: "#1f883d",
+    magenta: "#8250df",
+    red: "#cf222e",
+    scrollbarSliderBackground: "rgba(23, 32, 43, 0.2)",
+    scrollbarSliderHoverBackground: "rgba(23, 32, 43, 0.34)",
+    selectionBackground: "#c9ddf3",
+    selectionForeground: "#0f1720",
+    white: "#d0d7de",
+    yellow: "#9a6700",
+  },
 };
 
 export function TerminalPanel({ attachedSession, desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
@@ -53,6 +85,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
   const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [pendingWorkingDirectory, setPendingWorkingDirectory] = useState<string | null>(null);
+  const [resolvedTerminalTheme, setResolvedTerminalTheme] = useState<ResolvedTerminalTheme>(() => readResolvedTerminalTheme());
   const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
   const shellOptions = useMemo(() => getAvailableTerminalShells(), []);
   const autoStartedRef = useRef(false);
@@ -60,6 +93,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   const lastRequestedWorkingDirectoryRef = useRef((workingDirectory ?? "").trim());
   const ownedSessionIdRef = useRef<string | null>(null);
   const replayedAttachedSessionRef = useRef<string | null>(null);
+  const resolvedTerminalThemeRef = useRef<ResolvedTerminalTheme>(resolvedTerminalTheme);
   const pendingTerminalTextRef = useRef("");
   const pendingWorkingDirectoryRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -99,6 +133,32 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    resolvedTerminalThemeRef.current = resolvedTerminalTheme;
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = { ...XTERM_THEMES[resolvedTerminalTheme] };
+    }
+  }, [resolvedTerminalTheme]);
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") {
+      return;
+    }
+
+    const syncResolvedTheme = () => setResolvedTerminalTheme(readResolvedTerminalTheme());
+    const observer = new MutationObserver(syncResolvedTheme);
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
+
+    syncResolvedTheme();
+    observer.observe(document.documentElement, { attributeFilter: ["data-theme"], attributes: true });
+    mediaQuery.addEventListener("change", syncResolvedTheme);
+
+    return () => {
+      observer.disconnect();
+      mediaQuery.removeEventListener("change", syncResolvedTheme);
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -167,7 +227,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       fontSize: 12.5,
       lineHeight: 1.22,
       scrollback: 12_000,
-      theme: XTERM_THEME,
+      theme: { ...XTERM_THEMES[resolvedTerminalThemeRef.current] },
     });
     const fitAddon = new FitAddon();
     const host = terminalHostRef.current;
@@ -529,7 +589,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   }
 
   return (
-    <section className="terminal-panel" aria-label="Terminal">
+    <section className="terminal-panel" data-terminal-theme={resolvedTerminalTheme} aria-label="Terminal">
       <div
         className="terminal-resize-handle"
         role="separator"
@@ -589,4 +649,20 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function readResolvedTerminalTheme(): ResolvedTerminalTheme {
+  if (typeof document !== "undefined") {
+    const theme = document.documentElement.dataset.theme;
+
+    if (theme === "light" || theme === "dark") {
+      return theme;
+    }
+  }
+
+  if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: light)").matches) {
+    return "light";
+  }
+
+  return "dark";
 }

@@ -1,10 +1,10 @@
 import { AlertTriangle, CheckCircle2, ChevronDown, FileCode2, GitBranch, LoaderCircle, RefreshCw, ShieldAlert, TestTube2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatGitChangedFileStatus, formatGitChangedFiles, getGitStatusIssue, gitChangedFileStatusTone } from "../../lib/gitStatusUi";
-import { commitComputerGitChanges, createComputerGitBranch, getComputerGitStatus, pushComputerGitBranch } from "../../tools/computer/files";
+import { commitComputerGitChanges, createComputerGitBranch, getComputerGitStatus, initComputerGitRepository, pushComputerGitBranch } from "../../tools/computer/files";
 import type { ComputerGitChangedFile, ComputerGitDiffLine, ComputerGitStatus } from "../../types/localWorkspace";
 
-const GIT_REVIEW_REFRESH_INTERVAL_MS = 2_500;
+const GIT_REVIEW_REFRESH_INTERVAL_MS = 10_000;
 const MAX_REVIEW_FILES = 80;
 
 type ReviewMode = "auto" | "risk" | "summary" | "tests";
@@ -22,7 +22,7 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
   const [reviewControlsExpanded, setReviewControlsExpanded] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [branchName, setBranchName] = useState("");
-  const [gitActionRunning, setGitActionRunning] = useState<"branch" | "commit" | "push" | null>(null);
+  const [gitActionRunning, setGitActionRunning] = useState<"branch" | "commit" | "init" | "push" | null>(null);
   const [gitActionNotice, setGitActionNotice] = useState<{ detail?: string; kind: "error" | "success"; message: string } | null>(null);
   const [selectedFileKey, setSelectedFileKey] = useState("");
   const changedFiles = useMemo(() => sortChangedFiles(status?.files ?? []), [status?.files]);
@@ -42,7 +42,7 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
       }
 
       try {
-        const nextStatus = await getComputerGitStatus(root);
+        const nextStatus = await getComputerGitStatus(root, { includeDiffPreview: true });
 
         if (!disposed) {
           setStatus(nextStatus);
@@ -97,7 +97,7 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
     setLoading(true);
 
     try {
-      const nextStatus = await getComputerGitStatus(root);
+      const nextStatus = await getComputerGitStatus(root, { force: true, includeDiffPreview: true });
       setStatus(nextStatus);
       setLastUpdatedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }));
     } catch (error) {
@@ -107,7 +107,7 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
     }
   }
 
-  async function runGitAction(kind: "branch" | "commit" | "push", action: () => Promise<{ message: string; output?: string; status: ComputerGitStatus }>, onSuccess?: () => void) {
+  async function runGitAction(kind: "branch" | "commit" | "init" | "push", action: () => Promise<{ message: string; output?: string; status: ComputerGitStatus }>, onSuccess?: () => void) {
     setGitActionRunning(kind);
     setGitActionNotice(null);
 
@@ -142,6 +142,10 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
     void runGitAction("branch", () => createComputerGitBranch(root, nextBranchName), () => setBranchName(""));
   }
 
+  function initializeGitFromPanel() {
+    void runGitAction("init", () => initComputerGitRepository(root));
+  }
+
   function commitFromPanel() {
     const nextCommitMessage = commitMessage.trim();
 
@@ -158,6 +162,7 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
   }
 
   const issue = !status?.available ? getGitStatusIssue(status, root) : null;
+  const canInitializeGit = issue?.kind === "not-repo" && Boolean(root) && gitActionRunning === null;
 
   return (
     <aside className="git-review-panel" aria-label="Review changes">
@@ -309,6 +314,20 @@ export function GitReviewPanel({ root, onClose, onSubmitReview }: GitReviewPanel
             </span>
           </div>
           {issue?.hint ? <p>{issue.hint}</p> : null}
+          {canInitializeGit || gitActionRunning === "init" ? (
+            <div className="git-review-error-actions">
+              <button type="button" className="git-review-control-primary" disabled={gitActionRunning !== null} onClick={initializeGitFromPanel}>
+                {gitActionRunning === "init" ? <LoaderCircle size={16} aria-hidden="true" /> : <GitBranch size={16} aria-hidden="true" />}
+                <span>Initialize Git</span>
+              </button>
+            </div>
+          ) : null}
+          {gitActionNotice ? (
+            <div className="git-review-action-notice" data-kind={gitActionNotice.kind}>
+              <strong>{gitActionNotice.message}</strong>
+              {gitActionNotice.detail ? <small>{gitActionNotice.detail}</small> : null}
+            </div>
+          ) : null}
           {status?.error ? <pre>{status.error}</pre> : null}
         </section>
       )}

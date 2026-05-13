@@ -2,6 +2,7 @@ import {
   Bot,
   Braces,
   BrainCircuit,
+  CloudSun,
   CheckCircle2,
   Database,
   FileCode2,
@@ -11,6 +12,8 @@ import {
   Globe2,
   HardDrive,
   KeyRound,
+  Layers,
+  PlugZap,
   MonitorUp,
   Palette,
   PenTool,
@@ -20,6 +23,8 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { UtilityPageShell } from "../components/utility/UtilityPageShell";
+import { ProjectToolsPanel } from "../components/toolbox/ProjectToolsPanel";
 import { normalizeToolRegistrySettings } from "../types/tools";
 import type { ToolRegistryId, ToolRegistrySettings } from "../types/tools";
 
@@ -48,11 +53,15 @@ interface ToolRail {
 interface ToolboxPageProps {
   onSettingsChange: (settings: ToolRegistrySettings) => void;
   settings: ToolRegistrySettings;
+  /** Active workspace root the project tools panel pivots on. Empty string when no workspace is open. */
+  workspaceRoot: string;
+  /** All enabled workspace roots — passed to write helpers so policy checks pass. */
+  workspaceRoots: string[];
 }
 
 const currentTools: ToolSurface[] = [
   {
-    capabilities: ["web_search", "DuckDuckGo", "Sources"],
+    capabilities: ["web_search", "DuckDuckGo", "Brave"],
     detail: "Agent-callable",
     icon: Globe2,
     id: "webSearch",
@@ -61,6 +70,28 @@ const currentTools: ToolSurface[] = [
     rail: "Agent runtime",
     status: "Active",
     summary: "On-demand web search from chat or thinking for current facts, docs, errors, and citations.",
+  },
+  {
+    capabilities: ["weather", "NOAA/NWS", "Vectors"],
+    detail: "Location-aware",
+    icon: CloudSun,
+    id: "weatherTools",
+    label: "Weather",
+    phase: "Current",
+    rail: "Live data",
+    status: "Active",
+    summary: "Fetch NOAA/NWS forecasts, alerts, observations, grid data, stations, zones, and bounded climate archive slices for the AI.",
+  },
+  {
+    capabilities: ["Remote MCP", "Local stdio", "Approvals"],
+    detail: "OpenAI Responses",
+    icon: PlugZap,
+    id: "mcpServers",
+    label: "MCP Servers",
+    phase: "Current",
+    rail: "External tools",
+    status: "Preview",
+    summary: "Register remote MCP servers for model access and keep local stdio setup profiles with human approval guidance.",
   },
   {
     capabilities: ["Local Git", "Releases", "Workflows"],
@@ -129,7 +160,7 @@ const currentTools: ToolSurface[] = [
     summary: "Patch code with exact replacements, line-range edits, or single-letter punctuation fixes.",
   },
   {
-    capabilities: ["create_files", "PDF", "Markdown"],
+    capabilities: ["create_vite_project", "create_files", "PDF"],
     detail: "Typed creators",
     icon: FilePlus2,
     id: "fileCreation",
@@ -137,7 +168,7 @@ const currentTools: ToolSurface[] = [
     phase: "Current",
     rail: "Write tools",
     status: "Active",
-    summary: "Create TXT, Markdown, React, HTML, JS, TS, PDF, notes, and language-specific files from Markdown-aware prompts.",
+    summary: "Create full Vite React project scaffolds plus TXT, Markdown, React, HTML, JS, TS, PDF, notes, and language-specific files.",
   },
   {
     capabilities: ["delete_file", "No duplicates", "Confirm"],
@@ -217,7 +248,7 @@ const currentTools: ToolSurface[] = [
     summary: "Generate API routes, run codebase health scans, and summarize dependency posture.",
   },
   {
-    capabilities: ["run_terminal", "create_tool", "run_tool"],
+    capabilities: ["run_terminal", "Python/TS tools", "run_tool"],
     detail: "Agent-callable",
     icon: TerminalSquare,
     id: "terminal",
@@ -225,7 +256,7 @@ const currentTools: ToolSurface[] = [
     phase: "Current",
     rail: "Execution",
     status: "Active",
-    summary: "Run project commands, create reusable workspace scripts, and execute custom tools from chat.",
+    summary: "Run project commands and let the agent create reusable Python, TypeScript, JavaScript, or shell tools.",
   },
   {
     capabilities: ["Tabs", "Preview", "Localhost"],
@@ -236,7 +267,7 @@ const currentTools: ToolSurface[] = [
     phase: "Current",
     rail: "Browser rail",
     status: "Available",
-    summary: "Open web pages or local app previews beside the chat thread.",
+    summary: "Open web pages or local app previews beside the chat thread for app QA and docs checks.",
   },
   {
     capabilities: ["Reasoning", "Trace", "Effort"],
@@ -305,14 +336,15 @@ const toolFlow = [
   { icon: PenTool, label: "Act", value: "Patch files, run commands, or create tools" },
 ];
 
-export function ToolboxPage({ onSettingsChange, settings }: ToolboxPageProps) {
+export function ToolboxPage({ onSettingsChange, settings, workspaceRoot, workspaceRoots }: ToolboxPageProps) {
   const normalizedSettings = normalizeToolRegistrySettings(settings);
   const allTools = [...currentTools, ...upcomingTools];
   const enabledCount = allTools.filter((tool) => normalizedSettings[tool.id]).length;
   const disabledCount = allTools.length - enabledCount;
   const toolRails: ToolRail[] = [
-    { count: String(currentTools.length).padStart(2, "0"), icon: Bot, label: "Current tools", status: "Live" },
-    { count: String(upcomingTools.length).padStart(2, "0"), icon: KeyRound, label: "Upcoming tools", status: "Queued" },
+    { count: String(currentTools.length).padStart(2, "0"), icon: Bot, label: "Foundations", status: "Live" },
+    { count: workspaceRoot ? "01" : "00", icon: Layers, label: "This project", status: workspaceRoot ? "Active" : "No workspace" },
+    { count: String(upcomingTools.length).padStart(2, "0"), icon: KeyRound, label: "Upcoming", status: "Queued" },
     { count: String(enabledCount).padStart(2, "0"), icon: CheckCircle2, label: "Enabled", status: disabledCount ? `${disabledCount} off` : "All on" },
     { count: "01", icon: ShieldCheck, label: "Safety gate", status: "Always enforced" },
   ];
@@ -331,42 +363,30 @@ export function ToolboxPage({ onSettingsChange, settings }: ToolboxPageProps) {
   }
 
   return (
-    <div className="utility-page">
-      <section className="utility-shell" aria-labelledby="toolbox-title">
-        <header className="utility-header">
-          <div>
-            <p className="eyebrow">Toolbox</p>
-            <h1 id="toolbox-title">Tool registry</h1>
-          </div>
-          <div className="utility-header-actions" aria-label="Toolbox actions">
-            <button type="button" onClick={() => setAllTools(true)}>
-              Enable all
-            </button>
-            <button type="button" onClick={() => setAllTools(false)}>
-              Disable all
-            </button>
-          </div>
-        </header>
-
-        <div className="utility-stat-grid" aria-label="Toolbox overview">
-          {toolRails.map((item) => {
-            const Icon = item.icon;
-
-            return (
-              <article className="utility-stat-card" key={item.label}>
-                <Icon size={18} aria-hidden="true" />
-                <span>{item.label}</span>
-                <strong>{item.count}</strong>
-                <small>{item.status}</small>
-              </article>
-            );
-          })}
-        </div>
+    <UtilityPageShell
+      actions={
+        <>
+          <button type="button" onClick={() => setAllTools(true)}>
+            Enable all
+          </button>
+          <button type="button" onClick={() => setAllTools(false)}>
+            Disable all
+          </button>
+        </>
+      }
+      actionsLabel="Toolbox actions"
+      eyebrow="Toolbox"
+      stats={toolRails}
+      statsLabel="Toolbox overview"
+      title="Tool registry"
+      titleId="toolbox-title"
+    >
+        <ProjectToolsPanel workspaceRoot={workspaceRoot} workspaceRoots={workspaceRoots} />
 
         <ToolSection
-          heading="Current Tools"
+          heading="Foundations"
           settings={normalizedSettings}
-          subheading="Live in this build"
+          subheading="Built-in tools shipping with the app"
           tools={currentTools}
           onToggle={toggleTool}
         />
@@ -398,8 +418,7 @@ export function ToolboxPage({ onSettingsChange, settings }: ToolboxPageProps) {
             })}
           </div>
         </section>
-      </section>
-    </div>
+    </UtilityPageShell>
   );
 }
 

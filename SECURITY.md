@@ -29,7 +29,7 @@ Do not include real API keys, tokens, passwords, private workspace content, cust
 
 ## Secret Handling
 
-- Do not commit `.env` files, API keys, logs, build output, local databases, dependency folders, or generated targets.
+- Do not commit `.env` files, API keys, logs, build output, local databases, dependency folders, generated targets, or local scan artifacts.
 - Do not paste real provider keys, GitHub tokens, GitHub OAuth client secrets, or private repository content into issues, examples, fixtures, or docs.
 - Keep release signing keys and packaging credentials outside the repository.
 - Moving provider and GitHub credentials to OS-backed secure storage remains a pre-release hardening requirement.
@@ -39,5 +39,5 @@ Do not include real API keys, tokens, passwords, private workspace content, cust
 Track these before a stable release (not exhaustive):
 
 - **OS-backed secrets:** Move provider API keys, GitHub tokens, and related credentials from plain app storage into the platform secure store (Windows Credential Manager, macOS Keychain, freedesktop.org Secret Service) with a migration path for existing installs.
-- **Discord and tunnels:** Apply the same storage approach to Discord bot tokens, GitHub webhook secrets, and ngrok auth tokens where they are persisted today.
+- **Discord and tunnels:** Apply the same storage approach to Discord bot tokens, incoming webhook URLs, and ngrok auth tokens where they are persisted today.
 - **Local QA (Windows focus):** Smoke-test interactive terminal PTY, a short `run_terminal` invocation, and in-app browser preview against a dev server URL emitted in terminal output; confirm permission modes (`ask-first`, and so on) behave as expected after changes to local tools.

@@ -4,7 +4,7 @@ Use this checklist before publishing, tagging a release, or inviting outside col
 
 ## Repository Hygiene
 
-- Keep `node_modules/`, `dist/`, `src-tauri/target/`, coverage output, local logs, local databases, and generated runtime caches out of Git.
+- Keep `node_modules/`, `dist/`, `src-tauri/target/`, coverage output, local logs, local databases, generated runtime caches, and local scan artifacts out of Git.
 - Keep `.env`, provider keys, release signing keys, and packaging credentials out of Git.
 - Run `git status --short --ignored=matching` and confirm ignored local artifacts are expected.
 - Run `git diff --check` before committing.
@@ -55,6 +55,6 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 
 ## Security Review
 
-- Check that sample text, docs, fixtures, and screenshots do not contain real keys, private paths, customer data, or terminal output.
+- Check that sample text, docs, fixtures, screenshots, and generated scan reports do not contain real keys, private paths, customer data, or terminal output.
 - Treat auth, terminal, file write, full-computer scope, provider key handling, and tool execution as security-sensitive review areas.
 - Keep destructive actions behind explicit confirmation UI.

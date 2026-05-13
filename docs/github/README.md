@@ -2,7 +2,7 @@
 
 This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, and draft pull requests.
 
-Last verified: May 10, 2026.
+Last verified: May 12, 2026.
 
 Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -24,9 +24,9 @@ The integration does require:
 
 ## Official Links
 
-- Create a GitHub OAuth App: https://docs.github.com/en/developers/apps/creating-an-oauth-app
+- Create a GitHub OAuth App: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app
 - Authorizing OAuth Apps and device flow: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
-- OAuth App scopes: https://docs.github.com/en/developers/apps/scopes-for-oauth-apps
+- OAuth App scopes: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps
 - GitHub webhooks: https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks
 - Webhook events and payloads: https://docs.github.com/en/webhooks/webhook-events-and-payloads
 - GitHub REST API docs: https://docs.github.com/en/rest
@@ -172,7 +172,7 @@ See the broader tool contract in:
 
 ## Repository Webhooks
 
-Use this section when you want GitHub events to call an external service. For Discord channel notifications, see:
+Use this section when you want GitHub events to call an external service. Discord chat setup lives separately in:
 ../discord/README.md
 
 1. Open the GitHub repository.

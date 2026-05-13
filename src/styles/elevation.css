@@ -1,0 +1,140 @@
+:root {
+  --shadow-lg: none;
+  --shadow-popover: none;
+  --focus-ring-color: color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+:root[data-theme="light"] {
+  --shadow-lg: none;
+  --shadow-popover: none;
+  --focus-ring-color: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
+body *,
+body *::before,
+body *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+:where(button, textarea, input, a, [role="button"]):focus-visible {
+  outline: 1px solid var(--focus-ring-color);
+  outline-offset: 2px;
+  box-shadow: none !important;
+}
+
+:where(button, textarea, input, a, [role="button"]):active {
+  outline: 0;
+  box-shadow: none !important;
+}
+
+:where([data-active="true"], [data-selected="true"], [aria-expanded="true"], [data-pressed="true"]) {
+  box-shadow: none !important;
+}
+
+.composer-shell,
+.composer-shell:focus-within,
+.composer-popover,
+.composer-submenu,
+.model-selector-popover,
+.topbar-menu-panel,
+.sidebar-item-menu,
+.conversation-options-menu,
+.message-action-menu,
+.search-dialog,
+.app-dialog,
+.dialog-detail-list,
+.bulk-delete-chat-list,
+.settings-card,
+.settings-warning,
+.settings-status,
+.utility-section,
+.utility-stat-card,
+.workflow-template-card,
+.workflow-signal-card,
+.workflow-gap-card,
+.workflow-run-row,
+.mcp-runtime-banner,
+.mcp-empty-state,
+.mcp-server-card,
+.mcp-starter-card,
+.mcp-concept-card,
+.mcp-setup-card,
+.right-rail,
+.rail-card,
+.activity-card,
+.activity-tool-call,
+.approval-card,
+.plan-review-card,
+.git-review-panel,
+.git-review-summary,
+.git-review-control-panel,
+.browser-preview-panel,
+.browser-preview-window,
+.browser-preview-frame,
+.browser-preview-start,
+.browser-preview-start-search,
+.terminal-panel,
+.mobile-sidebar-toggle,
+.shell-sidebar,
+.topbar-logo,
+.send-button,
+.composer-tool,
+.mode-chip,
+.project-toggle,
+.local-toggle,
+.branch-toggle,
+.context-window-chip,
+.sidebar-action,
+.sidebar-settings,
+.sidebar-list-row,
+.sidebar-item-quick-action,
+.sidebar-item-menu-button,
+.icon-button,
+.dialog-button,
+.settings-primary-button,
+.settings-ghost-button,
+.settings-danger-button,
+.git-status-action {
+  box-shadow: none !important;
+}
+
+.composer-shell:focus-within,
+.composer-shell[data-layout="center"]:focus-within,
+.conversation-main[data-empty="true"] .composer-shell,
+.conversation-main[data-empty="true"] .composer-shell:focus-within {
+  border-color: var(--composer-border) !important;
+  outline: 0;
+}
+
+.conversation-main[data-empty="true"] .composer-shell :where(button, textarea, input, [role="button"]):focus-visible,
+.conversation-main[data-empty="true"] .composer-shell :where(button, textarea, input, [role="button"]):active {
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+
+.conversation-main[data-empty="true"] .composer-shell :where(button, .composer-tool, .send-button, .mode-chip, .project-toggle, .local-toggle, .branch-toggle, .context-window-chip):active {
+  transform: none !important;
+}
+
+.composer-popover,
+.composer-submenu,
+.model-selector-popover,
+.topbar-menu-panel,
+.sidebar-item-menu,
+.conversation-options-menu,
+.message-action-menu,
+.search-dialog,
+.app-dialog {
+  border-color: color-mix(in srgb, var(--popover-border) 82%, transparent);
+}
+
+.send-button:not(:disabled):focus-visible,
+.thinking-disclosure[data-live="true"] .thinking-compact-summary {
+  animation: none !important;
+}
+
+.sidebar-activity-dot,
+.markdown-message[data-streaming="true"]::after {
+  box-shadow: none !important;
+}

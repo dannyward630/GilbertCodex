@@ -1,3 +1,4 @@
+use crate::core::fs_utils::path_to_string;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -485,7 +486,7 @@ fn sync_chat_records(
                     json_bool(chat, "archived") as i64,
                     json_bool(chat, "pinned") as i64,
                     json_array_len(chat, "messages") as i64,
-                    raw_json.as_bytes().len() as i64,
+                    raw_json.len() as i64,
                     raw_json,
                 ],
             )
@@ -676,8 +677,4 @@ fn fallback_documents_dir() -> Option<PathBuf> {
         .or_else(|| env::var_os("HOME"))
         .map(PathBuf::from)
         .map(|home| home.join("Documents"))
-}
-
-fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
 }

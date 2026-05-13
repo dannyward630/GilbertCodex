@@ -10,6 +10,7 @@ export type ToolRegistryId =
   | "fileCreation"
   | "fileBrowser"
   | "fileSearch"
+  | "mcpServers"
   | "pdfTools"
   | "permissions"
   | "planning"
@@ -22,6 +23,7 @@ export type ToolRegistryId =
   | "testingTools"
   | "typescriptTools"
   | "webSearch"
+  | "weatherTools"
   | "workflowAutomation";
 
 export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
@@ -38,6 +40,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   fileCreation: true,
   fileBrowser: true,
   fileSearch: true,
+  mcpServers: true,
   pdfTools: true,
   permissions: true,
   planning: true,
@@ -50,6 +53,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   testingTools: true,
   typescriptTools: true,
   webSearch: true,
+  weatherTools: true,
   workflowAutomation: true,
 };
 

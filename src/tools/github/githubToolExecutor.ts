@@ -44,6 +44,11 @@ export interface GithubToolExecutionResult {
   content: string;
   directAnswer?: string;
   executed: boolean;
+  // True when the tool itself failed (unknown tool, missing required arg).
+  // Network/auth failures throw and are caught by the central handler with
+  // status="error" already, so they don't need this flag.
+  isError?: boolean;
+  errorCode?: string;
   sources?: ChatSource[];
 }
 
@@ -123,7 +128,7 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
             ].join("\n"),
         directAnswer: directInventory ? formatRepositoryListAnswer(repos) : undefined,
         executed: true,
-        sources: directInventory ? repos.slice(0, 12).map((repo) => ({ title: repo.fullName, url: repo.htmlUrl })) : undefined,
+        sources: directInventory ? repos.map((repo) => ({ title: repo.fullName, url: repo.htmlUrl })) : undefined,
       };
     }
     case "github_get_repository": {
@@ -235,7 +240,7 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
       return {
         content: formatCodeSearch(result),
         executed: true,
-        sources: result.items.slice(0, 12).map((item) => ({ title: `${item.repositoryFullName}:${item.path}`, url: item.htmlUrl })),
+        sources: result.items.map((item) => ({ title: `${item.repositoryFullName}:${item.path}`, url: item.htmlUrl })),
       };
     }
     case "github_create_branch": {
@@ -337,7 +342,7 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
         content: formatReleaseList(repo.owner, repo.repo, releases),
         directAnswer: formatReleaseListAnswer(repo.owner, repo.repo, releases),
         executed: true,
-        sources: releases.slice(0, 12).map((release) => ({ title: release.tagName, url: release.htmlUrl })),
+        sources: releases.map((release) => ({ title: release.tagName, url: release.htmlUrl })),
       };
     }
     case "github_list_workflows": {
@@ -357,7 +362,7 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
         content: formatWorkflowList(repo.owner, repo.repo, workflows),
         directAnswer: formatWorkflowListAnswer(repo.owner, repo.repo, workflows),
         executed: true,
-        sources: workflows.workflows.slice(0, 12).map((workflow) => ({ title: workflow.name, url: workflow.htmlUrl })),
+        sources: workflows.workflows.map((workflow) => ({ title: workflow.name, url: workflow.htmlUrl })),
       };
     }
     case "github_dispatch_workflow": {
@@ -399,7 +404,7 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
         content: formatWorkflowRuns(workflowId, runs),
         directAnswer: formatWorkflowRunsAnswer(workflowId, runs),
         executed: true,
-        sources: runs.runs.slice(0, 12).map((run) => ({ title: `Run #${run.runNumber}`, url: run.htmlUrl })),
+        sources: runs.runs.map((run) => ({ title: `Run #${run.runNumber}`, url: run.htmlUrl })),
       };
     }
   }
@@ -407,6 +412,8 @@ export async function executeGithubTool(tool: GithubToolName, args: Record<strin
   return {
     content: `Unknown GitHub tool request was ignored: ${tool}`,
     executed: false,
+    isError: true,
+    errorCode: "unknown_github_tool",
   };
 }
 
@@ -489,7 +496,7 @@ async function createMissingRepositoryResult(purpose: string): Promise<GithubToo
     content: directAnswer,
     directAnswer,
     executed: true,
-    sources: repos.slice(0, 12).map((repo) => ({ title: repo.fullName, url: repo.htmlUrl })),
+    sources: repos.map((repo) => ({ title: repo.fullName, url: repo.htmlUrl })),
   };
 }
 
@@ -673,14 +680,10 @@ function formatRepositorySelectionAnswer(purpose: string, repos: GithubRepositor
     return `I can reach GitHub, but no accessible repositories were returned. I need a specific repository to ${purpose}.`;
   }
 
-  const visibleRepos = repos.slice(0, 20);
-  const hiddenCount = Math.max(repos.length - visibleRepos.length, 0);
-
   return [
     `I need a specific repository to ${purpose}. I can see ${repos.length} accessible GitHub ${pluralize("repository", repos.length)}:`,
     "",
-    ...visibleRepos.map((repo, index) => `${index + 1}. **[${repo.fullName}](${repo.htmlUrl})** - ${repo.private ? "Private" : "Public"}, default branch \`${repo.defaultBranch}\`.`),
-    hiddenCount > 0 ? `\n${hiddenCount} more repositories are available. Ask with the repo name or \`owner/repo\`.` : "",
+    ...repos.map((repo, index) => `${index + 1}. **[${repo.fullName}](${repo.htmlUrl})** - ${repo.private ? "Private" : "Public"}, default branch \`${repo.defaultBranch}\`.`),
     "",
     `Try: \`${purpose} for ${repos[0].fullName}\`.`,
   ].filter(Boolean).join("\n");
@@ -748,14 +751,10 @@ function formatTree(tree: Awaited<ReturnType<typeof listGithubTree>>) {
 }
 
 function formatTreeAnswer(owner: string, repo: string, tree: Awaited<ReturnType<typeof listGithubTree>>) {
-  const entries = tree.entries.slice(0, 80);
-  const hiddenCount = Math.max(tree.entries.length - entries.length, 0);
-
   return [
     `Remote files in **${owner}/${repo}** on \`${tree.branch}\`:`,
     "",
-    ...entries.map((entry, index) => `${index + 1}. \`${entry.path}\` - ${entry.kind}${typeof entry.size === "number" ? `, ${entry.size} bytes` : ""}.`),
-    hiddenCount > 0 ? `\n${hiddenCount} more entries were returned but hidden here for readability.` : "",
+    ...tree.entries.map((entry, index) => `${index + 1}. \`${entry.path}\` - ${entry.kind}${typeof entry.size === "number" ? `, ${entry.size} bytes` : ""}.`),
     tree.truncated ? "\nGitHub marked this tree response as truncated." : "",
   ].filter(Boolean).join("\n");
 }

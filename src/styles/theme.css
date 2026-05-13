@@ -120,21 +120,17 @@
 
 .menu-shortcut,
 .search-group-title,
-.search-empty,
-.artifact-card span {
+.search-empty {
   color: var(--text-dim);
 }
 
 .message-block[data-role="user"] .message-content,
-.artifact-card,
 .code-block,
 .search-result:hover {
   background: var(--surface-soft);
 }
 
 .code-block,
-.artifact-card,
-.artifact-card button,
 .markdown-message th,
 .markdown-message td {
   border-color: var(--line);
@@ -153,8 +149,7 @@
 
 .markdown-message h1,
 .markdown-message h2,
-.markdown-message h3,
-.artifact-card strong {
+.markdown-message h3 {
   color: var(--text);
 }
 
@@ -244,4 +239,210 @@
 
 :root[data-theme="light"] .search-backdrop {
   background: rgba(18, 25, 34, 0.24);
+}
+
+:root[data-theme="light"] .topbar-weather {
+  color: #384252;
+  border-color: rgba(24, 34, 48, 0.12);
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 8px 24px rgba(36, 48, 66, 0.08);
+}
+
+:root[data-theme="light"] .topbar-weather:hover,
+:root[data-theme="light"] .topbar-weather:focus-visible,
+:root[data-theme="light"] .topbar-weather[aria-expanded="true"] {
+  color: #17202b;
+  border-color: rgba(20, 120, 200, 0.32);
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .weather-popover {
+  color: #202833;
+  border-color: rgba(24, 34, 48, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(239, 243, 247, 0.98)),
+    var(--popover-bg);
+  box-shadow: 0 24px 56px rgba(29, 38, 51, 0.22);
+}
+
+:root[data-theme="light"] .weather-popover-kicker,
+:root[data-theme="light"] .weather-popover-footer,
+:root[data-theme="light"] .weather-radar-placeholder span,
+:root[data-theme="light"] .weather-day-card em,
+:root[data-theme="light"] .weather-popover-current em {
+  color: #66717f;
+}
+
+:root[data-theme="light"] .weather-popover-hero h2,
+:root[data-theme="light"] .weather-popover-current strong,
+:root[data-theme="light"] .weather-day-name,
+:root[data-theme="light"] .weather-day-temp,
+:root[data-theme="light"] .weather-radar-placeholder strong,
+:root[data-theme="light"] .mapbox-weather-map-empty strong,
+:root[data-theme="light"] .weather-location-card strong {
+  color: #17202b;
+}
+
+:root[data-theme="light"] .weather-popover-hero p,
+:root[data-theme="light"] .weather-radar-placeholder p,
+:root[data-theme="light"] .weather-day-card p,
+:root[data-theme="light"] .weather-forecast-empty,
+:root[data-theme="light"] .mapbox-weather-map-empty {
+  color: #526070;
+}
+
+:root[data-theme="light"] .weather-popover-current,
+:root[data-theme="light"] .weather-day-card,
+:root[data-theme="light"] .weather-popover-refresh,
+:root[data-theme="light"] .weather-radar-placeholder,
+:root[data-theme="light"] .mapbox-weather-map-shell,
+:root[data-theme="light"] .mapbox-weather-map-empty {
+  border-color: rgba(24, 34, 48, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(231, 237, 243, 0.72)),
+    #f6f8fb;
+}
+
+:root[data-theme="light"] .weather-popover-refresh {
+  color: #526070;
+}
+
+:root[data-theme="light"] .weather-popover-refresh:hover:not(:disabled),
+:root[data-theme="light"] .weather-popover-refresh:focus-visible:not(:disabled) {
+  color: #17202b;
+  border-color: rgba(20, 120, 200, 0.28);
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .weather-day-temp small {
+  color: #7b8490;
+}
+
+:root[data-theme="light"] .weather-location-card {
+  color: #202833;
+  border-color: rgba(146, 113, 51, 0.24);
+  background: rgba(255, 248, 225, 0.72);
+}
+
+:root[data-theme="light"] .weather-location-card span,
+:root[data-theme="light"] .weather-location-card em {
+  color: #7b663e;
+}
+
+:root[data-theme="light"] .weather-location-card input {
+  color: #17202b;
+  border-color: rgba(24, 34, 48, 0.13);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-theme="light"] .weather-location-card button {
+  color: #251b06;
+  background: #f1c45f;
+}
+
+:root[data-theme="light"] .mapbox-weather-map-shell[data-clickable="true"]:hover,
+:root[data-theme="light"] .mapbox-weather-map-shell[data-clickable="true"]:focus-visible,
+:root[data-theme="light"] .mapbox-weather-map-empty[data-clickable="true"]:hover,
+:root[data-theme="light"] .mapbox-weather-map-empty[data-clickable="true"]:focus-visible {
+  border-color: rgba(20, 120, 200, 0.34);
+  box-shadow: 0 0 0 1px rgba(20, 120, 200, 0.1), 0 18px 36px rgba(29, 38, 51, 0.12);
+}
+
+:root[data-theme="light"] .weather-radar-page {
+  background:
+    linear-gradient(180deg, rgba(250, 252, 255, 0.98), rgba(233, 238, 244, 0.98)),
+    var(--chat-page-bg);
+}
+
+:root[data-theme="light"] .weather-radar-map-panel {
+  border-color: rgba(24, 34, 48, 0.12);
+  background:
+    radial-gradient(circle at 72% 16%, rgba(20, 120, 200, 0.14), transparent 30%),
+    linear-gradient(135deg, rgba(244, 248, 252, 0.98), rgba(230, 236, 243, 0.98));
+}
+
+:root[data-theme="light"] .weather-radar-frame-card,
+:root[data-theme="light"] .weather-radar-map-actions,
+:root[data-theme="light"] .weather-radar-layer-toggles,
+:root[data-theme="light"] .weather-radar-legend,
+:root[data-theme="light"] .weather-radar-status {
+  color: #202833;
+  border-color: rgba(24, 34, 48, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 18px 42px rgba(29, 38, 51, 0.16);
+}
+
+:root[data-theme="light"] .weather-radar-frame-card span,
+:root[data-theme="light"] .weather-radar-frame-card em,
+:root[data-theme="light"] .weather-radar-detail span,
+:root[data-theme="light"] .weather-radar-detail small,
+:root[data-theme="light"] .weather-radar-timeline,
+:root[data-theme="light"] .weather-radar-legend {
+  color: #617080;
+}
+
+:root[data-theme="light"] .weather-radar-frame-card strong,
+:root[data-theme="light"] .weather-radar-detail strong,
+:root[data-theme="light"] .weather-radar-alert strong,
+:root[data-theme="light"] .weather-radar-hourly strong {
+  color: #17202b;
+}
+
+:root[data-theme="light"] .weather-radar-toggle {
+  color: #4f5c6b;
+  border-color: rgba(24, 34, 48, 0.12);
+  background: rgba(247, 249, 252, 0.82);
+}
+
+:root[data-theme="light"] .weather-radar-toggle[data-active="true"] {
+  color: #0d3f67;
+  border-color: rgba(20, 120, 200, 0.34);
+  background: rgba(213, 235, 251, 0.92);
+}
+
+:root[data-theme="light"] .weather-radar-detail {
+  border-color: rgba(24, 34, 48, 0.12);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+:root[data-theme="light"] .weather-radar-alert,
+:root[data-theme="light"] .weather-radar-hourly {
+  border-color: rgba(24, 34, 48, 0.1);
+  background: rgba(246, 248, 251, 0.84);
+}
+
+:root[data-theme="light"] .weather-radar-alert span,
+:root[data-theme="light"] .weather-radar-hourly span {
+  color: #1478c8;
+}
+
+:root[data-theme="light"] .weather-radar-alert p,
+:root[data-theme="light"] .weather-radar-hourly p {
+  color: #526070;
+}
+
+:root[data-theme="light"] .weather-radar-hourly small {
+  color: #7d8590;
+}
+
+:root[data-theme="light"] .weather-radar-status[data-kind="error"] {
+  color: #7a241f;
+  border-color: rgba(201, 53, 43, 0.28);
+  background: rgba(255, 236, 233, 0.9);
+}
+
+:root[data-theme="light"] .weather-radar-setup {
+  color: #526070;
+  border-color: rgba(24, 34, 48, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+:root[data-theme="light"] .weather-radar-setup strong {
+  color: #17202b;
+}
+
+:root[data-theme="light"] .weather-radar-location-form input {
+  color: #17202b;
+  border-color: rgba(24, 34, 48, 0.13);
+  background: rgba(255, 255, 255, 0.88);
 }

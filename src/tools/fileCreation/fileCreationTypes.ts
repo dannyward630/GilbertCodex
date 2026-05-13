@@ -5,7 +5,6 @@ export type FileCreationToolName =
   | "create_files"
   | "create_html_file"
   | "create_markdown_file"
-  | "create_pdf_file"
   | "create_react_file"
   | "create_text_file";
 
@@ -13,7 +12,6 @@ export type FileCreationKind =
   | "code"
   | "html"
   | "markdown"
-  | "pdf"
   | "react"
   | "text";
 
@@ -36,6 +34,7 @@ export interface PreparedFileCreationWrite {
   overwrite: boolean;
   path: string;
   preview: string;
+  sourceContent?: string;
   title?: string;
 }
 
@@ -53,7 +52,6 @@ export const FILE_CREATION_TOOL_NAMES = new Set<FileCreationToolName>([
   "create_files",
   "create_html_file",
   "create_markdown_file",
-  "create_pdf_file",
   "create_react_file",
   "create_text_file",
 ]);

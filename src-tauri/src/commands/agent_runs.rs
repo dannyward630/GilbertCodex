@@ -1,6 +1,9 @@
 use crate::{
     commands::auth,
-    core::storage::{self, SYSTEM_NAMESPACE},
+    core::{
+        fs_utils::delete_legacy_file,
+        storage::{self, SYSTEM_NAMESPACE},
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -177,17 +180,4 @@ fn legacy_agent_runs_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn cleanup_legacy_agent_runs(app: &AppHandle) -> Result<(), String> {
     let path = legacy_agent_runs_path(app)?;
     delete_legacy_file(&path, "agent runs store")
-}
-
-fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(path).map_err(|error| {
-        format!(
-            "Could not remove the old {label} at {}: {error}",
-            path.to_string_lossy()
-        )
-    })
 }

@@ -115,7 +115,7 @@ export const PROMPT_CATALOG: PromptChunk[] = [
   {
     content: webSearchTool,
     id: "tool.web-search",
-    keywords: ["web_search", "duckduckgo", "web", "current facts", "official docs", "cite", "sources", "urls"],
+    keywords: ["web_search", "duckduckgo", "brave", "web", "current facts", "official docs", "cite", "sources", "urls"],
     kind: "tool",
     maxTokens: 300,
     priority: 76,

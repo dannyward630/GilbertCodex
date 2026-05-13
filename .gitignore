@@ -17,6 +17,8 @@ src-tauri/.tauri/
 
 # Claude / Cursor local agent settings (may contain machine-specific paths)
 .claude/
+.codex-logs/
+.codex-security-scans/
 
 # Local secrets
 .env
@@ -27,7 +29,13 @@ src-tauri/.tauri/
 *.p12
 *.pfx
 *.db
+*.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3-shm

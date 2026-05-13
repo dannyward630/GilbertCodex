@@ -37,7 +37,8 @@ export async function formatColorLookupResult(args: Record<string, string>) {
   const colorsByHex = createColorsByHexIndex(allNamedColors);
   const query = firstArg(args, ["color", "name", "query", "q", "hex", "value", "text"]) ?? "";
   const includeAll = booleanArg(args, ["all", "list_all", "list", "full"]) || isAllColorsQuery(query);
-  const maxResults = Math.min(Math.max(numberArg(args, ["max_results", "maxResults", "limit"], includeAll ? 500 : 12), 1), allNamedColors.length);
+  const requestedMaxResults = optionalNumberArg(args, ["max_results", "maxResults", "limit"]);
+  const maxResults = requestedMaxResults === undefined ? allNamedColors.length : Math.min(Math.max(requestedMaxResults, 1), allNamedColors.length);
   const lines = [
     "COLOR TOOL RESULTS - named color database",
     `Database: ${allNamedColors.length} named colors (${CSS_NAMED_COLORS.length} CSS standard, ${extendedColors.length} extended package entries) plus transparent/currentColor keywords.`,
@@ -51,7 +52,7 @@ export async function formatColorLookupResult(args: Record<string, string>) {
     return [
       ...lines,
       "",
-      `Named colors listed: ${listedColors.length} of ${allNamedColors.length}. Pass a higher max_results to return more names, up to the full database count.`,
+      `Named colors listed: ${listedColors.length} of ${allNamedColors.length}.`,
       ...listedColors.map(formatColorListLine),
       "",
       "Special CSS keywords:",
@@ -148,9 +149,8 @@ function formatColorListLine(color: CssNamedColor) {
 
 function formatAliasLine(color: CssNamedColor, colorsByHex: Map<string, CssNamedColor[]>) {
   const aliases = colorsByHex.get(color.hex)?.map((item) => item.name).filter((name) => name !== color.name) ?? [];
-  const visibleAliases = aliases.slice(0, 32);
   return aliases.length > 0
-    ? `Aliases with the same sRGB value: ${visibleAliases.join(", ")}${aliases.length > visibleAliases.length ? `, and ${aliases.length - visibleAliases.length} more` : ""}`
+    ? `Aliases with the same sRGB value: ${aliases.join(", ")}`
     : "Aliases with the same sRGB value: none";
 }
 
@@ -343,14 +343,18 @@ function firstArg(args: Record<string, string>, names: string[]) {
 }
 
 function numberArg(args: Record<string, string>, names: string[], fallback: number) {
+  return optionalNumberArg(args, names) ?? fallback;
+}
+
+function optionalNumberArg(args: Record<string, string>, names: string[]) {
   const rawValue = firstArg(args, names);
 
   if (rawValue === undefined || rawValue === "") {
-    return fallback;
+    return undefined;
   }
 
   const parsed = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function booleanArg(args: Record<string, string>, names: string[]) {

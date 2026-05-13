@@ -16,7 +16,7 @@ This folder contains a lightweight promotional scene for sharing Gilbert Codex a
 Start the local app first:
 
 ```powershell
-npm.cmd run dev -- --host 127.0.0.1 --port 1420
+npm.cmd run dev -- --host localhost --port 1420
 ```
 
 Then run:

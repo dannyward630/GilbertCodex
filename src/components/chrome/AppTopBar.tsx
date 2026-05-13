@@ -4,16 +4,21 @@ import { ArrowLeft, ArrowRight, Check, PanelLeft } from "lucide-react";
 import { closeWindow, maximizeWindow, minimizeWindow, startWindowDrag } from "../../app/windowClient";
 import { IconButton } from "../common/IconButton";
 import { AppUpdateIndicator, useAppUpdateController } from "./AppUpdateIndicator";
+import { WeatherTopBarIndicator } from "./WeatherTopBarIndicator";
 import { WindowControls } from "./WindowControls";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import type { AppInfo } from "../../types/app";
 import type { PrimaryRoute } from "../../types/navigation";
+import type { AppearanceMode } from "../../types/settings";
 
 interface AppTopBarProps {
   activeRoute: PrimaryRoute;
   appInfo: AppInfo;
+  appearanceMode: AppearanceMode;
   desktopRuntime: boolean;
   onNewChat: () => void;
   onOpenSearch: () => void;
+  onAppearanceModeChange: (mode: AppearanceMode) => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onShowAbout: () => void;
   onToggleSidebar: () => void;
@@ -91,9 +96,11 @@ async function pasteIntoActiveElement() {
 export function AppTopBar({
   activeRoute,
   appInfo,
+  appearanceMode,
   desktopRuntime,
   onNewChat,
   onOpenSearch,
+  onAppearanceModeChange,
   onRouteChange,
   onShowAbout,
   onToggleSidebar,
@@ -125,8 +132,13 @@ export function AppTopBar({
         { label: "Terminal", shortcut: "Ctrl+`", checked: terminalOpen, onSelect: onToggleTerminal },
         { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onSelect: () => onRouteChange("chat") },
         { label: "Toolbox", checked: activeRoute === "toolbox", onSelect: () => onRouteChange("toolbox") },
+        { label: "MCP", checked: activeRoute === "mcp", onSelect: () => onRouteChange("mcp") },
         { label: "Workflows", checked: activeRoute === "workflows", onSelect: () => onRouteChange("workflows") },
+        { label: "Radar", checked: activeRoute === "radar", onSelect: () => onRouteChange("radar") },
         { label: "Settings", checked: activeRoute === "settings", onSelect: () => onRouteChange("settings") },
+        { label: "System theme", checked: appearanceMode === "system", separatorBefore: true, onSelect: () => onAppearanceModeChange("system") },
+        { label: "Dark theme", checked: appearanceMode === "dark", onSelect: () => onAppearanceModeChange("dark") },
+        { label: "Light theme", checked: appearanceMode === "light", onSelect: () => onAppearanceModeChange("light") },
       ],
       window: [
         { label: "Minimize", onSelect: minimizeWindow },
@@ -146,7 +158,9 @@ export function AppTopBar({
     [
       activeRoute,
       appInfo,
+      appearanceMode,
       desktopRuntime,
+      onAppearanceModeChange,
       onNewChat,
       onOpenSearch,
       onRouteChange,
@@ -160,30 +174,12 @@ export function AppTopBar({
     ],
   );
 
-  useEffect(() => {
-    if (!openMenu) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (!topbarRef.current?.contains(event.target as Node)) {
-        setOpenMenu(null);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpenMenu(null);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [openMenu]);
+  useDismissableLayer({
+    active: openMenu !== null,
+    keyboardTarget: "window",
+    onDismiss: () => setOpenMenu(null),
+    refs: [topbarRef],
+  });
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -317,6 +313,7 @@ export function AppTopBar({
         <img className="topbar-logo" src="/gilbert-codex-logo.svg" alt="" aria-hidden="true" draggable={false} />
         <span>{appInfo.name}</span>
       </div>
+      <WeatherTopBarIndicator onOpenRadar={() => onRouteChange("radar")} />
       <div className="topbar-right" data-topbar-interactive="true">
         <AppUpdateIndicator controller={updateController} />
         <WindowControls />

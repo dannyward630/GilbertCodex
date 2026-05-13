@@ -18,7 +18,7 @@ I built an open-source desktop coding agent with Tauri, React, and Rust. Looking
 Hey everyone, I have been building **Gilbert Codex**, an open-source desktop workspace for coding with AI agents.
 
 Repo: https://github.com/UrbanWafflezz/GilbertCodex  
-Windows alpha release: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.2.3
+Windows alpha release: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.0
 
 The short version: it is a local-first desktop app built with **Tauri 2, React, TypeScript, and Rust**. The goal is to give agent coding work a focused GUI instead of scattering everything across a browser tab, terminal window, notes, and Git client.
 
@@ -57,7 +57,7 @@ Thanks for taking a look.
 I have been building **Gilbert Codex**, an MIT-licensed desktop coding agent workspace built with Tauri 2, React, TypeScript, and Rust.
 
 Repo: https://github.com/UrbanWafflezz/GilbertCodex  
-Windows alpha: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.2.3
+Windows alpha: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.0
 
 It has a chat workspace, local projects, multi-provider model routing, planning/thinking controls, DuckDuckGo source cards, local Git/GitHub tools, terminal sessions, browser preview, tool toggles, and SQL-backed local state.
 

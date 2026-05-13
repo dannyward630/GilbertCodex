@@ -2,6 +2,45 @@ import { isImageAttachment } from "../lib/chatAttachments";
 import { isOpenRouterFreeModel, OPENROUTER_FREE_AUTO_MODEL, OPENROUTER_SPEED_OPTIMIZED_FREE_MODELS } from "../lib/models";
 import type { ChatMessage } from "../types/chat";
 
+/**
+ * Models that we have verified support native function calling reliably even
+ * when routed through OpenRouter. The list is conservative — when a free
+ * model isn't here, the model client falls back to the XML-prompt path.
+ *
+ * Source: OpenRouter's `supported_parameters` includes "tools" for native
+ * function calling; the snapshot below was hand-curated from that field for
+ * the models the runtime exposes by default.
+ */
+const OPENROUTER_NATIVE_TOOL_MODEL_PREFIXES: string[] = [
+  // Anthropic family (paid)
+  "anthropic/claude-",
+  // OpenAI family (paid)
+  "openai/gpt-",
+  "openai/o1",
+  "openai/o3",
+  "openai/o4",
+  // Google paid
+  "google/gemini-",
+  // xAI paid
+  "x-ai/grok-",
+  // Mistral paid
+  "mistralai/mistral-large",
+  "mistralai/mistral-medium",
+  // Cohere paid
+  "cohere/command-",
+];
+
+export function openRouterModelHasReliableNativeTools(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (isOpenRouterFreeModel(normalized)) {
+    return false;
+  }
+  return OPENROUTER_NATIVE_TOOL_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
 type OpenRouterProviderSort =
   | "latency"
   | "price"

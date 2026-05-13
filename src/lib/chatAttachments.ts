@@ -1,12 +1,21 @@
 import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from "../types/chat";
 import { createId } from "./chatUtils";
 
-const RESIZED_IMAGE_MAX_EDGE = 1920;
+const RESIZED_IMAGE_MAX_EDGE = Number.POSITIVE_INFINITY;
 const RESIZED_IMAGE_QUALITY = 0.88;
-const RESIZE_IMAGE_SIZE_THRESHOLD = 1_900_000;
-const FILE_READ_TIMEOUT_MS = 12_000;
-const IMAGE_METADATA_TIMEOUT_MS = 1_200;
-const IMAGE_RESIZE_TIMEOUT_MS = 3_000;
+const RESIZE_IMAGE_SIZE_THRESHOLD = Number.POSITIVE_INFINITY;
+const FILE_READ_TIMEOUT_MS = 120_000;
+const IMAGE_METADATA_TIMEOUT_MS = 10_000;
+const IMAGE_RESIZE_TIMEOUT_MS = 60_000;
+const SAFE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
 
 export function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
   return attachment.kind === "image";
@@ -41,9 +50,25 @@ export async function createChatAttachmentFromFile(file: File): Promise<ChatAtta
   const now = new Date().toISOString();
   const id = createId("attachment");
   const name = file.name || "Attachment";
-  const mimeType = file.type || "application/octet-stream";
+  const mimeType = normalizeAttachmentMimeType(file.type, name);
+  const isPdf = mimeType === "application/pdf" || name.toLowerCase().endsWith(".pdf");
+  const isSvg = mimeType === "image/svg+xml" || name.toLowerCase().endsWith(".svg");
 
-  if (!mimeType.startsWith("image/")) {
+  if (!mimeType.startsWith("image/") || isSvg || !SAFE_IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) {
+    if (isPdf) {
+      const dataUrl = await withTimeout(readFileAsDataUrl(file), FILE_READ_TIMEOUT_MS, "Could not read this PDF fast enough.");
+
+      return {
+        createdAt: now,
+        dataUrl,
+        id,
+        kind: "file",
+        mimeType: "application/pdf",
+        name,
+        size: file.size,
+      } satisfies ChatFileAttachment;
+    }
+
     return {
       createdAt: now,
       id,
@@ -57,7 +82,7 @@ export async function createChatAttachmentFromFile(file: File): Promise<ChatAtta
   const originalDataUrl = await withTimeout(readFileAsDataUrl(file), FILE_READ_TIMEOUT_MS, "Could not read this image fast enough.");
   const imageSize = await withTimeout(getImageSize(originalDataUrl), IMAGE_METADATA_TIMEOUT_MS, {});
   const shouldKeepOriginal =
-    file.size <= RESIZE_IMAGE_SIZE_THRESHOLD || mimeType === "image/gif" || mimeType === "image/svg+xml" || !imageSize.width || !imageSize.height;
+    file.size <= RESIZE_IMAGE_SIZE_THRESHOLD || mimeType === "image/gif" || !imageSize.width || !imageSize.height;
   const preparedImage = shouldKeepOriginal
     ? { dataUrl: originalDataUrl, mimeType }
     : await withTimeout(resizeImageDataUrl(originalDataUrl, imageSize), IMAGE_RESIZE_TIMEOUT_MS, {
@@ -76,6 +101,36 @@ export async function createChatAttachmentFromFile(file: File): Promise<ChatAtta
     size: file.size,
     width: imageSize.width,
   } satisfies ChatImageAttachment;
+}
+
+function normalizeAttachmentMimeType(type: string, name: string) {
+  const normalizedType = type.trim().toLowerCase();
+  if (normalizedType) {
+    return normalizedType;
+  }
+
+  const extension = name.toLowerCase().split(".").pop();
+  switch (extension) {
+    case "avif":
+      return "image/avif";
+    case "bmp":
+      return "image/bmp";
+    case "gif":
+      return "image/gif";
+    case "jpeg":
+    case "jpg":
+      return "image/jpeg";
+    case "pdf":
+      return "application/pdf";
+    case "png":
+      return "image/png";
+    case "svg":
+      return "image/svg+xml";
+    case "webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function readFileAsDataUrl(file: File) {

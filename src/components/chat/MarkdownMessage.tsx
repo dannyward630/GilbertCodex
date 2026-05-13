@@ -72,30 +72,38 @@ function CodeBlock({ className, code, language }: CodeBlockProps) {
 
 const markdownComponents: Components = {
   a({ children, href, ...props }) {
+    const safeHref = sanitizeMarkdownHref(href);
+
     function handleClick(event: MouseEvent<HTMLAnchorElement>) {
-      if (!href || !isExternalUserLink(href)) {
+      if (!safeHref || !isExternalUserLink(safeHref)) {
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
-      void openExternalUrl(href).catch((error) => {
+      void openExternalUrl(safeHref).catch((error) => {
         console.warn("Could not open external link", error);
       });
     }
 
+    if (!safeHref) {
+      return <span>{children}</span>;
+    }
+
     return (
-      <a {...props} href={href} onClick={handleClick} rel="noreferrer" target="_blank">
+      <a {...props} href={safeHref} onClick={handleClick} rel="noreferrer" target="_blank">
         {children}
       </a>
     );
   },
   img({ alt, src }) {
-    if (!src) {
+    const safeSrc = sanitizeMarkdownImageSrc(src);
+
+    if (!safeSrc) {
       return null;
     }
 
-    return <OpenableImage alt={alt || "Assistant image"} className="markdown-image-button" src={src} />;
+    return <OpenableImage alt={alt || "Assistant image"} className="markdown-image-button" src={safeSrc} />;
   },
   table({ children }) {
     return (
@@ -128,6 +136,45 @@ const markdownComponents: Components = {
 
 function isExternalUserLink(href: string) {
   return /^(?:https?:|mailto:)/i.test(href.trim());
+}
+
+function sanitizeMarkdownHref(href?: string) {
+  const value = href?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.startsWith("#")) {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:") {
+      return url.href;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function sanitizeMarkdownImageSrc(src?: string) {
+  const value = src?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.startsWith("blob:") || value.startsWith("asset:")) {
+    return value;
+  }
+
+  if (/^data:image\/(?:avif|bmp|gif|jpe?g|png|webp);base64,/i.test(value)) {
+    return value;
+  }
+
+  return undefined;
 }
 
 export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {

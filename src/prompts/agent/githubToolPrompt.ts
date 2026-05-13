@@ -12,6 +12,7 @@ export interface GithubPromptAnalysis {
   explicitLocalContext: boolean;
   intent: GithubPromptIntent;
   isGithubRelated: boolean;
+  localGitIntent: boolean;
   ownerRepoHint?: string;
   repoHint?: string;
   shouldSkipLocalWorkspaceContext: boolean;
@@ -66,12 +67,20 @@ const REPO_HINT_STOP_WORDS = new Set([
 
 /** Classifies whether a user request should route through GitHub API tools. */
 export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
-  const normalized = prompt.toLowerCase();
   const ownerRepoHint = extractOwnerRepoHint(prompt);
   const repoHint = ownerRepoHint ?? extractNamedRepoHint(prompt);
+  const asksLocalGitInit = /\bgit\b[\s\S]{0,40}\b(init|initialize|initialise|initialized|initialised)\b/i.test(prompt)
+    || /\b(init|initialize|initialise|initialized|initialised)\b[\s\S]{0,40}\bgit\b/i.test(prompt);
+  const asksLocalGitState =
+    /\b(uncommitted|uncommited|unstaged|staged|dirty|working\s+tree|worktree|untracked|tracked|modified|deleted|added|local\s+changes?|changed\s+files?|diff|patch|before\s+(?:i\s+)?push|next\s+(?:push|update|commit|release)|would\s+(?:be\s+)?(?:push|commit)|will\s+(?:be\s+)?(?:push|commit))\b/i.test(prompt)
+    || /\b(push|commit|stage)\s+(this|these|my changes|the changes|everything|all)\b/i.test(prompt)
+    || /\b(this|our|current|selected)\s+(?:local\s+)?(?:git|repo|repository|workspace|project|clone)\b/i.test(prompt)
+    || asksLocalGitInit;
   const explicitLocalContext = /\b(local|workspace|folder|computer|pc|cloned?|on disk|this app|this project|current project|current workspace|files? here)\b/i.test(prompt)
-    || /\b(push|commit|stage)\s+(this|these|my changes|the changes)\b/i.test(prompt);
+    || /\b(push|commit|stage)\s+(this|these|my changes|the changes)\b/i.test(prompt)
+    || asksLocalGitState;
   const mentionsGithub = isGithubSourceControlPrompt(prompt);
+  const localGitIntent = asksLocalGitState && !/\b(github|remote\s+repo|remote\s+repository|pull\s+request|prs?\b|release|workflow|actions?|oauth|token)\b/i.test(prompt);
   const asksInventory = /\b(what|which|show|list|see|find|all|available|accessible|access|have|mine|my)\b/i.test(prompt)
     && /\b(repos?|repositories)\b/i.test(prompt);
   const asksStatus = /\b(status|connected|connection|logged\s+in|signed\s+in|scopes?|permissions?|access)\b/i.test(prompt)
@@ -107,9 +116,10 @@ export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
     explicitLocalContext,
     intent,
     isGithubRelated: mentionsGithub,
+    localGitIntent,
     ownerRepoHint,
     repoHint,
-    shouldSkipLocalWorkspaceContext: mentionsGithub && !explicitLocalContext,
+    shouldSkipLocalWorkspaceContext: mentionsGithub && !explicitLocalContext && !localGitIntent,
   };
 }
 
@@ -117,11 +127,16 @@ export function analyzeGithubPrompt(prompt: string): GithubPromptAnalysis {
 export function isGithubSourceControlPrompt(prompt: string) {
   const normalized = prompt.toLowerCase();
 
+  if (/\b(uncommitted|uncommited|unstaged|staged|dirty|working\s+tree|worktree|untracked|changed\s+files?|before\s+(?:i\s+)?push|next\s+(?:push|update|commit|release))\b/.test(normalized)
+    && !/\b(github|remote|pull\s+request|prs?\b|release|workflow|actions?|oauth|token)\b/.test(normalized)) {
+    return false;
+  }
+
   if (/\bgithub\b|\bsource\s+control\b|\bpull\s+request\b|\bprs?\b|\bgithub\s+actions?\b/.test(normalized)) {
     return true;
   }
 
-  if (/\bgit\b/.test(normalized) && /\b(repos?|repositories|branches?|commits?|push|pull|clone|remote|status|oauth|token|releases?|workflows?|actions?)\b/.test(normalized)) {
+  if (/\bgit\b/.test(normalized) && /\b(repos?|repositories|remote|oauth|token|releases?|workflows?|actions?)\b/.test(normalized)) {
     return true;
   }
 
@@ -129,7 +144,7 @@ export function isGithubSourceControlPrompt(prompt: string) {
     return true;
   }
 
-  return /\b(branches?|commits?|push|pull|merge|releases?|workflows?|actions?)\b/.test(normalized) && /\b(repos?|repositories|github|git|remote)\b/.test(normalized);
+  return /\b(branches?|commits?|push|pull|merge|releases?|workflows?|actions?)\b/.test(normalized) && /\b(repos?|repositories|github|remote)\b/.test(normalized);
 }
 
 /** Builds model-facing instructions for GitHub tool selection and answer shape. */
@@ -141,15 +156,24 @@ export function createGithubRuntimeToolInstructions(prompt: string) {
       ? `Current prompt repository hint: \`${analysis.repoHint}\` (owner can be inferred by the GitHub tool if needed).`
       : "";
 
+  if (!analysis.isGithubRelated || analysis.localGitIntent) {
+    return [
+      "GitHub API routing: the current prompt is not a remote GitHub API request. Use local git_* tools for the selected workspace clone when the user asks about Git status, branches, commits, diffs, uncommitted/staged/unstaged/untracked files, what the next commit/push/update will contain, or local push/commit preparation.",
+      "GitHub API tools cannot see unpushed local working-tree changes. For local source-control questions, call git_status first, then git_diff and git_log when the user asks for the actual changes or history.",
+    ].join("\n");
+  }
+
   return [
-    "GitHub source-control tools use the account connected in Settings through GitHub's API. Browser login requests full GitHub OAuth access. Local Git, Git Bash, and a local clone are not required for remote repository listing, inspection, branch creation, commits, or pull requests.",
+    "GitHub source-control tools use the account connected in Settings through GitHub's API. Use them for remote repository listing, inspection, branch creation, API commits, releases, workflows, and pull requests.",
+    "GitHub API tools cannot see local uncommitted workspace changes. If the request shifts to the selected local clone, use local git_* tools instead.",
     "Do not answer GitHub requests from guessed, cached, or hardcoded repository lists. Use github_* tool results for GitHub facts.",
     "GitHub routing: broad questions like 'what repos do I have' should call github_list_repositories. Repo-specific questions should not list every repo just because the user says 'my GitHub repo'.",
     "For a named repository, call github_get_repository, github_list_branches, github_list_tree, github_read_file, or github_search_code with repository=owner/repo when known. If only the repo name is known, pass repo=<name> so the GitHub tool can infer the owner from the connected account.",
     "For codebase deep dives, first call github_list_tree with recursive=true and a useful limit, then read concrete evidence with github_read_file such as README files, package manifests, config files, and entry points. Use github_search_code when the tree does not reveal enough. Synthesize only after those tool results arrive.",
     "For GitHub mutations, create an isolated branch with github_create_branch when appropriate, commit through github_commit_files, and open draft PRs with github_create_pull_request. Ask for missing repo, branch, or file details instead of guessing destructive changes.",
+    "For local Git initialization, use the local git_init tool with cwd set to the workspace folder. GitHub API tools cannot initialize a local folder.",
     "For GitHub releases, use github_generate_release_notes before github_create_release when the user wants release notes. github_create_release defaults to a draft release unless draft=false is explicitly requested. For GitHub Actions, use github_list_workflows, github_dispatch_workflow, and github_list_workflow_runs.",
-    "Use local computer tools only when the user explicitly asks for local workspace files, a local clone, this app/current project, or after GitHub results show local evidence is needed.",
+    "Use local git_* tools when the user explicitly asks for local workspace files, a local clone, this app/current project, uncommitted changes, staged/unstaged files, dirty working tree state, or what a next commit/push will include.",
     "GitHub answer format: use normal Markdown bullets, numbered lists, headings, and links. Avoid Markdown pipe tables for repository inventories unless the user explicitly asks for a table.",
     hint,
     analysis.isGithubRelated ? `Current GitHub intent: ${analysis.intent}.` : "",
@@ -172,6 +196,7 @@ export function createGithubRoutingContext(input: GithubRoutingContextInput) {
     `Intent: ${analysis.intent}`,
     hint,
     "Use github_* tools for this GitHub/source-control request before local computer tools.",
+    "Exception: if the request is to initialize Git in a local folder, use git_init with the selected workspace cwd before remote GitHub tools.",
     "If a repository is named, inspect that repository directly. Do not answer by listing every connected repository unless the user asks for a repo inventory.",
     "For a codebase/app deep dive, gather remote evidence with github_list_tree and github_read_file before summarizing.",
     input.connected

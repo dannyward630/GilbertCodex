@@ -1,6 +1,7 @@
 import { ChevronRight, MoreHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 
 export type SidebarItemActivity = "queued" | "waiting" | "working";
 
@@ -53,30 +54,11 @@ export function SidebarSection({
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const sectionTitleId = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-section`;
 
-  useEffect(() => {
-    if (!openMenuId) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (!sectionRef.current?.contains(event.target as Node)) {
-        setOpenMenuId(null);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpenMenuId(null);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [openMenuId]);
+  useDismissableLayer({
+    active: openMenuId !== null,
+    onDismiss: () => setOpenMenuId(null),
+    refs: [sectionRef],
+  });
 
   function renderItem(item: SidebarItem, depth = 0) {
     const Icon = item.icon;
@@ -85,11 +67,12 @@ export function SidebarSection({
     const hasChildren = childItems.length > 0;
     const hasMenu = Boolean(item.menuItems?.length);
     const hasQuickAction = Boolean(QuickActionIcon && item.onQuickAction);
+    const menuOpen = openMenuId === item.id;
     const activityLabel = item.activityLabel ?? (item.activity ? formatActivityLabel(item.activity) : undefined);
 
     return (
       <div key={item.id} className="sidebar-list-group" data-depth={depth}>
-        <div className="sidebar-list-row" data-active={item.active} data-activity={item.activity} data-depth={depth} data-has-menu={hasMenu}>
+        <div className="sidebar-list-row" data-active={item.active} data-activity={item.activity} data-depth={depth} data-has-menu={hasMenu} data-menu-open={menuOpen}>
           <button
             className="sidebar-list-item"
             type="button"
@@ -131,7 +114,7 @@ export function SidebarSection({
                     type="button"
                     aria-label={`${item.label} options`}
                     aria-haspopup="menu"
-                    aria-expanded={openMenuId === item.id}
+                    aria-expanded={menuOpen}
                     onClick={(event) => {
                       event.stopPropagation();
                       setOpenMenuId((currentId) => (currentId === item.id ? null : item.id));
@@ -139,8 +122,14 @@ export function SidebarSection({
                   >
                     <MoreHorizontal size={15} aria-hidden="true" />
                   </button>
-                  {openMenuId === item.id ? (
-                    <div className="sidebar-item-menu" role="menu" aria-label={`${item.label} options`}>
+                  {menuOpen ? (
+                    <div
+                      className="sidebar-item-menu"
+                      role="menu"
+                      aria-label={`${item.label} options`}
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
                       {item.menuItems?.map((menuItem) => {
                         const MenuIcon = menuItem.icon;
 
@@ -150,7 +139,8 @@ export function SidebarSection({
                             type="button"
                             role="menuitem"
                             data-danger={menuItem.danger}
-                            onClick={() => {
+                            onClick={(event) => {
+                              event.stopPropagation();
                               setOpenMenuId(null);
                               menuItem.onSelect();
                             }}

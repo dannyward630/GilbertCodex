@@ -1,8 +1,8 @@
 # Discord Integration Setup
 
-This guide explains how to prepare Discord so users can chat with Gilbert Codex from Discord, and how to send GitHub repository events into a Discord channel.
+This guide explains how to prepare Discord so users can chat with Gilbert Codex from Discord.
 
-Last verified: May 10, 2026.
+Last verified: May 12, 2026.
 
 Platform note: this bridge is verified on Windows. macOS and Linux have partial source support and need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -28,7 +28,7 @@ A plain Discord incoming webhook cannot read user messages; it only posts messag
 
 - Slash chat: best default. Discord sends interactions to a public HTTPS endpoint, and the bridge forwards the request to Gilbert.
 - Bot gateway: use for DMs, mentions, or normal channel-message chat. This requires a bot token and the right gateway intents.
-- Notify only: use an incoming webhook when Gilbert, GitHub, or another service only needs to post updates into Discord.
+- Notify only: use an incoming webhook when Gilbert or another app workflow only needs to post updates into Discord.
 
 ## Official Links
 
@@ -41,7 +41,6 @@ A plain Discord incoming webhook cannot read user messages; it only posts messag
 - Gateway and intents: https://docs.discord.com/developers/docs/topics/gateway
 - ngrok quickstart: https://ngrok.com/docs/getting-started
 - ngrok Agent API: https://ngrok.com/docs/agent/api/
-- GitHub webhook setup: https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks
 
 ## Prerequisites
 
@@ -50,9 +49,8 @@ A plain Discord incoming webhook cannot read user messages; it only posts messag
 - A channel for Gilbert chat or notifications.
 - For Slash chat, ngrok installed and authenticated, or another public HTTPS tunnel to the local receiver.
 - For Bot gateway, a running bridge process that can connect to Discord Gateway with a bot token.
-- For GitHub-to-Discord notifications, admin access to the GitHub repository.
 
-Do not commit bot tokens, webhook URLs, GitHub webhook secrets, or bridge environment files.
+Do not commit bot tokens, webhook URLs, ngrok auth tokens, or bridge environment files.
 
 ## Path A: Slash Chat With Discord Interactions
 
@@ -92,7 +90,7 @@ Use this path when users should type a slash command and get a response from Gil
    - Select Slash chat.
    - Keep Tunnel provider set to `ngrok`.
    - Keep Local port on the app default unless that port is already in use on your machine (change it in Settings > Discord if it conflicts).
-   - Keep ngrok executable set to `ngrok`, or paste the full path to the ngrok executable.
+   - Keep ngrok executable set to `ngrok`, paste the full path to the ngrok executable, or point it at a folder such as `.tools/ngrok`.
    - Set Response style to Channel or Ephemeral. Thread is reserved for a later richer Discord workflow.
    - Add Allowed guild IDs and Allowed channel IDs if you want to restrict where the bridge responds.
 
@@ -250,57 +248,13 @@ Use this path when Gilbert or another system only needs to post into Discord.
 
 8. Treat this URL like a password. Anyone with the URL can post into that Discord channel.
 
-## GitHub Events Into Discord
-
-Discord supports a GitHub-compatible webhook endpoint by appending `/github` to a Discord incoming webhook URL.
-
-1. Create a Discord incoming webhook using Path C.
-
-2. In Gilbert Codex Settings > Discord, paste the incoming webhook URL.
-
-3. The app will generate a GitHub payload URL like:
-
-   ```text
-   https://discord.com/api/webhooks/.../.../github
-   ```
-
-4. In Gilbert Codex Settings > Discord:
-   - Set Repository to `owner/repo`.
-   - Generate or paste a GitHub webhook secret.
-   - Select the events to send to Discord.
-   - Copy the GitHub payload URL.
-
-5. On GitHub, open the repository.
-
-6. Go to Settings > Webhooks > Add webhook.
-
-7. Paste the generated Discord GitHub payload URL into Payload URL.
-
-8. Set Content type to `application/json`.
-
-9. Paste the GitHub webhook secret.
-
-10. Select events. Recommended first set:
-    - Push
-    - Pull requests
-    - Issues
-    - Issue comments
-    - Releases
-
-11. Keep Active checked.
-
-12. Click Add webhook.
-
-13. GitHub sends a ping delivery after the webhook is created. Check Recent Deliveries on the webhook page if Discord does not receive the message.
-
 ## Recommended Production Checklist
 
 - Use Slash chat unless you specifically need gateway message reading.
-- Keep Discord bot token, incoming webhook URL, and GitHub webhook secret out of Git.
+- Keep Discord bot token, incoming webhook URL, and ngrok auth token out of Git.
 - Restrict the bridge with allowed guild IDs and channel IDs.
 - Verify Discord signatures before handling interaction payloads.
 - Use short timeouts and clear error responses in the bridge runtime.
-- Keep GitHub webhooks subscribed only to events the Discord channel needs.
 - Rotate tokens and webhook URLs if they are pasted into an issue, screenshot, or log.
 
 ## Troubleshooting
@@ -308,11 +262,10 @@ Discord supports a GitHub-compatible webhook endpoint by appending `/github` to 
 | Problem | Likely Cause | Fix |
 | --- | --- | --- |
 | Discord rejects the Interactions Endpoint URL | Endpoint does not answer `PING`, uses HTTP, ngrok stopped, or signature verification failed | Start the bridge in Settings > Discord, use the generated `https://.../discord/interactions` URL, then save again |
-| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, or paste the full ngrok executable path |
+| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, not in a known local tools folder, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, paste the full ngrok executable path, or place it under `.tools/ngrok/` |
 | Slash command does not appear | Command was not registered or app was not installed in the server | Register a guild command for fast testing, then reinstall the app if needed |
 | Slash command shows loading forever | Gilbert was closed, busy, or could not send the final edit to Discord | Keep Gilbert open, wait for the current run to finish, and try again |
 | Gateway bot connects but cannot read messages | Missing or unapproved `MESSAGE_CONTENT` privileged intent | Use slash commands or enable/request the privileged intent |
-| GitHub events do not post to Discord | Payload URL is missing `/github`, wrong content type, or webhook disabled | Use the generated URL from Settings > Discord and set content type to `application/json` |
 | The bridge responds in the wrong channel | Missing allowlist or wrong response style | Set Allowed guild IDs and Allowed channel IDs in Settings > Discord |
 
 ## Current Implementation Notes
@@ -324,4 +277,4 @@ Discord supports a GitHub-compatible webhook endpoint by appending `/github` to 
 - Discord responses stream by repeatedly editing the original interaction response, with throttling to avoid noisy Discord updates.
 - Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass Toolbox or local computer access settings.
 - Bot gateway mode is still future runtime work.
-- Incoming Discord webhooks and GitHub-compatible Discord webhook URLs are still one-way notification paths.
+- Incoming Discord webhooks are still one-way notification paths.

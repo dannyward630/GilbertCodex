@@ -7,6 +7,8 @@ const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
 };
 export const AUTO_COMPACT_CONTEXT_THRESHOLD = 0.8;
 export const AUTO_COMPACT_CONTEXT_TARGET = 0.55;
+const MAX_TOOL_CONTEXT_SURFACE_OUTPUT_CHARS = 8_000_000;
+const MAX_TOOL_CONTEXT_SURFACE_INPUT_CHARS = 24_000;
 
 export interface ContextWindowUsage {
   availableTokens: number;
@@ -280,19 +282,25 @@ export function createMessageContextSurface(message: Pick<ChatMessage, "content"
   const sections: string[] = [];
 
   if (message.toolCalls?.length) {
+    let remainingToolOutputChars = MAX_TOOL_CONTEXT_SURFACE_OUTPUT_CHARS;
+
     sections.push(
       [
         "TOOL CALLS",
-        ...message.toolCalls.map((toolCall, index) =>
-          [
+        ...message.toolCalls.map((toolCall, index) => {
+          const outputLimit = Math.max(remainingToolOutputChars, 0);
+          const output = toolCall.output ? limitContextSurfaceValue(toolCall.output, outputLimit, "Tool output") : "";
+          remainingToolOutputChars -= Math.min(toolCall.output?.length ?? 0, outputLimit);
+
+          return [
             `${index + 1}. ${toolCall.label} [${toolCall.status}]`,
             toolCall.detail ? `detail: ${toolCall.detail}` : "",
-            toolCall.input ? `input:\n${limitContextSurfaceValue(toolCall.input, 3_000)}` : "",
-            toolCall.output ? `output:\n${limitContextSurfaceValue(toolCall.output, 8_000)}` : "",
+            toolCall.input ? `input:\n${limitContextSurfaceValue(toolCall.input, MAX_TOOL_CONTEXT_SURFACE_INPUT_CHARS, "Tool input")}` : "",
+            output ? `output:\n${output}` : "",
           ]
             .filter(Boolean)
-            .join("\n"),
-        ),
+            .join("\n");
+        }),
       ].join("\n\n"),
     );
   }
@@ -361,7 +369,9 @@ export function createMessageContextSurface(message: Pick<ChatMessage, "content"
     );
   }
 
-  return sections.length > 0 ? `[CONVERSATION CONTEXT SURFACE]\n${sections.join("\n\n")}` : "";
+  return sections.length > 0
+    ? `[CONVERSATION CONTEXT SURFACE]\nInternal evidence only. Never quote this surface or present it as visible tool activity; real tool activity must come from app tool-call records.\n\n${sections.join("\n\n")}`
+    : "";
 }
 
 function estimateMessageTokens(message: Pick<ChatMessage, "content"> & Partial<ChatMessage>) {
@@ -398,11 +408,10 @@ function isProtectedContextMessage(message: ChatMessage) {
   return (
     message.content.includes("AUTO COMPACTION CONTINUATION") ||
     message.content.includes("FINAL ANSWER REQUIRED") ||
-    message.content.includes("LOCAL COMPUTER FILE TOOL") ||
     message.content.includes("LOCAL COMPUTER TOOL RESULTS") ||
     message.content.includes("AGENT TOOL RESULTS") ||
     message.content.includes("WEB TOOL RESULTS") ||
-    message.content.includes("WEB SEARCH CONTEXT - DuckDuckGo") ||
+    message.content.includes("WEB SEARCH CONTEXT - ") ||
     message.content.includes("LOCAL TOOL BUDGET REACHED")
   );
 }
@@ -423,7 +432,7 @@ function createCompactedContextMessage(messages: ChatMessage[], beforeUsage: Con
       "AUTO COMPACTED CONTEXT",
       `Older conversation turns were automatically compacted because this chat crossed ${Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100)}% of the selected model context window.`,
       `Compacted messages: ${messages.length}`,
-      `Before compaction estimate: ${formatTokenCount(beforeUsage.totalTokens)} / ${formatTokenCount(beforeUsage.contextWindowTokens)} tokens`,
+      `Before compaction estimate: ${formatTokenCount(beforeUsage.totalTokens)} / ${formatTokenCount(beforeUsage.contextWindowTokens)} tokens. The response cap is tracked separately.`,
       "Use this summary as continuity for older context. Recent turns, active tool requests, file edits, tool results, web results, and the current user request are preserved after this summary so the response can continue without restarting.",
       "",
       summary,
@@ -468,12 +477,16 @@ function getPlanningRequestsForContext(message: Pick<ChatMessage, "content"> & P
   return requests;
 }
 
-function limitContextSurfaceValue(value: string, limit: number) {
+function limitContextSurfaceValue(value: string, limit: number, label = "Context surface") {
+  if (limit <= 0) {
+    return `[${label} omitted because the persisted context surface reached its recovery budget]`;
+  }
+
   if (value.length <= limit) {
     return value;
   }
 
-  return `${value.slice(0, limit)}\n[Context surface truncated]`;
+  return `${value.slice(0, limit)}\n[${label} truncated for provider context recovery]`;
 }
 
 function normalizeCompactionText(content: string) {

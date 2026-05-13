@@ -2,16 +2,20 @@ import type { LucideIcon } from "lucide-react";
 import type { AppInfo } from "../../types/app";
 import type { DiscordBridgeSettings } from "../../types/discord";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ProjectSummary } from "../../types/project";
 import type { AppearanceMode, ProviderSettings } from "../../types/settings";
 
 export type SettingsSectionId =
   | "appearance"
+  | "braveSearch"
   | "configuration"
   | "database"
   | "discord"
   | "general"
   | "github"
+  | "mapbox"
   | "model"
+  | "pdf"
   | "personalization"
   | "providers";
 
@@ -32,6 +36,7 @@ export interface SettingsPageProps {
   onDiscordBridgeChange: (settings: DiscordBridgeSettings) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
+  projects: ProjectSummary[];
   settings: ProviderSettings;
 }
 

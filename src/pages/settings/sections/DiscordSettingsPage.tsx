@@ -1,4 +1,4 @@
-import { Bot, Copy, ExternalLink, Eye, EyeOff, Github, KeyRound, MessageCircle, Network, Play, RefreshCw, ShieldCheck, Square, Webhook } from "lucide-react";
+import { BookOpen, Bot, Copy, ExternalLink, Eye, EyeOff, MessageCircle, Network, Play, RefreshCw, ShieldCheck, Square, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   getDiscordBridgeStatus,
@@ -12,18 +12,28 @@ import {
 import {
   DISCORD_BRIDGE_MODE_LABELS,
   DISCORD_BRIDGE_RESPONSE_STYLE_LABELS,
-  DISCORD_GITHUB_WEBHOOK_EVENTS,
   DISCORD_TUNNEL_PROVIDER_LABELS,
   type DiscordBridgeMode,
   type DiscordBridgeResponseStyle,
   type DiscordBridgeSettings,
-  type DiscordGithubEvent,
   type DiscordTunnelProvider,
 } from "../../../types/discord";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
 
 const DISCORD_CHAT_COMMANDS = ["gilbert", "gilbertnewchat"] as const;
+
+const DISCORD_DOC_LINKS = [
+  { href: "https://discord.com/developers/applications", label: "Developer Portal" },
+  { href: "https://docs.discord.com/developers/interactions", label: "Interactions overview" },
+  { href: "https://docs.discord.com/developers/interactions/receiving-and-responding", label: "Receiving interactions" },
+  { href: "https://docs.discord.com/developers/interactions/application-commands", label: "Application commands" },
+  { href: "https://docs.discord.com/developers/resources/application", label: "Install links" },
+  { href: "https://docs.discord.com/developers/events/gateway", label: "Gateway intents" },
+  { href: "https://docs.discord.com/developers/resources/webhook", label: "Incoming webhooks" },
+  { href: "https://ngrok.com/docs/getting-started", label: "ngrok quickstart" },
+  { href: "https://github.com/UrbanWafflezz/GilbertCodex/blob/main/docs/discord/README.md", label: "Repo setup guide" },
+] as const;
 
 interface DiscordSettingsPageProps {
   settings: DiscordBridgeSettings;
@@ -36,8 +46,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
   const [runtimeStatus, setRuntimeStatus] = useState<SettingsStatusMessage | null>(null);
   const [showSecrets, setShowSecrets] = useState(false);
   const [copyStatus, setCopyStatus] = useState<SettingsStatusMessage | null>(null);
-  const githubDiscordPayloadUrl = formatDiscordGithubPayloadUrl(settings.incomingWebhookUrl);
-  const readiness = createReadiness(settings, githubDiscordPayloadUrl);
+  const readiness = createReadiness(settings);
   const activeModeReady = readiness.find((item) => item.mode === settings.mode)?.ready ?? false;
   const desktopBridgeAvailable = isTauriDesktopRuntime();
   const liveInteractionsEndpointUrl = bridgeStatus?.publicUrl || settings.publicInteractionsUrl || settings.interactionsEndpointUrl;
@@ -79,20 +88,6 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
     onSettingsChange({
       ...settings,
       ...patch,
-    });
-  }
-
-  function toggleGithubEvent(event: DiscordGithubEvent) {
-    const events = new Set(settings.githubEvents);
-
-    if (events.has(event)) {
-      events.delete(event);
-    } else {
-      events.add(event);
-    }
-
-    patchSettings({
-      githubEvents: DISCORD_GITHUB_WEBHOOK_EVENTS.filter((candidate) => events.has(candidate)),
     });
   }
 
@@ -228,7 +223,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
 
   return (
     <>
-      <SettingsSectionHeading detail="Discord chat intake, channel posting, and optional GitHub event routing." icon={MessageCircle} title="Discord" />
+      <SettingsSectionHeading detail="Connect Discord directly to Gilbert chat with slash commands, gateway chat, or channel posting." icon={MessageCircle} title="Discord" />
 
       <div className="discord-settings-layout">
         <article className="settings-card settings-card-wide discord-bridge-card" data-enabled={settings.enabled}>
@@ -332,7 +327,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
               <span>ngrok executable</span>
               <input autoComplete="off" placeholder="ngrok" value={settings.ngrokPath} onChange={(event) => patchSettings({ ngrokPath: event.target.value })} />
               <small className="settings-field-note">
-                If `ngrok` is not on PATH, paste the full path to the ngrok executable or install ngrok first.
+                If `ngrok` is not on PATH, paste the full executable path or a folder such as `.tools/ngrok`.
               </small>
             </label>
 
@@ -448,7 +443,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
             <Webhook size={19} aria-hidden="true" />
             <div>
               <h2>Channel posting</h2>
-              <p>Incoming webhooks post Gilbert or GitHub updates into one Discord channel.</p>
+              <p>Incoming webhooks let Gilbert post app updates and chat follow-ups into one Discord channel.</p>
             </div>
           </div>
 
@@ -492,78 +487,21 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
 
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">
-            <Github size={19} aria-hidden="true" />
-            <div>
-              <h2>GitHub to Discord</h2>
-              <p>Use Discord's GitHub-compatible webhook endpoint for repository event notifications.</p>
-            </div>
-          </div>
-
-          <div className="discord-github-grid">
-            <label className="settings-field">
-              <span>Repository</span>
-              <input autoComplete="off" placeholder="owner/repo" value={settings.githubRepository} onChange={(event) => patchSettings({ githubRepository: event.target.value })} />
-            </label>
-
-            <label className="settings-field">
-              <span>GitHub webhook secret</span>
-              <div className="settings-secret-row">
-                <input
-                  autoComplete="off"
-                  placeholder="High-entropy webhook secret"
-                  type={showSecrets ? "text" : "password"}
-                  value={settings.githubWebhookSecret}
-                  onChange={(event) => patchSettings({ githubWebhookSecret: event.target.value })}
-                />
-                <button type="button" aria-label="Generate GitHub webhook secret" onClick={() => patchSettings({ githubWebhookSecret: createWebhookSecret() })}>
-                  <KeyRound size={16} aria-hidden="true" />
-                </button>
-              </div>
-            </label>
-          </div>
-
-          <label className="settings-field">
-            <span>GitHub payload URL for Discord</span>
-            <div className="settings-url-row">
-              <input readOnly value={githubDiscordPayloadUrl} placeholder="Add a Discord incoming webhook URL to generate this" />
-              <button type="button" onClick={() => copyText(githubDiscordPayloadUrl, "GitHub payload URL copied.")}>
-                <Copy size={16} aria-hidden="true" />
-                Copy
-              </button>
-            </div>
-          </label>
-
-          <div className="discord-event-grid" aria-label="GitHub webhook events">
-            {DISCORD_GITHUB_WEBHOOK_EVENTS.map((event) => (
-              <label key={event} className="discord-event-toggle">
-                <input type="checkbox" checked={settings.githubEvents.includes(event)} onChange={() => toggleGithubEvent(event)} />
-                <span>{formatGithubEvent(event)}</span>
-              </label>
-            ))}
-          </div>
-        </article>
-
-        <article className="settings-card settings-card-wide">
-          <div className="settings-card-heading">
             <ShieldCheck size={19} aria-hidden="true" />
             <div>
               <h2>Setup handoff</h2>
-              <p>Copy the local configuration notes for the bridge runtime, Discord developer portal, and GitHub repo settings.</p>
+              <p>Copy the local configuration notes for the bridge runtime and Discord developer portal.</p>
             </div>
           </div>
 
           <div className="settings-actions-row discord-action-row">
-            <button className="settings-primary-button" type="button" onClick={() => copyText(createDiscordSetupSummary(settings, githubDiscordPayloadUrl), "Discord setup checklist copied.")}>
+            <button className="settings-primary-button" type="button" onClick={() => copyText(createDiscordSetupSummary(settings), "Discord setup checklist copied.")}>
               <Copy size={16} aria-hidden="true" />
               Copy setup checklist
             </button>
             <a className="settings-ghost-button discord-doc-link" href="https://docs.discord.com/developers/interactions/overview" rel="noreferrer" target="_blank">
               <ExternalLink size={16} aria-hidden="true" />
               Discord interactions
-            </a>
-            <a className="settings-ghost-button discord-doc-link" href="https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks" rel="noreferrer" target="_blank">
-              <ExternalLink size={16} aria-hidden="true" />
-              GitHub webhooks
             </a>
           </div>
 
@@ -572,6 +510,49 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
               {copyStatus.text}
             </div>
           ) : null}
+        </article>
+
+        <article className="settings-card settings-card-wide integration-docs-card discord-docs-card">
+          <div className="settings-card-heading">
+            <BookOpen size={19} aria-hidden="true" />
+            <div>
+              <h2>Docs</h2>
+              <p>Updated May 12, 2026 from the Discord developer docs and the repo setup guide.</p>
+            </div>
+          </div>
+
+          <div className="integration-docs-body">
+            <section className="integration-doc-section" aria-labelledby="discord-docs-setup-title">
+              <h3 id="discord-docs-setup-title">Setup steps</h3>
+              <ol className="integration-doc-steps">
+                <li>Open the Discord Developer Portal, create an application, then copy its Application ID and Public Key into this page.</li>
+                <li>Keep Slash chat selected for the normal Gilbert flow. Use Bot gateway only for DMs, mentions, or approved message-content flows.</li>
+                <li>Install and authenticate ngrok, or set Tunnel provider to Local only when you are using your own public HTTPS tunnel.</li>
+                <li>Click Start bridge. Gilbert starts the local receiver, opens the tunnel, and fills the public Interactions URL.</li>
+                <li>Paste that URL into the Discord app's Interactions Endpoint URL field and save it so Discord can validate the receiver.</li>
+                <li>Paste a bot token only when registering slash commands or testing gateway mode, then click Register commands.</li>
+                <li>Install the app into the target server with the applications.commands scope, then test <code>/gilbert</code> and <code>/gilbertnewchat</code>.</li>
+                <li>Use an incoming webhook only for one-way channel posts from Gilbert. It cannot read Discord messages.</li>
+              </ol>
+            </section>
+
+            <section className="integration-doc-section" aria-labelledby="discord-docs-links-title">
+              <h3 id="discord-docs-links-title">Official links</h3>
+              <ul className="integration-doc-link-list">
+                {DISCORD_DOC_LINKS.map((link) => (
+                  <li key={link.href}>
+                    <a href={link.href} rel="noreferrer" target="_blank">
+                      <span>{link.label}</span>
+                      <ExternalLink size={14} aria-hidden="true" />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              <p className="integration-doc-note">
+                Discord requires an initial interaction response within 3 seconds; Gilbert defers and edits the original response while the app works.
+              </p>
+            </section>
+          </div>
         </article>
       </div>
     </>
@@ -585,11 +566,10 @@ interface ReadinessItem {
   ready: boolean;
 }
 
-function createReadiness(settings: DiscordBridgeSettings, githubDiscordPayloadUrl: string): ReadinessItem[] {
+function createReadiness(settings: DiscordBridgeSettings): ReadinessItem[] {
   const hasInteractionSettings = Boolean(settings.applicationId && settings.publicKey && (settings.interactionsEndpointUrl || settings.publicInteractionsUrl));
   const hasGatewaySettings = Boolean(settings.botToken && (settings.allowedChannelIds || settings.allowedGuildIds));
   const hasWebhookSettings = Boolean(settings.incomingWebhookUrl);
-  const hasGithubSettings = Boolean(settings.githubRepository && githubDiscordPayloadUrl && settings.githubEvents.length > 0);
 
   return [
     {
@@ -610,25 +590,10 @@ function createReadiness(settings: DiscordBridgeSettings, githubDiscordPayloadUr
       mode: "webhook-relay",
       ready: hasWebhookSettings,
     },
-    {
-      detail: "Needs repository, Discord GitHub payload URL, and at least one event.",
-      label: "GitHub events",
-      ready: hasGithubSettings,
-    },
   ];
 }
 
-function formatDiscordGithubPayloadUrl(incomingWebhookUrl: string) {
-  const normalizedUrl = incomingWebhookUrl.trim().replace(/\/+$/, "");
-
-  if (!normalizedUrl) {
-    return "";
-  }
-
-  return normalizedUrl.endsWith("/github") ? normalizedUrl : `${normalizedUrl}/github`;
-}
-
-function createDiscordSetupSummary(settings: DiscordBridgeSettings, githubDiscordPayloadUrl: string) {
+function createDiscordSetupSummary(settings: DiscordBridgeSettings) {
   return [
     "Gilbert Discord bridge setup",
     `Enabled: ${settings.enabled ? "yes" : "no"}`,
@@ -650,26 +615,7 @@ function createDiscordSetupSummary(settings: DiscordBridgeSettings, githubDiscor
     "",
     "Posting",
     `Incoming webhook URL: ${settings.incomingWebhookUrl ? "(saved locally)" : "(not set)"}`,
-    `Discord GitHub payload URL: ${githubDiscordPayloadUrl || "(not set)"}`,
-    "",
-    "GitHub webhook",
-    `Repository: ${settings.githubRepository || "(not set)"}`,
-    `Events: ${settings.githubEvents.join(", ") || "(not set)"}`,
-    `Secret: ${settings.githubWebhookSecret ? "(saved locally)" : "(not set)"}`,
   ].join("\n");
-}
-
-function formatGithubEvent(event: DiscordGithubEvent) {
-  return event
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function createWebhookSecret() {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function normalizeBridgePortInput(value: string) {

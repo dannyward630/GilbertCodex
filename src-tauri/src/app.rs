@@ -37,11 +37,14 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::computer::files::computer_get_default_workspace,
             commands::computer::files::computer_get_file_index_summary,
             commands::computer::files::computer_get_git_status,
+            commands::computer::files::computer_git_init,
             commands::computer::files::computer_git_commit,
             commands::computer::files::computer_git_create_branch,
+            commands::computer::files::computer_git_create_worktree,
             commands::computer::files::computer_git_push,
             commands::computer::files::computer_list_directory,
             commands::computer::files::computer_list_drives,
+            commands::computer::files::computer_move_path,
             commands::computer::files::computer_pick_folder,
             commands::computer::files::computer_read_text_file,
             commands::computer::files::computer_search_file_index,
@@ -92,6 +95,8 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::terminal::terminal_write_session,
             commands::updates::app_update_check,
             commands::updates::app_update_install,
-            commands::web::duckduckgo_search
+            commands::web::brave_search,
+            commands::web::duckduckgo_search,
+            commands::weather::weather_fetch_json
         ])
 }

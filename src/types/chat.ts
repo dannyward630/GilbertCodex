@@ -15,7 +15,9 @@ export interface ChatAttachmentBase {
 }
 
 export interface ChatFileAttachment extends ChatAttachmentBase {
+  dataUrl?: string;
   kind: "file";
+  text?: string;
 }
 
 export interface ChatImageAttachment extends ChatAttachmentBase {
@@ -89,6 +91,10 @@ export interface ChatArtifact {
   detail?: string;
   id?: string;
   kind?: ChatArtifactKind;
+  mimeType?: string;
+  sizeBytes?: number;
+  sourceFormat?: "markdown" | "text";
+  sourceText?: string;
   title: string;
   url?: string;
 }
@@ -96,6 +102,9 @@ export interface ChatArtifact {
 export interface ChatSource {
   detail?: string;
   id?: string;
+  imageUrl?: string;
+  sourceType?: "answer" | "image" | "news" | "place" | "video" | "web";
+  thumbnailUrl?: string;
   title: string;
   url: string;
 }
@@ -113,8 +122,25 @@ export interface ChatToolCallTerminal {
   workingDirectory?: string;
 }
 
+export interface ChatToolFileChange {
+  additions: number;
+  deletions: number;
+  diffPreview?: ChatToolFileChangeLine[];
+  diffTruncated?: boolean;
+  kind?: "create" | "delete" | "move" | "update";
+  path: string;
+}
+
+export interface ChatToolFileChangeLine {
+  content: string;
+  kind: "add" | "context" | "hunk" | "meta" | "remove";
+  newLine?: number;
+  oldLine?: number;
+}
+
 export interface ChatToolCall {
   detail?: string;
+  fileChanges?: ChatToolFileChange[];
   id: string;
   input?: string;
   label: string;
@@ -128,10 +154,12 @@ export type ChatWebSearchStatus = "active" | "complete" | "error";
 export interface ChatWebSearch {
   enabled: boolean;
   error?: string;
+  fallbackReason?: string;
   maxResults?: number;
   provider: WebSearchProvider;
   query?: string;
   resultCount?: number;
+  resultProvider?: WebSearchProvider;
   searchedAt?: string;
   status?: ChatWebSearchStatus;
 }
@@ -185,9 +213,7 @@ export interface ChatSendInput {
   content: string;
   localWorkspace?: LocalWorkspaceSettings;
   mode?: ChatMessageMode;
-  planning?: {
-    maxPasses: number;
-  };
+  planning?: Record<string, never>;
   webSearch?: {
     enabled: boolean;
     maxResults?: number;

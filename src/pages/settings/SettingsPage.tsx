@@ -39,13 +39,16 @@ import type { GithubConnectionState, GithubDeviceLoginSession, GithubRepository 
 import type { LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ModelProviderId, ProviderSettings } from "../../types/settings";
 import { AppearanceSettingsPage } from "./sections/AppearanceSettingsPage";
+import { BraveSearchSettingsPage } from "./brave-search/BraveSearchSettingsPage";
 import { ConfigurationSettingsPage } from "./sections/ConfigurationSettingsPage";
 import { DatabaseSettingsPage } from "./sections/DatabaseSettingsPage";
 import { DiscordSettingsPage } from "./sections/DiscordSettingsPage";
 import { GeneralSettingsPage } from "./sections/GeneralSettingsPage";
 import { GithubSettingsPage } from "./sections/GithubSettingsPage";
+import { MapboxSettingsPage } from "./mapbox/MapboxSettingsPage";
 import { ModelSettingsPage } from "./sections/ModelSettingsPage";
 import { PersonalizationSettingsPage } from "./sections/PersonalizationSettingsPage";
+import { PdfSettingsPage } from "./sections/PdfSettingsPage";
 import { ProvidersSettingsPage } from "./sections/ProvidersSettingsPage";
 import type { LiveModelCatalogStatus, SettingsPageProps, SettingsStatusMessage } from "./types";
 
@@ -97,6 +100,7 @@ export function SettingsPage({
   onDiscordBridgeChange,
   onLocalWorkspaceChange,
   onSettingsChange,
+  projects,
   settings,
 }: SettingsPageProps) {
   const mountedRef = useRef(true);
@@ -675,6 +679,10 @@ export function SettingsPage({
       );
     }
 
+    if (activeSection === "braveSearch") {
+      return <BraveSearchSettingsPage settings={settings} onSettingsPatch={updateSettings} />;
+    }
+
     if (activeSection === "database") {
       return <DatabaseSettingsPage />;
     }
@@ -727,8 +735,16 @@ export function SettingsPage({
       );
     }
 
+    if (activeSection === "mapbox") {
+      return <MapboxSettingsPage />;
+    }
+
     if (activeSection === "personalization") {
       return <PersonalizationSettingsPage settings={settings} onSettingsPatch={updateSettings} />;
+    }
+
+    if (activeSection === "pdf") {
+      return <PdfSettingsPage projects={projects} />;
     }
 
     if (activeSection === "providers") {

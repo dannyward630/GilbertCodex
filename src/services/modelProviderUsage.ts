@@ -17,6 +17,7 @@ interface ProviderPayloadContextUsageInput {
   messages: ChatMessage[];
   settings: ProviderSettings;
   source: "estimate" | "openrouter" | "provider";
+  stream?: boolean;
 }
 
 export function estimateModelProviderContextWindowUsage({
@@ -47,6 +48,7 @@ export function estimateModelProviderPayloadUsage({
   messages,
   settings,
   source,
+  stream = true,
 }: ProviderPayloadContextUsageInput): ContextWindowUsage {
   return estimateProviderUsageFromMessages({
     chatMessageCount: messages.length,
@@ -55,6 +57,7 @@ export function estimateModelProviderPayloadUsage({
     messages,
     settings,
     source,
+    stream,
   });
 }
 
@@ -65,6 +68,7 @@ function estimateProviderUsageFromMessages({
   messages,
   settings,
   source,
+  stream = true,
 }: {
   chatMessageCount: number;
   contextWindowTokens: number;
@@ -72,16 +76,15 @@ function estimateProviderUsageFromMessages({
   messages: ChatMessage[];
   settings: ProviderSettings;
   source: "estimate" | "openrouter" | "provider";
+  stream?: boolean;
 }): ContextWindowUsage {
   const model = modelForMessages(settings, messages);
-  const body = createProviderUsageRequestBody(settings, messages, model);
+  const body = createProviderUsageRequestBody(settings, messages, model, stream);
   const requestBody = body as Record<string, unknown> & { messages?: unknown };
-  const bodyMessages = Array.isArray(requestBody.messages) ? requestBody.messages : [];
-  const systemTokens = estimateSerializedTokens(bodyMessages[0] ?? "");
-  const chatBodyMessages = bodyMessages.slice(1, 1 + chatMessageCount);
-  const draftBodyMessages = draftCount > 0 ? bodyMessages.slice(1 + chatMessageCount, 1 + chatMessageCount + draftCount) : [];
-  const messageTokens = chatBodyMessages.reduce((total: number, message: unknown) => total + estimateSerializedTokens(message), 0);
-  const draftTokens = draftBodyMessages.reduce((total: number, message: unknown) => total + estimateSerializedTokens(message), 0);
+  const promptParts = getProviderPromptParts(requestBody, chatMessageCount, draftCount);
+  const systemTokens = estimateSerializedPartsTokens(promptParts.system);
+  const messageTokens = estimateSerializedPartsTokens(promptParts.messages);
+  const draftTokens = estimateSerializedPartsTokens(promptParts.draft);
   const boundedContextWindow = Math.max(contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS, 1);
   const boundedMaxOutput = Math.max(Math.round(settings.maxTokens || 0), 0);
   const serializedBodyTokens = estimateSerializedTokens(body);
@@ -114,15 +117,16 @@ export function applyProviderUsageToContextEstimate(estimate: ContextWindowUsage
     return estimate;
   }
 
-  const promptBreakdown = scalePromptBreakdown(estimate, promptTokens);
+  const exactPromptTokens = Math.max(promptTokens, 0);
+  const promptBreakdown = scalePromptBreakdown(estimate, exactPromptTokens);
   const effectiveOutputBudget = Math.max(estimate.maxOutputTokens, completionTokens ?? 0);
-  const totalTokens = promptTokens + effectiveOutputBudget;
+  const totalTokens = exactPromptTokens + effectiveOutputBudget;
 
   return {
     ...estimate,
     ...promptBreakdown,
     availableTokens: Math.max(estimate.contextWindowTokens - totalTokens, 0),
-    inputTokens: promptTokens,
+    inputTokens: exactPromptTokens,
     openRouterCompletionTokens: completionTokens,
     openRouterTotalTokens: totalUsageTokens,
     tokenSource: "provider",
@@ -172,15 +176,73 @@ function createDraftUsageMessage(content: string, attachments: ChatAttachment[])
   };
 }
 
-function estimateSerializedTokens(value: unknown) {
+function estimateSerializedTokens(value: unknown): number {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   return estimateTextTokens(serialized || "");
 }
 
-function estimateProviderControlTokens(body: ReturnType<typeof createProviderUsageRequestBody>) {
-  const { messages: _messages, ...controlBody } = body as Record<string, unknown> & { messages?: unknown };
+function estimateSerializedPartsTokens(parts: unknown[]): number {
+  return parts.reduce<number>((total, part) => total + estimateSerializedTokens(part), 0);
+}
+
+function estimateProviderControlTokens(body: ReturnType<typeof createProviderUsageRequestBody>): number {
+  const {
+    input: _input,
+    instructions: _instructions,
+    messages: _messages,
+    system: _system,
+    ...controlBody
+  } = body as Record<string, unknown> & {
+    input?: unknown;
+    instructions?: unknown;
+    messages?: unknown;
+    system?: unknown;
+  };
 
   return estimateSerializedTokens(controlBody);
+}
+
+function getProviderPromptParts(
+  requestBody: Record<string, unknown>,
+  chatMessageCount: number,
+  draftCount: number,
+): {
+  draft: unknown[];
+  messages: unknown[];
+  system: unknown[];
+} {
+  if (Array.isArray(requestBody.input)) {
+    const inputMessages = requestBody.input;
+
+    return {
+      draft: draftCount > 0 ? inputMessages.slice(chatMessageCount, chatMessageCount + draftCount) : [],
+      messages: inputMessages.slice(0, chatMessageCount),
+      system: requestBody.instructions === undefined ? [] : [requestBody.instructions],
+    };
+  }
+
+  const bodyMessages = Array.isArray(requestBody.messages) ? requestBody.messages : [];
+
+  if (requestBody.system !== undefined) {
+    return {
+      draft: draftCount > 0 ? bodyMessages.slice(chatMessageCount, chatMessageCount + draftCount) : [],
+      messages: bodyMessages.slice(0, chatMessageCount),
+      system: [requestBody.system],
+    };
+  }
+
+  const hasSystemMessage = isProviderSystemMessage(bodyMessages[0]);
+  const firstChatMessageIndex = hasSystemMessage ? 1 : 0;
+
+  return {
+    draft: draftCount > 0 ? bodyMessages.slice(firstChatMessageIndex + chatMessageCount, firstChatMessageIndex + chatMessageCount + draftCount) : [],
+    messages: bodyMessages.slice(firstChatMessageIndex, firstChatMessageIndex + chatMessageCount),
+    system: hasSystemMessage ? [bodyMessages[0]] : [],
+  };
+}
+
+function isProviderSystemMessage(value: unknown) {
+  return Boolean(value && typeof value === "object" && "role" in value && (value as { role?: unknown }).role === "system");
 }
 
 function scalePromptBreakdown(estimate: ContextWindowUsage, exactPromptTokens: number) {

@@ -52,7 +52,6 @@ let pendingRefresh: Promise<void> | null = null;
 
 const CACHE_TTL_MS = 30_000;
 const DETECTION_TIMEOUT_MS = 1_500;
-const MAX_DETECTED_ROOTS = 4;
 
 function signatureForInputs(settings: LocalWorkspaceSettings) {
   return `${settings.scope}|${settings.permissionMode}|${[...settings.roots].sort().join("|")}`;
@@ -105,7 +104,7 @@ export async function refreshWorkspaceContext(settings: LocalWorkspaceSettings):
 }
 
 async function runDetection(settings: LocalWorkspaceSettings, signature: string): Promise<void> {
-  const roots = settings.roots.slice(0, MAX_DETECTED_ROOTS);
+  const roots = settings.roots;
 
   try {
     const [projects, gitStatuses] = await Promise.all([
@@ -215,7 +214,7 @@ async function detectNodeLikeProject(
     }
 
     if (parsed.scripts && typeof parsed.scripts === "object") {
-      scripts = Object.keys(parsed.scripts as Record<string, unknown>).slice(0, 16);
+      scripts = Object.keys(parsed.scripts as Record<string, unknown>);
     }
 
     const engines = parsed.engines as Record<string, unknown> | undefined;
@@ -317,7 +316,7 @@ export function formatWorkspaceContextForPrompt(snapshot: WorkspaceContextSnapsh
   if (snapshot.roots.length === 0) {
     return [
       "# Workspace Context",
-      "No workspace root is currently enabled. File and terminal tools are unavailable until the user selects a project folder.",
+      "No workspace root is currently enabled. File and terminal tools are unavailable until the user selects a project folder, except PDF export tools can still return downloadable chat artifacts without writing to disk.",
     ].join("\n");
   }
 

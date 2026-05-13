@@ -94,8 +94,6 @@ export function profileForTool(tool: FileCreationToolName, language?: string): F
       return { defaultExtension: "tsx", kind: "react", language: "react", mimeType: "application/typescript" };
     case "create_html_file":
       return { defaultExtension: "html", kind: "html", language: "html", mimeType: "text/html" };
-    case "create_pdf_file":
-      return { defaultExtension: "pdf", kind: "pdf", mimeType: "application/pdf" };
     case "create_code_file": {
       const extension = extensionForLanguage(language) ?? "txt";
       return {
@@ -148,10 +146,6 @@ export function inferKindFromExtension(extension: string): FileCreationKind {
 
   if (normalized === "html" || normalized === "htm") {
     return "html";
-  }
-
-  if (normalized === "pdf") {
-    return "pdf";
   }
 
   if (normalized === "tsx" || normalized === "jsx") {

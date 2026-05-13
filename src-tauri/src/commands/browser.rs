@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 const APP_USER_AGENT: &str = "GilbertCodex/0.1";
@@ -35,16 +36,12 @@ pub struct BrowserAutomationResponse {
 pub async fn browser_automation(
     request: BrowserAutomationRequest,
 ) -> Result<BrowserAutomationResponse, String> {
-    let url = request.url.trim();
-
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("browser automation needs an http(s) URL.".to_string());
-    }
+    let url = validate_browser_automation_url(&request.url)?;
 
     let client = reqwest::Client::builder()
         .user_agent(browser_user_agent())
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(8))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("Could not create browser automation client: {error}"))?;
     let response = client
@@ -54,10 +51,12 @@ pub async fn browser_automation(
         .map_err(|error| format!("Browser automation request failed: {error}"))?;
     let final_url = response.url().to_string();
     let status = response.status().as_u16();
-    let html = response
-        .text()
+
+    let bytes = response
+        .bytes()
         .await
         .map_err(|error| format!("Could not read browser automation response: {error}"))?;
+    let html = String::from_utf8_lossy(&bytes).to_string();
     let title = extract_title(&html);
     let text = html_to_text(&html);
     let links = extract_links(&html, &final_url);
@@ -75,14 +74,112 @@ pub async fn browser_automation(
 
     Ok(BrowserAutomationResponse {
         action: request.action,
-        links: links.into_iter().take(24).collect(),
+        links,
         matched,
         status,
         target_url,
-        text_snippet: text.chars().take(6000).collect(),
+        text_snippet: text,
         title,
         url: final_url,
     })
+}
+
+fn validate_browser_automation_url(raw_url: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(raw_url.trim())
+        .map_err(|_| "browser automation needs a valid http(s) URL.".to_string())?;
+    let scheme = url.scheme();
+
+    if scheme != "http" && scheme != "https" {
+        return Err("browser automation needs an http(s) URL.".to_string());
+    }
+
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("browser automation refuses URLs with embedded credentials.".to_string());
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "browser automation needs a URL host.".to_string())?
+        .to_ascii_lowercase();
+
+    if is_loopback_browser_automation_host(&host) {
+        return Ok(url);
+    }
+
+    if scheme != "https" {
+        return Err(
+            "browser automation only allows HTTP for localhost/loopback targets; use HTTPS for public web pages."
+                .to_string(),
+        );
+    }
+
+    if host.contains('@')
+        || host.ends_with(".local")
+        || host.ends_with(".lan")
+        || host.ends_with(".internal")
+        || host.ends_with(".home")
+        || host == "host.docker.internal"
+        || !host.contains('.')
+    {
+        return Err("browser automation blocked a private or local network host.".to_string());
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_private_or_special_ip(ip) {
+            return Err(
+                "browser automation blocked a private or special-use IP address.".to_string(),
+            );
+        }
+    }
+
+    Ok(url)
+}
+
+fn is_loopback_browser_automation_host(host: &str) -> bool {
+    if host == "localhost" || host.ends_with(".localhost") || host == "0.0.0.0" {
+        return true;
+    }
+
+    host.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+fn is_private_or_special_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_private_or_special_ipv4(ip),
+        IpAddr::V6(ip) => is_private_or_special_ipv6(ip),
+    }
+}
+
+fn is_private_or_special_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_unspecified()
+        || ip == Ipv4Addr::new(255, 255, 255, 255)
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        || (octets[0] == 169 && octets[1] == 254)
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && (18..=19).contains(&octets[1]))
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+}
+
+fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    let first = segments[0];
+
+    ip.is_loopback()
+        || ip.is_multicast()
+        || ip.is_unspecified()
+        || (first & 0xfe00) == 0xfc00
+        || (first & 0xffc0) == 0xfe80
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
 }
 
 fn browser_user_agent() -> &'static str {
@@ -138,7 +235,7 @@ fn extract_links(html: &str, base_url: &str) -> Vec<BrowserAutomationLink> {
             if !label.trim().is_empty() {
                 links.push(BrowserAutomationLink {
                     href: absolutize_url(base_url, href.trim()),
-                    text: label.trim().chars().take(240).collect(),
+                    text: label.trim().to_string(),
                 });
             }
         }
@@ -224,5 +321,40 @@ fn absolutize_url(base_url: &str, href: &str) -> String {
     } else {
         let directory_end = base_url.rfind('/').unwrap_or(origin_end);
         format!("{}/{}", &base_url[..directory_end], href)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_browser_automation_url;
+
+    #[test]
+    fn browser_automation_allows_public_https() {
+        assert!(validate_browser_automation_url("https://example.com/page").is_ok());
+    }
+
+    #[test]
+    fn browser_automation_allows_loopback_http() {
+        assert!(validate_browser_automation_url("http://127.0.0.1:5173/").is_ok());
+        assert!(validate_browser_automation_url("http://localhost:5173/").is_ok());
+    }
+
+    #[test]
+    fn browser_automation_blocks_plain_http_public_hosts() {
+        assert!(validate_browser_automation_url("http://example.com/").is_err());
+    }
+
+    #[test]
+    fn browser_automation_blocks_private_and_metadata_ips() {
+        assert!(validate_browser_automation_url("https://192.168.1.1/").is_err());
+        assert!(
+            validate_browser_automation_url("https://169.254.169.254/latest/meta-data/").is_err()
+        );
+        assert!(validate_browser_automation_url("https://[fd00::1]/").is_err());
+    }
+
+    #[test]
+    fn browser_automation_blocks_embedded_credentials() {
+        assert!(validate_browser_automation_url("https://user:pass@example.com/").is_err());
     }
 }

@@ -95,6 +95,16 @@
     position: relative;
   }
 
+  .desktop-root[data-runtime="web"] .sidebar-stage,
+  .desktop-root[data-runtime="desktop"] .sidebar-stage {
+    display: contents;
+  }
+
+  .desktop-root[data-runtime="web"] .app-main,
+  .desktop-root[data-runtime="desktop"] .app-main {
+    grid-column: 1;
+  }
+
   .desktop-root[data-runtime="web"] .workspace-shell .shell-sidebar {
     position: fixed;
     top: 56px;

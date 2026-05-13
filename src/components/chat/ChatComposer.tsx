@@ -1,4 +1,13 @@
-import { type ChangeEvent, type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   ArrowUp,
@@ -18,11 +27,11 @@ import {
   Home,
   Image as ImageIcon,
   Laptop,
-  ListChecks,
   LoaderCircle,
   Mic,
   MicOff,
   MoreHorizontal,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -33,22 +42,22 @@ import {
   X,
 } from "lucide-react";
 import { ThinkingModeControls } from "../thinking/ThinkingModeControls";
+import { ModelSelectorPopover, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
 import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment } from "../../lib/chatAttachments";
 import { DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
   AUTO_COMPACT_CONTEXT_THRESHOLD,
   formatTokenCount,
-  getFallbackModelContextWindow,
   type ContextWindowUsage,
   type ContextCompactionNotice,
-  type ModelContextWindow,
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
 import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
+import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
-import { DEFAULT_PLANNING_MAX_PASSES } from "../../services/planningClient";
 import {
   buildComputerFileIndex,
   createGilbertProjectMemoryTemplate,
@@ -56,10 +65,12 @@ import {
   formatLocalWorkspaceIndexStatus,
   getDefaultComputerWorkspace,
   GILBERT_PROJECT_MEMORY_FILE,
+  initComputerGitRepository,
   listenForComputerFileIndexProgress,
   listComputerDrives,
   localWorkspaceScopeLabel,
   localPermissionModeLabel,
+  mergeFullComputerRoots,
   pickComputerFolder,
   writeComputerTextFile,
 } from "../../tools/computer/files";
@@ -69,7 +80,6 @@ import type { ProjectSummary } from "../../types/project";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
 type ComposerMenu = "attach" | "branch" | "context" | "local" | "model" | "project" | null;
-type LiveModelCatalogStatus = "error" | "idle" | "loading" | "ready";
 type VoiceState = "blocked" | "error" | "idle" | "listening" | "requesting" | "unsupported";
 
 interface BuiltInSpeechRecognitionAlternative {
@@ -124,18 +134,22 @@ interface ChatComposerProps {
   onCreateProject: () => void | string | null | Promise<string | null | void>;
   onDraftApplied?: () => void;
   onDeleteQueuedMessage: (messageId: string) => void;
+  onHoldQueuedMessage: (messageId: string, held: boolean) => void;
+  onUpdateQueuedMessage: (messageId: string, content: string) => void;
   onHeightChange?: (height: number) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string, provider: ChatModelOption["provider"]) => void;
+  onForkWorktree?: () => void | Promise<void>;
   onReviewChanges?: () => void;
   onSelectProject: (project: string) => void;
   onStopGeneration?: () => void;
-  onSteerQueuedMessage: (messageId: string) => void;
+  onSteerQueuedMessage: (messageId: string, contentOverride?: string) => void;
   onSubmit: (input: ChatSendInput) => void | Promise<void>;
   projects: ProjectSummary[];
   providerSettings: ProviderSettings;
   queuedMessageCount?: number;
   queuedMessages?: ChatMessage[];
+  heldQueuedMessageIds?: string[];
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
   thinking: ThinkingSettings;
@@ -154,11 +168,20 @@ interface ComposerAttachmentDraft {
 
 interface PlanningModeSettings {
   enabled: boolean;
-  maxPasses: number;
 }
 
-const planningPassOptions = [3, 5, DEFAULT_PLANNING_MAX_PASSES];
-const GIT_STATUS_REFRESH_INTERVAL_MS = 2_500;
+type ModelProviderDefinition = (typeof MODEL_PROVIDERS)[number];
+type LiveModelCatalogCacheStatus = Extract<LiveModelCatalogStatus, "error" | "ready">;
+
+interface LiveModelCatalogCacheEntry {
+  checkedAt: number;
+  key: string;
+  status: LiveModelCatalogCacheStatus;
+}
+
+const GIT_STATUS_REFRESH_INTERVAL_MS = 15_000;
+const LIVE_MODEL_CATALOG_READY_CACHE_MS = 5 * 60 * 1000;
+const LIVE_MODEL_CATALOG_ERROR_CACHE_MS = 60 * 1000;
 
 function modelFromValue(modelValue: string, providerId: ChatModelOption["provider"], discoveredModels?: ProviderModelMetadata[]): ChatModelOption {
   const normalizedValue = modelValue.trim();
@@ -177,74 +200,51 @@ function modelFromValue(modelValue: string, providerId: ChatModelOption["provide
   };
 }
 
-function formatModelContextWindow(contextWindow: ModelContextWindow) {
-  const suffix = contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "" : " est.";
-
-  return `${formatTokenCount(contextWindow.tokens)} context${suffix}`;
+function createLiveModelCatalogRequestKey(settings: ProviderSettings) {
+  return getLiveModelCatalogProviders(settings)
+    .map((provider) => createLiveModelCatalogProviderRequestKey(provider, settings))
+    .join("\n");
 }
 
-function modelContextWindowTitle(contextWindow: ModelContextWindow) {
-  return contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "Context window reported by the selected provider" : "Estimated context window until provider metadata is available";
+function getLiveModelCatalogProviders(settings: ProviderSettings) {
+  return MODEL_PROVIDERS.filter((provider) => shouldLoadLiveModelCatalogProvider(provider.id, settings.provider));
 }
 
-function formatLiveCatalogHeading(status: LiveModelCatalogStatus, modelCount: number) {
-  if (status === "loading") {
-    return "loading";
-  }
-
-  if (status === "ready") {
-    return `${modelCount} live`;
-  }
-
-  if (status === "error") {
-    return modelCount > 0 ? `${modelCount} cached` : "offline";
-  }
-
-  return "live";
+function shouldLoadLiveModelCatalogProvider(provider: ProviderSettings["provider"], activeProvider: ProviderSettings["provider"]) {
+  return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === activeProvider);
 }
 
-function isOfflineCatalogError(error: string | null | undefined) {
-  const normalizedError = error?.toLowerCase().trim();
+function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
+  const apiKey = provider.id === "openrouter" ? settings.apiKeys[provider.id] || settings.openRouterApiKey || "" : settings.apiKeys[provider.id] || "";
+  const baseUrl = settings.baseUrls[provider.id] || provider.defaultBaseUrl;
+  const model = settings.providerModels[provider.id] || provider.defaultModel;
 
-  if (!normalizedError) {
-    return true;
-  }
-
-  return [
-    "failed to fetch",
-    "fetch failed",
-    "networkerror",
-    "load failed",
-    "connection refused",
-    "err_connection",
-    "err_network",
-  ].some((offlineSignal) => normalizedError.includes(offlineSignal));
+  return [provider.id, baseUrl, model, fingerprintSecret(apiKey)].join("\u001f");
 }
 
-function formatOfflineCatalogNote(providerLabel: string, baseUrl: string) {
-  return `Offline. Start ${providerLabel} and check ${baseUrl.replace(/\/+$/, "")}.`;
+function fingerprintSecret(secret: string) {
+  if (!secret) {
+    return "none";
+  }
+
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < secret.length; index += 1) {
+    hash ^= secret.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return `${secret.length}:${(hash >>> 0).toString(36)}`;
 }
 
-function createLiveCatalogNote(providerLabel: string, baseUrl: string, status: LiveModelCatalogStatus, error: string | undefined, modelCount: number) {
-  const modelsUrl = `${baseUrl.replace(/\/+$/, "")}/models`;
-
-  if (status === "loading") {
-    return `Loading real models from ${modelsUrl}`;
+function isFreshLiveModelCatalogCache(entry: LiveModelCatalogCacheEntry | undefined, requestKey: string) {
+  if (!entry || entry.key !== requestKey) {
+    return false;
   }
 
-  if (status === "error") {
-    return isOfflineCatalogError(error) ? formatOfflineCatalogNote(providerLabel, baseUrl) : error || `No model list from ${modelsUrl}. Start ${providerLabel} or check the host and port.`;
-  }
+  const maxAge = entry.status === "ready" ? LIVE_MODEL_CATALOG_READY_CACHE_MS : LIVE_MODEL_CATALOG_ERROR_CACHE_MS;
 
-  if (status === "ready" && modelCount === 0) {
-    return `${providerLabel} is reachable but returned no loaded models.`;
-  }
-
-  if (status === "idle") {
-    return `Open this menu with ${providerLabel} running to load its real model list.`;
-  }
-
-  return "";
+  return Date.now() - entry.checkedAt < maxAge;
 }
 
 export function ChatComposer({
@@ -262,9 +262,12 @@ export function ChatComposer({
   onCreateProject,
   onDraftApplied,
   onDeleteQueuedMessage,
+  onHoldQueuedMessage,
+  onUpdateQueuedMessage,
   onHeightChange,
   onLocalWorkspaceChange,
   onModelChange,
+  onForkWorktree,
   onReviewChanges,
   onSelectProject,
   onStopGeneration,
@@ -274,6 +277,7 @@ export function ChatComposer({
   providerSettings,
   queuedMessageCount,
   queuedMessages = [],
+  heldQueuedMessageIds = [],
   onThinkingChange,
   onWebSearchChange,
   thinking,
@@ -281,7 +285,9 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const composerRef = useRef<HTMLFormElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const mountedRef = useRef(true);
+  const providerSettingsRef = useRef(providerSettings);
   const visibleQueuedMessageCount = queuedMessageCount ?? queuedMessages.length;
   const voiceBaseMessageRef = useRef("");
   const voiceRecognitionRef = useRef<BuiltInSpeechRecognition | null>(null);
@@ -290,17 +296,21 @@ export function ChatComposer({
   const [openMenu, setOpenMenu] = useState<ComposerMenu>(null);
   const [planMode, setPlanMode] = useState<PlanningModeSettings>({
     enabled: false,
-    maxPasses: DEFAULT_PLANNING_MAX_PASSES,
   });
   const [attachments, setAttachments] = useState<ComposerAttachmentDraft[]>([]);
   const [liveModelCatalogs, setLiveModelCatalogs] = useState<Partial<Record<ProviderSettings["provider"], ProviderModelMetadata[]>>>({});
   const [liveModelCatalogErrors, setLiveModelCatalogErrors] = useState<Partial<Record<ProviderSettings["provider"], string>>>({});
   const [liveModelCatalogStatus, setLiveModelCatalogStatus] = useState<Partial<Record<ProviderSettings["provider"], LiveModelCatalogStatus>>>({});
+  const liveModelCatalogCache = useRef<Partial<Record<ProviderSettings["provider"], LiveModelCatalogCacheEntry>>>({});
   const [gitStatus, setGitStatus] = useState<ComputerGitStatus | null>(null);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
+  const [gitInitRunning, setGitInitRunning] = useState(false);
+  const [gitInitNotice, setGitInitNotice] = useState<{ kind: "error" | "success"; message: string } | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [queueMenuMessageId, setQueueMenuMessageId] = useState<string | null>(null);
+  const [queuedEditDrafts, setQueuedEditDrafts] = useState<Record<string, string>>({});
   const readyAttachments = attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : []));
   const hasImageAttachment = readyAttachments.some(isImageAttachment);
   const hasPendingAttachments = attachments.some((attachment) => attachment.status === "loading");
@@ -308,6 +318,7 @@ export function ChatComposer({
   const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
   const selectedProvider = getModelProvider(providerSettings.provider);
   const selectedModel = modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]);
+  const webSearchProviderLabel = formatWebSearchProviderLabel(webSearch.provider);
   const estimatedContextUsage = estimateModelProviderContextWindowUsage({
     chat,
     contextWindowTokens,
@@ -325,37 +336,35 @@ export function ChatComposer({
   const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
   const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
+  const heldQueuedMessageIdSet = new Set(heldQueuedMessageIds);
 
   useEffect(() => {
     mountedRef.current = true;
 
-    function handlePointerDown(event: PointerEvent) {
-      if (!composerRef.current?.contains(event.target as Node)) {
-        setOpenMenu(null);
-      }
-    }
-
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpenMenu(null);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-
     return () => {
       mountedRef.current = false;
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
       cancelVoiceInput(false);
     };
   }, []);
+
+  useDismissableLayer({
+    active: openMenu !== null,
+    ignoreSelectors: [".model-selector-popover"],
+    onDismiss: () => setOpenMenu(null),
+    refs: [composerRef],
+  });
+
+  useDismissableLayer({
+    active: queueMenuMessageId !== null,
+    onDismiss: () => setQueueMenuMessageId(null),
+    refs: [composerRef],
+  });
 
   useEffect(() => {
     if (!activeRoot || localWorkspace.scope === "full-computer") {
       setGitStatus(null);
       setGitStatusLoading(false);
+      setGitInitNotice(null);
       return;
     }
 
@@ -407,6 +416,10 @@ export function ChatComposer({
   }, [activeRoot, localWorkspace.indexUpdatedAt, localWorkspace.scope]);
 
   useEffect(() => {
+    setGitInitNotice(null);
+  }, [activeRoot]);
+
+  useEffect(() => {
     const composer = composerRef.current;
 
     if (!composer || !onHeightChange) {
@@ -435,23 +448,38 @@ export function ChatComposer({
     onDraftApplied?.();
   }, [draft, onDraftApplied]);
 
+  const liveModelCatalogRequestKey = createLiveModelCatalogRequestKey(providerSettings);
+  providerSettingsRef.current = providerSettings;
+
   useEffect(() => {
     if (openMenu !== "model") {
       return;
     }
 
-    const liveProviders = MODEL_PROVIDERS.filter((provider) => usesLiveModelCatalog(provider.id));
-    const controllers = liveProviders.map((provider) => ({ controller: new AbortController(), provider }));
+    const latestProviderSettings = providerSettingsRef.current;
+    const liveProviders = getLiveModelCatalogProviders(latestProviderSettings);
+    const controllers = liveProviders.flatMap((provider) => {
+      const requestKey = createLiveModelCatalogProviderRequestKey(provider, latestProviderSettings);
+      const cachedCatalog = liveModelCatalogCache.current[provider.id];
+      const cachedStatus = cachedCatalog?.status;
 
-    controllers.forEach(({ controller, provider }) => {
+      if (cachedStatus && isFreshLiveModelCatalogCache(cachedCatalog, requestKey)) {
+        setLiveModelCatalogStatus((current) => (current[provider.id] === cachedStatus ? current : { ...current, [provider.id]: cachedStatus }));
+        return [];
+      }
+
+      return [{ controller: new AbortController(), provider, requestKey }];
+    });
+
+    controllers.forEach(({ controller, provider, requestKey }) => {
       setLiveModelCatalogStatus((current) => ({
         ...current,
         [provider.id]: "loading",
       }));
 
       const settingsForProvider: ProviderSettings = {
-        ...providerSettings,
-        model: providerSettings.providerModels[provider.id] || provider.defaultModel,
+        ...latestProviderSettings,
+        model: latestProviderSettings.providerModels[provider.id] || provider.defaultModel,
         provider: provider.id,
       };
 
@@ -465,6 +493,11 @@ export function ChatComposer({
             ...current,
             [provider.id]: models,
           }));
+          liveModelCatalogCache.current[provider.id] = {
+            checkedAt: Date.now(),
+            key: requestKey,
+            status: "ready",
+          };
           setLiveModelCatalogErrors((current) => ({
             ...current,
             [provider.id]: undefined,
@@ -483,6 +516,11 @@ export function ChatComposer({
             ...current,
             [provider.id]: readErrorMessage(error, `Could not load ${provider.label} models.`),
           }));
+          liveModelCatalogCache.current[provider.id] = {
+            checkedAt: Date.now(),
+            key: requestKey,
+            status: "error",
+          };
           setLiveModelCatalogStatus((current) => ({
             ...current,
             [provider.id]: "error",
@@ -491,10 +529,44 @@ export function ChatComposer({
     });
 
     return () => controllers.forEach(({ controller }) => controller.abort());
-  }, [openMenu, providerSettings]);
+  }, [liveModelCatalogRequestKey, openMenu]);
 
   function toggleMenu(menu: Exclude<ComposerMenu, null>) {
     setOpenMenu((currentMenu) => (currentMenu === menu ? null : menu));
+  }
+
+  function handleModelMenuPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    toggleMenu("model");
+  }
+
+  function handleModelMenuClick(event: ReactMouseEvent<HTMLButtonElement>) {
+    if (event.detail === 0) {
+      toggleMenu("model");
+    }
+  }
+
+  async function initializeGitRepository() {
+    if (!activeRoot || gitInitRunning) {
+      return;
+    }
+
+    setGitInitRunning(true);
+    setGitInitNotice(null);
+
+    try {
+      const result = await initComputerGitRepository(activeRoot);
+      setGitStatus(result.status);
+      setGitInitNotice({ kind: "success", message: result.message });
+    } catch (error) {
+      setGitInitNotice({ kind: "error", message: readErrorMessage(error, "Git init failed.") });
+    } finally {
+      setGitInitRunning(false);
+    }
   }
 
   function togglePlanMode() {
@@ -504,19 +576,11 @@ export function ChatComposer({
     }));
   }
 
-  function setPlanningPasses(maxPasses: number) {
-    setPlanMode((currentPlanMode) => ({
-      ...currentPlanMode,
-      enabled: true,
-      maxPasses,
-    }));
-  }
-
   function toggleWebSearch() {
     onWebSearchChange({
       ...webSearch,
       enabled: !webSearch.enabled,
-      provider: "duckduckgo",
+      provider: webSearch.provider,
     });
   }
 
@@ -627,17 +691,64 @@ export function ChatComposer({
       content,
       localWorkspace,
       mode: planMode.enabled ? "plan" : "chat",
-      planning: planMode.enabled
-        ? {
-            maxPasses: planMode.maxPasses,
-          }
-        : undefined,
+      planning: planMode.enabled ? {} : undefined,
       webSearch: {
         enabled: webSearch.enabled,
         maxResults: webSearch.maxResults,
-        provider: "duckduckgo",
+        provider: webSearch.provider,
       },
     });
+  }
+
+  function beginQueuedMessageEdit(queuedMessage: ChatMessage) {
+    setOpenMenu(null);
+    setQueueMenuMessageId(null);
+    setQueuedEditDrafts((drafts) => ({
+      ...drafts,
+      [queuedMessage.id]: drafts[queuedMessage.id] ?? queuedMessage.content,
+    }));
+    onHoldQueuedMessage(queuedMessage.id, true);
+  }
+
+  function updateQueuedMessageDraft(messageId: string, content: string) {
+    setQueuedEditDrafts((drafts) => ({
+      ...drafts,
+      [messageId]: content,
+    }));
+  }
+
+  function cancelQueuedMessageEdit(messageId: string) {
+    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
+    onHoldQueuedMessage(messageId, false);
+  }
+
+  function steerQueuedMessage(messageId: string) {
+    const queuedMessage = queuedMessages.find((message) => message.id === messageId);
+    const draftContent = queuedEditDrafts[messageId];
+    const nextContent = (draftContent ?? queuedMessage?.content ?? "").trim();
+
+    if (!nextContent) {
+      return;
+    }
+
+    if (draftContent !== undefined) {
+      onUpdateQueuedMessage(messageId, nextContent);
+      setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
+    }
+
+    onHoldQueuedMessage(messageId, false);
+    onSteerQueuedMessage(messageId, nextContent);
+  }
+
+  function resumeQueuedMessage(messageId: string) {
+    const draftContent = queuedEditDrafts[messageId]?.trim();
+
+    if (draftContent) {
+      onUpdateQueuedMessage(messageId, draftContent);
+    }
+
+    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
+    onHoldQueuedMessage(messageId, false);
   }
 
   function handleTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -806,31 +917,87 @@ export function ChatComposer({
               Review changes
             </button>
           </div>
-          {openMenu === "branch" ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
+          {openMenu === "branch" ? <GitStatusPopover initNotice={gitInitNotice} initializing={gitInitRunning} loading={gitStatusLoading} onInitialize={initializeGitRepository} root={activeRoot} status={gitStatus} /> : null}
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
         <div className="composer-queue-tray" aria-label="Queued follow-up messages">
-          {queuedMessages.map((queuedMessage) => (
-            <div className="composer-queue-row" key={queuedMessage.id}>
-              <CornerDownRight size={15} aria-hidden="true" />
-              <span title={queuedMessage.content}>{formatQueuedMessagePreview(queuedMessage)}</span>
-              {isGenerating ? (
-                <button type="button" className="composer-queue-steer" onClick={() => onSteerQueuedMessage(queuedMessage.id)}>
-                  <CornerDownRight size={14} aria-hidden="true" />
-                  <span>Steer</span>
-                </button>
-              ) : (
-                <span className="composer-queue-state">Queued</span>
-              )}
-              <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => onDeleteQueuedMessage(queuedMessage.id)}>
-                <Trash2 size={14} aria-hidden="true" />
-              </button>
-              <button type="button" className="composer-queue-icon" aria-label="More queued message actions" title="More" disabled>
-                <MoreHorizontal size={15} aria-hidden="true" />
-              </button>
-            </div>
-          ))}
+          {queuedMessages.map((queuedMessage) => {
+            const editDraft = queuedEditDrafts[queuedMessage.id];
+            const isEditingQueuedMessage = editDraft !== undefined;
+            const isHeldQueuedMessage = heldQueuedMessageIdSet.has(queuedMessage.id);
+            const canSteerQueuedMessage = isGenerating && (editDraft ?? queuedMessage.content).trim().length > 0;
+
+            return (
+              <div className="composer-queue-row" data-editing={isEditingQueuedMessage} key={queuedMessage.id}>
+                <CornerDownRight size={15} aria-hidden="true" />
+                {isEditingQueuedMessage ? (
+                  <label className="composer-queue-edit">
+                    <span className="sr-only">Edit queued steering message</span>
+                    <textarea
+                      autoFocus
+                      rows={2}
+                      value={editDraft}
+                      onChange={(event) => updateQueuedMessageDraft(queuedMessage.id, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                          event.preventDefault();
+                          if (canSteerQueuedMessage) {
+                            steerQueuedMessage(queuedMessage.id);
+                          }
+                        }
+                      }}
+                    />
+                  </label>
+                ) : (
+                  <span title={queuedMessage.content}>{formatQueuedMessagePreview(queuedMessage)}</span>
+                )}
+                {isGenerating ? (
+                  <button type="button" className="composer-queue-steer" disabled={!canSteerQueuedMessage} onClick={() => steerQueuedMessage(queuedMessage.id)}>
+                    <CornerDownRight size={14} aria-hidden="true" />
+                    <span>Steer</span>
+                  </button>
+                ) : isHeldQueuedMessage ? (
+                  <button type="button" className="composer-queue-steer" onClick={() => resumeQueuedMessage(queuedMessage.id)}>
+                    <Check size={14} aria-hidden="true" />
+                    <span>Queue</span>
+                  </button>
+                ) : (
+                  <span className="composer-queue-state">Queued</span>
+                )}
+                {isEditingQueuedMessage ? (
+                  <button type="button" className="composer-queue-icon" aria-label="Cancel queued message edit" title="Cancel edit" onClick={() => cancelQueuedMessageEdit(queuedMessage.id)}>
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => onDeleteQueuedMessage(queuedMessage.id)}>
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                )}
+                <span className="composer-queue-menu-wrap">
+                  <button
+                    type="button"
+                    className="composer-queue-icon"
+                    aria-label="More queued message actions"
+                    aria-haspopup="menu"
+                    aria-expanded={queueMenuMessageId === queuedMessage.id}
+                    title="More"
+                    onClick={() => setQueueMenuMessageId((currentId) => (currentId === queuedMessage.id ? null : queuedMessage.id))}
+                  >
+                    <MoreHorizontal size={15} aria-hidden="true" />
+                  </button>
+                  {queueMenuMessageId === queuedMessage.id ? (
+                    <div className="composer-queue-menu" role="menu" aria-label="Queued message actions">
+                      <button type="button" role="menuitem" onClick={() => beginQueuedMessageEdit(queuedMessage)}>
+                        <Pencil size={14} aria-hidden="true" />
+                        <span>Edit</span>
+                      </button>
+                    </div>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
       <label className="composer-input-wrap">
@@ -900,7 +1067,7 @@ export function ChatComposer({
                   <Globe2 size={18} aria-hidden="true" />
                   <span>
                     <strong>Web search</strong>
-                    <small>{webSearch.enabled ? `DuckDuckGo up to ${webSearch.maxResults} sources` : "Use DuckDuckGo when this message needs sources"}</small>
+                    <small>{webSearch.enabled ? `${webSearchProviderLabel} up to ${webSearch.maxResults} sources` : `Use ${webSearchProviderLabel} when this message needs sources`}</small>
                   </span>
                   <span className="composer-switch" data-on={webSearch.enabled}>
                     <span />
@@ -916,38 +1083,12 @@ export function ChatComposer({
                   <Wand2 size={18} aria-hidden="true" />
                   <span>
                     <strong>Plan mode</strong>
-                    <small>{planMode.enabled ? `Up to ${planMode.maxPasses} passes` : "Adaptive pass budget"}</small>
+                    <small>{planMode.enabled ? "Research the codebase and write a plan to approve" : "Have Gilbert read the code and propose a plan first"}</small>
                   </span>
                   <span className="composer-switch" data-on={planMode.enabled}>
                     <span />
                   </span>
                 </button>
-                {planMode.enabled ? (
-                  <div className="composer-plan-inline" role="group" aria-label="Plan mode settings">
-                    <div className="composer-plan-inline-header">
-                      <ListChecks size={14} aria-hidden="true" />
-                      <span>
-                        <strong>Planning flow</strong>
-                        <small>Stage-by-stage, then final answer</small>
-                      </span>
-                    </div>
-                    <div className="composer-plan-pass-row" role="radiogroup" aria-label="Maximum planning passes">
-                      {planningPassOptions.map((passCount) => (
-                        <button
-                          key={passCount}
-                          type="button"
-                          role="radio"
-                          aria-checked={planMode.maxPasses === passCount}
-                          data-selected={planMode.maxPasses === passCount}
-                          onClick={() => setPlanningPasses(passCount)}
-                        >
-                          <strong>{passCount}</strong>
-                          <small>{passCount === DEFAULT_PLANNING_MAX_PASSES ? "Deep" : passCount === 5 ? "Balanced" : "Quick"}</small>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
                 <div className="composer-menu-separator" />
                 <div className="composer-menu-panel">
                   <ThinkingModeControls settings={thinking} onChange={onThinkingChange} variant="panel" />
@@ -977,85 +1118,32 @@ export function ChatComposer({
         <div className="composer-actions-left">
           <div className="composer-menu-anchor">
             <button
+              ref={modelButtonRef}
               className="mode-chip mode-chip-model"
               type="button"
               aria-haspopup="menu"
               aria-expanded={openMenu === "model"}
               data-active={openMenu === "model"}
-              onClick={() => toggleMenu("model")}
+              onClick={handleModelMenuClick}
+              onPointerDown={handleModelMenuPointerDown}
             >
               <Sparkles size={16} aria-hidden="true" />
               <span>{selectedModel.label}</span>
               <ChevronDown size={15} aria-hidden="true" />
             </button>
             {openMenu === "model" ? (
-              <div className="composer-popover composer-popover-model" role="menu" aria-label="Model selector">
-                <div className="model-provider-current">
-                  <strong>{selectedProvider.label}</strong>
-                  <small>{selectedProvider.detail}</small>
-                </div>
-                {MODEL_PROVIDERS.map((provider) => {
-                  const providerModel = provider.id === providerSettings.provider ? model : providerSettings.providerModels[provider.id] || provider.defaultModel;
-                  const providerOptions = buildProviderModelOptions(provider.id, liveModelCatalogs[provider.id], providerModel);
-                  const isLiveCatalogProvider = usesLiveModelCatalog(provider.id);
-                  const liveCatalogModelCount = liveModelCatalogs[provider.id]?.length ?? 0;
-                  const liveCatalogStatus = liveModelCatalogStatus[provider.id] ?? "idle";
-                  const liveCatalogNote = createLiveCatalogNote(
-                    provider.label,
-                    providerSettings.baseUrls[provider.id] || provider.defaultBaseUrl,
-                    liveCatalogStatus,
-                    liveModelCatalogErrors[provider.id],
-                    liveCatalogModelCount,
-                  );
-
-                  return (
-                    <div className="model-provider-group" key={provider.id}>
-                      <div className="model-provider-heading">
-                        <span>{provider.label}</span>
-                        <small>{isLiveCatalogProvider ? formatLiveCatalogHeading(liveCatalogStatus, liveCatalogModelCount) : providerOptions.length}</small>
-                      </div>
-                      {isLiveCatalogProvider && liveCatalogNote ? <div className="model-provider-note">{liveCatalogNote}</div> : null}
-                      {providerOptions.map((option) => {
-                      const selected = option.value === selectedModel.value && option.provider === providerSettings.provider;
-                      const optionContextWindow =
-                        modelContextWindows[option.value] ??
-                        (option.contextWindowTokens
-                          ? {
-                              source: "provider" as const,
-                              tokens: option.contextWindowTokens,
-                            }
-                          : getFallbackModelContextWindow(option.value));
-                      return (
-                        <button
-                          key={option.id}
-                          className="composer-menu-item composer-menu-item-stacked"
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={selected}
-                          data-selected={selected}
-                          onClick={() => {
-                            onModelChange(option.value, option.provider);
-                            setOpenMenu(null);
-                          }}
-                        >
-                          <Sparkles size={18} aria-hidden="true" />
-                          <span>
-                            <strong>{option.label}</strong>
-                            <small className="model-option-detail">
-                              <span>{option.detail}</span>
-                              <span className="model-context-size" title={modelContextWindowTitle(optionContextWindow)}>
-                                {formatModelContextWindow(optionContextWindow)}
-                              </span>
-                            </small>
-                          </span>
-                          {selected ? <Check size={18} aria-hidden="true" /> : null}
-                        </button>
-                      );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
+              <ModelSelectorPopover
+                anchorRef={modelButtonRef}
+                liveModelCatalogErrors={liveModelCatalogErrors}
+                liveModelCatalogs={liveModelCatalogs}
+                liveModelCatalogStatus={liveModelCatalogStatus}
+                model={model}
+                modelContextWindows={modelContextWindows}
+                onClose={() => setOpenMenu(null)}
+                onModelChange={onModelChange}
+                providerSettings={providerSettings}
+                selectedModel={selectedModel}
+              />
             ) : null}
           </div>
         </div>
@@ -1070,7 +1158,20 @@ export function ChatComposer({
             data-warning={voiceState === "blocked" || voiceState === "unsupported" || voiceState === "error"}
             onClick={handleVoiceToggle}
           >
-            {voiceBusy ? <LoaderCircle size={18} aria-hidden="true" /> : voiceState === "listening" ? <MicOff size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
+            {voiceBusy ? (
+              <LoaderCircle size={18} aria-hidden="true" />
+            ) : voiceState === "listening" ? (
+              <span className="voice-waveform" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+                <span />
+              </span>
+            ) : voiceState === "error" || voiceState === "blocked" || voiceState === "unsupported" ? (
+              <MicOff size={18} aria-hidden="true" />
+            ) : (
+              <Mic size={18} aria-hidden="true" />
+            )}
           </button>
           {isGenerating && onStopGeneration ? (
             <button className="send-button send-button-stop" type="button" aria-label="Stop response" title="Stop response" onClick={() => onStopGeneration()}>
@@ -1123,7 +1224,16 @@ export function ChatComposer({
             <span>{localWorkspace.enabled ? "Work locally" : "Local off"}</span>
             <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "local" ? <LocalWorkspacePopover providerLabel={selectedProvider.label} settings={localWorkspace} onChange={onLocalWorkspaceChange} /> : null}
+          {openMenu === "local" ? (
+            <LocalWorkspacePopover
+              providerLabel={selectedProvider.label}
+              providerUsage={contextUsage}
+              providerUsagePercent={contextUsagePercent}
+              settings={localWorkspace}
+              onChange={onLocalWorkspaceChange}
+              onForkWorktree={onForkWorktree}
+            />
+          ) : null}
         </div>
         <div className="composer-menu-anchor composer-branch-root">
           <button
@@ -1139,7 +1249,7 @@ export function ChatComposer({
             <span>{gitBranchLabel}</span>
             <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "branch" && !hasGitChangeSummary ? <GitStatusPopover loading={gitStatusLoading} root={activeRoot} status={gitStatus} /> : null}
+          {openMenu === "branch" && !hasGitChangeSummary ? <GitStatusPopover initNotice={gitInitNotice} initializing={gitInitRunning} loading={gitStatusLoading} onInitialize={initializeGitRepository} root={activeRoot} status={gitStatus} /> : null}
         </div>
         <div className="composer-menu-anchor composer-context-root">
           <button
@@ -1167,8 +1277,8 @@ export function ChatComposer({
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
         {isGenerating ? <span className="composer-status">Generating response</span> : null}
         {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
-        {webSearch.enabled ? <span className="composer-status composer-status-web">DuckDuckGo web on</span> : null}
-        {planMode.enabled ? <span className="composer-status">Plan mode - up to {planMode.maxPasses} passes</span> : null}
+        {webSearch.enabled ? <span className="composer-status composer-status-web">{webSearchProviderLabel} web on</span> : null}
+        {planMode.enabled ? <span className="composer-status">Plan mode</span> : null}
       </div>
     </form>
   );
@@ -1275,7 +1385,21 @@ function parseProjectOptionDate(value: string) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
-function GitStatusPopover({ loading, root, status }: { loading: boolean; root: string; status: ComputerGitStatus | null }) {
+function GitStatusPopover({
+  initNotice,
+  initializing,
+  loading,
+  onInitialize,
+  root,
+  status,
+}: {
+  initNotice: { kind: "error" | "success"; message: string } | null;
+  initializing: boolean;
+  loading: boolean;
+  onInitialize: () => void;
+  root: string;
+  status: ComputerGitStatus | null;
+}) {
   if (loading) {
     return (
       <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
@@ -1289,6 +1413,7 @@ function GitStatusPopover({ loading, root, status }: { loading: boolean; root: s
 
   if (!status?.available) {
     const issue = getGitStatusIssue(status, root);
+    const canInitialize = issue.kind === "not-repo" && Boolean(root);
 
     return (
       <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
@@ -1302,6 +1427,13 @@ function GitStatusPopover({ loading, root, status }: { loading: boolean; root: s
           </span>
         </div>
         {issue.hint ? <div className="git-status-hint">{issue.hint}</div> : null}
+        {canInitialize ? (
+          <button type="button" className="git-status-action" disabled={initializing} onClick={onInitialize}>
+            {initializing ? <LoaderCircle size={15} aria-hidden="true" /> : <GitBranch size={15} aria-hidden="true" />}
+            <span>Initialize Git</span>
+          </button>
+        ) : null}
+        {initNotice ? <div className="git-status-notice" data-kind={initNotice.kind}>{initNotice.message}</div> : null}
         {status?.error ? (
           <div className="git-status-error-detail" title={status.error}>
             {status.error}
@@ -1343,7 +1475,21 @@ function GitStatusPopover({ loading, root, status }: { loading: boolean; root: s
   );
 }
 
-function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange: (settings: LocalWorkspaceSettings) => void; providerLabel: string; settings: LocalWorkspaceSettings }) {
+function LocalWorkspacePopover({
+  onChange,
+  onForkWorktree,
+  providerLabel,
+  providerUsage,
+  providerUsagePercent,
+  settings,
+}: {
+  onChange: (settings: LocalWorkspaceSettings) => void;
+  onForkWorktree?: () => void | Promise<void>;
+  providerLabel: string;
+  providerUsage: ContextWindowUsage;
+  providerUsagePercent: number;
+  settings: LocalWorkspaceSettings;
+}) {
   const activeIndexRequestRef = useRef<number | null>(null);
   const indexRequestRef = useRef(0);
   const [drives, setDrives] = useState<ComputerDrive[]>([]);
@@ -1469,7 +1615,9 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
       };
 
       commitSettings(nextSettings);
-      void rebuildIndex(nextSettings, scope === "full-computer" ? "Auto-indexing drives" : "Auto-indexing folder");
+      if (scope !== "full-computer") {
+        void rebuildIndex(nextSettings, "Auto-indexing folder");
+      }
 
       if (scope !== "full-computer" && roots[0]) {
         setBrowserPath(roots[0]);
@@ -1511,7 +1659,7 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
     if (scope === "full-computer") {
       const driveList = drives.length > 0 ? drives : await listComputerDrives();
       setDrives(driveList);
-      return driveList.map((drive) => drive.path);
+      return mergeFullComputerRoots(settings.roots, driveList);
     }
 
     if (scope === "current-folder") {
@@ -1532,6 +1680,24 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
   }
 
   async function rebuildIndex(settingsOverride: LocalWorkspaceSettings = settings, reason = "Indexing workspace") {
+    if (settingsOverride.scope === "full-computer") {
+      const roots = settingsOverride.roots.length > 0 ? settingsOverride.roots : await resolveRootsForScope(settingsOverride.scope);
+      onChange({
+        ...settingsOverride,
+        enabled: true,
+        indexReason: undefined,
+        indexStatus: "idle",
+        indexSummary: undefined,
+        indexUpdatedAt: undefined,
+        lastError: undefined,
+        roots,
+      });
+      setIndexing(false);
+      setIndexProgress(null);
+      setError(null);
+      return;
+    }
+
     const requestId = indexRequestRef.current + 1;
     indexRequestRef.current = requestId;
     activeIndexRequestRef.current = requestId;
@@ -1646,18 +1812,16 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
           <span>Work locally</span>
           {settings.enabled ? <Check size={18} aria-hidden="true" /> : null}
         </button>
-        <button type="button" disabled title="New worktree support is coming after folder projects settle.">
+        <button
+          type="button"
+          disabled={!onForkWorktree || settings.roots.length === 0}
+          title={settings.roots.length === 0 ? "Choose a Git-backed project folder before creating a worktree." : "Fork this chat into a new Git worktree."}
+          onClick={() => void onForkWorktree?.()}
+        >
           <CornerDownRight size={18} aria-hidden="true" />
           <span>New worktree</span>
         </button>
-        <button type="button" disabled>
-          <Gauge size={18} aria-hidden="true" />
-          <span>
-            Rate limits remaining
-            <small>{providerLabel} usage view coming soon</small>
-          </span>
-          <ChevronRight size={17} aria-hidden="true" />
-        </button>
+        <ProviderUsageSnapshot providerLabel={providerLabel} usage={providerUsage} usagePercent={providerUsagePercent} />
       </div>
 
       <div className="local-scope-row" role="radiogroup" aria-label="Local workspace scope">
@@ -1716,7 +1880,7 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
       ) : null}
 
       <div className="local-index-row">
-        <button type="button" disabled={indexing || selectedRoots.length === 0} onClick={() => void rebuildIndex(settings, "Indexing workspace")}>
+        <button type="button" disabled={indexing || selectedRoots.length === 0 || settings.scope === "full-computer"} onClick={() => void rebuildIndex(settings, "Indexing workspace")}>
           {indexing ? <LoaderCircle size={15} aria-hidden="true" /> : <RefreshCw size={15} aria-hidden="true" />}
           <span>{indexing ? formatIndexButtonLabel(liveIndexProgress) : "Index now"}</span>
         </button>
@@ -1746,6 +1910,60 @@ function LocalWorkspacePopover({ onChange, providerLabel, settings }: { onChange
   );
 }
 
+function ProviderUsageSnapshot({ providerLabel, usage, usagePercent }: { providerLabel: string; usage: ContextWindowUsage; usagePercent: number }) {
+  const reservePercent = Math.min(Math.round((usage.maxOutputTokens / usage.contextWindowTokens) * 100), 100);
+  const isProviderUsage = usage.tokenSource === "openrouter" || usage.tokenSource === "provider";
+  const sourceLabel =
+    usage.tokenSource === "projected"
+      ? "Projected next request"
+      : isProviderUsage
+        ? "Last provider payload"
+        : "Provider-visible request estimate";
+
+  return (
+    <div className="local-provider-usage-card" role="group" aria-label={`${providerLabel} usage`}>
+      <div className="local-provider-usage-header">
+        <Gauge size={17} aria-hidden="true" />
+        <span>
+          <strong>Provider usage</strong>
+          <small>
+            {providerLabel} - {sourceLabel}
+          </small>
+        </span>
+        <em>{formatTokenCount(usage.inputTokens)}</em>
+      </div>
+      <div className="local-provider-usage-meter" aria-hidden="true">
+        <span style={{ width: `${usagePercent}%` }} />
+        <em style={{ width: `${reservePercent}%` }} />
+      </div>
+      <dl className="local-provider-usage-list">
+        <div>
+          <dt>{isProviderUsage ? "Provider prompt" : "Provider payload estimate"}</dt>
+          <dd>{formatTokenCount(usage.inputTokens)}</dd>
+        </div>
+        <div>
+          <dt>Chat, tools, sources</dt>
+          <dd>{formatTokenCount(usage.messageTokens)}</dd>
+        </div>
+        <div>
+          <dt>System, runtime, envelope</dt>
+          <dd>{formatTokenCount(usage.systemTokens + usage.requestOverheadTokens)}</dd>
+        </div>
+        <div>
+          <dt>Response cap</dt>
+          <dd>{formatTokenCount(usage.maxOutputTokens)}</dd>
+        </div>
+        {typeof usage.openRouterTotalTokens === "number" ? (
+          <div>
+            <dt>Provider actual total</dt>
+            <dd>{formatTokenCount(usage.openRouterTotalTokens)}</dd>
+          </div>
+        ) : null}
+      </dl>
+    </div>
+  );
+}
+
 function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?: ContextCompactionNotice | null; usage: ContextWindowUsage; usagePercent: number }) {
   const reservePercent = Math.min(Math.round((usage.maxOutputTokens / usage.contextWindowTokens) * 100), 100);
   const compactPercent = Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100);
@@ -1764,8 +1982,8 @@ function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?
               : isProviderUsage
                 ? "Provider usage from last request"
                 : usage.source === "openrouter" || usage.source === "provider"
-                  ? "Estimated prompt payload against model limit"
-                : "Estimated prompt payload against estimated limit"}
+                  ? "Provider-visible payload estimate against model limit"
+                : "Provider-visible payload estimate against estimated limit"}
           </small>
         </span>
         <strong>
@@ -1781,9 +1999,9 @@ function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?
         {isProjectedUsage
           ? "Uses the last provider prompt as a baseline and adds the current draft estimate, so typing does not hide transient tool context."
           : isProviderUsage
-            ? "Prompt and completion use provider returned usage. Section rows are the app's normalized split of that exact prompt total."
-            : "Estimated from the serialized provider request body. The response cap is tracked separately."}{" "}
-        Auto compacts at {compactPercent}% ({formatTokenCount(compactTokenLimit)}).
+            ? "Provider-reported prompt tokens replace the serialized estimate after a send."
+            : "Estimated from the exact serialized provider request body. The response cap is tracked separately."}{" "}
+        Auto compacts only after the prompt payload exceeds the selected input window ({formatTokenCount(compactTokenLimit)}).
       </p>
       <dl className="context-window-list">
         {compaction ? (
@@ -1800,7 +2018,7 @@ function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?
           </div>
         ) : null}
         <div>
-          <dt>{isProjectedUsage ? "Projected prompt" : isProviderUsage ? "Provider prompt" : "Prompt payload estimate"}</dt>
+          <dt>{isProjectedUsage ? "Projected provider prompt" : isProviderUsage ? "Provider prompt" : "Provider payload estimate"}</dt>
           <dd>{formatTokenCount(usage.inputTokens)}</dd>
         </div>
         {typeof usage.openRouterCompletionTokens === "number" ? (
@@ -1884,6 +2102,11 @@ function formatQueuedMessagePreview(message: ChatMessage) {
   return `${attachmentCount} attachments`;
 }
 
+function removeQueuedEditDraft(drafts: Record<string, string>, messageId: string) {
+  const { [messageId]: _removed, ...nextDrafts } = drafts;
+  return nextDrafts;
+}
+
 function getBuiltInSpeechRecognition() {
   const speechWindow = window as Window & {
     SpeechRecognition?: BuiltInSpeechRecognitionConstructor;
@@ -1953,6 +2176,7 @@ function createIndexProgressFromRoots(requestId: number, roots: string[]): Compu
   return {
     done: false,
     entryCount: 0,
+    ignoredEntries: 0,
     requestId,
     roots,
     scannedDirectories: 0,
@@ -1965,6 +2189,7 @@ function createIndexProgressFromSummary(requestId: number, summary: ComputerFile
   return {
     done: true,
     entryCount: summary.entryCount,
+    ignoredEntries: summary.ignoredEntries,
     requestId,
     roots: summary.roots,
     scannedDirectories: summary.scannedDirectories,
@@ -1988,9 +2213,10 @@ function formatLiveIndexProgress(progress: ComputerFileIndexProgress | null) {
 
   const entries = formatCompactCount(progress.entryCount);
   const folders = formatCompactCount(progress.scannedDirectories);
+  const ignored = progress.ignoredEntries > 0 ? `, ${formatCompactCount(progress.ignoredEntries)} ignored` : "";
   const skipped = progress.skippedEntries > 0 ? `, ${formatCompactCount(progress.skippedEntries)} skipped` : "";
   const cap = progress.truncated ? ", capped" : "";
-  return `${entries} items, ${folders} folders${skipped}${cap}`;
+  return `${entries} items, ${folders} folders${ignored}${skipped}${cap}`;
 }
 
 function formatIndexCurrentPath(path?: string) {

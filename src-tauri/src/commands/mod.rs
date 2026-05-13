@@ -9,4 +9,5 @@ pub mod github;
 pub mod settings;
 pub mod terminal;
 pub mod updates;
+pub mod weather;
 pub mod web;

@@ -4,11 +4,13 @@ import { AppTopBar } from "../chrome/AppTopBar";
 import { ShellSidebar } from "./ShellSidebar";
 import { SearchDialog } from "../search/SearchDialog";
 import { TerminalPanel } from "../terminal/TerminalPanel";
+import { useAnimatedPresence } from "../../lib/useAnimatedPresence";
 import type { AppInfo } from "../../types/app";
 import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { ProjectSummary } from "../../types/project";
+import type { AppearanceMode } from "../../types/settings";
 import type { TerminalAttachedSession } from "../../types/terminal";
 import type { SettingsSectionId } from "../../pages/settings/types";
 
@@ -16,12 +18,14 @@ interface AppShellProps {
   activeRoute: PrimaryRoute;
   activeSettingsSection: SettingsSectionId;
   appInfo: AppInfo;
+  appearanceMode: AppearanceMode;
   authUser: AuthUser;
   chats: ChatSummary[];
   children: ReactNode;
   desktopRuntime: boolean;
   activeChatId: string;
   onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onAppearanceModeChange: (mode: AppearanceMode) => void;
   onCloseSearch: () => void;
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
@@ -53,10 +57,12 @@ export function AppShell({
   activeRoute,
   activeSettingsSection,
   appInfo,
+  appearanceMode,
   authUser,
   chats,
   children,
   desktopRuntime,
+  onAppearanceModeChange,
   onCreateProject,
   onCloseSearch,
   onDeleteChat,
@@ -83,6 +89,8 @@ export function AppShell({
   terminalOpen,
   terminalWorkingDirectory,
 }: AppShellProps) {
+  const sidebarPresence = useAnimatedPresence(sidebarOpen, 360);
+  const sidebarState = sidebarOpen ? "open" : sidebarPresence.exiting ? "closing" : "closed";
   const rootStyle = {
     "--terminal-height": `${terminalHeight}px`,
   } as CSSProperties;
@@ -102,9 +110,11 @@ export function AppShell({
       <AppTopBar
         activeRoute={activeRoute}
         appInfo={appInfo}
+        appearanceMode={appearanceMode}
         desktopRuntime={desktopRuntime}
         sidebarOpen={sidebarOpen}
         terminalOpen={terminalOpen}
+        onAppearanceModeChange={onAppearanceModeChange}
         onNewChat={onNewChat}
         onOpenSearch={onOpenSearch}
         onRouteChange={onRouteChange}
@@ -122,59 +132,63 @@ export function AppShell({
       >
         <PanelLeft size={18} aria-hidden="true" />
       </button>
-      <div className="workspace-shell" data-sidebar-open={sidebarOpen}>
-        <ShellSidebar
-          activeChatId={activeChatId}
-          activeRoute={activeRoute}
-          activeSettingsSection={activeSettingsSection}
-          authUser={authUser}
-          chats={chats}
-          open={sidebarOpen}
-          projects={projects}
-          onCreateProject={async () => {
-            const createdProjectName = await onCreateProject();
-            closeSidebarOnSmallScreens();
-            return createdProjectName;
-          }}
-          onDeleteChat={(chatId) => {
-            onDeleteChat(chatId);
-            closeSidebarOnSmallScreens();
-          }}
-          onDeleteProject={(projectName) => {
-            onDeleteProject(projectName);
-            closeSidebarOnSmallScreens();
-          }}
-          onNewChat={(project) => {
-            onNewChat(project);
-            closeSidebarOnSmallScreens();
-          }}
-          onOpenBulkDeleteChats={() => {
-            onOpenBulkDeleteChats();
-            closeSidebarOnSmallScreens();
-          }}
-          onOpenSearch={() => {
-            onOpenSearch();
-            closeSidebarOnSmallScreens();
-          }}
-          onLogout={onLogout}
-          onRouteChange={(route) => {
-            onRouteChange(route);
-            closeSidebarOnSmallScreens();
-          }}
-          onSelectChat={(chatId) => {
-            onSelectChat(chatId);
-            closeSidebarOnSmallScreens();
-          }}
-          onSelectProject={(project) => {
-            onSelectProject(project);
-            closeSidebarOnSmallScreens();
-          }}
-          onSettingsSectionChange={(section) => {
-            onSettingsSectionChange(section);
-            closeSidebarOnSmallScreens();
-          }}
-          onTogglePin={onTogglePin}
-        />
+      <div className="workspace-shell" data-sidebar-open={sidebarOpen} data-sidebar-state={sidebarState}>
+        <div className="sidebar-stage" data-sidebar-state={sidebarState}>
+          {sidebarPresence.mounted ? (
+            <ShellSidebar
+              activeChatId={activeChatId}
+              activeRoute={activeRoute}
+              activeSettingsSection={activeSettingsSection}
+              authUser={authUser}
+              chats={chats}
+              open={sidebarOpen && !sidebarPresence.exiting}
+              projects={projects}
+              onCreateProject={async () => {
+                const createdProjectName = await onCreateProject();
+                closeSidebarOnSmallScreens();
+                return createdProjectName;
+              }}
+              onDeleteChat={(chatId) => {
+                onDeleteChat(chatId);
+                closeSidebarOnSmallScreens();
+              }}
+              onDeleteProject={(projectName) => {
+                onDeleteProject(projectName);
+                closeSidebarOnSmallScreens();
+              }}
+              onNewChat={(project) => {
+                onNewChat(project);
+                closeSidebarOnSmallScreens();
+              }}
+              onOpenBulkDeleteChats={() => {
+                onOpenBulkDeleteChats();
+                closeSidebarOnSmallScreens();
+              }}
+              onOpenSearch={() => {
+                onOpenSearch();
+                closeSidebarOnSmallScreens();
+              }}
+              onLogout={onLogout}
+              onRouteChange={(route) => {
+                onRouteChange(route);
+                closeSidebarOnSmallScreens();
+              }}
+              onSelectChat={(chatId) => {
+                onSelectChat(chatId);
+                closeSidebarOnSmallScreens();
+              }}
+              onSelectProject={(project) => {
+                onSelectProject(project);
+                closeSidebarOnSmallScreens();
+              }}
+              onSettingsSectionChange={(section) => {
+                onSettingsSectionChange(section);
+                closeSidebarOnSmallScreens();
+              }}
+              onTogglePin={onTogglePin}
+            />
+          ) : null}
+        </div>
         <button
           className="sidebar-mobile-backdrop"
           type="button"

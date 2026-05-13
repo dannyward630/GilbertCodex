@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, ExternalLink, GitBranch, Github, KeyRound, LogIn, ShieldCheck, Trash2, X } from "lucide-react";
+import { BookOpen, CheckCircle2, Copy, ExternalLink, GitBranch, Github, KeyRound, LogIn, ShieldCheck, Trash2, X } from "lucide-react";
 import type { GithubConnectionState, GithubDeviceLoginSession, GithubRepository } from "../../../types/github";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -25,6 +25,19 @@ interface GithubSettingsPageProps {
   onStartBrowserLogin: () => void;
   onUpdateGithubOauthClientId: (clientId: string) => void;
 }
+
+const GITHUB_DOC_LINKS = [
+  { href: "https://github.com/settings/developers", label: "Developer settings" },
+  { href: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app", label: "Create OAuth App" },
+  { href: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps", label: "Device flow" },
+  { href: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps", label: "OAuth scopes" },
+  { href: "https://docs.github.com/en/rest", label: "REST API" },
+  { href: "https://docs.github.com/en/rest/repos/repos", label: "Repositories API" },
+  { href: "https://docs.github.com/en/rest/repos/contents", label: "Contents API" },
+  { href: "https://docs.github.com/en/rest/pulls/pulls", label: "Pull requests API" },
+  { href: "https://docs.github.com/en/rest/actions/workflows", label: "Actions workflows" },
+  { href: "https://github.com/UrbanWafflezz/GilbertCodex/blob/main/docs/github/README.md", label: "Repo setup guide" },
+] as const;
 
 export function GithubSettingsPage({
   accountDetail,
@@ -221,6 +234,49 @@ export function GithubSettingsPage({
               <span>No repository preview loaded.</span>
             </div>
           )}
+        </article>
+
+        <article className="settings-card settings-card-wide integration-docs-card github-docs-card">
+          <div className="settings-card-heading github-card-heading">
+            <BookOpen size={19} aria-hidden="true" />
+            <div>
+              <h2>Docs</h2>
+              <p>Updated May 12, 2026 from GitHub's OAuth App, device-flow, scope, and REST API docs.</p>
+            </div>
+          </div>
+
+          <div className="integration-docs-body">
+            <section className="integration-doc-section" aria-labelledby="github-docs-setup-title">
+              <h3 id="github-docs-setup-title">Setup steps</h3>
+              <ol className="integration-doc-steps">
+                <li>Open GitHub Developer settings, create an OAuth App, and use public-safe app details.</li>
+                <li>Set Homepage URL to the project or repository page, set Authorization callback URL to <code>http://localhost</code>, and enable Device Flow.</li>
+                <li>Copy the public Client ID into this page or into <code>VITE_GITHUB_OAUTH_CLIENT_ID</code> for local development.</li>
+                <li>Click Continue with GitHub. Gilbert starts device-flow login and sends you to <code>https://github.com/login/device</code> with a user code.</li>
+                <li>Approve the requested scopes. Scopes limit token access and do not exceed the signed-in account's own repository permissions.</li>
+                <li>Return to Gilbert and wait for the connection state to show your username, then click Check access.</li>
+                <li>Confirm repository previews load, then use chat for repository reads, code search, branch work, commits, PRs, releases, and workflow runs.</li>
+                <li>Reconnect from this page after changing scopes, replacing the OAuth App, or authorizing SSO for organization repositories.</li>
+              </ol>
+            </section>
+
+            <section className="integration-doc-section" aria-labelledby="github-docs-links-title">
+              <h3 id="github-docs-links-title">Official links</h3>
+              <ul className="integration-doc-link-list">
+                {GITHUB_DOC_LINKS.map((link) => (
+                  <li key={link.href}>
+                    <a href={link.href} rel="noreferrer" target="_blank">
+                      <span>{link.label}</span>
+                      <ExternalLink size={14} aria-hidden="true" />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              <p className="integration-doc-note">
+                Gilbert uses device flow and a public Client ID. Do not paste a GitHub OAuth client secret into this app.
+              </p>
+            </section>
+          </div>
         </article>
       </div>
     </>

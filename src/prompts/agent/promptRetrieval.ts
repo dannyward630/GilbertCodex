@@ -292,6 +292,7 @@ function getEnabledToolNames(settings: ProviderSettings) {
 
   return [
     tools.webSearch ? "web_search" : "",
+    tools.weatherTools ? "weather" : "",
     tools.fileSearch ? "recall_context" : "",
     tools.fileSearch ? "search_files" : "",
     tools.codeView ? "view_code" : "",
@@ -301,6 +302,7 @@ function getEnabledToolNames(settings: ProviderSettings) {
     tools.codeEdit ? "edit_file" : "",
     tools.codeEdit ? "write_file" : "",
     tools.fileCreation ? "create_files" : "",
+    tools.fileCreation ? "create_vite_project" : "",
     tools.fileSafety ? "delete_file" : "",
     tools.testingTools ? "run_tests" : "",
     tools.typescriptTools ? "typescript_check" : "",
@@ -327,7 +329,8 @@ function hasAnyLocalTool(settings: ProviderSettings) {
     tools.reactNativeTools ||
     tools.codeGeneration ||
     tools.terminal ||
-    tools.browserPreview
+    tools.browserPreview ||
+    tools.weatherTools
   );
 }
 
@@ -344,5 +347,5 @@ function hasLocalComputerContextMessage(message: ChatMessage) {
 }
 
 function hasWebContextMessage(message: ChatMessage) {
-  return message.id.startsWith("web-context") || message.content.includes("WEB SEARCH CONTEXT - DuckDuckGo") || message.content.includes("WEB TOOL RESULTS");
+  return message.id.startsWith("web-context") || message.content.includes("WEB SEARCH CONTEXT - ") || message.content.includes("WEB TOOL RESULTS");
 }

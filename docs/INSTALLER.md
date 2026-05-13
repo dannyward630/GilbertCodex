@@ -49,7 +49,7 @@ The GitHub `Release` workflow builds the Windows NSIS installer with the same up
 
 ## What Stays Local
 
-Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, release signing credentials, and updater private keys are not bundled into public installers. Those are created or connected by the user after installation.
+Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, and updater private keys are not bundled into public installers. Those are created or connected by the user after installation.
 
 ## Light And Dark Mode
 

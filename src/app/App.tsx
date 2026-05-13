@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Info, Trash2 } from "lucide-react";
 import { AuthPage } from "../pages/AuthPage";
-import { ConfirmDialog, DialogShell, NoticeDialog } from "../components/dialogs/AppDialog";
+import { ConfirmDialog, DialogShell, NoticeDialog, TextInputDialog } from "../components/dialogs/AppDialog";
 import { AppShell } from "../components/layout/AppShell";
+import { OnboardingDialog } from "../components/onboarding/OnboardingDialog";
 import { ChatPage } from "../pages/ChatPage";
 import { SettingsPage } from "../pages/settings/SettingsPage";
 import type { SettingsSectionId } from "../pages/settings/types";
+import { McpPage } from "../pages/McpPage";
 import { ToolboxPage } from "../pages/ToolboxPage";
+import { WeatherRadarPage } from "../pages/WeatherRadarPage";
 import { WorkflowsPage } from "../pages/WorkflowsPage";
 import {
   loadActiveChatId,
@@ -14,6 +17,7 @@ import {
   loadChats,
   loadDiscordBridgeSettings,
   loadLocalWorkspaceSettings,
+  loadPersistentString,
   loadProjects,
   loadProviderSettings,
   saveActiveChatId,
@@ -21,6 +25,7 @@ import {
   saveChats,
   saveDiscordBridgeSettings,
   saveLocalWorkspaceSettings,
+  savePersistentString,
   saveProjects,
   saveProviderSettings,
   initializeDeviceStorage,
@@ -49,18 +54,19 @@ import {
   type ModelContextWindowMap,
 } from "../lib/contextWindow";
 import { getEffectiveMaxOutputTokens } from "../lib/generationSettings";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { CHAT_MODEL_OPTIONS, getModelProvider, getProviderApiKey, supportsProviderThinking } from "../lib/models";
+import { createPdfLibraryContextMessages, syncPdfLibraryFromChats } from "../lib/pdfLibrary";
 import {
-  clampPlanningPasses,
   createPlanningInputRequest,
   createPlanningProgress,
-  DEFAULT_PLANNING_MAX_PASSES,
   runPlanningMode,
+  type PlanningProviderRequest,
 } from "../services/planningClient";
 import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
 import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
-import { buildComputerFileIndex, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../tools/computer/files";
+import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../tools/computer/files";
 import {
   createLocalComputerProgress,
   createApprovalSessionDecisionKey,
@@ -69,25 +75,40 @@ import {
   runLocalComputerToolCalls,
   sanitizeLocalToolCallsForDisplay,
   STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY,
+  type LocalComputerToolExecutionPolicy,
   type LocalSubagentResult,
   type LocalSubagentTask,
 } from "../tools/computer/localToolExecutor";
 import {
   createActiveLocalToolCalls,
+  createFabricatedToolActivityRecoveryInstruction,
   createFinalAnswerRecoveryInstruction,
   createInterruptedResponseContinuationInstruction,
   createLocalToolBudgetFinalInstruction,
   createLocalToolFinalInstruction,
   createMalformedToolCallRecoveryInstruction,
+  createFreshLocalToolEvidenceInstruction,
+  createRecoverableLocalEditRetryInstruction,
+  createToolActionPromiseRecoveryInstruction,
+  createToolProtocolNarrationRecoveryInstruction,
   createPlanningAnswerMessages,
+  createSimpleLocalTaskCompletionAnswer,
   getLatestUserPrompt,
   getPendingPlanningInputRequest,
   getPlanningInputRequests,
+  detectSimpleLocalTaskCompletion,
+  isSimpleLocalScaffoldRequest,
+  isEmptySelectedScaffoldProbe,
+  isRecoverableLocalEditFailure,
   isAbortError,
   isInterruptedAssistantMessage,
   isToolResultFallbackAnswer,
+  looksLikeFabricatedToolActivity,
   looksLikeInternalToolRecoveryAnswer,
   looksLikeOnlyToolPrelude,
+  looksLikeToolProtocolNarration,
+  looksLikeUnexecutedToolActionPromise,
+  needsFreshLocalToolEvidence,
   markPlanningInputAnswered,
   mergeChatSources,
   stampLocalToolCallIds,
@@ -96,7 +117,8 @@ import {
 } from "./chatRuntime";
 import { mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortProjectsByUpdatedAt } from "./projectState";
 import { refreshWorkspaceContext } from "../tools/workspaceContext";
-import { createChatSourcesFromWebResults, createWebSearchContextMessage, MAX_WEB_SEARCH_RESULTS, searchDuckDuckGo } from "../services/webSearchClient";
+import { createChatSourcesFromWebResults, createWebSearchContextMessage, formatWebSearchProviderLabel, MAX_WEB_SEARCH_RESULTS, searchWebWithProvider } from "../services/webSearchClient";
+import { requestAndRememberWeatherLocation } from "../services/weatherLocation";
 import {
   getAppInfo,
   getDefaultTerminalWorkingDirectory,
@@ -111,7 +133,8 @@ import {
 import { getGithubState } from "./githubClient";
 import { listAgentRuns, saveAgentRun } from "./agentRunClient";
 import { getAuthState, logoutLocalAccount } from "./authClient";
-import { analyzeGithubPrompt, createGithubRoutingContext, isGithubSourceControlPrompt } from "../prompts/agent/githubToolPrompt";
+import { openChatWindow } from "./windowClient";
+import { analyzeGithubPrompt, createGithubRoutingContext } from "../prompts/agent/githubToolPrompt";
 import {
   createNeedsAttentionNotification,
   createNeedsInputNotification,
@@ -122,6 +145,7 @@ import type { AppInfo } from "../types/app";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../types/agentRun";
 import type { AuthSession } from "../types/auth";
 import type {
+  ChatArtifact,
   ChatAttachment,
   ChatContextCompaction,
   ChatComposerDraft,
@@ -141,12 +165,12 @@ import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
 import type { TerminalAttachedSession } from "../types/terminal";
 import { isDeepResearchThinking } from "../types/settings";
-import type { AppearanceMode, ProviderSettings } from "../types/settings";
+import type { AppearanceMode, ProviderSettings, WebSearchSettings } from "../types/settings";
 import { normalizeToolRegistrySettings } from "../types/tools";
 import type { ToolRegistrySettings } from "../types/tools";
 
 interface ActiveGeneration {
-  chatId?: string;
+  chatId: string;
   controller: AbortController;
   messageId?: string;
   previousChat: ChatSummary;
@@ -157,6 +181,7 @@ interface ActiveGeneration {
 
 interface QueuedChatSend {
   chatId: string;
+  held?: boolean;
   id: string;
   input: ChatSendInput;
   userMessageId: string;
@@ -186,6 +211,7 @@ interface DiscordStreamUpdate {
 
 interface AssistantToolResponse {
   approvalRequests?: AgentApproval[];
+  artifacts?: ChatArtifact[];
   content: string;
   pendingToolCallContent?: string;
   progress?: ChatProgressItem;
@@ -207,18 +233,29 @@ const MAX_DEEP_RESEARCH_TOOL_PASSES = 24;
 const MAX_DEEP_RESEARCH_TOOL_EXECUTIONS = 96;
 const MAX_TOOL_FINALIZATION_RETRIES = 3;
 const MAX_MALFORMED_TOOL_RECOVERY_RETRIES = 2;
+const MAX_RECOVERABLE_LOCAL_EDIT_RETRIES = 4;
 const MESSAGE_RETRY_TIMEOUT_MS = 10_000;
 const CONTEXT_COMPACTION_PROGRESS_ID = "context-compaction";
 const DISCORD_NEW_CHAT_COMMAND = "gilbertnewchat";
 const DISCORD_STREAM_UPDATE_INTERVAL_MS = 2_400;
 const DISCORD_STREAM_MESSAGE_LIMIT = 1_850;
 const STEERING_PROGRESS_ID = "response-steering";
+const ONBOARDING_NEVER_SHOW_KEY = "gilbert-codex.onboarding.never-show.v1";
 const CURRENT_INFORMATION_PROMPT_PATTERN =
-  /\b(latest|current|currently|today|tonight|tomorrow|yesterday|now|right now|recent|newest|up[-\s]?to[-\s]?date|news|release|released|changelog|version|pricing|price|schedule|weather|forecast|docs?|official|standard|api|model|verify|source|cite|look up|lookup|web|search)\b/i;
+  /\b(latest|current|currently|today|tonight|tomorrow|yesterday|now|right now|recent|newest|up[-\s]?to[-\s]?date|news|release|released|changelog|version|pricing|price|schedule|docs?|official|standard|api|model|verify|source|cite|look up|lookup|web|search)\b/i;
 const RESEARCH_PROMPT_PATTERN = /\b(research|investigate|audit|compare|verify|source|cite|latest|current|docs?|official|standard|api|model|release|changelog)\b/i;
+const SIMPLE_THINKING_PROMPT_MAX_WORDS = 18;
+const SIMPLE_THINKING_PROMPT_PATTERN = /\b(?:answer|change|clean up|explain|fix typo|format|quick|rename|remove|rewrite|show|summarize|tell|translate|update)\b/i;
+const COMPLEX_THINKING_PROMPT_PATTERN = /\b(?:all|architecture|audit|build|debug|deep|end[-\s]?to[-\s]?end|entire|every|investigate|migrate|plan|publish|refactor|release|research|review|security|test|verify)\b/i;
+const WEATHER_DATA_PROMPT_PATTERN = /\b(weather|forecast|temperature|temp|rain|snow|storm|storms|thunderstorm|alerts?|warnings?|radar|current conditions?|hourly|nws|noaa)\b/i;
+const WEATHER_WEB_DOCS_PROMPT_PATTERN = /\b(docs?|documentation|api|schema|endpoint|openapi|developer|source code|standard|spec)\b/i;
 const PENDING_CHAT_TITLE = "Naming chat...";
 
 function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorkspaceSettings {
+  if (current?.enabled && current.scope === "full-computer") {
+    return current;
+  }
+
   return {
     enabled: false,
     indexReason: undefined,
@@ -232,19 +269,6 @@ function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorksp
   };
 }
 
-function isCleanNoProjectWorkspace(settings: LocalWorkspaceSettings) {
-  return (
-    !settings.enabled &&
-    !settings.indexReason &&
-    !settings.indexSummary &&
-    settings.indexStatus === "idle" &&
-    !settings.indexUpdatedAt &&
-    !settings.lastError &&
-    settings.roots.length === 0 &&
-    settings.scope === "selected-folder"
-  );
-}
-
 function createApprovalWorkspaceSessionKey(settings: LocalWorkspaceSettings) {
   const roots = settings.roots.map((root) => root.trim().replace(/[\\/]+$/, "")).filter(Boolean).sort();
 
@@ -256,6 +280,10 @@ function createApprovalWorkspaceSessionKey(settings: LocalWorkspaceSettings) {
 }
 
 function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, settings: ProviderSettings, isDiscordRequest: boolean) {
+  if (isWeatherDataPrompt(prompt) && normalizeToolRegistrySettings(settings.tools).weatherTools) {
+    return false;
+  }
+
   if (input.webSearch?.enabled) {
     return true;
   }
@@ -275,7 +303,13 @@ function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, sett
   return isDiscordRequest && RESEARCH_PROMPT_PATTERN.test(prompt);
 }
 
-function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSettings, webSearchEnabled: boolean) {
+function isWeatherDataPrompt(prompt: string) {
+  return WEATHER_DATA_PROMPT_PATTERN.test(prompt) && !WEATHER_WEB_DOCS_PROMPT_PATTERN.test(prompt);
+}
+
+function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSettings, webSearchEnabled: boolean, webSearchProvider: WebSearchSettings["provider"]) {
+  const providerLabel = formatWebSearchProviderLabel(webSearchProvider);
+
   return [
     createMessage(
       "user",
@@ -287,7 +321,7 @@ function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSe
           ? "Local workspace access is enabled for this chat's project, so local computer tools may use that selected workspace according to the current permission mode."
           : "No local workspace is enabled for this chat's project; use web/GitHub/provider context where available and ask for workspace access only when local files are required.",
         webSearchEnabled
-          ? "Live DuckDuckGo context is being attached for this request. Use it as current evidence and cite URLs when making web-supported claims."
+          ? `Live ${providerLabel} context is being attached for this request. Use it as current evidence and cite URLs when making web-supported claims.`
           : "If current, latest, date-sensitive, or source-backed facts are needed and web_search is enabled, call web_search instead of answering from memory.",
         "For mutating or sensitive actions, follow Gilbert's existing approval gates. If approval is required, explain that it must be completed in the app.",
       ].join("\n"),
@@ -304,7 +338,7 @@ interface BulkDeleteChatsDialogProps {
   onToggleChat: (chatId: string) => void;
   open: boolean;
   selectedChatIds: string[];
-  sendingChatId: string | null;
+  sendingChatIds: string[];
 }
 
 function BulkDeleteChatsDialog({
@@ -316,12 +350,13 @@ function BulkDeleteChatsDialog({
   onToggleChat,
   open,
   selectedChatIds,
-  sendingChatId,
+  sendingChatIds,
 }: BulkDeleteChatsDialogProps) {
   const visibleChats = sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived));
   const selectedIds = new Set(selectedChatIds);
-  const selectableCount = visibleChats.filter((chat) => chat.id !== sendingChatId).length;
-  const selectedCount = visibleChats.filter((chat) => selectedIds.has(chat.id) && chat.id !== sendingChatId).length;
+  const sendingIds = new Set(sendingChatIds);
+  const selectableCount = visibleChats.filter((chat) => !sendingIds.has(chat.id)).length;
+  const selectedCount = visibleChats.filter((chat) => selectedIds.has(chat.id) && !sendingIds.has(chat.id)).length;
   const allSelected = selectableCount > 0 && selectedCount === selectableCount;
 
   return (
@@ -354,7 +389,7 @@ function BulkDeleteChatsDialog({
       <div className="bulk-delete-chat-list" role="list" aria-label="Chats to delete">
         {visibleChats.length > 0 ? (
           visibleChats.map((chat) => {
-            const disabled = chat.id === sendingChatId;
+            const disabled = sendingIds.has(chat.id);
             const selected = selectedIds.has(chat.id) && !disabled;
             const projectName = normalizeProjectName(chat.project);
 
@@ -516,7 +551,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
     version: "0.2.3",
   });
-  const [sendingChatId, setSendingChatId] = useState<string | null>(null);
+  const [sendingChatIds, setSendingChatIds] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>("general");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -526,7 +561,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [terminalHeight, setTerminalHeight] = useState(284);
   const [defaultTerminalWorkingDirectory, setDefaultTerminalWorkingDirectory] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(() => loadPersistentString(ONBOARDING_NEVER_SHOW_KEY) !== "true");
   const [noticeDialog, setNoticeDialog] = useState<{ description?: string; title: string } | null>(null);
+  const [renameChatId, setRenameChatId] = useState<string | null>(null);
+  const [renameChatTitle, setRenameChatTitle] = useState("");
+  const [renameChatError, setRenameChatError] = useState<string | null>(null);
   const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
   const [pendingDeleteProjectName, setPendingDeleteProjectName] = useState<string | null>(null);
   const [bulkDeleteChatsOpen, setBulkDeleteChatsOpen] = useState(false);
@@ -546,7 +585,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const isDesktopRuntime = isTauriDesktopRuntime() || appInfo.runtime.toLowerCase().includes("tauri");
   const toolSettings = normalizeToolRegistrySettings(providerSettings.tools);
   const activeSendRef = useRef(0);
-  const activeGenerationRef = useRef<ActiveGeneration | null>(null);
+  const activeGenerationsRef = useRef(new Map<string, ActiveGeneration>());
+  const activeRequestChatIdsRef = useRef(new Map<number, string>());
   const discordAutoStartKeyRef = useRef<string | null>(null);
   const discordBridgeSettingsRef = useRef(discordBridgeSettings);
   const titleGenerationRequestsRef = useRef(new Map<string, AbortController>());
@@ -556,16 +596,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const pendingChatsRef = useRef<ChatSummary[]>(chats);
   const agentRunsRef = useRef<AgentRun[]>([]);
   const queuedChatSendsRef = useRef<QueuedChatSend[]>([]);
-  const queuedStarterRef = useRef<string | null>(null);
+  const queuedStartersRef = useRef(new Set<string>());
   const sessionApprovalDecisionsRef = useRef<SessionApprovalDecisionsByWorkspace>({});
-  const sendingRequestRef = useRef<number | null>(null);
+  const weatherLocationPromptRef = useRef(false);
 
   useEffect(() => {
     return () => {
-      activeGenerationRef.current?.controller.abort();
-      activeGenerationRef.current = null;
-      sendingRequestRef.current = null;
+      for (const activeGeneration of activeGenerationsRef.current.values()) {
+        activeGeneration.controller.abort();
+      }
+      activeGenerationsRef.current.clear();
+      activeRequestChatIdsRef.current.clear();
       queuedChatSendsRef.current = [];
+      queuedStartersRef.current.clear();
 
       for (const controller of titleGenerationRequestsRef.current.values()) {
         controller.abort();
@@ -577,6 +620,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     void getAppInfo().then(setAppInfo);
+  }, []);
+
+  useEffect(() => {
+    if (weatherLocationPromptRef.current) {
+      return;
+    }
+
+    weatherLocationPromptRef.current = true;
+    void requestAndRememberWeatherLocation().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -639,6 +691,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   useEffect(() => {
     pendingChatsRef.current = chats;
     saveChats(chats);
+    syncPdfLibraryFromChats(chats);
   }, [chats]);
 
   useEffect(() => {
@@ -646,36 +699,47 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [queuedChatSends]);
 
   useEffect(() => {
-    if (sendingChatId || sendingRequestRef.current !== null || queuedChatSends.length === 0 || !toolSettings.provider) {
+    if (queuedChatSends.length === 0 || !toolSettings.provider) {
       return;
     }
 
-    const nextQueuedSend = queuedChatSends[0];
+    const startingChatIds = new Set<string>();
+    const queuedSendsToStart: QueuedChatSend[] = [];
 
-    if (!nextQueuedSend || queuedStarterRef.current === nextQueuedSend.id) {
-      return;
-    }
-
-    queuedStarterRef.current = nextQueuedSend.id;
-    setQueuedChatSends((currentQueue) => {
-      if (currentQueue[0]?.id !== nextQueuedSend.id) {
-        return currentQueue;
+    for (const queuedSend of queuedChatSends) {
+      if (queuedSend.held || activeGenerationsRef.current.has(queuedSend.chatId) || startingChatIds.has(queuedSend.chatId) || queuedStartersRef.current.has(queuedSend.id)) {
+        continue;
       }
 
-      const nextQueue = currentQueue.slice(1);
+      startingChatIds.add(queuedSend.chatId);
+      queuedSendsToStart.push(queuedSend);
+    }
+
+    if (queuedSendsToStart.length === 0) {
+      return;
+    }
+
+    const startingIds = new Set(queuedSendsToStart.map((queuedSend) => queuedSend.id));
+
+    for (const queuedSend of queuedSendsToStart) {
+      queuedStartersRef.current.add(queuedSend.id);
+    }
+
+    setQueuedChatSends((currentQueue) => {
+      const nextQueue = currentQueue.filter((queuedSend) => !startingIds.has(queuedSend.id));
       queuedChatSendsRef.current = nextQueue;
       return nextQueue;
     });
 
-    void startSendMessage(nextQueuedSend.input, {
-      chatId: nextQueuedSend.chatId,
-      queuedMessageId: nextQueuedSend.userMessageId,
-    }).finally(() => {
-      if (queuedStarterRef.current === nextQueuedSend.id) {
-        queuedStarterRef.current = null;
-      }
-    });
-  }, [queuedChatSends, sendingChatId, toolSettings.provider]);
+    for (const queuedSend of queuedSendsToStart) {
+      void startSendMessage(queuedSend.input, {
+        chatId: queuedSend.chatId,
+        queuedMessageId: queuedSend.userMessageId,
+      }).finally(() => {
+        queuedStartersRef.current.delete(queuedSend.id);
+      });
+    }
+  }, [queuedChatSends, sendingChatIds, toolSettings.provider]);
 
   useEffect(() => {
     function savePendingChats() {
@@ -900,26 +964,59 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     createEmptyChat(DEFAULT_PROJECT);
 
   useEffect(() => {
+    function selectChatFromHash() {
+      const chatId = getChatIdFromLocationHash();
+
+      if (!chatId) {
+        return;
+      }
+
+      const targetChat = pendingChatsRef.current.find((chat) => chat.id === chatId && !chat.archived);
+
+      if (!targetChat) {
+        return;
+      }
+
+      restoreProjectLocalWorkspace(targetChat.project);
+      setActiveChatId(targetChat.id);
+      setActiveRoute("chat");
+    }
+
+    selectChatFromHash();
+    window.addEventListener("hashchange", selectChatFromHash);
+
+    return () => window.removeEventListener("hashchange", selectChatFromHash);
+  }, []);
+
+  useEffect(() => {
     const activeProjectName = normalizeProjectName(activeChat.project);
+    const currentWorkspace = localWorkspaceRef.current;
 
     if (isNoProjectName(activeProjectName)) {
+      const noProjectWorkspace = createNoProjectWorkspace(currentWorkspace);
+
+      if (!sameLocalWorkspaceSettings(noProjectWorkspace, currentWorkspace)) {
+        localWorkspaceRef.current = noProjectWorkspace;
+        setLocalWorkspace(noProjectWorkspace);
+      }
+
       return;
     }
 
     const projectWorkspace = projects.find((project) => project.name.toLowerCase() === activeProjectName.toLowerCase())?.localWorkspace;
 
-    if (projectWorkspace && !sameLocalWorkspaceSettings(projectWorkspace, localWorkspace)) {
+    if (projectWorkspace && !sameLocalWorkspaceSettings(projectWorkspace, currentWorkspace)) {
       localWorkspaceRef.current = projectWorkspace;
       setLocalWorkspace(projectWorkspace);
       return;
     }
 
-    if (!projectWorkspace && localWorkspace.enabled) {
-      const noProjectWorkspace = createNoProjectWorkspace(localWorkspace);
+    if (!projectWorkspace && currentWorkspace.enabled) {
+      const noProjectWorkspace = createNoProjectWorkspace(currentWorkspace);
       localWorkspaceRef.current = noProjectWorkspace;
       setLocalWorkspace(noProjectWorkspace);
     }
-  }, [activeChat.project, localWorkspace, projects]);
+  }, [activeChat.project, projects]);
 
   function resolveWorkspaceForChatProject(projectName: string, fallback: LocalWorkspaceSettings = localWorkspaceRef.current) {
     const normalizedProjectName = normalizeProjectName(projectName);
@@ -929,6 +1026,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const projectWorkspace = projectsRef.current.find((project) => project.name.toLowerCase() === normalizedProjectName.toLowerCase())?.localWorkspace;
+
+    if (fallback.enabled && fallback.scope === "full-computer") {
+      return fallback;
+    }
 
     if (projectWorkspace) {
       return projectWorkspace;
@@ -1247,8 +1348,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
-  function createProjectFromFolder(folderPath: string): string | null {
+  function createProjectFromFolder(folderPath: string, options: { bindToActiveChat?: boolean; projectNameHint?: string } = {}): string | null {
     const root = normalizeSelectedProjectPath(folderPath);
+    const shouldBindToActiveChat = options.bindToActiveChat !== false;
 
     if (!root) {
       setNoticeDialog({
@@ -1261,12 +1363,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const existingProject = projectsRef.current.find((project) => samePathSet(project.localWorkspace?.roots ?? [], [root]));
 
     if (existingProject) {
-      bindActiveChatToProject(existingProject.name, existingProject.localWorkspace);
+      if (shouldBindToActiveChat) {
+        bindActiveChatToProject(existingProject.name, existingProject.localWorkspace);
+      } else if (existingProject.localWorkspace) {
+        restoreProjectLocalWorkspace(existingProject.name, existingProject.localWorkspace);
+      }
+
       return existingProject.name;
     }
 
     const now = new Date().toISOString();
-    const baseProjectName = createProjectBaseName(projectNameFromPath(root));
+    const baseProjectName = createProjectBaseName(options.projectNameHint ?? projectNameFromPath(root));
     const reusableProject = projectsRef.current.find(
       (project) => project.name.toLowerCase() === baseProjectName.toLowerCase() && (project.localWorkspace?.roots.length ?? 0) === 0,
     );
@@ -1303,7 +1410,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     );
     projectsRef.current = nextProjects;
     setProjects(nextProjects);
-    bindActiveChatToProject(projectName, indexingWorkspace);
+
+    if (shouldBindToActiveChat) {
+      bindActiveChatToProject(projectName, indexingWorkspace);
+    }
 
     window.setTimeout(() => {
       void buildComputerFileIndex([root], "selected-folder")
@@ -1488,6 +1598,221 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     );
   }
 
+  function handleOpenRenameChat(chat: ChatSummary) {
+    setRenameChatId(chat.id);
+    setRenameChatTitle(chat.title || "New chat");
+    setRenameChatError(null);
+  }
+
+  function confirmRenameChat() {
+    if (!renameChatId) {
+      return;
+    }
+
+    const nextTitle = renameChatTitle.trim();
+
+    if (!nextTitle) {
+      setRenameChatError("Enter a chat name.");
+      return;
+    }
+
+    setChats((currentChats) =>
+      sortChatsByUpdatedAt(
+        currentChats.map((chat) =>
+          chat.id === renameChatId
+            ? {
+                ...chat,
+                title: nextTitle,
+                updatedAt: new Date().toISOString(),
+              }
+            : chat,
+        ),
+      ),
+    );
+    setRenameChatId(null);
+    setRenameChatTitle("");
+    setRenameChatError(null);
+  }
+
+  function handleArchiveActiveChat() {
+    const chatToArchive = pendingChatsRef.current.find((chat) => chat.id === activeChat.id);
+
+    if (!chatToArchive) {
+      return;
+    }
+
+    if (isChatSending(chatToArchive.id)) {
+      setNoticeDialog({
+        description: "Wait for the current response to finish, then archive the chat.",
+        title: "Chat is still responding",
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let nextChats = sortChatsByUpdatedAt(
+      pendingChatsRef.current.map((chat) =>
+        chat.id === chatToArchive.id
+          ? {
+              ...chat,
+              archived: true,
+              updatedAt: now,
+            }
+          : chat,
+      ),
+    );
+    const nextActiveChat = nextChats.find((chat) => !chat.archived) ?? createEmptyChat(DEFAULT_PROJECT);
+
+    if (!nextChats.some((chat) => chat.id === nextActiveChat.id)) {
+      nextChats = sortChatsByUpdatedAt([nextActiveChat, ...nextChats]);
+    }
+
+    pendingChatsRef.current = nextChats;
+    setChats(nextChats);
+    updateQueuedChatSends((currentQueue) => currentQueue.filter((queuedSend) => queuedSend.chatId !== chatToArchive.id));
+    setActiveChatId(nextActiveChat.id);
+    setActiveRoute("chat");
+  }
+
+  async function handleCopyWorkingDirectory() {
+    const workingDirectory = getActiveWorkingDirectory();
+
+    if (!workingDirectory) {
+      setNoticeDialog({
+        description: "Choose a local project folder or enable a workspace before copying a working directory.",
+        title: "No working directory selected",
+      });
+      return;
+    }
+
+    await copyLabeledTextToClipboard("Working directory", workingDirectory);
+  }
+
+  async function handleCopySessionId() {
+    await copyLabeledTextToClipboard("Session ID", activeChat.id);
+  }
+
+  async function handleCopyChatDeeplink() {
+    await copyLabeledTextToClipboard("Deeplink", createChatDeeplink(activeChat.id));
+  }
+
+  async function handleCopyChatMarkdown() {
+    await copyLabeledTextToClipboard("Chat Markdown", formatChatAsMarkdown(activeChat));
+  }
+
+  function handleForkActiveChatLocal() {
+    const forkedChat = createForkedChat(activeChat, activeChat.project);
+    activateForkedChat(forkedChat, resolveWorkspaceForChatProject(activeChat.project, localWorkspaceRef.current));
+    setNoticeDialog({
+      description: `${forkedChat.title} is ready in ${forkedChat.project}.`,
+      title: "Chat forked locally",
+    });
+  }
+
+  async function handleForkActiveChatWorktree() {
+    const sourceWorkspace = resolveWorkspaceForChatProject(activeChat.project, localWorkspaceRef.current);
+    const sourceRoot = sourceWorkspace.enabled ? sourceWorkspace.roots[0] : localWorkspaceRef.current.roots[0];
+
+    if (!sourceRoot) {
+      setNoticeDialog({
+        description: "Choose a Git-backed project folder before forking into a new worktree.",
+        title: "No project folder selected",
+      });
+      return;
+    }
+
+    try {
+      const worktree = await createComputerGitWorktree(sourceRoot, {
+        title: activeChat.title,
+      });
+      const projectName = createProjectFromFolder(worktree.path, {
+        bindToActiveChat: false,
+        projectNameHint: `${projectNameFromPath(worktree.path)} worktree`,
+      });
+
+      if (!projectName) {
+        return;
+      }
+
+      const worktreeWorkspace = resolveWorkspaceForChatProject(projectName, {
+        ...sourceWorkspace,
+        enabled: true,
+        roots: [worktree.path],
+        scope: "selected-folder",
+      });
+      const forkedChat = createForkedChat(activeChat, projectName, `Worktree: ${activeChat.title}`);
+
+      activateForkedChat(forkedChat, worktreeWorkspace);
+      setNoticeDialog({
+        description: `${worktree.branchName} was created at ${worktree.path}.`,
+        title: "Worktree fork ready",
+      });
+    } catch (error) {
+      setNoticeDialog({
+        description: readErrorMessage(error, "Could not create a Git worktree for this chat."),
+        title: "Worktree fork failed",
+      });
+    }
+  }
+
+  function handleAddAutomation() {
+    setActiveRoute("workflows");
+    setSearchOpen(false);
+    setNoticeDialog({
+      description: "Open the Manual monitor brief workflow to turn this chat into a repeatable check. The recurring scheduler is still tracked on the Workflows capability map.",
+      title: "Automation workflow opened",
+    });
+  }
+
+  async function handleOpenActiveChatInNewWindow() {
+    try {
+      await openChatWindow(activeChat.id, activeChat.title);
+    } catch (error) {
+      setNoticeDialog({
+        description: readErrorMessage(error, "Could not open this chat in a new window."),
+        title: "Could not open window",
+      });
+    }
+  }
+
+  function getActiveWorkingDirectory() {
+    const workspace = resolveWorkspaceForChatProject(activeChat.project, localWorkspaceRef.current);
+
+    return workspace.roots[0] || localWorkspaceRef.current.roots[0] || defaultTerminalWorkingDirectory;
+  }
+
+  async function copyLabeledTextToClipboard(label: string, text: string) {
+    try {
+      const copied = await copyTextToClipboard(text);
+
+      if (!copied) {
+        throw new Error(`Could not copy ${label.toLowerCase()}.`);
+      }
+
+      setNoticeDialog({
+        description: label,
+        title: "Copied",
+      });
+    } catch (error) {
+      setNoticeDialog({
+        description: readErrorMessage(error, `Could not copy ${label.toLowerCase()}.`),
+        title: "Copy failed",
+      });
+    }
+  }
+
+  function activateForkedChat(forkedChat: ChatSummary, workspace: LocalWorkspaceSettings) {
+    const nextChats = sortChatsByUpdatedAt([forkedChat, ...pendingChatsRef.current]);
+
+    pendingChatsRef.current = nextChats;
+    setChats(nextChats);
+    restoreProjectLocalWorkspace(forkedChat.project, workspace);
+    touchProject(forkedChat.project);
+    setActiveChatId(forkedChat.id);
+    setActiveRoute("chat");
+    setSearchOpen(false);
+  }
+
   function notifyPlanningInputNeeded(inputRequest: ChatPlanningInputRequest) {
     notifyAgentRunStatus({
       notification: createNeedsInputNotification(inputRequest.detail || inputRequest.title),
@@ -1620,7 +1945,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (chatId === sendingChatId) {
+    if (isChatSending(chatId)) {
       setNoticeDialog({
         description: "Wait for the current response to finish, then delete the chat from the sidebar menu.",
         title: "Chat is still responding",
@@ -1640,7 +1965,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     const projectChatIds = new Set(chats.filter((chat) => chat.project.toLowerCase() === projectToDelete.name.toLowerCase()).map((chat) => chat.id));
 
-    if (sendingChatId && projectChatIds.has(sendingChatId)) {
+    if (isAnyChatSending(projectChatIds)) {
       setNoticeDialog({
         description: "Wait for the current response to finish, then delete the project from the sidebar menu.",
         title: "Project is still responding",
@@ -1658,7 +1983,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function handleToggleBulkDeleteChat(chatId: string) {
-    if (chatId === sendingChatId) {
+    if (isChatSending(chatId)) {
       return;
     }
 
@@ -1666,7 +1991,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function handleSelectAllBulkDeleteChats() {
-    setBulkDeleteChatIds(sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived && chat.id !== sendingChatId)).map((chat) => chat.id));
+    setBulkDeleteChatIds(sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived && !isChatSending(chat.id))).map((chat) => chat.id));
   }
 
   function handleClearBulkDeleteChats() {
@@ -1681,7 +2006,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (chatToDelete.id === sendingChatId) {
+    if (isChatSending(chatToDelete.id)) {
       setPendingDeleteChatId(null);
       setNoticeDialog({
         description: "Wait for the current response to finish, then delete the chat from the sidebar menu.",
@@ -1722,7 +2047,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const projectKey = projectToDelete.name.toLowerCase();
     const deletedChatIds = new Set(chats.filter((chat) => chat.project.toLowerCase() === projectKey).map((chat) => chat.id));
 
-    if (sendingChatId && deletedChatIds.has(sendingChatId)) {
+    if (isAnyChatSending(deletedChatIds)) {
       setPendingDeleteProjectName(null);
       setNoticeDialog({
         description: "Wait for the current response to finish, then delete the project from the sidebar menu.",
@@ -1764,12 +2089,14 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingChatId && selectedIds.has(sendingChatId)) {
+    const selectedSendingChatIds = getSendingChatIds(selectedIds);
+
+    if (selectedSendingChatIds.length > 0) {
       setNoticeDialog({
         description: "Wait for the current response to finish, then include that chat in a bulk delete.",
         title: "A selected chat is still responding",
       });
-      setBulkDeleteChatIds((currentIds) => currentIds.filter((id) => id !== sendingChatId));
+      setBulkDeleteChatIds((currentIds) => currentIds.filter((id) => !selectedSendingChatIds.includes(id)));
       return;
     }
 
@@ -1798,92 +2125,144 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setSearchOpen(false);
   }
 
-  function createActiveGeneration(previousChat: ChatSummary, previousChatExisted: boolean, restoreDraft?: ChatComposerDraft, target?: { chatId: string; messageId: string }) {
+  function isChatSending(chatId: string | undefined) {
+    return Boolean(chatId && activeGenerationsRef.current.has(chatId));
+  }
+
+  function isAnyChatSending(chatIds: Iterable<string>) {
+    for (const chatId of chatIds) {
+      if (isChatSending(chatId)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function getSendingChatIds(chatIds: Iterable<string>) {
+    return [...new Set([...chatIds].filter((chatId) => isChatSending(chatId)))];
+  }
+
+  function setChatSending(chatId: string, sending: boolean) {
+    setSendingChatIds((currentIds) => {
+      const hasChatId = currentIds.includes(chatId);
+
+      if (sending) {
+        return hasChatId ? currentIds : [...currentIds, chatId];
+      }
+
+      return hasChatId ? currentIds.filter((id) => id !== chatId) : currentIds;
+    });
+  }
+
+  function getActiveGenerationByRequest(requestId: number) {
+    const chatId = activeRequestChatIdsRef.current.get(requestId);
+
+    return chatId ? activeGenerationsRef.current.get(chatId) : undefined;
+  }
+
+  function getActiveGenerationByMessage(messageId: string | undefined) {
+    if (!messageId) {
+      return undefined;
+    }
+
+    for (const activeGeneration of activeGenerationsRef.current.values()) {
+      if (activeGeneration.messageId === messageId) {
+        return activeGeneration;
+      }
+    }
+
+    return undefined;
+  }
+
+  function createActiveGeneration(chatId: string, previousChat: ChatSummary, previousChatExisted: boolean, restoreDraft?: ChatComposerDraft, target?: { messageId: string }) {
     const requestId = activeSendRef.current + 1;
     const controller = new AbortController();
 
     activeSendRef.current = requestId;
-    sendingRequestRef.current = requestId;
-    activeGenerationRef.current = {
-      chatId: target?.chatId,
+    activeRequestChatIdsRef.current.set(requestId, chatId);
+    activeGenerationsRef.current.set(chatId, {
+      chatId,
       controller,
       messageId: target?.messageId,
       previousChat,
       previousChatExisted,
       requestId,
       restoreDraft,
-    };
+    });
+    setChatSending(chatId, true);
 
     return { controller, requestId };
   }
 
   function setActiveGenerationTarget(requestId: number, chatId: string, messageId: string) {
-    const activeGeneration = activeGenerationRef.current;
+    const activeGeneration = getActiveGenerationByRequest(requestId);
 
-    if (!activeGeneration || activeGeneration.requestId !== requestId) {
+    if (!activeGeneration || activeGeneration.chatId !== chatId || activeGeneration.requestId !== requestId) {
       return;
     }
 
-    activeGeneration.chatId = chatId;
     activeGeneration.messageId = messageId;
   }
 
   function isRequestInactive(requestId: number, controller: AbortController) {
-    return controller.signal.aborted || sendingRequestRef.current !== requestId;
+    const activeGeneration = getActiveGenerationByRequest(requestId);
+
+    return controller.signal.aborted || !activeGeneration || activeGeneration.requestId !== requestId;
   }
 
   function finishActiveGeneration(requestId: number) {
-    if (sendingRequestRef.current === requestId) {
-      sendingRequestRef.current = null;
-      activeGenerationRef.current = null;
-      setSendingChatId(null);
+    const activeGeneration = getActiveGenerationByRequest(requestId);
+
+    if (activeGeneration?.requestId === requestId) {
+      activeGenerationsRef.current.delete(activeGeneration.chatId);
+      activeRequestChatIdsRef.current.delete(requestId);
+      setChatSending(activeGeneration.chatId, false);
     }
   }
 
   function handleStopGeneration(messageId?: unknown) {
     const requestedMessageId = typeof messageId === "string" ? messageId : undefined;
-    const targetMessageId = requestedMessageId ?? activeGenerationRef.current?.messageId;
-    stopActiveGeneration({ messageId: targetMessageId, restoreDraft: !targetMessageId });
+    const activeGeneration = requestedMessageId ? getActiveGenerationByMessage(requestedMessageId) : activeGenerationsRef.current.get(activeChat.id);
+    const targetMessageId = requestedMessageId ?? activeGeneration?.messageId;
+    stopActiveGeneration({ activeGeneration, messageId: targetMessageId, restoreDraft: !targetMessageId });
   }
 
-  function stopActiveGeneration({ messageId, restoreDraft }: { messageId?: string; restoreDraft: boolean }) {
-    const activeGeneration = activeGenerationRef.current;
+  function stopActiveGeneration({ activeGeneration, messageId, restoreDraft }: { activeGeneration?: ActiveGeneration; messageId?: string; restoreDraft: boolean }) {
+    const generationToStop = activeGeneration ?? getActiveGenerationByMessage(messageId);
 
-    if (!activeGeneration) {
+    if (!generationToStop) {
       if (messageId) {
         stopStreamingMessage(messageId);
       } else {
-        stopStaleStreamingMessages();
+        stopStaleStreamingMessages(activeChat.id);
       }
       return;
     }
 
     const isTargetedStop = Boolean(messageId);
-    const stopMatchesActiveGeneration = !messageId || !activeGeneration.messageId || activeGeneration.messageId === messageId;
+    const stopMatchesActiveGeneration = !messageId || !generationToStop.messageId || generationToStop.messageId === messageId;
 
     if (!stopMatchesActiveGeneration) {
       stopStreamingMessage(messageId);
       return;
     }
 
-    activeGeneration.controller.abort();
+    generationToStop.controller.abort();
 
-    if (restoreDraft && activeGeneration.restoreDraft) {
-      setComposerDraftToRestore(activeGeneration.restoreDraft);
+    if (restoreDraft && generationToStop.restoreDraft) {
+      setComposerDraftToRestore(generationToStop.restoreDraft);
     }
 
     if (isTargetedStop && messageId) {
       stopStreamingMessage(messageId);
     } else {
-      restoreChatSnapshot(preserveQueuedMessagesForSnapshot(activeGeneration.previousChat), activeGeneration.previousChatExisted);
+      restoreChatSnapshot(preserveQueuedMessagesForSnapshot(generationToStop.previousChat), generationToStop.previousChatExisted);
     }
 
-    if (sendingRequestRef.current === activeGeneration.requestId) {
-      sendingRequestRef.current = null;
-    }
-
-    activeGenerationRef.current = null;
-    setSendingChatId(null);
+    activeGenerationsRef.current.delete(generationToStop.chatId);
+    activeRequestChatIdsRef.current.delete(generationToStop.requestId);
+    setChatSending(generationToStop.chatId, false);
   }
 
   function stopStreamingMessage(messageId: string) {
@@ -1924,9 +2303,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setAgentRunCancelled(stoppedRunId, "Response stopped.");
   }
 
-  function stopStaleStreamingMessages(exceptMessageId?: string) {
+  function stopStaleStreamingMessages(chatId: string, exceptMessageId?: string) {
     const stoppedRunIds = new Set(
       pendingChatsRef.current
+        .filter((chat) => chat.id === chatId)
         .flatMap((chat) => chat.messages)
         .filter((message) => message.role === "assistant" && message.isStreaming && message.id !== exceptMessageId && message.agentRunId)
         .map((message) => message.agentRunId!),
@@ -1936,6 +2316,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       let changed = false;
       const stoppedAt = new Date().toISOString();
       const nextChats = currentChats.map((chat) => {
+        if (chat.id !== chatId) {
+          return chat;
+        }
+
         let chatChanged = false;
         const nextMessages = chat.messages.map((message) => {
           if (message.role !== "assistant" || !message.isStreaming || message.id === exceptMessageId) {
@@ -2226,11 +2610,72 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     });
   }
 
-  function handleSteerQueuedMessage(messageId: string) {
+  function handleHoldQueuedMessage(messageId: string, held: boolean) {
+    updateQueuedChatSends((currentQueue) =>
+      currentQueue.map((queuedSend) =>
+        queuedSend.userMessageId === messageId
+          ? {
+              ...queuedSend,
+              held,
+            }
+          : queuedSend,
+      ),
+    );
+  }
+
+  function handleUpdateQueuedMessage(messageId: string, content: string) {
+    const trimmedContent = content.trim();
     const queuedSend = queuedChatSendsRef.current.find((candidate) => candidate.userMessageId === messageId);
-    const activeGeneration = activeGenerationRef.current;
+
+    if (!queuedSend || !trimmedContent) {
+      return;
+    }
+
+    updateQueuedChatSends((currentQueue) =>
+      currentQueue.map((candidate) =>
+        candidate.userMessageId === messageId
+          ? {
+              ...candidate,
+              input: {
+                ...candidate.input,
+                content: trimmedContent,
+              },
+            }
+          : candidate,
+      ),
+    );
+    setChats((currentChats) => {
+      const nextChats = currentChats.map((chat) =>
+        chat.id === queuedSend.chatId
+          ? {
+              ...chat,
+              messages: chat.messages.map((message) =>
+                message.id === messageId
+                  ? {
+                      ...message,
+                      content: trimmedContent,
+                    }
+                  : message,
+              ),
+              updatedAt: new Date().toISOString(),
+            }
+          : chat,
+      );
+
+      pendingChatsRef.current = nextChats;
+      return nextChats;
+    });
+  }
+
+  function handleSteerQueuedMessage(messageId: string, contentOverride?: string) {
+    const queuedSend = queuedChatSendsRef.current.find((candidate) => candidate.userMessageId === messageId);
+    const activeGeneration = queuedSend ? activeGenerationsRef.current.get(queuedSend.chatId) : undefined;
 
     if (!queuedSend || !activeGeneration) {
+      if (queuedSend && contentOverride?.trim()) {
+        handleUpdateQueuedMessage(messageId, contentOverride);
+        handleHoldQueuedMessage(messageId, false);
+      }
       return;
     }
 
@@ -2244,6 +2689,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     void steerActiveResponse({
       activeGeneration,
       assistantMessageIndex,
+      contentOverride,
       currentChat,
       queuedSend,
     });
@@ -2252,42 +2698,52 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   async function steerActiveResponse({
     activeGeneration,
     assistantMessageIndex,
+    contentOverride,
     currentChat,
     queuedSend,
   }: {
     activeGeneration: ActiveGeneration;
     assistantMessageIndex: number;
+    contentOverride?: string;
     currentChat: ChatSummary;
     queuedSend: QueuedChatSend;
   }) {
     const queuedMessage = currentChat.messages.find((message) => message.id === queuedSend.userMessageId);
     const assistantMessage = currentChat.messages[assistantMessageIndex];
-    const steerContent = queuedMessage?.content.trim() || queuedSend.input.content.trim();
+    const steerContent = contentOverride?.trim() || queuedMessage?.content.trim() || queuedSend.input.content.trim();
 
     if (!assistantMessage || assistantMessage.role !== "assistant" || !steerContent) {
       return;
     }
 
-    activeGeneration.controller.abort();
-    updateQueuedChatSends((currentQueue) => currentQueue.filter((candidate) => candidate.id !== queuedSend.id));
-
     const now = new Date().toISOString();
-    const messagesWithoutSteer = currentChat.messages.filter((message) => message.id !== queuedSend.userMessageId);
-    const nextAssistantMessageIndex = messagesWithoutSteer.findIndex((message) => message.id === assistantMessage.id);
+    const visibleSteerMessage: ChatMessage = {
+      ...(queuedMessage ?? createMessage("user", steerContent, undefined, undefined, queuedSend.input.attachments)),
+      attachments: queuedSend.input.attachments.length > 0 ? queuedSend.input.attachments : queuedMessage?.attachments,
+      content: steerContent,
+      source: queuedMessage?.source,
+      status: undefined,
+    };
+    const messagesWithoutQueuedSteer = currentChat.messages.filter((message) => message.id !== queuedSend.userMessageId);
+    const nextAssistantMessageIndex = messagesWithoutQueuedSteer.findIndex((message) => message.id === assistantMessage.id);
 
     if (nextAssistantMessageIndex < 0) {
       return;
     }
 
-    const messagesBeforeAssistant = messagesWithoutSteer.slice(0, nextAssistantMessageIndex);
-    const messagesAfterAssistant = messagesWithoutSteer.slice(nextAssistantMessageIndex + 1);
+    activeGeneration.controller.abort();
+    activeGenerationsRef.current.delete(activeGeneration.chatId);
+    activeRequestChatIdsRef.current.delete(activeGeneration.requestId);
+    updateQueuedChatSends((currentQueue) => currentQueue.filter((candidate) => candidate.id !== queuedSend.id));
+
+    const messagesBeforeAssistant = messagesWithoutQueuedSteer.slice(0, nextAssistantMessageIndex);
+    const messagesAfterAssistant = messagesWithoutQueuedSteer.slice(nextAssistantMessageIndex + 1);
     const previousChatSnapshot = {
       ...currentChat,
-      messages: [...messagesBeforeAssistant, ...messagesAfterAssistant],
+      messages: [...messagesBeforeAssistant, visibleSteerMessage, ...messagesAfterAssistant],
       updatedAt: now,
     };
-    const { controller, requestId } = createActiveGeneration(previousChatSnapshot, true, undefined, {
-      chatId: currentChat.id,
+    const { controller, requestId } = createActiveGeneration(currentChat.id, previousChatSnapshot, true, undefined, {
       messageId: assistantMessage.id,
     });
     const latestPrompt = getLatestUserPrompt(messagesBeforeAssistant);
@@ -2302,28 +2758,28 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
     setChats((currentChats) => {
       const nextChats = currentChats.map((chat) =>
         chat.id === currentChat.id
           ? {
               ...chat,
-              messages: messagesWithoutSteer.map((message) =>
-                message.id === assistantMessage.id
-                  ? {
-                      ...message,
-                      isStreaming: true,
-                      progress: withSteeringProgress(message.progress),
-                      status: undefined,
-                      thinking: message.thinking
-                        ? {
-                            ...message.thinking,
-                            completedAt: undefined,
-                          }
-                        : message.thinking,
-                    }
-                  : message,
-              ),
+              messages: [
+                ...messagesBeforeAssistant,
+                visibleSteerMessage,
+                {
+                  ...assistantMessage,
+                  isStreaming: true,
+                  progress: withSteeringProgress(assistantMessage.progress),
+                  status: undefined,
+                  thinking: assistantMessage.thinking
+                    ? {
+                        ...assistantMessage.thinking,
+                        completedAt: undefined,
+                      }
+                    : assistantMessage.thinking,
+                } satisfies ChatMessage,
+                ...messagesAfterAssistant,
+              ],
               updatedAt: now,
             }
           : chat,
@@ -2384,9 +2840,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                   ...chat,
                   messages: chat.messages.map((message) =>
                     message.id === assistantMessage.id
-                      ? {
-                          ...message,
-                          content: assistantResponse.content,
+                        ? {
+                            ...message,
+                            artifacts: mergeChatArtifacts(message.artifacts, assistantResponse.artifacts),
+                            content: assistantResponse.content,
                           isStreaming: false,
                           progress: withLocalComputerProgress(assistantResponse.progress, removeSteeringProgress(message.progress)),
                           reasoning: assistantResponse.reasoning,
@@ -2408,6 +2865,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       );
       notifyRunComplete({
         ...assistantMessage,
+        artifacts: mergeChatArtifacts(assistantMessage.artifacts, assistantResponse.artifacts),
         content: assistantResponse.content,
         isStreaming: false,
         progress: withLocalComputerProgress(assistantResponse.progress, removeSteeringProgress(assistantMessage.progress)),
@@ -2460,10 +2918,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const visibleMessages = existingMessages.filter((message) => message.status !== "error");
     const sourceControlContextMessages = await createSourceControlContextMessages(prompt);
     const projectBoundaryMessages = [createActiveProjectBoundaryMessage(projectName, workspaceSettings)];
+    const pdfContextMessages = createPdfLibraryContextMessages(projectName);
     const localContextMessages = shouldSkipLocalContextForGithub(prompt)
       ? []
       : await createLocalWorkspaceContextMessages(workspaceSettings, prompt, projectName);
-    const compaction = compactProviderMessages([...visibleMessages, ...sourceControlContextMessages, ...projectBoundaryMessages, ...localContextMessages, ...webContextMessages, userMessage]);
+    const compaction = compactProviderMessages([
+      ...visibleMessages,
+      ...sourceControlContextMessages,
+      ...projectBoundaryMessages,
+      ...pdfContextMessages,
+      ...localContextMessages,
+      ...webContextMessages,
+      userMessage,
+    ]);
 
     if (compaction.contextCompaction) {
       onCompaction?.(compaction.contextCompaction);
@@ -2484,7 +2951,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         `Workspace roots for this request: ${roots}`,
         workspaceSettings.enabled && workspaceSettings.roots.length > 0
           ? "The workspace roots above are the authoritative selected folder context for this request."
-          : "No local folder is selected for this request; do not describe any other project as a substitute.",
+          : "No local folder is selected for this request; do not describe any other project as a substitute. PDF export requests may still return downloadable chat artifacts directly in this conversation.",
         "Use only this active chat, these workspace roots, and this request's tool/web evidence when describing or changing a project.",
         "Treat prior file listings, terminal output, sources, or project descriptions from any other project as stale unless the user explicitly asks to compare projects.",
       ].join("\n"),
@@ -2492,7 +2959,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   async function createSourceControlContextMessages(prompt: string) {
-    if (!toolSettings.sourceControl || !isGithubSourceControlPrompt(prompt)) {
+    if (!toolSettings.sourceControl) {
+      return [];
+    }
+
+    const analysis = analyzeGithubPrompt(prompt);
+
+    if (!analysis.isGithubRelated || analysis.localGitIntent) {
       return [];
     }
 
@@ -2521,7 +2994,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           [
             "GITHUB SOURCE CONTROL ROUTING",
             `Tool note: ${detail}`,
-            "The latest user request appears to be about GitHub/source control. Prefer github_* tools over local computer file tools for repository discovery and remote repo inspection.",
+            "The latest user request appears to be about remote GitHub source control. Prefer github_* tools over local computer file tools for repository discovery and remote repo inspection.",
             "If a repository is named, inspect that repository directly instead of answering with a full repository inventory.",
           ].join("\n"),
         ),
@@ -2564,7 +3037,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       toolSettings.typescriptTools ||
       toolSettings.sqlTools ||
       toolSettings.reactNativeTools ||
-      toolSettings.codeGeneration
+      toolSettings.codeGeneration ||
+      toolSettings.sourceControl
     );
   }
 
@@ -2602,10 +3076,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
-  function compactProviderMessagesIfNeeded(messages: ChatMessage[], settingsOverride?: ProviderSettings, options: { target?: number; threshold?: number } = {}) {
-    return compactProviderMessages(messages, settingsOverride, options).messages;
-  }
-
   function compactProviderMessages(messages: ChatMessage[], settingsOverride?: ProviderSettings, options: { target?: number; threshold?: number } = {}) {
     const effectiveSettings = createToolAwareProviderSettings(settingsOverride);
     const requestedThreshold = options.threshold ?? AUTO_COMPACT_CONTEXT_THRESHOLD;
@@ -2638,6 +3108,30 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
+  function createContextBoundLocalToolExecutionPolicy(basePolicy: LocalComputerToolExecutionPolicy): LocalComputerToolExecutionPolicy {
+    const modelVisibleResultChars = getModelVisibleToolResultCharBudget(contextWindow.tokens);
+
+    return {
+      ...basePolicy,
+      maxToolCallOutputChars: minNullableCharCap(basePolicy.maxToolCallOutputChars, Math.max(modelVisibleResultChars, 96_000)),
+      maxToolResultsChars: minNullableCharCap(basePolicy.maxToolResultsChars, modelVisibleResultChars),
+    };
+  }
+
+  function getModelVisibleToolResultCharBudget(contextWindowTokens: number) {
+    const tokenBudget = Math.min(Math.max(Math.floor(contextWindowTokens * 0.2), 6_000), 60_000);
+
+    return tokenBudget * 4;
+  }
+
+  function minNullableCharCap(cap: number | null, budget: number) {
+    if (cap === null || !Number.isFinite(cap)) {
+      return budget;
+    }
+
+    return Math.min(cap, budget);
+  }
+
   function getProviderCompactionBaseline(threshold: number) {
     const usage = lastProviderContextUsage?.chatId === activeChat.id ? lastProviderContextUsage.usage : null;
 
@@ -2649,9 +3143,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function recordContextCompaction(compaction: ReturnType<typeof compactMessagesForContext>, providerBaseline: ContextWindowUsage | null): ContextCompactionNotice {
-    const beforeTokens = providerBaseline?.totalTokens ?? compaction.beforeUsage.totalTokens;
+    const beforeTokens = providerBaseline?.inputTokens ?? compaction.beforeUsage.inputTokens;
     const notice = {
-      afterTokens: compaction.afterUsage.totalTokens,
+      afterTokens: compaction.afterUsage.inputTokens,
       beforeTokens,
       chatId: activeChat.id,
       compactedAt: new Date().toISOString(),
@@ -2668,7 +3162,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   function createContextCompactionProgress(compaction: ReturnType<typeof compactMessagesForContext> & { contextCompaction?: ContextCompactionNotice }): ChatProgressItem {
     const notice = compaction.contextCompaction;
-    const afterTokens = notice?.afterTokens ?? compaction.afterUsage.totalTokens;
+    const afterTokens = notice?.afterTokens ?? compaction.afterUsage.inputTokens;
     const contextTokens = notice?.contextWindowTokens ?? compaction.afterUsage.contextWindowTokens;
     const compactedMessageCount = notice?.compactedMessageCount ?? compaction.compactedMessageCount;
 
@@ -2716,27 +3210,36 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function recordProviderContextUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings) {
+  function recordProviderContextUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean } = {}) {
     setLastProviderContextUsage({
       chatId,
-      usage: estimateProviderContextUsageForDisplay(messages, settings),
+      usage: estimateProviderContextUsageForDisplay(messages, settings, options),
     });
   }
 
-  function recordProviderActualUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"]) {
+  function recordProviderActualUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"], options: { stream?: boolean } = {}) {
     setLastProviderContextUsage({
       chatId,
-      usage: applyProviderUsageToContextEstimate(estimateProviderContextUsageForDisplay(messages, settings), usage),
+      usage: applyProviderUsageToContextEstimate(estimateProviderContextUsageForDisplay(messages, settings, options), usage),
     });
   }
 
-  function estimateProviderContextUsageForDisplay(messages: ChatMessage[], settings: ProviderSettings) {
+  function estimateProviderContextUsageForDisplay(messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean } = {}) {
     return estimateModelProviderPayloadUsage({
       contextWindowTokens: contextWindow.tokens,
       messages,
       settings,
       source: contextWindow.source,
+      stream: options.stream ?? true,
     });
+  }
+
+  function recordPlanningProviderRequest(chatId: string, request: PlanningProviderRequest) {
+    recordProviderContextUsage(chatId, request.messages, request.settings, { stream: request.stream });
+  }
+
+  function recordPlanningProviderUsage(chatId: string, request: PlanningProviderRequest, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"]) {
+    recordProviderActualUsage(chatId, request.messages, request.settings, usage, { stream: request.stream });
   }
 
   function createToolAwareProviderSettings(overrides: Partial<ProviderSettings> = {}): ProviderSettings {
@@ -2761,10 +3264,46 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function createFinalOnlyProviderSettings(): ProviderSettings {
+  function createPromptAwareProviderSettings(prompt: string, overrides: Partial<ProviderSettings> = {}): ProviderSettings {
+    const settings = createToolAwareProviderSettings(overrides);
+
+    return {
+      ...settings,
+      thinking: createPromptAwareThinkingSettings(settings.thinking, prompt),
+    };
+  }
+
+  function createPromptAwareThinkingSettings(thinking: ProviderSettings["thinking"], prompt: string): ProviderSettings["thinking"] {
+    if (!thinking.enabled || isDeepResearchThinking(thinking) || !shouldUseLighterThinkingForPrompt(prompt)) {
+      return thinking;
+    }
+
+    if (thinking.effort === "high" || thinking.effort === "medium") {
+      return {
+        ...thinking,
+        effort: "low",
+      };
+    }
+
+    return thinking;
+  }
+
+  function shouldUseLighterThinkingForPrompt(prompt: string) {
+    const normalizedPrompt = prompt.replace(/\s+/g, " ").trim();
+
+    if (!normalizedPrompt || COMPLEX_THINKING_PROMPT_PATTERN.test(normalizedPrompt)) {
+      return false;
+    }
+
+    const wordCount = normalizedPrompt.split(/\s+/).filter(Boolean).length;
+
+    return wordCount <= SIMPLE_THINKING_PROMPT_MAX_WORDS && SIMPLE_THINKING_PROMPT_PATTERN.test(normalizedPrompt);
+  }
+
+  function createFinalOnlyProviderSettings(prompt?: string): ProviderSettings {
     const tools = normalizeToolRegistrySettings(providerSettings.tools);
 
-    return createToolAwareProviderSettings({
+    const settings = createToolAwareProviderSettings({
       tools: {
         ...tools,
         browserPreview: false,
@@ -2783,8 +3322,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         testingTools: false,
         typescriptTools: false,
         webSearch: false,
+        weatherTools: false,
       },
     });
+
+    return prompt
+      ? {
+          ...settings,
+          thinking: createPromptAwareThinkingSettings(settings.thinking, prompt),
+        }
+      : settings;
   }
 
   function rememberSessionApprovalDecision(approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings) {
@@ -2838,6 +3385,18 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return Math.min(Math.max(Math.round(Math.max(requested, deepMinimum)), 1), MAX_WEB_SEARCH_RESULTS);
   }
 
+  function getRuntimeWebSearchSettings(settings: ProviderSettings, requestedWebSearch?: ChatSendInput["webSearch"] | ChatWebSearch): WebSearchSettings {
+    return {
+      ...settings.webSearch,
+      maxResults: getRuntimeWebSearchMaxResults(settings, requestedWebSearch?.maxResults),
+      provider: requestedWebSearch?.provider ?? settings.webSearch.provider,
+    };
+  }
+
+  function shouldIncludeVisualWebResults(webSearchSettings: WebSearchSettings, workspaceSettings: LocalWorkspaceSettings, mode: ChatMessage["mode"] | undefined, discordReply: boolean) {
+    return webSearchSettings.provider === "brave" && webSearchSettings.brave.showImageResults && mode !== "plan" && !workspaceSettings.enabled && !discordReply;
+  }
+
   async function streamAssistantWithLocalTools({
     approvalDecisions,
     chatId,
@@ -2872,17 +3431,209 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
 
     let totalExecutedToolCalls = 0;
+    let allArtifacts: ChatArtifact[] = [];
     let allToolCalls: ChatToolCall[] = [];
     let finalizationRetries = 0;
+    let freshLocalToolEvidenceRetries = 0;
     let malformedToolRecoveryRetries = 0;
+    let recoverableEditRetries = 0;
+    let emptyScaffoldRecoveryUsed = false;
 
     let passIndex = 0;
-    const baseRuntimeSettings = createToolAwareProviderSettings();
+    const baseRuntimeSettings = createPromptAwareProviderSettings(prompt);
     const deepResearch = isDeepResearchThinking(baseRuntimeSettings.thinking);
-    const toolExecutionPolicy = deepResearch ? DEEP_RESEARCH_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY : STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY;
+    const baseToolExecutionPolicy = deepResearch ? DEEP_RESEARCH_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY : STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY;
+    const toolExecutionPolicy = createContextBoundLocalToolExecutionPolicy(baseToolExecutionPolicy);
     const runtimeWebSearchMaxResults = getRuntimeWebSearchMaxResults(providerSettings);
-    const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : MAX_LOCAL_TOOL_PASSES;
-    const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : MAX_LOCAL_TOOL_EXECUTIONS;
+    const runtimeWebSearchSettings: WebSearchSettings = {
+      ...providerSettings.webSearch,
+      maxResults: runtimeWebSearchMaxResults,
+    };
+    const simpleLocalScaffoldRequest = isSimpleLocalScaffoldRequest(prompt) && !deepResearch;
+    const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : simpleLocalScaffoldRequest ? 5 : MAX_LOCAL_TOOL_PASSES;
+    const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : simpleLocalScaffoldRequest ? 16 : MAX_LOCAL_TOOL_EXECUTIONS;
+
+    function maybeFinishSimpleLocalScaffold(reasoning?: string): typeof finalResponse | null {
+      if (!simpleLocalScaffoldRequest) {
+        return null;
+      }
+
+      const completion = detectSimpleLocalTaskCompletion(prompt, allToolCalls);
+
+      if (!completion) {
+        return null;
+      }
+
+      const content = createSimpleLocalTaskCompletionAnswer(completion);
+      const completedProgress = createLocalComputerProgress("complete", "Starter app verified");
+      localProgress = completedProgress;
+      finalResponse = {
+        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+        content,
+        progress: completedProgress,
+        reasoning,
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      };
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        agentRunStatus: "completed",
+        artifacts: allArtifacts.length > 0 ? mergeChatArtifacts(message.artifacts, allArtifacts) : message.artifacts,
+        content,
+        progress: withLocalComputerProgress(completedProgress, message.progress),
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
+      }));
+      onExternalUpdate?.({
+        content,
+        progress: completedProgress,
+        status: "Starter app verified.",
+        toolCall: allToolCalls[allToolCalls.length - 1],
+      });
+
+      return finalResponse;
+    }
+
+    function createSimpleScaffoldToolPlanContent() {
+      return [
+        "<tool_call>",
+        "create_vite_project",
+        "</tool_call>",
+        "<tool_call>",
+        "run_terminal",
+        "<arg_key>command</arg_key><arg_value>npm install</arg_value>",
+        "<arg_key>timeout</arg_key><arg_value>300</arg_value>",
+        "</tool_call>",
+        "<tool_call>",
+        "run_terminal",
+        "<arg_key>command</arg_key><arg_value>npm run build</arg_value>",
+        "<arg_key>timeout</arg_key><arg_value>300</arg_value>",
+        "</tool_call>",
+        "<tool_call>",
+        "run_terminal",
+        "<arg_key>command</arg_key><arg_value>npm run dev</arg_value>",
+        "</tool_call>",
+      ].join("\n");
+    }
+
+    async function recoverEmptySimpleScaffold(reasoning?: string): Promise<typeof finalResponse | null> {
+      emptyScaffoldRecoveryUsed = true;
+      const recoveryPassIndex = passIndex + 1;
+      const recoveryToolContent = createSimpleScaffoldToolPlanContent();
+      const activeProgress = createLocalComputerProgress("active", "Scaffolding empty starter app");
+      const activeToolCalls = createActiveLocalToolCalls(recoveryToolContent, recoveryPassIndex, toolExecutionPolicy);
+      let liveToolCalls = activeToolCalls;
+
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        agentRunStatus: "running",
+        content: "",
+        progress: withLocalComputerProgress(activeProgress, message.progress),
+        toolCalls: activeToolCalls.length > 0 ? [...allToolCalls, ...activeToolCalls] : message.toolCalls,
+      }));
+      onExternalUpdate?.({
+        progress: activeProgress,
+        status: "Scaffolding empty starter app...",
+        toolCall: activeToolCalls[0],
+      });
+
+      const toolRun = await runLocalComputerToolCalls({
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
+        assistantContent: recoveryToolContent,
+        executionPolicy: toolExecutionPolicy,
+        mcpContext: {
+          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
+          settings: providerSettings.mcp,
+        },
+        onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
+        onToolCallUpdate: (_callNumber, toolCall) => {
+          const [stampedToolCall] = stampLocalToolCallIds([toolCall], recoveryPassIndex);
+
+          if (!stampedToolCall) {
+            return;
+          }
+
+          liveToolCalls = upsertToolCall(liveToolCalls, stampedToolCall);
+          attachLiveTerminalSession([stampedToolCall]);
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...message,
+            content: "",
+            progress: withLocalComputerProgress(activeProgress, message.progress),
+            toolCalls: [...allToolCalls, ...liveToolCalls],
+          }));
+          onExternalUpdate?.({
+            progress: activeProgress,
+            status: formatDiscordToolStatus(stampedToolCall),
+            toolCall: stampedToolCall,
+          });
+        },
+        settings: workspaceSettings,
+        signal: controller.signal,
+        toolSettings,
+        userPrompt: prompt,
+        webSearchSettings: runtimeWebSearchSettings,
+        webSearchMaxResults: runtimeWebSearchMaxResults,
+      });
+
+      if (toolRun.browserPreviewUrl && toolSettings.browserPreview) {
+        setBrowserPreviewTarget((currentTarget) => ({
+          id: (currentTarget?.id ?? 0) + 1,
+          url: toolRun.browserPreviewUrl!,
+        }));
+      }
+
+      totalExecutedToolCalls += toolRun.executedCount;
+      const completedToolCalls = stampLocalToolCallIds(toolRun.toolCalls, recoveryPassIndex);
+      allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
+      allToolCalls = [...allToolCalls, ...completedToolCalls];
+      attachLiveTerminalSession(allToolCalls);
+      localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", `${totalExecutedToolCalls} ran`);
+      finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
+      finalResponse.toolCalls = allToolCalls;
+      finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
+        ...approval,
+        messageId,
+        resumeToolCallContent: recoveryToolContent,
+      }));
+      finalResponse.pendingToolCallContent = toolRun.waitingForApproval ? recoveryToolContent : undefined;
+      finalResponse.waitingForApproval = toolRun.waitingForApproval;
+
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        agentRunStatus: toolRun.waitingForApproval ? "waiting_for_approval" : "running",
+        approvals: toolRun.waitingForApproval ? mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []) : message.approvals,
+        artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
+        content: "",
+        progress: withLocalComputerProgress(localProgress, message.progress),
+        sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
+        toolCalls: allToolCalls,
+      }));
+      onExternalUpdate?.({
+        progress: localProgress,
+        sources: toolRun.sources,
+        status: toolRun.waitingForApproval ? "Tool approval is needed in Gilbert Codex." : `${totalExecutedToolCalls} tool call${totalExecutedToolCalls === 1 ? "" : "s"} completed.`,
+        toolCall: allToolCalls[allToolCalls.length - 1],
+      });
+
+      if (toolRun.waitingForApproval) {
+        return {
+          ...finalResponse,
+          progress: toolRun.progress,
+        };
+      }
+
+      const completedResponse = maybeFinishSimpleLocalScaffold(reasoning);
+      if (completedResponse) {
+        return completedResponse;
+      }
+
+      messages = [
+        ...messages,
+        createMessage("assistant", recoveryToolContent),
+        createMessage("user", toolRun.contextMessage),
+        createMessage("user", createLocalToolFinalInstruction(prompt)),
+      ];
+      passIndex = recoveryPassIndex + 1;
+      return null;
+    }
 
     async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
       if (isRequestInactive(requestId, controller)) {
@@ -2901,7 +3652,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         status: allToolCalls.length > 0 ? "Writing final answer from gathered tool results..." : "Recovering final answer...",
       });
 
-      const baseSynthesisSettings = createFinalOnlyProviderSettings();
+      const baseSynthesisSettings = createFinalOnlyProviderSettings(prompt);
       const synthesisSettings: ProviderSettings = {
         ...baseSynthesisSettings,
         maxTokens: Math.max(baseSynthesisSettings.maxTokens, deepResearch ? DEEP_RESEARCH_MIN_TOKENS : LOCAL_TOOL_FINAL_MIN_TOKENS),
@@ -2944,11 +3695,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         try {
-          recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings);
+          recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings, { stream: false });
           const response = await sendProviderMessage(synthesisSettings, synthesisCompaction.messages, {
             signal: controller.signal,
           });
-          recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage);
+          recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage, { stream: false });
 
           if (isRequestInactive(requestId, controller)) {
             return null;
@@ -2956,12 +3707,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
           const content = sanitizeLocalToolCallsForDisplay(response.content, toolExecutionPolicy).trim();
 
-          if (!content || looksLikeOnlyToolPrelude(content) || looksLikeInternalToolRecoveryAnswer(content)) {
+          if (!content || looksLikeOnlyToolPrelude(content) || looksLikeInternalToolRecoveryAnswer(content) || looksLikeFabricatedToolActivity(content, allToolCalls)) {
             continue;
           }
 
           return {
             content,
+            artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
             progress: localProgress,
             reasoning: response.reasoning ?? fallbackReasoning,
             toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -2999,6 +3751,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: resumeToolCallContent,
         executionPolicy: toolExecutionPolicy,
+        mcpContext: {
+          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
+          settings: providerSettings.mcp,
+        },
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
         previousToolCalls,
         onToolCallUpdate: (_callNumber, toolCall) => {
@@ -3009,6 +3765,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }
 
           liveToolCalls = upsertToolCall(liveToolCalls, stampedToolCall);
+          attachLiveTerminalSession([stampedToolCall]);
           updateGeneratedMessage(chatId, messageId, (message) => ({
             ...message,
             content: "",
@@ -3025,6 +3782,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         signal: controller.signal,
         toolSettings,
         userPrompt: prompt,
+        webSearchSettings: runtimeWebSearchSettings,
         webSearchMaxResults: runtimeWebSearchMaxResults,
       });
 
@@ -3036,9 +3794,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       totalExecutedToolCalls += toolRun.executedCount;
+      allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
       allToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
       attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", `${totalExecutedToolCalls} ran`);
+      finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
         ...approval,
@@ -3052,6 +3812,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ...message,
         agentRunStatus: toolRun.waitingForApproval ? "waiting_for_approval" : "running",
         approvals: toolRun.waitingForApproval ? mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []) : message.approvals,
+        artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),
         sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
@@ -3071,6 +3832,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         };
       }
 
+      const simpleScaffoldResponse = maybeFinishSimpleLocalScaffold(undefined);
+      if (simpleScaffoldResponse) {
+        return simpleScaffoldResponse;
+      }
+
       messages = [
         ...messages,
         createMessage("assistant", resumeToolCallContent),
@@ -3081,7 +3847,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     while (!isRequestInactive(requestId, controller)) {
       const toolBudgetReached = passIndex >= maxToolPasses || totalExecutedToolCalls >= maxToolExecutions;
-      const runtimeSettings = toolBudgetReached ? createFinalOnlyProviderSettings() : createToolAwareProviderSettings();
+      const runtimeSettings = toolBudgetReached ? createFinalOnlyProviderSettings(prompt) : createPromptAwareProviderSettings(prompt);
       const minPassTokens = deepResearch ? DEEP_RESEARCH_MIN_TOKENS : localProgress ? LOCAL_TOOL_FINAL_MIN_TOKENS : 0;
       const passSettings: ProviderSettings = minPassTokens > 0
         ? {
@@ -3115,19 +3881,29 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               return;
             }
 
-            const visibleContent = hasLocalComputerToolCalls(snapshot.content, toolExecutionPolicy) ? "" : sanitizeLocalToolCallsForDisplay(snapshot.content, toolExecutionPolicy);
+            const hasStreamingLocalToolCalls = hasLocalComputerToolCalls(snapshot.content, toolExecutionPolicy);
+            const streamingToolCalls = hasStreamingLocalToolCalls ? createActiveLocalToolCalls(snapshot.content, passIndex, toolExecutionPolicy) : [];
+            const promisedToolAction = !hasStreamingLocalToolCalls && looksLikeUnexecutedToolActionPromise(snapshot.content);
+            const streamingLocalProgress = hasStreamingLocalToolCalls
+              ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingToolCalls))
+              : promisedToolAction
+                ? createLocalComputerProgress("active", "Preparing file changes")
+                : localProgress;
+            const sanitizedContent = hasStreamingLocalToolCalls ? "" : sanitizeLocalToolCallsForDisplay(snapshot.content, toolExecutionPolicy);
+            const visibleContent = promisedToolAction || looksLikeFabricatedToolActivity(sanitizedContent, allToolCalls) || looksLikeToolProtocolNarration(sanitizedContent) ? "" : sanitizedContent;
 
             updateGeneratedMessage(chatId, messageId, (message) => ({
               ...message,
               content: visibleContent,
-              progress: localProgress ? withLocalComputerProgress(localProgress, message.progress) : message.progress,
+              progress: streamingLocalProgress ? withLocalComputerProgress(streamingLocalProgress, message.progress) : message.progress,
               reasoning: snapshot.reasoning,
               thinking: message.thinking,
+              toolCalls: streamingToolCalls.length > 0 ? [...allToolCalls, ...streamingToolCalls] : message.toolCalls,
             }));
             onExternalUpdate?.({
               content: visibleContent,
-              progress: localProgress,
-              status: visibleContent ? "Streaming answer..." : "Thinking...",
+              progress: streamingLocalProgress,
+              status: hasStreamingLocalToolCalls ? "Preparing tool request..." : promisedToolAction ? "Preparing file changes..." : visibleContent ? "Streaming answer..." : "Thinking...",
             });
           },
           {
@@ -3150,7 +3926,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: createToolFinalAnswerUnavailableMessage(),
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3158,6 +3935,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       finalResponse = {
+        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         content: hasLocalComputerToolCalls(assistantResponse.content, toolExecutionPolicy) ? "" : sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy),
         reasoning: assistantResponse.reasoning,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3213,7 +3991,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: createToolFinalAnswerUnavailableMessage(),
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3221,13 +4000,31 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       if (!hasLocalComputerToolCalls(assistantResponse.content, toolExecutionPolicy)) {
-        if (looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content)) {
+        const fabricatedToolActivity = looksLikeFabricatedToolActivity(finalResponse.content, allToolCalls);
+        const toolProtocolNarration = looksLikeToolProtocolNarration(finalResponse.content);
+        const unexecutedToolActionPromise = looksLikeUnexecutedToolActionPromise(finalResponse.content);
+        const localToolEvidenceRequired =
+          allToolCalls.length === 0 &&
+          freshLocalToolEvidenceRetries < 1 &&
+          !toolBudgetReached &&
+          needsFreshLocalToolEvidence(prompt, workspaceSettings.enabled);
+
+        if (localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolActivity || toolProtocolNarration || unexecutedToolActionPromise) {
+          if (localToolEvidenceRequired) {
+            freshLocalToolEvidenceRetries += 1;
+          }
           finalizationRetries += 1;
 
           if (finalizationRetries > MAX_TOOL_FINALIZATION_RETRIES) {
             const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
               [...messages, createMessage("assistant", assistantResponse.content)],
-              "The previous finalization attempt exposed tool activity instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
+              fabricatedToolActivity
+                ? "The previous finalization attempt claimed tool activity that was not backed by app tool-call records. Do not repeat that claim."
+                : toolProtocolNarration
+                  ? "The previous finalization attempt exposed tool-call protocol narration. Do not repeat it."
+                : unexecutedToolActionPromise
+                  ? "The previous finalization attempt promised a tool action without executing it. Do not repeat the promise."
+                : "The previous finalization attempt exposed tool activity instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
               assistantResponse.reasoning,
             );
 
@@ -3236,7 +4033,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             }
 
             return {
-              content: createToolFinalAnswerUnavailableMessage(),
+              artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+              content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
               progress: localProgress,
               reasoning: assistantResponse.reasoning,
               toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3252,14 +4050,22 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }));
           onExternalUpdate?.({
             progress: recoveryProgress,
-            status: localProgress ? "Synthesizing gathered tool results..." : "Recovering final answer...",
+            status: localToolEvidenceRequired ? "Requesting fresh tool evidence..." : localProgress ? "Synthesizing gathered tool results..." : "Recovering final answer...",
           });
           messages = [
             ...messages,
             createMessage("assistant", assistantResponse.content),
             createMessage(
               "user",
-              localProgress
+              localToolEvidenceRequired
+                ? createFreshLocalToolEvidenceInstruction(prompt, finalResponse.content)
+                : fabricatedToolActivity
+                ? createFabricatedToolActivityRecoveryInstruction(prompt, finalResponse.content, allToolCalls)
+                : toolProtocolNarration
+                  ? createToolProtocolNarrationRecoveryInstruction(prompt, finalResponse.content)
+                : unexecutedToolActionPromise
+                  ? createToolActionPromiseRecoveryInstruction(prompt, finalResponse.content)
+                : localProgress
                 ? createLocalToolFinalInstruction(prompt)
                 : createFinalAnswerRecoveryInstruction(
                     prompt,
@@ -3297,6 +4103,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: assistantResponse.content,
         executionPolicy: toolExecutionPolicy,
+        mcpContext: {
+          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
+          settings: providerSettings.mcp,
+        },
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
         onToolCallUpdate: (_callNumber, toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
@@ -3306,6 +4116,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }
 
           liveToolCalls = upsertToolCall(liveToolCalls, stampedToolCall);
+          attachLiveTerminalSession([stampedToolCall]);
           updateGeneratedMessage(chatId, messageId, (message) => ({
             ...message,
             content: "",
@@ -3322,6 +4133,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         signal: controller.signal,
         toolSettings,
         userPrompt: prompt,
+        webSearchSettings: runtimeWebSearchSettings,
         webSearchMaxResults: runtimeWebSearchMaxResults,
       });
 
@@ -3334,9 +4146,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       totalExecutedToolCalls += toolRun.executedCount;
       const completedToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
+      allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
       allToolCalls = [...allToolCalls, ...completedToolCalls];
       attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", deepResearch ? `${totalExecutedToolCalls} deep research tools ran` : `${totalExecutedToolCalls} ran`);
+      finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
         ...approval,
@@ -3351,6 +4165,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ...message,
           agentRunStatus: "waiting_for_approval",
           approvals: mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []),
+          artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
           content: "",
           progress: withLocalComputerProgress(toolRun.progress, message.progress),
           sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
@@ -3399,7 +4214,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         return {
-          content: sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy) || createToolFinalAnswerUnavailableMessage(),
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy) || createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
@@ -3408,6 +4224,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
         ...message,
+        artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),
         sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
@@ -3420,13 +4237,79 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         toolCall: allToolCalls[allToolCalls.length - 1],
       });
 
+      if (!emptyScaffoldRecoveryUsed && isEmptySelectedScaffoldProbe(prompt, toolRun.contextMessage, completedToolCalls)) {
+        const recoveredResponse = await recoverEmptySimpleScaffold(assistantResponse.reasoning);
+        if (recoveredResponse) {
+          return recoveredResponse;
+        }
+        continue;
+      }
+
+      const hasRecoverableToolFailure =
+        toolRun.requestedCount > 0 &&
+        isRecoverableLocalEditFailure(toolRun.contextMessage, completedToolCalls, toolRun.recoverableFailure);
+
+      if (hasRecoverableToolFailure && recoverableEditRetries < MAX_RECOVERABLE_LOCAL_EDIT_RETRIES) {
+        recoverableEditRetries += 1;
+        const retryProgress = createLocalComputerProgress("active", "Recovering file change");
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          content: "",
+          progress: withLocalComputerProgress(retryProgress, message.progress),
+          sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
+          toolCalls: allToolCalls,
+        }));
+        onExternalUpdate?.({
+          progress: retryProgress,
+          sources: toolRun.sources,
+          status: "Recovering file change...",
+          toolCall: allToolCalls[allToolCalls.length - 1],
+        });
+
+        messages = [
+          ...messages,
+          createMessage("assistant", assistantResponse.content),
+          createMessage("user", toolRun.contextMessage),
+          createMessage("user", createRecoverableLocalEditRetryInstruction(prompt, toolRun.contextMessage, toolRun.recoverableFailure)),
+        ];
+        passIndex += 1;
+        continue;
+      }
+
       if (toolRun.directAnswer) {
         return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
           content: toolRun.directAnswer,
           progress: localProgress,
           reasoning: finalResponse.reasoning,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
+      }
+
+      if (toolRun.requestedCount > 0 && toolRun.executedCount === 0) {
+        const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+          [...messages, createMessage("assistant", assistantResponse.content), createMessage("user", toolRun.contextMessage)],
+          createNoExecutedToolFinalInstruction(toolRun.contextMessage, hasRecoverableToolFailure),
+          assistantResponse.reasoning,
+        );
+
+        if (synthesizedResponse) {
+          return synthesizedResponse;
+        }
+
+        return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: createNoExecutedToolFinalAnswer(toolRun.contextMessage),
+          progress: localProgress,
+          reasoning: assistantResponse.reasoning,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+        };
+      }
+
+      const simpleScaffoldResponse = maybeFinishSimpleLocalScaffold(assistantResponse.reasoning);
+      if (simpleScaffoldResponse) {
+        return simpleScaffoldResponse;
       }
 
       const nextPassWillReachBudget = passIndex + 1 >= maxToolPasses || totalExecutedToolCalls >= maxToolExecutions;
@@ -3456,8 +4339,296 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function createToolFinalAnswerUnavailableMessage() {
-    return "I could not produce a clean final answer for this run.";
+  function createToolFinalAnswerUnavailableMessage(toolCalls: ChatToolCall[] = [], originalPrompt = "") {
+    const gitFallback = createGitToolFallbackAnswer(toolCalls, originalPrompt);
+
+    if (gitFallback) {
+      return gitFallback;
+    }
+
+    const latestIssueToolCall = [...toolCalls].reverse().find((toolCall) => toolCall.status !== "complete" && (toolCall.output || toolCall.detail));
+    const latestToolCall = latestIssueToolCall ?? [...toolCalls].reverse().find((toolCall) => toolCall.output || toolCall.detail);
+
+    if (!latestToolCall) {
+      return "I could not finish a clean response from the available tool results. Please retry the last request.";
+    }
+
+    if (!latestToolCall) {
+      return "The model finished without producing a final answer for this run. Try sending the prompt again — the tool runs above should make the next attempt faster.";
+    }
+
+    const rawLatestOutput = latestToolCall.output ? latestToolCall.output : latestToolCall.detail ? latestToolCall.detail : "";
+    const fallbackOutput = latestToolCall.status === "complete"
+      ? limitFallbackToolOutput(rawLatestOutput)
+      : summarizeUnsuccessfulToolSection(rawLatestOutput);
+
+    if (latestToolCall.status === "complete") {
+      return [
+        `Latest completed result: ${latestToolCall.label}`,
+        fallbackOutput,
+      ].filter(Boolean).join("\n\n");
+    }
+
+    return [
+      `The run stopped on this ${latestToolCall.label} result:`,
+      latestToolCall.status ? `Status: ${latestToolCall.status}` : "",
+      fallbackOutput,
+    ].filter(Boolean).join("\n\n");
+
+  }
+
+  function limitFallbackToolOutput(output: string) {
+    const trimmed = output.trim();
+    const maxChars = Math.min(getModelVisibleToolResultCharBudget(contextWindow.tokens), 24_000);
+
+    if (trimmed.length <= maxChars) {
+      return trimmed;
+    }
+
+    return `${trimmed.slice(0, maxChars)}\n\n[Fallback output truncated to stay within the model context window. Open Activity or rerun the tool for a narrower path/range for exact omitted output.]`;
+  }
+
+  function createGitToolFallbackAnswer(toolCalls: ChatToolCall[], originalPrompt: string) {
+    const gitStatusOutputs = toolCalls
+      .filter((toolCall) => /^git status$/i.test(toolCall.label) && toolCall.output)
+      .map((toolCall) => toolCall.output ?? "");
+    const gitDiffOutputs = toolCalls
+      .filter((toolCall) => /^git diff$/i.test(toolCall.label) && toolCall.output)
+      .map((toolCall) => toolCall.output ?? "");
+
+    if (gitStatusOutputs.length === 0 && gitDiffOutputs.length === 0) {
+      return "";
+    }
+
+    const statusFiles = parseGitStatusFallbackFiles(gitStatusOutputs.join("\n"));
+    const diffStats = parseGitDiffStatFallbackFiles(gitDiffOutputs.join("\n"));
+    const changedPathCount = statusFiles.length || diffStats.length;
+    const grouped = groupGitStatusFallbackFiles(statusFiles);
+    const diffOnly = diffStats.filter((stat) => !statusFiles.some((file) => file.path === stat.path));
+    const wantsAll = /\b(all|every|everything|single|period|not miss|missing nothing|full|complete|deep)\b/i.test(originalPrompt);
+
+    return [
+      changedPathCount > 0
+        ? `Here is a Git overview built from the tool output (${changedPathCount} changed path${changedPathCount === 1 ? "" : "s"}).`
+        : "Git ran, but no changed paths could be parsed from the tool output.",
+      wantsAll ? "Every parsed path is listed below." : "",
+      formatGitStatusFallbackGroup("Modified", grouped.modified),
+      formatGitStatusFallbackGroup("Added / untracked", grouped.added),
+      formatGitStatusFallbackGroup("Deleted", grouped.deleted),
+      formatGitStatusFallbackGroup("Renamed / copied", grouped.renamed),
+      formatGitStatusFallbackGroup("Other changed", grouped.other),
+      diffOnly.length > 0 ? ["Diff-stat-only paths:", ...diffOnly.map((file) => `- ${file.path}${formatGitStatSuffix(file)}`)].join("\n") : "",
+      gitDiffOutputs.some((output) => /Output truncated:\s*yes/i.test(output))
+        ? "Git output reported truncation. The next review pass should split by explicit file paths until every path is covered."
+        : "",
+    ].filter(Boolean).join("\n\n");
+  }
+
+  function parseGitStatusFallbackFiles(output: string) {
+    const stdout = extractToolStdout(output);
+    const files: Array<{ path: string; status: string }> = [];
+
+    for (const rawLine of stdout.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+
+      if (!line || line.startsWith("##") || line.startsWith("warning:")) {
+        continue;
+      }
+
+      const match = line.match(/^(.{1,2})\s+(.+)$/);
+
+      if (!match) {
+        continue;
+      }
+
+      const status = match[1].trim();
+      const path = cleanGitFallbackPath(match[2]);
+
+      if (status && path) {
+        files.push({ path, status });
+      }
+    }
+
+    return dedupeGitFallbackFiles(files);
+  }
+
+  function parseGitDiffStatFallbackFiles(output: string) {
+    const stdout = extractToolStdout(output);
+    const files: Array<{ additions: number; deletions: number; path: string }> = [];
+
+    for (const rawLine of stdout.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+
+      if (!line || line.startsWith("diff --git ") || line.startsWith("UNTRACKED FILES") || line.startsWith("=====")) {
+        continue;
+      }
+
+      const match = line.match(/^\s*(.+?)\s+\|\s+(\d+)(?:\s+([+\-]+))?\s*$/);
+
+      if (!match) {
+        continue;
+      }
+
+      const path = cleanGitFallbackPath(match[1]);
+      const markers = match[3] ?? "";
+
+      if (path) {
+        files.push({
+          additions: Array.from(markers).filter((char) => char === "+").length,
+          deletions: Array.from(markers).filter((char) => char === "-").length,
+          path,
+        });
+      }
+    }
+
+    return files;
+  }
+
+  function extractToolStdout(output: string) {
+    const stdoutIndex = output.indexOf("\nSTDOUT\n");
+
+    if (stdoutIndex === -1) {
+      return output;
+    }
+
+    const stderrIndex = output.indexOf("\nSTDERR", stdoutIndex + 8);
+    return stderrIndex === -1 ? output.slice(stdoutIndex + 8) : output.slice(stdoutIndex + 8, stderrIndex);
+  }
+
+  function cleanGitFallbackPath(value: string) {
+    return value.trim().replace(/^"|"$/g, "").replace(/\s+\([^)]+\)$/g, "");
+  }
+
+  function dedupeGitFallbackFiles(files: Array<{ path: string; status: string }>) {
+    const seen = new Set<string>();
+    const deduped: Array<{ path: string; status: string }> = [];
+
+    for (const file of files) {
+      if (seen.has(file.path)) {
+        continue;
+      }
+      seen.add(file.path);
+      deduped.push(file);
+    }
+
+    return deduped;
+  }
+
+  function groupGitStatusFallbackFiles(files: Array<{ path: string; status: string }>) {
+    const grouped = {
+      added: [] as Array<{ path: string; status: string }>,
+      deleted: [] as Array<{ path: string; status: string }>,
+      modified: [] as Array<{ path: string; status: string }>,
+      other: [] as Array<{ path: string; status: string }>,
+      renamed: [] as Array<{ path: string; status: string }>,
+    };
+
+    for (const file of files) {
+      if (file.status === "??" || file.status.includes("A")) {
+        grouped.added.push(file);
+      } else if (file.status.includes("D")) {
+        grouped.deleted.push(file);
+      } else if (file.status.includes("R") || file.status.includes("C")) {
+        grouped.renamed.push(file);
+      } else if (file.status.includes("M")) {
+        grouped.modified.push(file);
+      } else {
+        grouped.other.push(file);
+      }
+    }
+
+    return grouped;
+  }
+
+  function formatGitStatusFallbackGroup(label: string, files: Array<{ path: string; status: string }>) {
+    if (files.length === 0) {
+      return "";
+    }
+
+    return [`${label} (${files.length}):`, ...files.map((file) => `- ${file.status} ${file.path}`)].join("\n");
+  }
+
+  function formatGitStatSuffix(file: { additions: number; deletions: number }) {
+    const stats = [file.additions > 0 ? `+${file.additions}` : "", file.deletions > 0 ? `-${file.deletions}` : ""].filter(Boolean).join(" ");
+    return stats ? ` (${stats})` : "";
+  }
+
+  function createNoExecutedToolFinalInstruction(contextMessage: string, retryBudgetExhausted = false) {
+    const hasError = /\bTOOL\s+\d+\s+\[error\]:/i.test(contextMessage);
+    const hasEditFailure = /\b(?:edit_file|inline_edit)\b/i.test(contextMessage);
+
+    return [
+      retryBudgetExhausted
+        ? "A recoverable local edit/write failure still could not be completed within the retry budget."
+        : "",
+      hasError
+        ? "At least one requested tool call failed before any successful tool result was produced."
+        : "Every requested tool call in the last pass was skipped, blocked, or paused before any successful tool result was produced.",
+      hasEditFailure
+        ? "If this was a malformed or mismatched edit, state that no file was changed; do not present replacement code as if it was applied."
+        : "",
+      retryBudgetExhausted
+        ? "Do not request more tools in this final synthesis pass because the bounded recovery loop has already been used."
+        : "Do not request more tools in this final synthesis pass because the remaining blocker is not recoverable by changing tool arguments.",
+      "Do not paste raw tool output, Activity blocks, stack traces, adaptation recommendations, or tool-loop wording.",
+      "Do not claim success for an edit, command, file read, or web search unless the tool result says it completed.",
+      "Explain the blocker in one concise user-facing sentence and give the best next step from the available evidence.",
+    ].filter(Boolean).join(" ");
+  }
+
+  function createNoExecutedToolFinalAnswer(contextMessage: string) {
+    const unsuccessfulSection = extractFirstUnsuccessfulToolSection(contextMessage);
+
+    if (!unsuccessfulSection) {
+      return "I could not complete that tool action, and no file changes were applied. Check Activity for the exact tool result.";
+    }
+
+    return [
+      "I could not complete that tool action, and no file changes were applied.",
+      summarizeUnsuccessfulToolSection(unsuccessfulSection),
+    ].filter(Boolean).join("\n\n");
+  }
+
+  function extractFirstUnsuccessfulToolSection(contextMessage: string) {
+    const match = contextMessage.match(/\n?TOOL\s+\d+\s+\[(?:skipped|error|waiting_approval)\]:[^\n]*(?:\n[\s\S]*?)(?=\nTOOL\s+\d+(?:\s+\[[^\]]+\])?:|\nAUTO SYNTAX CHECK\b|$)/i);
+
+    if (!match) {
+      return "";
+    }
+
+    return match[0].trim();
+  }
+
+  function summarizeUnsuccessfulToolSection(section: string) {
+    const body = stripToolSectionHeader(stripToolAdaptationRecommendation(section));
+    const normalized = body.replace(/\s+/g, " ").trim();
+
+    if (!normalized) {
+      return "";
+    }
+
+    if (/edit_file needs old_text\/new_text/i.test(normalized)) {
+      return "The edit request was malformed: `edit_file` needs `old_text`/`new_text`, `start_line`/`end_line`/`content`, `insert_at_line`/`content`, or `start_char`/`end_char`/`content`.";
+    }
+
+    if (/\b(?:blocked|permission|approval|workspace roots?|read-only|outside the enabled workspace)\b/i.test(normalized)) {
+      return normalized.slice(0, 500);
+    }
+
+    return normalized.slice(0, 500);
+  }
+
+  function stripToolSectionHeader(section: string) {
+    return section.replace(/^\s*TOOL\s+\d+\s+\[(?:skipped|error|waiting_approval)\]:[^\n]*\n?/i, "").trim();
+  }
+
+  function stripToolAdaptationRecommendation(value: string) {
+    const index = value.toLowerCase().indexOf("adaptation recommendation");
+    if (index === -1) {
+      return value.trim();
+    }
+
+    return value.slice(0, index).replace(/[^\w`"'./\\:()[\]{}]+$/g, "").trim();
   }
 
   function appendAutoCompactionContinuation(messages: ChatMessage[], prompt: string, executedToolCalls: number) {
@@ -3494,7 +4665,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
 
     return Promise.all(
-      tasks.slice(0, 4).map(async (task, index) => {
+      tasks.map(async (task, index) => {
         const title = task.title || `Sub-agent ${index + 1}`;
 
         try {
@@ -3638,6 +4809,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     return (
       /\bhttp\s+(?:408|409|425|429|500|502|503|504|520|521|522|523|524)\b/.test(message) ||
+      /\b(max(?:imum)? context length|context length|context window|too many tokens|requested about \d+ tokens|reduce the length)\b/.test(message) ||
       /\b(fetch failed|failed to fetch|network|timeout|timed out|temporarily unavailable|connection reset|connection refused|econnreset|etimedout)\b/.test(message)
     );
   }
@@ -3695,18 +4867,23 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     messageId,
     query,
     requestId,
+    webSearchSettings,
+    includeVisualResults,
   }: {
     chatId: string;
     controller: AbortController;
+    includeVisualResults: boolean;
     maxResults: number;
     messageId: string;
     query: string;
     requestId: number;
+    webSearchSettings: WebSearchSettings;
   }): Promise<{ contextMessages: ChatMessage[]; sources: ChatSource[] }> {
+    const providerLabel = formatWebSearchProviderLabel(webSearchSettings.provider);
     const activeWebSearch: ChatWebSearch = {
       enabled: true,
       maxResults,
-      provider: "duckduckgo",
+      provider: webSearchSettings.provider,
       query,
       status: "active",
     };
@@ -3718,7 +4895,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }));
 
     try {
-      const results = await searchDuckDuckGo(query, {
+      const searchResponse = await searchWebWithProvider(query, {
+        ...webSearchSettings,
+        maxResults,
+      }, {
+        includeVisualResults,
         maxResults,
         signal: controller.signal,
       });
@@ -3730,13 +4911,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         };
       }
 
-      const sources = createChatSourcesFromWebResults(results);
+      const sources = createChatSourcesFromWebResults(searchResponse.results);
       if (sources.length === 0) {
-        throw new Error("DuckDuckGo returned no usable sources.");
+        throw new Error(`${providerLabel} returned no usable sources.`);
       }
+      const usedFallback = searchResponse.provider !== searchResponse.primaryProvider;
+      const fallbackReason = usedFallback ? searchResponse.fallbackError : undefined;
       const completedWebSearch: ChatWebSearch = {
         ...activeWebSearch,
+        fallbackReason,
         resultCount: sources.length,
+        resultProvider: usedFallback ? searchResponse.provider : undefined,
         searchedAt: new Date().toISOString(),
         status: "complete",
       };
@@ -3748,8 +4933,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         webSearch: completedWebSearch,
       }));
 
+      const contextProvider = searchResponse.provider;
+      const contextNote = fallbackReason ? `${providerLabel} failed, so ${formatWebSearchProviderLabel(contextProvider)} fallback results were used: ${fallbackReason}` : undefined;
+
       return {
-        contextMessages: createWebSearchContextMessage(query, sources),
+        contextMessages: createWebSearchContextMessage(query, sources, contextNote, contextProvider),
         sources,
       };
     } catch (error) {
@@ -3760,7 +4948,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         };
       }
 
-      const detail = error instanceof Error ? error.message : "DuckDuckGo search failed.";
+      const detail = error instanceof Error ? error.message : `${providerLabel} search failed.`;
       const failedWebSearch: ChatWebSearch = {
         ...activeWebSearch,
         error: detail,
@@ -3776,7 +4964,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }));
 
       return {
-        contextMessages: createWebSearchContextMessage(query, [], detail),
+        contextMessages: createWebSearchContextMessage(query, [], detail, webSearchSettings.provider),
         sources: [],
       };
     }
@@ -3787,7 +4975,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return [];
     }
 
-    return createWebSearchContextMessage(message.webSearch.query || fallbackQuery, message.sources ?? [], message.webSearch.error);
+    const contextProvider = message.webSearch.resultProvider ?? message.webSearch.provider;
+    const fallbackNote =
+      message.webSearch.fallbackReason && message.webSearch.resultProvider
+        ? `${formatWebSearchProviderLabel(message.webSearch.provider)} failed, so ${formatWebSearchProviderLabel(message.webSearch.resultProvider)} fallback results were used: ${message.webSearch.fallbackReason}`
+        : undefined;
+
+    return createWebSearchContextMessage(message.webSearch.query || fallbackQuery, message.sources ?? [], message.webSearch.error ?? fallbackNote, contextProvider);
   }
 
   function createInterruptedResponseContextMessages(message: ChatMessage, prompt: string) {
@@ -3868,8 +5062,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingRequestRef.current !== null) {
-      await sendDiscordReply(replyTarget, "Gilbert is already working on another request. Try again after the current response finishes.");
+    const sourceChat = resolveDiscordSourceChat(interaction);
+
+    if (isChatSending(sourceChat.id)) {
+      await sendDiscordReply(replyTarget, "Gilbert is already working in that Discord conversation. Try again after that response finishes.");
       return;
     }
 
@@ -3890,7 +5086,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     await startSendMessage(input, undefined, {
       discordReply: replyTarget,
-      sourceChat: resolveDiscordSourceChat(interaction),
+      sourceChat,
       userMessageSource: createDiscordMessageSource(interaction),
     });
   }
@@ -4087,7 +5283,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   async function handleSendMessage(input: ChatSendInput) {
-    if (sendingRequestRef.current !== null) {
+    if (isChatSending(activeChat.id)) {
       enqueueChatSend(input);
       return;
     }
@@ -4096,13 +5292,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   async function startSendMessage(input: ChatSendInput, queuedSend?: { chatId: string; queuedMessageId: string }, options: StartSendMessageOptions = {}) {
-    if (sendingRequestRef.current !== null) {
-      return;
-    }
-
     const content = input.content.trim();
     const attachments = input.attachments;
     const sourceChat = queuedSend ? pendingChatsRef.current.find((chat) => chat.id === queuedSend.chatId && !chat.archived) : options.sourceChat ?? activeChat;
+    const currentChat = sourceChat ?? createEmptyChat(DEFAULT_PROJECT);
+
+    if (isChatSending(currentChat.id)) {
+      await sendDiscordReply(options.discordReply, "Gilbert is already working in that conversation. Try again after that response finishes.");
+      return;
+    }
 
     if (!toolSettings.provider) {
       setNoticeDialog({
@@ -4114,11 +5312,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const isPlanningMode = toolSettings.planning && input.mode === "plan";
-    const planningMaxPasses = clampPlanningPasses(input.planning?.maxPasses ?? 10);
-    const effectiveProviderSettings = createToolAwareProviderSettings();
+    const effectiveProviderSettings = createPromptAwareProviderSettings(content);
     const webSearchEnabled = Boolean(toolSettings.webSearch && content && shouldAttachWebSearchContext(input, content, effectiveProviderSettings, Boolean(options.discordReply)));
-    const webSearchMaxResults = getRuntimeWebSearchMaxResults(providerSettings, input.webSearch?.maxResults);
-    const currentChat = sourceChat ?? createEmptyChat(DEFAULT_PROJECT);
+    const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, input.webSearch);
+    const webSearchMaxResults = runtimeWebSearchSettings.maxResults;
+    const webSearchProviderLabel = formatWebSearchProviderLabel(runtimeWebSearchSettings.provider);
     const discordStreamer = options.discordReply ? createDiscordResponseStreamer(options.discordReply) : undefined;
     const queuedMessageIndex = queuedSend ? currentChat.messages.findIndex((message) => message.id === queuedSend.queuedMessageId && message.role === "user") : -1;
 
@@ -4140,7 +5338,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           title: shouldGenerateChatTitle ? "New chat" : currentChat.title,
         }
       : currentChat;
-    const { controller, requestId } = createActiveGeneration(previousChatSnapshot, currentChatExisted, restoreDraft);
+    const { controller, requestId } = createActiveGeneration(currentChat.id, previousChatSnapshot, currentChatExisted, restoreDraft);
     const now = new Date().toISOString();
     const userMessage =
       queuedSend && currentChat.messages[queuedMessageIndex]
@@ -4159,26 +5357,26 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       ? {
           enabled: true,
           maxResults: webSearchMaxResults,
-          provider: "duckduckgo",
+          provider: runtimeWebSearchSettings.provider,
           query: content,
           status: "active",
         }
       : undefined;
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, input.localWorkspace ?? localWorkspaceRef.current);
     const effectiveThinkingSettings = effectiveProviderSettings.thinking;
-    const discordContextMessages = options.discordReply ? createDiscordRuntimeContextMessages(workspaceSettings, webSearchEnabled) : [];
+    const discordContextMessages = options.discordReply ? createDiscordRuntimeContextMessages(workspaceSettings, webSearchEnabled, runtimeWebSearchSettings.provider) : [];
     const assistantMessage: ChatMessage = {
       ...createMessage("assistant", ""),
       isStreaming: true,
       mode: isPlanningMode ? "plan" : "chat",
       planning: isPlanningMode
         ? {
-            maxPasses: planningMaxPasses,
+            maxPasses: 1,
             passCount: 0,
             startedAt: now,
           }
         : undefined,
-      progress: withWebSearchProgress(initialWebSearch, isPlanningMode ? createPlanningProgress(0, planningMaxPasses, "input") : undefined),
+      progress: withWebSearchProgress(initialWebSearch, isPlanningMode ? createPlanningProgress("input") : undefined),
       thinking: toolSettings.thinking && (isPlanningMode || effectiveThinkingSettings.enabled)
         ? {
             effort: isPlanningMode ? "high" : effectiveThinkingSettings.effort,
@@ -4200,7 +5398,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
 
     setChats((currentChats) => {
       const hasCurrentChat = currentChats.some((chat) => chat.id === currentChat.id);
@@ -4218,7 +5415,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       pendingChatsRef.current = sortedChats;
       return sortedChats;
     });
-    stopStaleStreamingMessages(assistantMessage.id);
+    stopStaleStreamingMessages(currentChat.id, assistantMessage.id);
     touchProject(currentChat.project);
 
     if (shouldGenerateChatTitle) {
@@ -4236,15 +5433,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const webContext = webSearchEnabled
         ? await (async () => {
             discordStreamer?.update({
-              status: "Searching the web with DuckDuckGo...",
+              status: `Searching the web with ${webSearchProviderLabel}...`,
             });
             const result = await prepareWebSearchForGeneration({
               chatId: currentChat.id,
               controller,
+              includeVisualResults: shouldIncludeVisualWebResults(runtimeWebSearchSettings, workspaceSettings, assistantMessage.mode, Boolean(options.discordReply)),
               maxResults: webSearchMaxResults,
               messageId: assistantMessage.id,
               query: content,
               requestId,
+              webSearchSettings: runtimeWebSearchSettings,
             });
             discordStreamer?.update({
               sources: result.sources,
@@ -4268,7 +5467,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ...run.events,
             {
               at: eventAt,
-              detail: "DuckDuckGo returned no usable sources. The run continued with that tool note in context.",
+              detail: `${webSearchProviderLabel} returned no usable sources. The run continued with that tool note in context.`,
               id: createId("agent-event"),
               label: "Web search unavailable",
               type: "info",
@@ -4298,6 +5497,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       if (isPlanningMode) {
         const inputRequest = await createPlanningInputRequest(createToolAwareProviderSettings(), messagesForProvider, {
+          onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+          onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
           signal: controller.signal,
         });
 
@@ -4325,7 +5526,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                                     inputRequests: [inputRequest],
                                   }
                                 : undefined,
-                              progress: withWebSearchProgress(message.webSearch, createPlanningProgress(0, planningMaxPasses, "input")),
+                              progress: withWebSearchProgress(message.webSearch, createPlanningProgress("input")),
                               reasoning: inputRequest.detail || inputRequest.title,
                             }
                           : message,
@@ -4347,11 +5548,104 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           return;
         }
 
+        const researchInstruction = createMessage(
+          "user",
+          [
+            "RESEARCH PHASE FOR PLAN MODE",
+            `Original user request: ${content}`,
+            "Use the agent's READ-ONLY tools right now to gather the exact context the plan will need. Acceptable tools: read_file, list_directory, search_files, view_code, recall_context, build_index, web_search (only if the user explicitly asked about current external information).",
+            "Do NOT use any tool that writes, edits, deletes, runs terminal commands, runs tests, commits, pushes, applies search-replace, edits files, creates files, or otherwise mutates the workspace or remote services.",
+            "Run multiple read tool calls when useful. Inspect the entry points, the files the user mentioned, the components or functions named in the request, and the surrounding code that the change will touch.",
+            "When you have enough grounded facts to build a real plan, STOP calling tools and write a Markdown summary titled 'Research observations'. List the specific files, paths, functions, components, and snippets you saw. Quote 1-3 line code excerpts when they pin down a bug or constraint. Note any gaps or assumptions.",
+            "Do not write the plan itself this turn. The plan is produced in a later turn from these observations.",
+          ].join("\n\n"),
+        );
+
+        const researchResponse = await streamAssistantWithLocalTools({
+          chatId: currentChat.id,
+          controller,
+          messageId: assistantMessage.id,
+          messagesForProvider: [...messagesForProvider, researchInstruction],
+          prompt: content,
+          requestId,
+          workspaceSettings,
+        });
+
+        if (isRequestInactive(requestId, controller)) {
+          return;
+        }
+
+        if (researchResponse.waitingForApproval) {
+          setChats((currentChats) =>
+            sortChatsByUpdatedAt(
+              currentChats.map((chat) =>
+                chat.id === currentChat.id
+                  ? {
+                      ...chat,
+                      messages: chat.messages.map((message) =>
+                        message.id === assistantMessage.id
+                          ? {
+                              ...message,
+                              agentRunStatus: "waiting_for_approval",
+                              approvals: researchResponse.approvalRequests && researchResponse.approvalRequests.length > 0
+                                ? mergeAgentApprovals(message.approvals ?? [], researchResponse.approvalRequests)
+                                : message.approvals,
+                              content: researchResponse.content,
+                              isStreaming: false,
+                              progress: withLocalComputerProgress(researchResponse.progress, message.progress),
+                              reasoning: researchResponse.reasoning,
+                              toolCalls: researchResponse.toolCalls ?? message.toolCalls,
+                            }
+                          : message,
+                      ),
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : chat,
+              ),
+            ),
+          );
+          setAgentRunWaiting(
+            agentRun.id,
+            "Tool approval required during plan research",
+            "A research tool needs approval before the plan can be built.",
+            researchResponse.approvalRequests ?? [],
+            researchResponse.pendingToolCallContent,
+          );
+          notifyRunNeedsAttention("A tool action is waiting for your approval during plan research.");
+          touchProject(currentChat.project);
+          return;
+        }
+
+        const researchFindings = researchResponse.content?.trim() || "";
+
+        setChats((currentChats) =>
+          currentChats.map((chat) =>
+            chat.id === currentChat.id
+              ? {
+                  ...chat,
+                  messages: chat.messages.map((message) =>
+                    message.id === assistantMessage.id
+                      ? {
+                          ...message,
+                          content: "",
+                          isStreaming: true,
+                          progress: withWebSearchProgress(message.webSearch, createPlanningProgress("drafting")),
+                          toolCalls: researchResponse.toolCalls ?? message.toolCalls,
+                        }
+                      : message,
+                  ),
+                }
+              : chat,
+          ),
+        );
+
         const assistantResponse = await runPlanningMode({
-          maxPasses: planningMaxPasses,
           messages: messagesForProvider,
+          researchFindings,
           signal: controller.signal,
           settings: createToolAwareProviderSettings(),
+          onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+          onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
           onUpdate: (snapshot) => {
             if (isRequestInactive(requestId, controller)) {
               return;
@@ -4366,15 +5660,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                         message.id === assistantMessage.id
                           ? {
                               ...message,
-                              planning: message.planning
-                                ? {
-                                    ...message.planning,
-                                    passCount: snapshot.passCount,
-                                  }
-                                : undefined,
                               content: snapshot.content ?? message.content,
                               progress: withWebSearchProgress(message.webSearch, snapshot.progress),
-                              reasoning: snapshot.trace,
                             }
                           : message,
                       ),
@@ -4409,11 +5696,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                               ? {
                                   ...message.planning,
                                   completedAt: new Date().toISOString(),
-                                  passCount: assistantResponse.passCount,
+                                  passCount: 1,
                                 }
                               : undefined,
                             progress: withWebSearchProgress(message.webSearch, assistantResponse.progress),
-                            reasoning: assistantResponse.trace,
                             thinking: message.thinking
                               ? {
                                   ...message.thinking,
@@ -4429,7 +5715,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ),
           ),
         );
-        setAgentRunWaiting(agentRun.id, "Plan approval required", "Approve the task list to hand this plan into the executable agent loop.", [planApproval]);
+        setAgentRunWaiting(agentRun.id, "Plan approval required", "Approve the plan to hand it into the executable agent loop.", [planApproval]);
         notifyRunNeedsAttention("A plan is ready for approval before execution.");
         touchProject(currentChat.project);
         if (discordStreamer) {
@@ -4468,6 +5754,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                             approvals: assistantResponse.approvalRequests && assistantResponse.approvalRequests.length > 0
                               ? mergeAgentApprovals(message.approvals ?? [], assistantResponse.approvalRequests)
                               : message.approvals,
+                            artifacts: mergeChatArtifacts(message.artifacts, assistantResponse.artifacts),
                             content: assistantResponse.content,
                             isStreaming: false,
                             progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
@@ -4509,6 +5796,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         const completedAssistantMessage: ChatMessage = {
           ...assistantMessage,
           agentRunStatus: "completed",
+          artifacts: mergeChatArtifacts(assistantMessage.artifacts, assistantResponse.artifacts),
           content: assistantResponse.content,
           isStreaming: false,
           reasoning: assistantResponse.reasoning,
@@ -4584,11 +5872,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingRequestRef.current !== null) {
+    const currentChat = activeChat;
+
+    if (isChatSending(currentChat.id)) {
       return;
     }
 
-    const currentChat = activeChat;
     const assistantMessageIndex = currentChat.messages.findIndex((message) => message.id === messageId && message.role === "assistant");
     const assistantMessage = assistantMessageIndex >= 0 ? currentChat.messages[assistantMessageIndex] : undefined;
     const approval = assistantMessage?.approvals?.find((candidate) => candidate.id === approvalId);
@@ -4619,14 +5908,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, run?.localWorkspace ?? localWorkspaceRef.current);
     rememberSessionApprovalDecision(approval, decision, workspaceSettings);
     const prompt = run?.prompt ?? getLatestUserPrompt(currentChat.messages.slice(0, assistantMessageIndex));
-    const { controller, requestId } = createActiveGeneration(currentChat, true, undefined, {
-      chatId: currentChat.id,
+    const { controller, requestId } = createActiveGeneration(currentChat.id, currentChat, true, undefined, {
       messageId,
     });
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
     updateAgentRun(assistantMessage.agentRunId, (run, startedAt) => ({
       ...run,
       events: [
@@ -4805,6 +6092,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                           approvals: assistantResponse.approvalRequests && assistantResponse.approvalRequests.length > 0
                             ? mergeAgentApprovals(message.approvals ?? [], assistantResponse.approvalRequests)
                             : message.approvals,
+                          artifacts: mergeChatArtifacts(message.artifacts, assistantResponse.artifacts),
                           content: assistantResponse.content,
                           isStreaming: false,
                           progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
@@ -4842,6 +6130,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       setAgentRunCompleted(approval.runId ?? assistantMessage.agentRunId, {
         ...assistantMessage,
         agentRunStatus: "completed",
+        artifacts: mergeChatArtifacts(assistantMessage.artifacts, assistantResponse.artifacts),
         content: assistantResponse.content,
         isStreaming: false,
         reasoning: assistantResponse.reasoning,
@@ -4849,6 +6138,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       });
       notifyRunComplete({
         ...assistantMessage,
+        artifacts: mergeChatArtifacts(assistantMessage.artifacts, assistantResponse.artifacts),
         content: assistantResponse.content,
         isStreaming: false,
         reasoning: assistantResponse.reasoning,
@@ -4903,11 +6193,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingRequestRef.current !== null) {
+    const currentChat = activeChat;
+
+    if (isChatSending(currentChat.id)) {
       return;
     }
 
-    const currentChat = activeChat;
     const assistantMessageIndex = currentChat.messages.findIndex((message) => message.id === messageId && message.role === "assistant");
     const assistantMessage = assistantMessageIndex >= 0 ? currentChat.messages[assistantMessageIndex] : undefined;
     const inputRequest = getPendingPlanningInputRequest(assistantMessage?.planning);
@@ -4916,9 +6207,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    const planningMaxPasses = clampPlanningPasses(assistantMessage.planning?.maxPasses ?? DEFAULT_PLANNING_MAX_PASSES);
-    const { controller, requestId } = createActiveGeneration(currentChat, true, undefined, {
-      chatId: currentChat.id,
+    const { controller, requestId } = createActiveGeneration(currentChat.id, currentChat, true, undefined, {
       messageId,
     });
     const now = new Date().toISOString();
@@ -4935,7 +6224,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
     updateAgentRun(assistantMessage.agentRunId, (run, startedAt) => ({
       ...run,
       events: [
@@ -4983,8 +6271,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                           }
                         : undefined,
                       progress: compactionProgress
-                        ? withContextCompactionProgress(compactionProgress, withWebSearchProgress(message.webSearch, createPlanningProgress(1, planningMaxPasses, "active")))
-                        : withWebSearchProgress(message.webSearch, createPlanningProgress(1, planningMaxPasses, "active")),
+                        ? withContextCompactionProgress(compactionProgress, withWebSearchProgress(message.webSearch, createPlanningProgress("drafting")))
+                        : withWebSearchProgress(message.webSearch, createPlanningProgress("drafting")),
                       reasoning: undefined,
                       status: undefined,
                     }
@@ -4999,6 +6287,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     try {
       if (answeredInputRequests.length < MAX_PLANNING_INPUT_ROUNDS) {
         const followUpInputRequest = await createPlanningInputRequest(createToolAwareProviderSettings(), messagesForProvider, {
+          onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+          onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
           signal: controller.signal,
         });
 
@@ -5026,7 +6316,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                                     inputRequests: [...answeredInputRequests, followUpInputRequest],
                                   }
                                 : undefined,
-                              progress: withWebSearchProgress(message.webSearch, createPlanningProgress(0, planningMaxPasses, "input")),
+                              progress: withWebSearchProgress(message.webSearch, createPlanningProgress("input")),
                               reasoning: followUpInputRequest.detail || followUpInputRequest.title,
                             }
                           : message,
@@ -5045,10 +6335,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       const assistantResponse = await runPlanningMode({
-        maxPasses: planningMaxPasses,
         messages: messagesForProvider,
         signal: controller.signal,
         settings: createToolAwareProviderSettings(),
+        onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+        onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
         onUpdate: (snapshot) => {
           if (isRequestInactive(requestId, controller)) {
             return;
@@ -5063,15 +6354,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                       message.id === messageId
                         ? {
                             ...message,
-                            planning: message.planning
-                              ? {
-                                  ...message.planning,
-                                  passCount: snapshot.passCount,
-                                }
-                              : undefined,
                             content: snapshot.content ?? message.content,
                             progress: withWebSearchProgress(message.webSearch, snapshot.progress),
-                            reasoning: snapshot.trace,
                           }
                         : message,
                     ),
@@ -5107,11 +6391,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                             ? {
                                 ...message.planning,
                                 completedAt: new Date().toISOString(),
-                                passCount: assistantResponse.passCount,
+                                passCount: 1,
                               }
                             : undefined,
                           progress: withWebSearchProgress(message.webSearch, assistantResponse.progress),
-                          reasoning: assistantResponse.trace,
                           thinking: message.thinking
                             ? {
                                 ...message.thinking,
@@ -5128,7 +6411,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ),
       );
       if (planApproval) {
-        setAgentRunWaiting(assistantMessage.agentRunId, "Plan approval required", "Approve the task list to hand this plan into the executable agent loop.", [planApproval]);
+        setAgentRunWaiting(assistantMessage.agentRunId, "Plan approval required", "Approve the plan to hand it into the executable agent loop.", [planApproval]);
         touchProject(currentChat.project);
         notifyRunNeedsAttention("A plan is ready for approval before execution.");
         return;
@@ -5143,10 +6426,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ? {
               ...assistantMessage.planning,
               completedAt: new Date().toISOString(),
-              passCount: assistantResponse.passCount,
+              passCount: 1,
             }
           : undefined,
-        reasoning: assistantResponse.trace,
       });
     } catch (error) {
       if (isAbortError(error) || isRequestInactive(requestId, controller)) {
@@ -5207,11 +6489,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingRequestRef.current !== null) {
+    const currentChat = activeChat;
+
+    if (isChatSending(currentChat.id)) {
       return;
     }
 
-    const currentChat = activeChat;
     const assistantMessageIndex = currentChat.messages.findIndex((message) => message.id === messageId && message.role === "assistant");
     const assistantMessage = assistantMessageIndex >= 0 ? currentChat.messages[assistantMessageIndex] : undefined;
 
@@ -5220,9 +6503,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const originalPrompt = getLatestUserPrompt(currentChat.messages.slice(0, assistantMessageIndex));
-    const planningMaxPasses = clampPlanningPasses(assistantMessage.planning?.maxPasses ?? DEFAULT_PLANNING_MAX_PASSES);
     const revisionPrompt = [originalPrompt, revisionFeedback].filter(Boolean).join("\n\n");
-    const webSearchMaxResults = getRuntimeWebSearchMaxResults(providerSettings, assistantMessage.webSearch?.maxResults);
+    const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, assistantMessage.webSearch ?? providerSettings.webSearch);
+    const webSearchMaxResults = runtimeWebSearchSettings.maxResults;
     const revisionWebSearchInput: ChatSendInput = {
       attachments: [],
       content: revisionPrompt,
@@ -5231,12 +6514,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ? {
               enabled: true,
               maxResults: webSearchMaxResults,
-              provider: "duckduckgo",
+              provider: runtimeWebSearchSettings.provider,
             }
           : undefined,
     };
     const webSearchEnabled = Boolean(toolSettings.webSearch && revisionPrompt && shouldAttachWebSearchContext(revisionWebSearchInput, revisionPrompt, createToolAwareProviderSettings(), false));
-    const { controller, requestId } = createActiveGeneration(currentChat, true);
+    const { controller, requestId } = createActiveGeneration(currentChat.id, currentChat, true);
     const now = new Date().toISOString();
     const revisionUserMessage = createMessage("user", revisionFeedback);
     const revisedAssistantMessage: ChatMessage = {
@@ -5245,11 +6528,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       isStreaming: true,
       mode: "plan",
       planning: {
-        maxPasses: planningMaxPasses,
+        maxPasses: 1,
         passCount: 0,
         startedAt: now,
       },
-      progress: createPlanningProgress(1, planningMaxPasses, "active"),
+      progress: createPlanningProgress("drafting"),
       thinking: toolSettings.thinking
         ? {
             effort: "high",
@@ -5299,7 +6582,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
     setChats((currentChats) =>
       sortChatsByUpdatedAt(
         currentChats.map((chat) =>
@@ -5319,17 +6601,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ),
       ),
     );
-    stopStaleStreamingMessages(revisedAssistantMessage.id);
+    stopStaleStreamingMessages(currentChat.id, revisedAssistantMessage.id);
 
     try {
       const webContext = webSearchEnabled
         ? await prepareWebSearchForGeneration({
             chatId: currentChat.id,
             controller,
+            includeVisualResults: false,
             maxResults: webSearchMaxResults,
             messageId: revisedAssistantMessage.id,
             query: [originalPrompt, revisionFeedback].filter(Boolean).join("\n"),
             requestId,
+            webSearchSettings: runtimeWebSearchSettings,
           })
         : {
             contextMessages: [],
@@ -5373,10 +6657,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       const assistantResponse = await runPlanningMode({
-        maxPasses: planningMaxPasses,
         messages: messagesForProvider,
         signal: controller.signal,
         settings: createToolAwareProviderSettings(),
+        onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+        onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
         onUpdate: (snapshot) => {
           if (isRequestInactive(requestId, controller)) {
             return;
@@ -5385,14 +6670,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           updateGeneratedMessage(currentChat.id, revisedAssistantMessage.id, (message) => ({
             ...message,
             content: snapshot.content ?? message.content,
-            planning: message.planning
-              ? {
-                  ...message.planning,
-                  passCount: snapshot.passCount,
-                }
-              : undefined,
             progress: withWebSearchProgress(message.webSearch, snapshot.progress),
-            reasoning: snapshot.trace,
           }));
         },
       });
@@ -5421,11 +6699,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                             ? {
                                 ...message.planning,
                                 completedAt: new Date().toISOString(),
-                                passCount: assistantResponse.passCount,
+                                passCount: 1,
                               }
                             : undefined,
                           progress: withWebSearchProgress(message.webSearch, assistantResponse.progress),
-                          reasoning: assistantResponse.trace,
                           sources: webContext.sources.length > 0 ? webContext.sources : message.sources,
                           thinking: message.thinking
                             ? {
@@ -5499,11 +6776,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    if (sendingRequestRef.current !== null) {
+    const currentChat = activeChat;
+
+    if (isChatSending(currentChat.id)) {
       return;
     }
 
-    const currentChat = activeChat;
     const assistantMessageIndex = currentChat.messages.findIndex((message) => message.id === messageId && message.role === "assistant");
     const assistantMessage = assistantMessageIndex >= 0 ? currentChat.messages[assistantMessageIndex] : undefined;
 
@@ -5519,11 +6797,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const isPlanningMode = toolSettings.planning && (assistantMessage.mode === "plan" || Boolean(assistantMessage.planning));
-    const planningMaxPasses = clampPlanningPasses(assistantMessage.planning?.maxPasses ?? DEFAULT_PLANNING_MAX_PASSES);
     const answeredPlanningInputRequests = getPlanningInputRequests(assistantMessage.planning).filter((request) => request.answeredAt && request.answers?.length);
     const continueInterruptedResponse = isInterruptedAssistantMessage(assistantMessage);
     const regeneratePrompt = getLatestUserPrompt(priorMessages);
-    const webSearchMaxResults = getRuntimeWebSearchMaxResults(providerSettings, assistantMessage.webSearch?.maxResults);
+    const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, assistantMessage.webSearch ?? providerSettings.webSearch);
+    const webSearchMaxResults = runtimeWebSearchSettings.maxResults;
+    const webSearchProviderLabel = formatWebSearchProviderLabel(runtimeWebSearchSettings.provider);
     const regenerateWebSearchInput: ChatSendInput = {
       attachments: [],
       content: regeneratePrompt,
@@ -5532,23 +6811,23 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           ? {
               enabled: true,
               maxResults: webSearchMaxResults,
-              provider: "duckduckgo",
+              provider: runtimeWebSearchSettings.provider,
             }
           : undefined,
     };
-    const webSearchEnabled = Boolean(toolSettings.webSearch && regeneratePrompt && shouldAttachWebSearchContext(regenerateWebSearchInput, regeneratePrompt, createToolAwareProviderSettings(), false));
-    const { controller, requestId } = createActiveGeneration(currentChat, true);
+    const webSearchEnabled = Boolean(toolSettings.webSearch && regeneratePrompt && shouldAttachWebSearchContext(regenerateWebSearchInput, regeneratePrompt, createPromptAwareProviderSettings(regeneratePrompt), false));
+    const { controller, requestId } = createActiveGeneration(currentChat.id, currentChat, true);
     const now = new Date().toISOString();
     const initialWebSearch: ChatWebSearch | undefined = webSearchEnabled
       ? {
           enabled: true,
           maxResults: webSearchMaxResults,
-          provider: "duckduckgo",
+          provider: runtimeWebSearchSettings.provider,
           query: regeneratePrompt,
           status: "active",
         }
       : undefined;
-    const effectiveThinkingSettings = createToolAwareProviderSettings().thinking;
+    const effectiveThinkingSettings = createPromptAwareProviderSettings(regeneratePrompt).thinking;
     const regeneratedAssistantMessage: ChatMessage = {
       ...assistantMessage,
       artifacts: undefined,
@@ -5563,12 +6842,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ? {
             inputRequest: answeredPlanningInputRequests[answeredPlanningInputRequests.length - 1],
             inputRequests: answeredPlanningInputRequests,
-            maxPasses: planningMaxPasses,
+            maxPasses: 1,
             passCount: 0,
             startedAt: now,
           }
         : undefined,
-      progress: withWebSearchProgress(initialWebSearch, isPlanningMode ? createPlanningProgress(1, planningMaxPasses, "active") : undefined),
+      progress: withWebSearchProgress(initialWebSearch, isPlanningMode ? createPlanningProgress("drafting") : undefined),
       reasoning: undefined,
       sources: continueInterruptedResponse ? assistantMessage.sources : undefined,
       status: undefined,
@@ -5585,7 +6864,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     setActiveChatId(currentChat.id);
     setActiveRoute("chat");
-    setSendingChatId(currentChat.id);
     setAgentRunContinuing(
       assistantMessage.agentRunId,
       continueInterruptedResponse ? "Continue interrupted response" : "Regenerate response",
@@ -5604,17 +6882,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ),
       ),
     );
-    stopStaleStreamingMessages(regeneratedAssistantMessage.id);
+    stopStaleStreamingMessages(currentChat.id, regeneratedAssistantMessage.id);
 
     try {
       const webContext = webSearchEnabled
         ? await prepareWebSearchForGeneration({
             chatId: currentChat.id,
             controller,
+            includeVisualResults: shouldIncludeVisualWebResults(runtimeWebSearchSettings, resolveWorkspaceForChatProject(currentChat.project, localWorkspaceRef.current), regeneratedAssistantMessage.mode, false),
             maxResults: webSearchMaxResults,
             messageId,
             query: regeneratePrompt,
             requestId,
+            webSearchSettings: runtimeWebSearchSettings,
           })
         : {
             contextMessages: [],
@@ -5632,7 +6912,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ...run.events,
             {
               at: eventAt,
-              detail: "DuckDuckGo returned no usable sources. The run continued with that tool note in context.",
+              detail: `${webSearchProviderLabel} returned no usable sources. The run continued with that tool note in context.`,
               id: createId("agent-event"),
               label: "Web search unavailable",
               type: "info",
@@ -5669,10 +6949,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       if (isPlanningMode) {
         const assistantResponse = await runPlanningMode({
-          maxPasses: planningMaxPasses,
           messages: messagesForProvider,
           signal: controller.signal,
           settings: createToolAwareProviderSettings(),
+          onProviderRequest: (request) => recordPlanningProviderRequest(currentChat.id, request),
+          onProviderUsage: (request, usage) => recordPlanningProviderUsage(currentChat.id, request, usage),
           onUpdate: (snapshot) => {
             if (isRequestInactive(requestId, controller)) {
               return;
@@ -5687,15 +6968,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                         message.id === messageId
                           ? {
                               ...message,
-                              planning: message.planning
-                                ? {
-                                    ...message.planning,
-                                    passCount: snapshot.passCount,
-                                  }
-                                : undefined,
                               content: snapshot.content ?? message.content,
                               progress: withWebSearchProgress(message.webSearch, snapshot.progress),
-                              reasoning: snapshot.trace,
                             }
                           : message,
                       ),
@@ -5730,11 +7004,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                               ? {
                                   ...message.planning,
                                   completedAt: new Date().toISOString(),
-                                  passCount: assistantResponse.passCount,
+                                  passCount: 1,
                                 }
                               : undefined,
                             progress: withWebSearchProgress(message.webSearch, assistantResponse.progress),
-                            reasoning: assistantResponse.trace,
                             thinking: message.thinking
                               ? {
                                   ...message.thinking,
@@ -5766,10 +7039,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ? {
                 ...regeneratedAssistantMessage.planning,
                 completedAt: new Date().toISOString(),
-                passCount: assistantResponse.passCount,
+                passCount: 1,
               }
             : undefined,
-          reasoning: assistantResponse.trace,
         });
         notifyRunComplete({
           ...regeneratedAssistantMessage,
@@ -5780,10 +7052,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ? {
                 ...regeneratedAssistantMessage.planning,
                 completedAt: new Date().toISOString(),
-                passCount: assistantResponse.passCount,
+                passCount: 1,
               }
             : undefined,
-          reasoning: assistantResponse.trace,
         });
       } else {
         const assistantResponse = await streamAssistantWithLocalTools({
@@ -5814,6 +7085,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                             approvals: assistantResponse.approvalRequests && assistantResponse.approvalRequests.length > 0
                               ? mergeAgentApprovals(message.approvals ?? [], assistantResponse.approvalRequests)
                               : message.approvals,
+                            artifacts: mergeChatArtifacts(message.artifacts, assistantResponse.artifacts),
                             content: assistantResponse.content,
                             isStreaming: false,
                             progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
@@ -5850,6 +7122,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         setAgentRunCompleted(assistantMessage.agentRunId, {
           ...regeneratedAssistantMessage,
           agentRunStatus: "completed",
+          artifacts: mergeChatArtifacts(regeneratedAssistantMessage.artifacts, assistantResponse.artifacts),
           content: assistantResponse.content,
           isStreaming: false,
           reasoning: assistantResponse.reasoning,
@@ -5858,6 +7131,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         notifyRunComplete({
           ...regeneratedAssistantMessage,
           agentRunStatus: "completed",
+          artifacts: mergeChatArtifacts(regeneratedAssistantMessage.artifacts, assistantResponse.artifacts),
           content: assistantResponse.content,
           isStreaming: false,
           reasoning: assistantResponse.reasoning,
@@ -5911,7 +7185,26 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   function renderUtilityPage() {
     if (activeRoute === "toolbox") {
-      return <ToolboxPage settings={toolSettings} onSettingsChange={handleToolSettingsChange} />;
+      return (
+        <ToolboxPage
+          settings={toolSettings}
+          onSettingsChange={handleToolSettingsChange}
+          workspaceRoot={localWorkspace.roots[0] ?? ""}
+          workspaceRoots={localWorkspace.roots}
+        />
+      );
+    }
+
+    if (activeRoute === "mcp") {
+      return (
+        <McpPage
+          mcp={providerSettings.mcp}
+          mcpToolboxEnabled={toolSettings.mcpServers}
+          provider={providerSettings.provider}
+          thinkingEnabled={providerSettings.thinking.enabled}
+          onMcpChange={(mcp) => setProviderSettings((settings) => ({ ...settings, mcp }))}
+        />
+      );
     }
 
     if (activeRoute === "workflows") {
@@ -5934,6 +7227,18 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       );
     }
 
+    if (activeRoute === "radar") {
+      return (
+        <WeatherRadarPage
+          onBackToChat={() => setActiveRoute("chat")}
+          onOpenMapboxSettings={() => {
+            setActiveSettingsSection("mapbox");
+            setActiveRoute("settings");
+          }}
+        />
+      );
+    }
+
     if (activeRoute === "settings") {
       return (
         <SettingsPage
@@ -5942,6 +7247,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           appearanceMode={appearanceMode}
           discordBridge={discordBridgeSettings}
           localWorkspace={localWorkspace}
+          projects={projects}
           settings={providerSettings}
           onAppearanceModeChange={setAppearanceMode}
           onDiscordBridgeChange={setDiscordBridgeSettings}
@@ -5966,12 +7272,20 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         contextWindowSource={contextWindow.source}
         contextWindowTokens={contextWindow.tokens}
         hasApiKey={!getModelProvider(providerSettings.provider).requiresApiKey || Boolean(getProviderApiKey(providerSettings).trim())}
-        isSending={sendingChatId === activeChat.id}
+        isSending={isChatSending(activeChat.id)}
         lastContextCompaction={lastContextCompaction?.chatId === activeChat.id && lastContextCompaction.contextWindowTokens === contextWindow.tokens ? lastContextCompaction : null}
         localWorkspace={localWorkspace}
         model={providerSettings.model}
         modelContextWindows={modelContextWindows}
         onComposerDraftApplied={() => setComposerDraftToRestore(null)}
+        onAddAutomation={handleAddAutomation}
+        onArchiveChat={handleArchiveActiveChat}
+        onCopyChatDeeplink={() => void handleCopyChatDeeplink()}
+        onCopyChatMarkdown={() => void handleCopyChatMarkdown()}
+        onCopySessionId={() => void handleCopySessionId()}
+        onCopyWorkingDirectory={() => void handleCopyWorkingDirectory()}
+        onForkChatLocal={handleForkActiveChatLocal}
+        onForkChatWorktree={handleForkActiveChatWorktree}
         onLocalWorkspaceChange={handleLocalWorkspaceChange}
         onModelChange={(nextModel, nextProvider) =>
           setProviderSettings((settings) => {
@@ -5992,13 +7306,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onResolveToolApproval={handleResolveToolApproval}
         onSendMessage={handleSendMessage}
         onDeleteQueuedMessage={handleDeleteQueuedMessage}
+        onHoldQueuedMessage={handleHoldQueuedMessage}
         onSteerQueuedMessage={handleSteerQueuedMessage}
+        onUpdateQueuedMessage={handleUpdateQueuedMessage}
         onStopGeneration={handleStopGeneration}
         onSubmitPlanningInput={handleSubmitPlanningInput}
         lastProviderContextUsage={lastProviderContextUsage?.chatId === activeChat.id ? lastProviderContextUsage.usage : null}
         onCreateProject={openCreateProjectDialog}
         providerSettings={createToolAwareProviderSettings()}
         projects={projects}
+        queuedMessageCount={queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id).length}
+        heldQueuedMessageIds={queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id && queuedSend.held).map((queuedSend) => queuedSend.userMessageId)}
         onSelectProject={handleSelectProject}
         onThinkingChange={(nextThinking) => setProviderSettings((settings) => ({ ...settings, thinking: nextThinking }))}
         onWebSearchChange={(nextWebSearch) => setProviderSettings((settings) => ({ ...settings, webSearch: nextWebSearch }))}
@@ -6006,14 +7324,37 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         webSearch={providerSettings.webSearch}
         onTogglePin={() => activeChat && handleTogglePin(activeChat.id)}
         onToggleTerminal={handleToggleTerminal}
+        onOpenChatInNewWindow={handleOpenActiveChatInNewWindow}
         onOpenSideChat={() => handleNewChat(activeChat.project)}
+        onRenameChat={() => handleOpenRenameChat(activeChat)}
         terminalEnabled={toolSettings.terminal}
         terminalOpen={terminalOpen}
       />
     );
   }
 
+  function handleSkipOnboarding() {
+    setOnboardingOpen(false);
+  }
+
+  function handleNeverShowOnboarding() {
+    savePersistentString(ONBOARDING_NEVER_SHOW_KEY, "true");
+    setOnboardingOpen(false);
+  }
+
+  function handleOpenOnboardingSettings() {
+    setActiveSettingsSection("providers");
+    setActiveRoute("settings");
+    setOnboardingOpen(false);
+  }
+
+  function handleOpenOnboardingToolbox() {
+    setActiveRoute("toolbox");
+    setOnboardingOpen(false);
+  }
+
   const pendingDeleteChat = pendingDeleteChatId ? chats.find((chat) => chat.id === pendingDeleteChatId) : undefined;
+  const pendingRenameChat = renameChatId ? chats.find((chat) => chat.id === renameChatId) : undefined;
   const pendingDeleteProject = pendingDeleteProjectName ? projects.find((project) => project.name.toLowerCase() === pendingDeleteProjectName.toLowerCase()) : undefined;
   const pendingDeleteProjectChats = pendingDeleteProject
     ? chats.filter((chat) => chat.project.toLowerCase() === pendingDeleteProject.name.toLowerCase())
@@ -6026,12 +7367,14 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         activeRoute={activeRoute}
         activeSettingsSection={activeSettingsSection}
         appInfo={appInfo}
+        appearanceMode={appearanceMode}
         authUser={authSession.user}
         chats={chats}
         desktopRuntime={isDesktopRuntime}
         projects={projects}
         searchOpen={searchOpen}
         sidebarOpen={sidebarOpen}
+        onAppearanceModeChange={setAppearanceMode}
         onCreateProject={openCreateProjectDialog}
         onCloseSearch={() => setSearchOpen(false)}
         onDeleteChat={handleDeleteChat}
@@ -6067,11 +7410,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         </div>
       </AppShell>
 
+      <OnboardingDialog
+        open={onboardingOpen}
+        onClose={handleSkipOnboarding}
+        onNeverShowAgain={handleNeverShowOnboarding}
+        onOpenSettings={handleOpenOnboardingSettings}
+        onOpenToolbox={handleOpenOnboardingToolbox}
+      />
+
       <BulkDeleteChatsDialog
         chats={chats}
         open={bulkDeleteChatsOpen}
         selectedChatIds={bulkDeleteChatIds}
-        sendingChatId={sendingChatId}
+        sendingChatIds={sendingChatIds}
         onClearSelection={handleClearBulkDeleteChats}
         onClose={() => {
           setBulkDeleteChatsOpen(false);
@@ -6080,6 +7431,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onConfirm={confirmBulkDeleteChats}
         onSelectAll={handleSelectAllBulkDeleteChats}
         onToggleChat={handleToggleBulkDeleteChat}
+      />
+
+      <TextInputDialog
+        confirmLabel="Rename"
+        description={pendingRenameChat ? `Current project: ${pendingRenameChat.project}` : undefined}
+        error={renameChatError}
+        label="Chat name"
+        open={Boolean(pendingRenameChat)}
+        placeholder="Chat name"
+        title="Rename chat"
+        value={renameChatTitle}
+        onChange={(value) => {
+          setRenameChatTitle(value);
+          setRenameChatError(null);
+        }}
+        onClose={() => {
+          setRenameChatId(null);
+          setRenameChatTitle("");
+          setRenameChatError(null);
+        }}
+        onSubmit={confirmRenameChat}
       />
 
       <ConfirmDialog
@@ -6205,6 +7577,25 @@ function waitForDiscordFlushSlot() {
 
 function formatDiscordProgress(progress: ChatProgressItem) {
   return progress.detail ? `${progress.label}: ${progress.detail}` : progress.label;
+}
+
+function formatLocalToolPreviewProgress(toolCalls: ChatToolCall[]) {
+  if (toolCalls.length === 0) {
+    return "Preparing tool request";
+  }
+
+  const firstDetailedTool = toolCalls.find((toolCall) => toolCall.label !== "Agent tools" || toolCall.detail);
+  const targets = toolCalls
+    .map((toolCall) => toolCall.detail)
+    .filter((detail): detail is string => Boolean(detail?.trim()))
+    .slice(0, 2);
+  const targetText = targets.length > 0 ? `: ${targets.join(", ")}${toolCalls.length > targets.length ? ` and ${toolCalls.length - targets.length} more` : ""}` : "";
+
+  if (toolCalls.length === 1) {
+    return firstDetailedTool ? `Preparing ${firstDetailedTool.label.toLowerCase()}${firstDetailedTool.detail ? `: ${firstDetailedTool.detail}` : ""}` : "Preparing tool request";
+  }
+
+  return `Preparing ${toolCalls.length} tool calls${targetText}`;
 }
 
 function formatDiscordToolStatus(toolCall: ChatToolCall) {
@@ -6353,6 +7744,105 @@ function closeUnclosedDiscordCodeFence(content: string) {
   return fenceCount % 2 === 1 ? `${content}\n\`\`\`` : content;
 }
 
+function getChatIdFromLocationHash() {
+  const hash = window.location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(hash);
+  const chatId = params.get("chat");
+
+  return chatId?.trim() || "";
+}
+
+function createChatDeeplink(chatId: string) {
+  const url = new URL(window.location.href);
+  url.hash = `chat=${encodeURIComponent(chatId)}`;
+  return url.toString();
+}
+
+function formatChatAsMarkdown(chat: ChatSummary) {
+  const sections = [
+    `# ${chat.title || "New chat"}`,
+    "",
+    `- Session: \`${chat.id}\``,
+    `- Project: ${chat.project}`,
+    `- Updated: ${chat.updatedAt}`,
+  ];
+
+  if (chat.messages.length === 0) {
+    sections.push("", "_No messages yet._");
+    return sections.join("\n");
+  }
+
+  for (const message of chat.messages) {
+    sections.push("", `## ${message.role === "assistant" ? "Assistant" : "User"} - ${message.createdAt}`, "", message.content || "_No visible text._");
+
+    if (message.reasoning?.trim()) {
+      sections.push("", "<details>", "<summary>Reasoning</summary>", "", message.reasoning.trim(), "", "</details>");
+    }
+
+    if (message.attachments?.length) {
+      sections.push("", "Attachments:", ...message.attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes)`));
+    }
+
+    if (message.sources?.length) {
+      sections.push("", "Sources:", ...message.sources.map((source) => `- [${source.title}](${source.url})${source.detail ? ` - ${source.detail}` : ""}`));
+    }
+  }
+
+  return sections.join("\n");
+}
+
+function createForkedChat(sourceChat: ChatSummary, projectName: string, title = `Fork: ${sourceChat.title || "New chat"}`): ChatSummary {
+  const now = new Date().toISOString();
+
+  return {
+    ...sourceChat,
+    archived: false,
+    id: createId("chat"),
+    isDraft: undefined,
+    messages: sourceChat.messages.map(cloneMessageForFork),
+    pinned: false,
+    project: normalizeProjectName(projectName),
+    title,
+    updatedAt: now,
+  };
+}
+
+function cloneMessageForFork(message: ChatMessage): ChatMessage {
+  return {
+    ...cloneJson(message),
+    agentRunId: undefined,
+    agentRunStatus: undefined,
+    approvals: undefined,
+    id: createId("message"),
+    isStreaming: undefined,
+    status: message.status === "queued" ? undefined : message.status,
+    toolCalls: message.toolCalls?.map(cloneToolCallForFork),
+  };
+}
+
+function cloneToolCallForFork(toolCall: ChatToolCall): ChatToolCall {
+  const clonedToolCall = cloneJson(toolCall);
+  const active = clonedToolCall.status === "active" || clonedToolCall.status === "waiting_approval";
+
+  return {
+    ...clonedToolCall,
+    detail: active ? "Snapshot from forked chat; live tool state was not carried over." : clonedToolCall.detail,
+    id: createId("tool-call"),
+    status: active ? "skipped" : clonedToolCall.status,
+    terminal: clonedToolCall.terminal
+      ? {
+          ...clonedToolCall.terminal,
+          live: false,
+          sessionId: undefined,
+        }
+      : undefined,
+  };
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function createUniqueProjectName(baseName: string, projects: ProjectSummary[]) {
   const fallbackName = createProjectBaseName(baseName);
   const existingNames = new Set(projects.map((project) => project.name.toLowerCase()));
@@ -6438,6 +7928,33 @@ function mergeAgentApprovals(currentApprovals: AgentApproval[], nextApprovals: A
   }
 
   return mergedApprovals;
+}
+
+function mergeChatArtifacts(currentArtifacts: ChatArtifact[] | undefined, nextArtifacts: ChatArtifact[] | undefined) {
+  if (!nextArtifacts?.length) {
+    return currentArtifacts;
+  }
+
+  const mergedArtifacts = [...(currentArtifacts ?? [])];
+
+  for (const nextArtifact of nextArtifacts) {
+    const existingIndex = mergedArtifacts.findIndex((artifact) =>
+      nextArtifact.id
+        ? artifact.id === nextArtifact.id
+        : artifact.title === nextArtifact.title && artifact.url === nextArtifact.url,
+    );
+
+    if (existingIndex >= 0) {
+      mergedArtifacts[existingIndex] = {
+        ...mergedArtifacts[existingIndex],
+        ...nextArtifact,
+      };
+    } else {
+      mergedArtifacts.push(nextArtifact);
+    }
+  }
+
+  return mergedArtifacts;
 }
 
 function recoverInterruptedAgentRun(run: AgentRun, now: string): AgentRun {

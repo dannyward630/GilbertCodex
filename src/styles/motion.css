@@ -1,0 +1,893 @@
+:root {
+  --motion-fast: 160ms;
+  --motion-medium: 260ms;
+  --motion-slow: 430ms;
+  --motion-ease: cubic-bezier(0.22, 0.72, 0.18, 1);
+  --motion-ease-pop: cubic-bezier(0.2, 1.08, 0.24, 1);
+  --motion-ease-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-spring: linear(
+    0,
+    0.018 1%,
+    0.072 3%,
+    0.18 6%,
+    0.39 11%,
+    0.64 17%,
+    0.82 24%,
+    0.94 32%,
+    0.988 42%,
+    1.006 54%,
+    1.004 64%,
+    1.001 76%,
+    0.999 88%,
+    1
+  );
+}
+
+.side-panel-presence {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.voice-waveform {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 18px;
+  height: 18px;
+}
+
+.voice-waveform span {
+  width: 2px;
+  height: 13px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: scaleY(0.72);
+  transform-origin: center;
+}
+
+@keyframes gil-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes gil-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes gil-pop-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+
+  72% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-pop-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+@keyframes gil-popup-open {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.996);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0) scale(1.001);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes gil-side-panel-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate3d(-1px, 0, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-side-panel-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0);
+  }
+}
+
+@keyframes gil-sidebar-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(-22px, 0, 0);
+  }
+
+  60% {
+    opacity: 1;
+    transform: translate3d(2px, 0, 0);
+  }
+
+  82% {
+    opacity: 1;
+    transform: translate3d(-1px, 0, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-sidebar-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(-22px, 0, 0);
+  }
+}
+
+@keyframes gil-main-settle {
+  0% {
+    transform: translate3d(-3px, 0, 0);
+  }
+
+  62% {
+    transform: translate3d(1px, 0, 0);
+  }
+
+  82% {
+    transform: translate3d(-1px, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-main-close-settle {
+  0% {
+    transform: translate3d(3px, 0, 0);
+  }
+
+  62% {
+    transform: translate3d(-1px, 0, 0);
+  }
+
+  82% {
+    transform: translate3d(1px, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-route-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-page-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-message-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-user-bubble-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(0.992);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.002);
+  }
+
+  86% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes gil-composer-dock-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 12px, 0);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate3d(-50%, -1px, 0);
+  }
+
+  86% {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes gil-composer-center-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0);
+  }
+
+  86% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes gil-title-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.996);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.001);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes gil-live-dot {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: translateY(0) scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1);
+  }
+}
+
+@keyframes gil-soft-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 0%, transparent);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 12%, transparent);
+  }
+}
+
+@keyframes gil-mic-wave {
+  0%,
+  100% {
+    transform: scaleY(0.42);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes gil-sheen {
+  from {
+    transform: translateX(-130%);
+  }
+
+  to {
+    transform: translateX(130%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-shell {
+    transition:
+      column-gap 360ms var(--motion-ease-soft),
+      grid-template-columns 360ms var(--motion-ease-soft);
+  }
+
+  .workspace-shell[data-sidebar-state="open"] .app-main {
+    animation: gil-main-settle 340ms var(--motion-ease-soft) both;
+    transform-origin: left center;
+  }
+
+  .workspace-shell[data-sidebar-state="closing"] .app-main,
+  .workspace-shell[data-sidebar-state="closed"] .app-main {
+    animation: gil-main-close-settle 340ms var(--motion-ease-soft) both;
+    transform-origin: left center;
+  }
+
+  .route-panel {
+    backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .conversation-body,
+  .desktop-root[data-runtime="desktop"] .conversation-body {
+    transition: grid-template-columns 340ms var(--motion-ease-soft);
+  }
+
+  .conversation-body[data-browser-resizing="true"],
+  .desktop-root[data-runtime="desktop"] .conversation-body[data-browser-resizing="true"] {
+    transition: none;
+  }
+
+  .route-panel[data-active="true"] > .conversation-frame,
+  .route-panel[data-active="true"] > .utility-page,
+  .route-panel[data-active="true"] > .settings-page {
+    animation: gil-page-enter 300ms var(--motion-ease-soft) both;
+    backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .conversation-title h1 {
+    animation: gil-title-pop 260ms var(--motion-ease-soft) both;
+  }
+
+  .topbar-logo,
+  .sidebar-account-avatar {
+    transition:
+      transform 360ms var(--motion-spring),
+      box-shadow var(--motion-medium) var(--motion-ease);
+  }
+
+  .topbar-center:hover .topbar-logo,
+  .sidebar-account:hover .sidebar-account-avatar {
+    transform: translateY(-1px) scale(1.015);
+  }
+
+  .shell-sidebar[data-open="true"] {
+    animation: gil-sidebar-in 440ms var(--motion-ease-soft) both;
+    will-change: transform, opacity;
+  }
+
+  .shell-sidebar[data-open="false"] {
+    animation: gil-sidebar-out 320ms var(--motion-ease) both;
+    pointer-events: none;
+    will-change: transform, opacity;
+  }
+
+  .sidebar-action,
+  .sidebar-settings,
+  .sidebar-list-row,
+  .section-actions button,
+  .sidebar-item-quick-action,
+  .sidebar-item-menu-button,
+  .sidebar-account-signout,
+  .icon-button,
+  .topbar-menu-button,
+  .topbar-menu-item,
+  .window-controls button,
+  .conversation-options-button,
+  .conversation-options-menu-item,
+  .message-action,
+  .dialog-button,
+  .settings-primary-button,
+  .settings-ghost-button,
+  .settings-danger-button,
+  .settings-segmented-control button,
+  .utility-header-actions button,
+  .workflow-start-button,
+  .workflow-run-meta button,
+  .mcp-icon-button,
+  .mcp-starter-card button,
+  .mcp-setup-card button {
+    transition:
+      background-color var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease),
+      opacity var(--motion-fast) var(--motion-ease),
+      transform 260ms var(--motion-spring);
+  }
+
+  .sidebar-action:hover,
+  .sidebar-settings:hover,
+  .sidebar-list-row:hover,
+  .section-actions button:hover,
+  .sidebar-item-quick-action:hover,
+  .sidebar-item-menu-button:hover,
+  .icon-button:hover:not(:disabled),
+  .topbar-menu-button:hover,
+  .window-controls button:hover,
+  .conversation-options-button:hover,
+  .message-action:hover:not(:disabled),
+  .dialog-button:hover:not(:disabled),
+  .settings-primary-button:hover:not(:disabled),
+  .settings-ghost-button:hover:not(:disabled),
+  .settings-danger-button:hover:not(:disabled),
+  .settings-segmented-control button:hover,
+  .utility-header-actions button:hover,
+  .workflow-start-button:hover,
+  .workflow-run-meta button:hover,
+  .mcp-icon-button:hover,
+  .mcp-starter-card button:hover,
+  .mcp-setup-card button:hover {
+    transform: translateY(-1px);
+  }
+
+  .sidebar-action:active,
+  .sidebar-settings:active,
+  .sidebar-list-row:active,
+  .icon-button:active:not(:disabled),
+  .conversation-options-button:active,
+  .message-action:active:not(:disabled),
+  .dialog-button:active:not(:disabled),
+  .settings-primary-button:active:not(:disabled),
+  .settings-ghost-button:active:not(:disabled),
+  .settings-danger-button:active:not(:disabled) {
+    transform: translateY(0) scale(0.982);
+  }
+
+  .sidebar-list-row[data-menu-open="true"],
+  .sidebar-list-row[data-menu-open="true"]:hover,
+  .sidebar-list-row[data-menu-open="true"]:active {
+    transform: none;
+  }
+
+  .sidebar-primary-actions .sidebar-action:first-child:hover,
+  .sidebar-primary-actions .sidebar-action:first-child[data-active="true"] {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 22%, transparent);
+  }
+
+  .sidebar-primary-actions .sidebar-action:first-child:active svg {
+    transform: scale(1.025) rotate(-2deg);
+  }
+
+  .topbar-menu-panel,
+  .conversation-options-menu,
+  .message-action-menu,
+  .sidebar-item-menu,
+  .composer-popover,
+  .composer-submenu,
+  .search-dialog,
+  .app-dialog {
+    animation: gil-popup-open 200ms var(--motion-ease-soft) both;
+    will-change: transform, opacity;
+    transform-origin: top left;
+  }
+
+  .composer-popover,
+  .composer-submenu {
+    transform-origin: bottom left;
+  }
+
+  .composer-popover-model {
+    transform-origin: bottom right;
+  }
+
+  .dialog-backdrop,
+  .search-backdrop,
+  .image-viewer-backdrop {
+    animation: gil-fade-in 240ms var(--motion-ease) both;
+  }
+
+  .composer-shell[data-layout="dock"] {
+    animation: gil-composer-dock-enter 380ms var(--motion-ease-soft) both;
+  }
+
+  .composer-shell[data-layout="center"] {
+    animation: gil-composer-center-enter 400ms var(--motion-ease-soft) both;
+  }
+
+  .composer-shell {
+    transition:
+      border-color 240ms var(--motion-ease),
+      box-shadow 320ms var(--motion-ease);
+  }
+
+  .composer-shell:focus-within {
+    box-shadow:
+      0 18px 58px color-mix(in srgb, black 26%, transparent),
+      0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent);
+  }
+
+  .composer-queue-tray,
+  .composer-change-strip,
+  .composer-attachments,
+  .composer-status,
+  .thinking-live-detail,
+  .local-danger-popup,
+  .local-index-progress,
+  .planning-input-card,
+  .planning-input-summary {
+    animation: gil-pop-in 260ms var(--motion-ease-soft) both;
+  }
+
+  .composer-queue-row,
+  .attachment-chip,
+  .composer-menu-item,
+  .composer-submenu button,
+  .thinking-effort-grid button,
+  .thinking-trace-toggle,
+  .thinking-trace-note,
+  .local-mode-menu button,
+  .local-scope-row button,
+  .local-permission-row button,
+  .local-index-row button,
+  .project-list button,
+  .model-selector-row,
+  .model-selector-category-toggle,
+  .model-selector-provider-strip button,
+  .model-selector-toolbar button,
+  .rail-row,
+  .progress-row,
+  .activity-tool-call,
+  .approval-card,
+  .planning-option-list button {
+    transition:
+      background-color var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease),
+      opacity var(--motion-fast) var(--motion-ease),
+      transform 280ms var(--motion-spring);
+  }
+
+  .composer-menu-item:hover,
+  .composer-submenu button:hover,
+  .thinking-effort-grid button:hover,
+  .thinking-trace-toggle:hover,
+  .local-mode-menu button:hover:not(:disabled),
+  .local-scope-row button:hover,
+  .local-permission-row button:hover,
+  .local-index-row button:hover:not(:disabled),
+  .project-list button:hover,
+  .model-selector-row:hover,
+  .model-selector-category-toggle:hover,
+  .model-selector-provider-strip button:hover,
+  .model-selector-toolbar button:hover,
+  .rail-row:hover,
+  .progress-row:hover,
+  .activity-tool-call:hover,
+  .approval-card:hover,
+  .planning-option-list button:hover {
+    transform: translateY(-1px) scale(1.002);
+  }
+
+  .composer-tool,
+  .send-button,
+  .mode-chip,
+  .project-toggle,
+  .local-toggle,
+  .branch-toggle,
+  .context-window-chip,
+  .browser-preview-icon-button,
+  .browser-preview-icon-link,
+  .browser-preview-window-actions button,
+  .browser-preview-nav button,
+  .browser-preview-tools button,
+  .browser-preview-tab,
+  .browser-preview-shortcuts button,
+  .browser-preview-start-search button {
+    transition:
+      background-color var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease),
+      opacity var(--motion-fast) var(--motion-ease),
+      transform 300ms var(--motion-spring),
+      box-shadow var(--motion-fast) var(--motion-ease);
+  }
+
+  .composer-tool:hover:not(:disabled),
+  .send-button:hover:not(:disabled),
+  .mode-chip:hover,
+  .project-toggle:hover,
+  .local-toggle:hover,
+  .branch-toggle:hover,
+  .context-window-chip:hover,
+  .browser-preview-icon-button:hover:not(:disabled),
+  .browser-preview-icon-link:hover,
+  .browser-preview-window-actions button:hover:not(:disabled),
+  .browser-preview-nav button:hover:not(:disabled),
+  .browser-preview-tools button:hover:not(:disabled),
+  .browser-preview-tab:hover,
+  .browser-preview-shortcuts button:hover,
+  .browser-preview-start-search button:hover {
+    transform: translateY(-1px) scale(1.008);
+  }
+
+  .composer-tool:active:not(:disabled),
+  .send-button:active:not(:disabled),
+  .mode-chip:active,
+  .project-toggle:active,
+  .local-toggle:active,
+  .branch-toggle:active,
+  .context-window-chip:active,
+  .browser-preview-icon-button:active:not(:disabled),
+  .browser-preview-window-actions button:active:not(:disabled),
+  .browser-preview-nav button:active:not(:disabled),
+  .browser-preview-tools button:active:not(:disabled) {
+    transform: translateY(0) scale(0.982);
+  }
+
+  .send-button:not(:disabled) {
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 16%, transparent);
+  }
+
+  .send-button:not(:disabled):focus-visible {
+    animation: gil-soft-pulse 1s var(--motion-ease) both;
+  }
+
+  .send-button:not(:disabled):hover svg {
+    transform: translateY(-1px);
+  }
+
+  .send-button svg,
+  .composer-tool svg,
+  .mode-chip svg,
+  .project-toggle svg,
+  .local-toggle svg,
+  .branch-toggle svg,
+  .context-window-chip svg {
+    transition: transform var(--motion-fast) var(--motion-ease-pop);
+  }
+
+  .composer-tool[data-active="true"] svg,
+  .mode-chip[data-active="true"] svg,
+  .project-toggle[data-active="true"] svg,
+  .local-toggle[data-active="true"] svg,
+  .branch-toggle[data-active="true"] svg,
+  .context-window-chip[data-active="true"] svg {
+    transform: scale(1.025);
+  }
+
+  .voice-waveform {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 18px;
+    height: 18px;
+  }
+
+  .voice-waveform span {
+    width: 2px;
+    height: 13px;
+    border-radius: 999px;
+    background: currentColor;
+    transform-origin: center;
+    animation: gil-mic-wave 620ms var(--motion-ease) infinite;
+  }
+
+  .voice-waveform span:nth-child(2) {
+    animation-delay: 90ms;
+  }
+
+  .voice-waveform span:nth-child(3) {
+    animation-delay: 180ms;
+  }
+
+  .voice-waveform span:nth-child(4) {
+    animation-delay: 270ms;
+  }
+
+  .message-block:last-child {
+    animation: gil-message-enter 320ms var(--motion-ease-soft) both;
+  }
+
+  .message-block[data-role="user"]:last-child .message-content {
+    animation: gil-user-bubble-pop 360ms var(--motion-ease-soft) both;
+  }
+
+  .message-block[data-role="user"] .message-content {
+    transition:
+      background-color var(--motion-fast) var(--motion-ease),
+      transform 280ms var(--motion-spring);
+  }
+
+  .message-block[data-role="user"] .message-content:hover {
+    transform: translateY(-1px) scale(1.002);
+  }
+
+  .markdown-message[data-streaming="true"]::after {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--blue) 76%, white 24%);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 12%, transparent);
+    animation: gil-live-dot 880ms var(--motion-ease) infinite;
+    vertical-align: baseline;
+  }
+
+  .message-block[data-role="assistant"][data-streaming="true"] .message-content {
+    animation: gil-fade-in 180ms var(--motion-ease) both;
+  }
+
+  .thinking-disclosure[data-live="true"] .thinking-compact-summary {
+    animation: gil-soft-pulse 1.8s var(--motion-ease) infinite;
+  }
+
+  .thinking-popover-orb,
+  .thinking-glyph {
+    transition:
+      filter var(--motion-medium) var(--motion-ease),
+      transform 340ms var(--motion-spring);
+  }
+
+  .thinking-popover-header:hover .thinking-popover-orb,
+  .thinking-mode-root:has([aria-expanded="true"]) .mode-chip-thinking svg {
+    filter: brightness(1.08);
+    transform: scale(1.025);
+  }
+
+  .side-panel-presence[data-presence="enter"] .right-rail,
+  .side-panel-presence[data-presence="enter"] .git-review-panel,
+  .side-panel-presence[data-presence="enter"] .browser-preview-panel {
+    animation: gil-side-panel-in 340ms var(--motion-ease-soft) both;
+    will-change: transform, opacity;
+  }
+
+  .side-panel-presence[data-presence="exit"] {
+    pointer-events: none;
+  }
+
+  .side-panel-presence[data-presence="exit"] .right-rail,
+  .side-panel-presence[data-presence="exit"] .git-review-panel,
+  .side-panel-presence[data-presence="exit"] .browser-preview-panel {
+    animation: gil-side-panel-out 220ms var(--motion-ease) both;
+    will-change: transform, opacity;
+  }
+
+  .browser-preview-start,
+  .plan-review-card,
+  .approval-card {
+    animation: gil-pop-in 240ms var(--motion-ease-soft) both;
+  }
+
+  .browser-preview-start-search,
+  .empty-chat-start h2,
+  .empty-chat-suggestions {
+    animation: gil-route-enter 260ms var(--motion-ease-soft) both;
+  }
+
+  .empty-chat-suggestions button {
+    transition:
+      background-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease),
+      transform 280ms var(--motion-spring);
+  }
+
+  .empty-chat-suggestions button:hover,
+  .empty-chat-suggestions button:focus-visible {
+    transform: translateX(3px) scale(1.002);
+  }
+
+  .plan-review-card[data-state="streaming"] {
+    position: relative;
+  }
+
+  .plan-review-card[data-state="streaming"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 44%;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--blue) 8%, transparent), transparent);
+    animation: gil-sheen 1.7s var(--motion-ease) infinite;
+  }
+}
+
+@media (max-width: 1180px) {
+  .side-panel-presence {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) and (max-width: 820px) {
+  .desktop-root[data-runtime="web"] .workspace-shell .shell-sidebar,
+  .desktop-root[data-runtime="desktop"] .workspace-shell .shell-sidebar {
+    transition:
+      transform 320ms var(--motion-ease-soft),
+      opacity 260ms var(--motion-ease);
+  }
+
+  .desktop-root[data-runtime="web"] .sidebar-mobile-backdrop,
+  .desktop-root[data-runtime="desktop"] .sidebar-mobile-backdrop {
+    transition: opacity 260ms var(--motion-ease);
+  }
+}

@@ -11,8 +11,9 @@ Gilbert Codex exposes typed file creation tools through the local computer runti
 | `create_code_file` | Create source files for TypeScript, JavaScript, Python, Rust, Go, Java, Kotlin, Swift, C/C++, C#, PHP, Ruby, SQL, CSS, JSON, YAML, shell, and other extension-driven languages. |
 | `create_react_file` | Create `.tsx` or `.jsx` React component files, including fenced-code extraction from Markdown. |
 | `create_html_file` | Create full HTML documents from HTML or Markdown-like content. |
-| `create_pdf_file` | Render Markdown-like notes into a local PDF file. |
+| `create_pdf_file` | Render Markdown notes into a clean PDF file with headings, lists, tables, rules, and code blocks. If no workspace is selected, PDF-only creation returns a downloadable chat artifact. |
 | `create_files` | Create many files in one atomic-intent batch from a JSON manifest. |
+| `create_vite_project` | Create a complete Vite React scaffold directly in the selected workspace folder by default. |
 
 All tools accept `path`, `content`, `markdown`, `text`, `body`, `title`, `overwrite`, `duplicate_strategy`, and `createParentDirs` where relevant. File creation defaults to `overwrite=false` to prevent accidental duplicates. If the model provides fenced Markdown to a code tool, Gilbert extracts the best matching code fence before writing the file.
 
@@ -38,7 +39,11 @@ Use `create_files` when a feature needs several files. The `files_json` argument
 }
 ```
 
-The batch writer validates every target path against the enabled roots and duplicate policy before writing so a blocked file does not leave a partial multi-file operation.
+The batch writer validates every target path against the enabled roots and duplicate policy before writing so a blocked file does not leave a partial multi-file operation. Absolute paths are checked as-is; workspace-relative paths are resolved under the selected root. If a batch repeats the selected project folder name as its first path segment, Gilbert rebases that segment to the open folder so generated project scaffolds land in the current workspace instead of being blocked as outside-root paths.
+
+`create_vite_project` follows the same selected-folder rule: when `project_path` is omitted, the scaffold is written directly into the selected workspace root. `project_name` controls the package/display name; it does not create a same-named child folder. To intentionally scaffold under a child folder, pass `project_path`.
+
+PDF export is the one regular-chat exception: when there is no selected workspace, `create_pdf_file` and `create_chat_pdf` return a downloadable artifact directly in the assistant message. Other file creation, source edits, terminal commands, deletes, and Git operations still require selected workspace roots.
 
 ## Design Notes
 

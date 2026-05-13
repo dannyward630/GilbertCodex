@@ -14,7 +14,9 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import type { Webview } from "@tauri-apps/api/webview";
+import { isTauriDesktopRuntime } from "../../app/tauriClient";
 import { loadPersistentString, savePersistentString } from "../../lib/appStorage";
 
 interface BrowserPreviewPanelProps {
@@ -31,6 +33,8 @@ interface BrowserPreviewPanelProps {
 
 interface BrowserPreviewTab {
   createdAt: string;
+  history: string[];
+  historyIndex: number;
   id: string;
   reloadKey: number;
   updatedAt: string;
@@ -43,7 +47,21 @@ interface BrowserPreviewSession {
 }
 
 type LocalPreviewStatus = "available" | "checking" | "unavailable";
+type NativeBrowserStatus = "idle" | "loading" | "ready" | "error";
 type SearchEngineId = "duckduckgo" | "github" | "google" | "youtube";
+
+interface NativeBrowserInstance {
+  generation: number;
+  label: string;
+  webview: Webview;
+}
+
+interface NativeBrowserBounds {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
 
 interface SearchEngine {
   homeUrl: string;
@@ -55,7 +73,8 @@ interface SearchEngine {
 const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
 const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
 const LOCAL_PROBE_TIMEOUT_MS = 900;
-const LOCAL_PREVIEW_PORTS = [1420, 3000, 3001, 4173, 4200, 4321, 5000, 5001, 5173, 5174, 5500, 8000, 8080, 8787];
+const LOCAL_PREVIEW_PORTS = [5173, 5174, 3000, 3001, 4173, 4174, 4200, 4201, 4321, 4322, 5000, 5001, 5500, 6006, 8000, 8001, 8080, 8081, 1313, 4000];
+const NATIVE_BROWSER_CREATE_TIMEOUT_MS = 6_000;
 const SEARCH_ENGINES: SearchEngine[] = [
   {
     homeUrl: "https://www.google.com/",
@@ -94,6 +113,9 @@ export function BrowserPreviewPanel({
   onResizeStart,
   onToggleExpanded,
 }: BrowserPreviewPanelProps) {
+  const nativeFrameRef = useRef<HTMLDivElement>(null);
+  const nativeBrowserRef = useRef<NativeBrowserInstance | null>(null);
+  const nativeBrowserGenerationRef = useRef(0);
   const normalizedInitialUrl = useMemo(() => {
     const url = normalizePreviewUrl(initialUrl);
     return url && !isCurrentAppUrl(url) ? url : null;
@@ -106,14 +128,49 @@ export function BrowserPreviewPanel({
   const [addressDraft, setAddressDraft] = useState(activeUrl ?? "");
   const [addressInvalid, setAddressInvalid] = useState(false);
   const [activeLocalStatus, setActiveLocalStatus] = useState<LocalPreviewStatus>("available");
+  const [nativeBrowserStatus, setNativeBrowserStatus] = useState<NativeBrowserStatus>("idle");
+  const [nativeBrowserError, setNativeBrowserError] = useState("");
   const selectedSearchEngine = getSearchEngine(searchEngineId);
   const previewTitle = formatPreviewTitle(activeUrl);
   const activeUrlIsLocal = Boolean(activeUrl && isLocalHttpUrl(activeUrl));
+  const nativeBrowserEnabled = isTauriDesktopRuntime() && Boolean(activeUrl && !activeUrlIsLocal);
   const showFrame = Boolean(activeUrl && (!activeUrlIsLocal || activeLocalStatus === "available"));
+  const activeHistoryState = getTabHistoryState(activeTab);
+  const canGoBack = activeHistoryState.historyIndex > 0;
+  const canGoForward = activeHistoryState.historyIndex >= 0 && activeHistoryState.historyIndex < activeHistoryState.history.length - 1;
+
+  const syncNativeBrowserBounds = useCallback(() => {
+    const instance = nativeBrowserRef.current;
+    const frame = nativeFrameRef.current;
+
+    if (!instance || !frame) {
+      return;
+    }
+
+    const bounds = getNativeBrowserBounds(frame);
+
+    if (!bounds) {
+      return;
+    }
+
+    void setNativeBrowserBounds(instance.webview, bounds);
+  }, []);
 
   useEffect(() => {
     saveBrowserPreviewSession(session);
   }, [session]);
+
+  useEffect(() => {
+    if (!isTauriDesktopRuntime()) {
+      return;
+    }
+
+    void closeStaleNativeBrowserInstances();
+
+    return () => {
+      void closeStaleNativeBrowserInstances();
+    };
+  }, []);
 
   useEffect(() => {
     if (!normalizedInitialUrl) {
@@ -165,6 +222,110 @@ export function BrowserPreviewPanel({
     };
   }, [activeTab.reloadKey, activeUrl]);
 
+  useEffect(() => {
+    if (!nativeBrowserEnabled || !showFrame || !activeUrl) {
+      closeNativeBrowserInstance(nativeBrowserRef.current);
+      nativeBrowserRef.current = null;
+      setNativeBrowserStatus("idle");
+      setNativeBrowserError("");
+      return;
+    }
+
+    let disposed = false;
+    const generation = nativeBrowserGenerationRef.current + 1;
+    nativeBrowserGenerationRef.current = generation;
+    const label = createNativeBrowserLabel(activeTab.id, generation);
+
+    void closeStaleNativeBrowserInstances(label);
+    closeNativeBrowserInstance(nativeBrowserRef.current);
+    nativeBrowserRef.current = null;
+    setNativeBrowserStatus("loading");
+    setNativeBrowserError("");
+
+    void createNativeBrowserInstance(label, activeUrl, nativeFrameRef.current)
+      .then((webview) => {
+        if (disposed || nativeBrowserGenerationRef.current !== generation) {
+          void webview.close().catch(() => undefined);
+          return;
+        }
+
+        nativeBrowserRef.current = {
+          generation,
+          label,
+          webview,
+        };
+        setNativeBrowserStatus("ready");
+        syncNativeBrowserBounds();
+      })
+      .catch((error: unknown) => {
+        if (disposed || nativeBrowserGenerationRef.current !== generation) {
+          return;
+        }
+
+        nativeBrowserRef.current = null;
+        setNativeBrowserStatus("error");
+        setNativeBrowserError(error instanceof Error ? error.message : "Could not open the native browser view.");
+      });
+
+    return () => {
+      disposed = true;
+
+      if (nativeBrowserRef.current?.generation === generation) {
+        closeNativeBrowserInstance(nativeBrowserRef.current);
+        nativeBrowserRef.current = null;
+      }
+    };
+  }, [activeTab.id, activeTab.reloadKey, activeUrl, nativeBrowserEnabled, showFrame, syncNativeBrowserBounds]);
+
+  useLayoutEffect(() => {
+    if (!nativeBrowserEnabled || !showFrame || !activeUrl) {
+      return;
+    }
+
+    const frame = nativeFrameRef.current;
+
+    if (!frame) {
+      return;
+    }
+
+    let resizeFrame: number | null = null;
+    const scheduleSync = () => {
+      if (resizeFrame !== null) {
+        return;
+      }
+
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        syncNativeBrowserBounds();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleSync);
+    resizeObserver.observe(frame);
+    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("scroll", scheduleSync, true);
+    const steadySyncInterval = window.setInterval(scheduleSync, 160);
+
+    scheduleSync();
+
+    return () => {
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+      }
+
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      window.removeEventListener("scroll", scheduleSync, true);
+      window.clearInterval(steadySyncInterval);
+    };
+  }, [activeUrl, nativeBrowserEnabled, showFrame, syncNativeBrowserBounds]);
+
+  useEffect(() => {
+    return () => {
+      closeNativeBrowserInstance(nativeBrowserRef.current);
+      nativeBrowserRef.current = null;
+    };
+  }, []);
+
   function submitAddress(value = addressDraft, engineId = searchEngineId) {
     const nextUrl = createNavigationUrl(value, engineId);
 
@@ -179,6 +340,7 @@ export function BrowserPreviewPanel({
   function navigateToUrl(nextUrl: string) {
     updateActiveTab((tab) => ({
       ...tab,
+      ...createNavigationHistoryUpdate(tab, nextUrl),
       reloadKey: tab.url === nextUrl ? tab.reloadKey + 1 : tab.reloadKey,
       updatedAt: new Date().toISOString(),
       url: nextUrl,
@@ -207,6 +369,28 @@ export function BrowserPreviewPanel({
       activeTabId: nextTab.id,
       tabs: [...ensureSession(currentSession).tabs, nextTab],
     }));
+  }
+
+  function navigateHistory(delta: -1 | 1) {
+    updateActiveTab((tab) => {
+      const historyState = getTabHistoryState(tab);
+      const nextIndex = historyState.historyIndex + delta;
+      const nextUrl = historyState.history[nextIndex];
+
+      if (!nextUrl) {
+        return tab;
+      }
+
+      return {
+        ...tab,
+        history: historyState.history,
+        historyIndex: nextIndex,
+        reloadKey: tab.reloadKey + 1,
+        updatedAt: new Date().toISOString(),
+        url: nextUrl,
+      };
+    });
+    setAddressInvalid(false);
   }
 
   function closeTab(tabId: string) {
@@ -311,10 +495,10 @@ export function BrowserPreviewPanel({
 
         <div className="browser-preview-toolbar">
           <div className="browser-preview-nav">
-            <button type="button" aria-label="Back" disabled>
+            <button type="button" aria-label="Back" disabled={!canGoBack} onClick={() => navigateHistory(-1)}>
               <ArrowLeft size={16} aria-hidden="true" />
             </button>
-            <button type="button" aria-label="Forward" disabled>
+            <button type="button" aria-label="Forward" disabled={!canGoForward} onClick={() => navigateHistory(1)}>
               <ArrowRight size={16} aria-hidden="true" />
             </button>
             <button type="button" aria-label="Reload page" disabled={!activeUrl} onClick={reloadActiveTab}>
@@ -368,7 +552,7 @@ export function BrowserPreviewPanel({
 
           <div className="browser-preview-tools">
             {activeUrl ? (
-              <a className="browser-preview-icon-link" href={activeUrl} target="_blank" rel="noreferrer" aria-label="Open page externally" title="Open page externally">
+              <a className="browser-preview-icon-link" href={activeUrl} target="_blank" rel="noopener noreferrer" aria-label="Open page externally" title="Open page externally">
                 <ExternalLink size={15} aria-hidden="true" />
               </a>
             ) : null}
@@ -382,7 +566,14 @@ export function BrowserPreviewPanel({
         </div>
 
         <div className="browser-preview-content" aria-label={activeUrl ? `Browser content for ${activeUrl}` : "Browser start page"}>
-          {showFrame ? <iframe className="browser-preview-frame" key={`${activeTab.id}-${activeTab.reloadKey}-${activeUrl}`} title={previewTitle} src={activeUrl} /> : null}
+          {showFrame && nativeBrowserEnabled ? (
+            <div className="browser-preview-native-frame" data-status={nativeBrowserStatus} ref={nativeFrameRef}>
+              {nativeBrowserStatus !== "ready" ? (
+                <BrowserNativeStatus activeUrl={activeUrl!} error={nativeBrowserError} status={nativeBrowserStatus} />
+              ) : null}
+            </div>
+          ) : null}
+          {showFrame && !nativeBrowserEnabled ? <iframe className="browser-preview-frame" key={`${activeTab.id}-${activeTab.reloadKey}-${activeUrl}`} title={previewTitle} src={activeUrl} /> : null}
           {!showFrame ? (
             <BrowserStartPage
               activeLocalStatus={activeUrlIsLocal ? activeLocalStatus : "available"}
@@ -398,6 +589,26 @@ export function BrowserPreviewPanel({
         </div>
       </div>
     </aside>
+  );
+}
+
+function BrowserNativeStatus({ activeUrl, error, status }: { activeUrl: string; error: string; status: NativeBrowserStatus }) {
+  if (status === "error") {
+    return (
+      <section className="browser-preview-start" aria-label="Native browser status">
+        <Globe2 size={22} aria-hidden="true" />
+        <h2>Browser unavailable</h2>
+        <span>{error || formatPreviewTitle(activeUrl)}</span>
+      </section>
+    );
+  }
+
+  return (
+    <section className="browser-preview-start" aria-label="Native browser status">
+      <LoaderCircle className="browser-preview-start-spinner" size={22} aria-hidden="true" />
+      <h2>Opening browser</h2>
+      <span>{formatPreviewTitle(activeUrl)}</span>
+    </section>
   );
 }
 
@@ -582,6 +793,8 @@ function createPreviewTab(url?: string): BrowserPreviewTab {
 
   return {
     createdAt: now,
+    history: url ? [url] : [],
+    historyIndex: url ? 0 : -1,
     id: createPreviewTabId(),
     reloadKey: 0,
     updatedAt: now,
@@ -610,6 +823,53 @@ function getActiveTab(session: BrowserPreviewSession) {
   return session.tabs.find((tab) => tab.id === session.activeTabId) ?? session.tabs[0] ?? createPreviewTab();
 }
 
+function getTabHistoryState(tab: BrowserPreviewTab) {
+  const history = Array.isArray(tab.history) ? tab.history.flatMap((entry) => {
+    const url = normalizePreviewUrl(entry);
+    return url ? [url] : [];
+  }) : [];
+
+  if (tab.url && !history.includes(tab.url)) {
+    history.push(tab.url);
+  }
+
+  if (history.length === 0) {
+    return {
+      history,
+      historyIndex: -1,
+    };
+  }
+
+  const storedIndex = Number.isInteger(tab.historyIndex) ? tab.historyIndex : -1;
+  const urlIndex = tab.url ? history.lastIndexOf(tab.url) : -1;
+  const historyIndex = clampHistoryIndex(storedIndex >= 0 ? storedIndex : urlIndex >= 0 ? urlIndex : history.length - 1, history);
+
+  return {
+    history,
+    historyIndex,
+  };
+}
+
+function clampHistoryIndex(index: number, history: string[]) {
+  return Math.max(0, Math.min(index, history.length - 1));
+}
+
+function createNavigationHistoryUpdate(tab: BrowserPreviewTab, nextUrl: string) {
+  const historyState = getTabHistoryState(tab);
+
+  if (historyState.history.length > 0 && historyState.history[historyState.historyIndex] === nextUrl) {
+    return historyState;
+  }
+
+  const priorHistory = historyState.historyIndex >= 0 ? historyState.history.slice(0, historyState.historyIndex + 1) : [];
+  const history = [...priorHistory, nextUrl];
+
+  return {
+    history,
+    historyIndex: history.length - 1,
+  };
+}
+
 function ensureSession(session: BrowserPreviewSession) {
   return session.tabs.length > 0 ? session : createBrowserPreviewSession();
 }
@@ -628,12 +888,15 @@ function openUrlInSession(session: BrowserPreviewSession, url: string): BrowserP
   const activeTab = getActiveTab(ensuredSession);
 
   if (!activeTab.url) {
+    const historyUpdate = createNavigationHistoryUpdate(activeTab, url);
+
     return {
       activeTabId: activeTab.id,
       tabs: ensuredSession.tabs.map((tab) =>
         tab.id === activeTab.id
           ? {
               ...tab,
+              ...historyUpdate,
               updatedAt: new Date().toISOString(),
               url,
             }
@@ -711,12 +974,44 @@ function normalizeStoredTab(value: unknown): BrowserPreviewTab | null {
     return null;
   }
 
+  const normalizedHistory = normalizeStoredHistory(tab.history, tab.historyIndex, url);
+
   return {
     createdAt: typeof tab.createdAt === "string" && tab.createdAt ? tab.createdAt : new Date().toISOString(),
+    history: normalizedHistory.history,
+    historyIndex: normalizedHistory.historyIndex,
     id: typeof tab.id === "string" && tab.id ? tab.id : createPreviewTabId(),
     reloadKey: typeof tab.reloadKey === "number" && Number.isFinite(tab.reloadKey) ? tab.reloadKey : 0,
     updatedAt: typeof tab.updatedAt === "string" && tab.updatedAt ? tab.updatedAt : new Date().toISOString(),
     url: url ?? undefined,
+  };
+}
+
+function normalizeStoredHistory(value: unknown, rawIndex: unknown, currentUrl: string | null) {
+  const history = Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const url = typeof entry === "string" ? normalizePreviewUrl(entry) : null;
+        return url && !isCurrentAppUrl(url) ? [url] : [];
+      })
+    : [];
+
+  if (currentUrl && !history.includes(currentUrl)) {
+    history.push(currentUrl);
+  }
+
+  if (history.length === 0) {
+    return {
+      history,
+      historyIndex: -1,
+    };
+  }
+
+  const indexFromUrl = currentUrl ? history.lastIndexOf(currentUrl) : -1;
+  const storedIndex = typeof rawIndex === "number" && Number.isFinite(rawIndex) ? rawIndex : -1;
+
+  return {
+    history,
+    historyIndex: clampHistoryIndex(storedIndex >= 0 ? storedIndex : indexFromUrl >= 0 ? indexFromUrl : history.length - 1, history),
   };
 }
 
@@ -866,4 +1161,123 @@ function isLocalHostName(hostname: string) {
 
 function getSearchEngine(engineId: SearchEngineId) {
   return SEARCH_ENGINES.find((engine) => engine.id === engineId) ?? SEARCH_ENGINES[0];
+}
+
+let tauriWebviewModulePromise: Promise<typeof import("@tauri-apps/api/webview")> | null = null;
+let tauriWindowModulePromise: Promise<typeof import("@tauri-apps/api/window")> | null = null;
+let tauriDpiModulePromise: Promise<typeof import("@tauri-apps/api/dpi")> | null = null;
+
+function loadTauriWebviewModule() {
+  tauriWebviewModulePromise ??= import("@tauri-apps/api/webview");
+  return tauriWebviewModulePromise;
+}
+
+function loadTauriWindowModule() {
+  tauriWindowModulePromise ??= import("@tauri-apps/api/window");
+  return tauriWindowModulePromise;
+}
+
+function loadTauriDpiModule() {
+  tauriDpiModulePromise ??= import("@tauri-apps/api/dpi");
+  return tauriDpiModulePromise;
+}
+
+async function createNativeBrowserInstance(label: string, url: string, frame: HTMLElement | null) {
+  const bounds = frame ? getNativeBrowserBounds(frame) : null;
+
+  if (!bounds) {
+    throw new Error("The browser panel is not ready yet.");
+  }
+
+  const [{ Webview }, { getCurrentWindow }] = await Promise.all([loadTauriWebviewModule(), loadTauriWindowModule()]);
+  const webview = new Webview(getCurrentWindow(), label, {
+    dragDropEnabled: true,
+    focus: false,
+    height: bounds.height,
+    url,
+    width: bounds.width,
+    x: bounds.x,
+    y: bounds.y,
+    zoomHotkeysEnabled: true,
+  });
+
+  await waitForNativeBrowserCreated(webview);
+  await setNativeBrowserBounds(webview, bounds);
+
+  return webview;
+}
+
+function waitForNativeBrowserCreated(webview: Webview) {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeout);
+      callback();
+    };
+    const timeout = window.setTimeout(() => {
+      finish(() => reject(new Error("Timed out while opening the native browser view.")));
+    }, NATIVE_BROWSER_CREATE_TIMEOUT_MS);
+
+    void webview.once("tauri://created", () => finish(resolve));
+    void webview.once("tauri://error", (event) => {
+      finish(() => reject(new Error(String(event.payload || "Could not open the native browser view."))));
+    });
+  });
+}
+
+function closeNativeBrowserInstance(instance: NativeBrowserInstance | null) {
+  if (!instance) {
+    return;
+  }
+
+  void instance.webview.close().catch(() => undefined);
+}
+
+async function closeStaleNativeBrowserInstances(currentLabel?: string) {
+  try {
+    const { Webview } = await loadTauriWebviewModule();
+    const webviews = await Webview.getAll();
+
+    await Promise.all(
+      webviews
+        .filter((webview) => webview.label.startsWith("browser-preview-") && webview.label !== currentLabel)
+        .map((webview) => webview.close().catch(() => undefined)),
+    );
+  } catch {
+    // Best effort cleanup for native webviews that may survive a hot reload.
+  }
+}
+
+function getNativeBrowserBounds(element: HTMLElement): NativeBrowserBounds | null {
+  const rect = element.getBoundingClientRect();
+
+  if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top)) {
+    return null;
+  }
+
+  return {
+    height: Math.max(1, Math.round(rect.height)),
+    width: Math.max(1, Math.round(rect.width)),
+    x: Math.max(0, Math.round(rect.left)),
+    y: Math.max(0, Math.round(rect.top)),
+  };
+}
+
+async function setNativeBrowserBounds(webview: Webview, bounds: NativeBrowserBounds) {
+  const { LogicalPosition, LogicalSize } = await loadTauriDpiModule();
+
+  await Promise.all([
+    webview.setPosition(new LogicalPosition(bounds.x, bounds.y)),
+    webview.setSize(new LogicalSize(bounds.width, bounds.height)),
+  ]);
+}
+
+function createNativeBrowserLabel(tabId: string, generation: number) {
+  const safeTabId = tabId.replace(/[^a-zA-Z0-9_:/-]/g, "_").slice(-42) || "tab";
+  return `browser-preview-${generation}-${safeTabId}`;
 }

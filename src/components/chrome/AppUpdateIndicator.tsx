@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Download, RefreshCw, RotateCcw } from "lucide-react";
 import { checkForAppUpdate, installAppUpdate, type AppUpdateCheckResponse } from "../../app/tauriClient";
+import { DialogShell } from "../dialogs/AppDialog";
 
-type AppUpdateStage = "idle" | "checking" | "available" | "not-available" | "feed-missing" | "downloading" | "restarting" | "error";
+type AppUpdateStage = "idle" | "checking" | "available" | "not-available" | "feed-missing" | "downloading" | "installing" | "restarting" | "error";
 
 interface AppUpdateProgress {
   contentLength: number | null;
@@ -114,7 +115,7 @@ export function useAppUpdateController(desktopRuntime: boolean): AppUpdateContro
           downloaded: event.data.downloaded,
         });
       } else if (event.event === "finished") {
-        setStage("restarting");
+        setStage("installing");
       }
     }).catch((installError) => {
       busyRef.current = false;
@@ -160,7 +161,7 @@ export function useAppUpdateController(desktopRuntime: boolean): AppUpdateContro
   }, [stage]);
 
   return {
-    busy: stage === "checking" || stage === "downloading" || stage === "restarting",
+    busy: stage === "checking" || stage === "downloading" || stage === "installing" || stage === "restarting",
     checkNow,
     error,
     installNow,
@@ -175,6 +176,14 @@ interface AppUpdateIndicatorProps {
 }
 
 export function AppUpdateIndicator({ controller }: AppUpdateIndicatorProps) {
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+
+  useEffect(() => {
+    if (controller.stage !== "available") {
+      setConfirmationOpen(false);
+    }
+  }, [controller.stage]);
+
   if (controller.stage === "idle") {
     return null;
   }
@@ -182,33 +191,95 @@ export function AppUpdateIndicator({ controller }: AppUpdateIndicatorProps) {
   const label = getUpdateLabel(controller);
   const title = getUpdateTitle(controller);
   const actionAvailable = controller.stage === "available";
+  const releaseNotes = summarizeUpdateBody(controller.update?.body);
   const Icon =
     controller.stage === "not-available"
       ? CheckCircle2
       : controller.stage === "feed-missing"
         ? AlertCircle
-        : controller.stage === "restarting"
+        : controller.stage === "installing" || controller.stage === "restarting"
           ? RotateCcw
           : controller.stage === "checking"
             ? RefreshCw
             : Download;
 
   return (
-    <button
-      className="app-update-indicator"
-      type="button"
-      aria-label={title}
-      title={title}
-      data-stage={controller.stage}
-      data-busy={controller.busy}
-      data-actionable={actionAvailable}
-      disabled={controller.busy || controller.stage === "not-available"}
-      onClick={actionAvailable ? controller.installNow : controller.checkNow}
-    >
-      <Icon size={14} aria-hidden="true" />
-      <span>{label}</span>
-      {controller.stage === "downloading" && controller.percent !== null ? <em>{controller.percent}%</em> : null}
-    </button>
+    <>
+      <button
+        className="app-update-indicator"
+        type="button"
+        aria-label={title}
+        title={title}
+        data-stage={controller.stage}
+        data-busy={controller.busy}
+        data-actionable={actionAvailable}
+        disabled={controller.busy || controller.stage === "not-available"}
+        onClick={actionAvailable ? () => setConfirmationOpen(true) : controller.checkNow}
+      >
+        <Icon size={14} aria-hidden="true" />
+        <span>{label}</span>
+        {controller.stage === "downloading" && controller.percent !== null ? <em>{controller.percent}%</em> : null}
+      </button>
+
+      <DialogShell
+        description="Review the update before Gilbert Codex downloads it and hands off to the Windows installer."
+        icon={Download}
+        onClose={() => setConfirmationOpen(false)}
+        open={confirmationOpen}
+        title="Install update?"
+        actions={
+          <>
+            <button className="dialog-button" type="button" onClick={() => setConfirmationOpen(false)}>
+              Not now
+            </button>
+            <button
+              className="dialog-button dialog-button-primary"
+              type="button"
+              onClick={() => {
+                setConfirmationOpen(false);
+                controller.installNow();
+              }}
+            >
+              Install update
+            </button>
+          </>
+        }
+      >
+        <div className="app-update-dialog">
+          <dl className="dialog-detail-list">
+            <div>
+              <dt>Current</dt>
+              <dd>{controller.update?.currentVersion ?? "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Update</dt>
+              <dd>{controller.update?.version ?? "Ready"}</dd>
+            </div>
+            {controller.update?.date ? (
+              <div>
+                <dt>Published</dt>
+                <dd>{formatUpdateDate(controller.update.date)}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Installer</dt>
+              <dd>After download, the Windows installer opens and Gilbert Codex closes.</dd>
+            </div>
+            <div>
+              <dt>Relaunch</dt>
+              <dd>The installer can reopen the app from its finish page when Windows allows it.</dd>
+            </div>
+          </dl>
+
+          {releaseNotes ? (
+            <section className="app-update-release-notes" aria-label="Release notes">
+              <strong>Release notes</strong>
+              <p>{releaseNotes}</p>
+            </section>
+          ) : null}
+        </div>
+      </DialogShell>
+    </>
   );
 }
 
@@ -231,6 +302,10 @@ function getUpdateLabel(controller: AppUpdateController) {
 
   if (controller.stage === "downloading") {
     return "Updating";
+  }
+
+  if (controller.stage === "installing") {
+    return "Opening installer";
   }
 
   if (controller.stage === "restarting") {
@@ -258,6 +333,10 @@ function getUpdateTitle(controller: AppUpdateController) {
     return controller.percent === null ? "Downloading update" : `Downloading update ${controller.percent}%`;
   }
 
+  if (controller.stage === "installing") {
+    return "Opening the Windows installer. Gilbert Codex will close while the installer takes over.";
+  }
+
   return getUpdateLabel(controller);
 }
 
@@ -272,4 +351,30 @@ function getMissingFeedMessage(error: unknown) {
   }
 
   return null;
+}
+
+function formatUpdateDate(date: string) {
+  const timestamp = Date.parse(date);
+  if (Number.isNaN(timestamp)) {
+    return date;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+function summarizeUpdateBody(body?: string | null) {
+  const text = body
+    ?.replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#*_`>\-[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  return text.length > 360 ? `${text.slice(0, 357).trim()}...` : text;
 }

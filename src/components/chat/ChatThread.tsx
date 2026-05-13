@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef } from "react";
 import { MarkdownMessage } from "./MarkdownMessage";
-import { MessageAttachments } from "./MessageAttachments";
+import { MessageArtifacts, MessageAttachments, OpenableImage } from "./MessageAttachments";
 import { MessageActions } from "./MessageActions";
 import { MessageBlock } from "./MessageBlock";
 import { PlanReviewCard } from "./PlanReviewCard";
@@ -8,7 +8,7 @@ import { ThinkingDisclosure } from "../thinking/ThinkingDisclosure";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import type { AppInfo } from "../../types/app";
 import type { AgentApprovalDecision } from "../../types/agentRun";
-import type { ChatContextCompaction, ChatMessage, ChatMessageSource, ChatSummary } from "../../types/chat";
+import type { ChatContextCompaction, ChatMessage, ChatMessageSource, ChatSource, ChatSummary } from "../../types/chat";
 
 const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
 const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
@@ -146,11 +146,12 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
         const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, message.reasoning) : { content: message.content, reasoning: message.reasoning };
         const hasVisibleContent = displayMessage.content.trim().length > 0;
         const hasVisibleAttachment = Boolean(message.attachments?.length);
+        const hasVisibleArtifact = Boolean(message.artifacts?.length);
         const activity = message.role === "assistant" ? getAssistantActivity(message) : null;
         const hasThinkingIndicator = message.role === "assistant" && Boolean(message.thinking || displayMessage.reasoning?.trim() || activity);
         const showPlanReview = shouldShowPlanReviewCard(message);
 
-        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasThinkingIndicator && !showPlanReview) {
+        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasVisibleArtifact && !hasThinkingIndicator && !showPlanReview) {
           return null;
         }
 
@@ -176,6 +177,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                 />
               ) : null}
               <MessageAttachments attachments={message.attachments} />
+              <MessageArtifacts artifacts={message.artifacts} />
               {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
               {showPlanReview ? (
                 <PlanReviewCard
@@ -189,6 +191,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
               ) : displayMessage.content.trim() || message.isStreaming ? (
                 <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
               ) : null}
+              {shouldShowWebImageSources(message) ? <WebImageSources sources={message.sources ?? []} /> : null}
               <MessageActions
                 canRegenerate={canRegenerateMessage(chat, messageIndex)}
                 message={actionMessage}
@@ -203,6 +206,36 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
         );
       })}
     </div>
+  );
+}
+
+function WebImageSources({ sources }: { sources: ChatSource[] }) {
+  const imageSources = sources.filter((source) => source.sourceType === "image" && (source.thumbnailUrl || source.imageUrl)).slice(0, 6);
+
+  if (imageSources.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="web-image-strip" aria-label="Web image results">
+      {imageSources.map((source) => (
+        <div className="web-image-card" key={source.id ?? source.url}>
+          <OpenableImage alt={source.title} caption={source.detail ?? source.title} className="web-image-button" src={source.thumbnailUrl || source.imageUrl || source.url} />
+          <a href={source.url} rel="noreferrer" target="_blank">{source.title}</a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function shouldShowWebImageSources(message: ChatMessage) {
+  return (
+    message.role === "assistant" &&
+    message.webSearch?.enabled &&
+    message.webSearch.status === "complete" &&
+    message.mode !== "plan" &&
+    !message.toolCalls?.length &&
+    Boolean(message.sources?.some((source) => source.sourceType === "image" && (source.thumbnailUrl || source.imageUrl)))
   );
 }
 
@@ -247,7 +280,7 @@ function getAssistantActivity(message: ChatMessage) {
   const label = activeProgress?.label ?? activeTool?.label ?? waitingTool?.label ?? (webStatus === "active" ? "Searching web" : toolCount ? "Reviewing tool results" : "Working");
   const details = [
     activeProgress?.detail,
-    activeTool?.detail,
+    activeTool ? formatAssistantActivityToolDetail(activeTool) : "",
     waitingTool ? "Waiting for your approval in Activity." : "",
     toolCount ? `${toolCount} tools: ${completeTools} complete${activeTools ? `, ${activeTools} running` : ""}${errorTools ? `, ${errorTools} blocked` : ""}` : "",
     webStatus === "active" ? "Web search is still running." : "",
@@ -259,6 +292,33 @@ function getAssistantActivity(message: ChatMessage) {
     detail: details.join(" "),
     label,
   };
+}
+
+function formatAssistantActivityToolDetail(toolCall: NonNullable<ChatSummary["messages"][number]["toolCalls"]>[number]) {
+  const fileChangeSummary = formatAssistantActivityFileChangeSummary(toolCall.fileChanges);
+  const liveOutput = toolCall.status === "active" ? cleanAssistantActivityText(toolCall.output) : "";
+
+  return [liveOutput, fileChangeSummary, toolCall.detail].filter(Boolean).join(" ");
+}
+
+function formatAssistantActivityFileChangeSummary(fileChanges: NonNullable<ChatSummary["messages"][number]["toolCalls"]>[number]["fileChanges"]) {
+  if (!fileChanges?.length) {
+    return "";
+  }
+
+  const additions = fileChanges.reduce((total, change) => total + change.additions, 0);
+  const deletions = fileChanges.reduce((total, change) => total + change.deletions, 0);
+  return `${fileChanges.length === 1 ? "1 file" : `${fileChanges.length} files`} changed, +${additions} -${deletions}.`;
+}
+
+function cleanAssistantActivityText(content?: string) {
+  const normalized = content?.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.length > 180 ? `${normalized.slice(0, 179).trimEnd()}...` : normalized;
 }
 
 function DiscordMessageSource({ source }: { source: ChatMessageSource }) {
@@ -282,11 +342,13 @@ function shouldShowPlanReviewCard(message: ChatSummary["messages"][number]) {
     return false;
   }
 
-  const hasPendingPlanningApproval = message.approvals?.some((approval) => approval.tool === "planning_handoff" && approval.status === "pending");
   const hasAcceptedPlanningApproval = message.approvals?.some((approval) => approval.tool === "planning_handoff" && (approval.status === "approved" || approval.status === "edited"));
-  const isPlanningOnly = !message.toolCalls?.length && !message.artifacts?.length;
 
-  return Boolean((message.isStreaming && isPlanningOnly) || hasPendingPlanningApproval || (isPlanningOnly && message.planning && !hasAcceptedPlanningApproval && message.agentRunStatus !== "completed"));
+  if (hasAcceptedPlanningApproval) {
+    return false;
+  }
+
+  return true;
 }
 
 function ContextCompactionDivider({ compaction }: { compaction: ChatContextCompaction }) {

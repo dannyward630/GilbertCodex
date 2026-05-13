@@ -3,8 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/gilbert-codex-logo.svg" />
     <title>Gilbert Codex</title>
+    <script>
+      (() => {
+        try {
+          const storedMode = window.localStorage.getItem("gilbert-codex.appearance.v1");
+          const mode = storedMode === "light" || storedMode === "dark" || storedMode === "system" ? storedMode : "system";
+          const prefersLight = window.matchMedia?.("(prefers-color-scheme: light)").matches ?? false;
+          const resolvedTheme = mode === "system" ? (prefersLight ? "light" : "dark") : mode;
+
+          document.documentElement.dataset.theme = resolvedTheme;
+          document.documentElement.dataset.themePreference = mode;
+          document.documentElement.style.colorScheme = resolvedTheme;
+        } catch {
+          document.documentElement.dataset.theme = "dark";
+          document.documentElement.dataset.themePreference = "system";
+          document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

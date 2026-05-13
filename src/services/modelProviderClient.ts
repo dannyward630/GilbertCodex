@@ -1,6 +1,7 @@
 import { attachmentSummary, isImageAttachment } from "../lib/chatAttachments";
 import { createMessageContextSurface } from "../lib/contextWindow";
 import { applyLocalSamplingParameters } from "../lib/generationSettings";
+import { createActivityReasoningSnapshot } from "../lib/thinkingActivity";
 import {
   getDefaultModelForProvider,
   getModelProvider,
@@ -10,18 +11,35 @@ import {
   normalizeProviderModelId,
   supportsProviderThinking,
 } from "../lib/models";
-import type { ProviderModelMetadata } from "../lib/models";
+import type { ModelPricing, ProviderModelMetadata } from "../lib/models";
 import { buildAgentSystemPrompt } from "../prompts/agent";
 import type { ChatMessage } from "../types/chat";
 import type { ModelProviderId, ProviderSettings, ReasoningEffort } from "../types/settings";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
+import { createOpenAIResponsesMcpTools } from "./mcpTools";
+import {
+  modelSupportsNativeTools,
+  selectNativeToolNames,
+  toAnthropicTools,
+  toOpenAITools,
+  toOpenAIResponsesTools,
+} from "./toolSchemaAdapters";
+import {
+  applyOpenAIToolCallDelta,
+  finalizeOpenAIAccumulatedToolCalls,
+  serializeAnthropicToolUses,
+  serializeOpenAIToolCalls,
+  serializeToolCallToXml,
+  type AnthropicToolUseBlock,
+  type OpenAIToolCall,
+  type OpenAIToolCallAccumulator,
+} from "./toolCallNormalizer";
 
 const STREAM_FLUSH_MS = 80;
-const MAX_STREAM_REASONING_CHARS = 80_000;
+const MAX_STREAM_REASONING_CHARS = Number.POSITIVE_INFINITY;
 const PROVIDER_RESPONSE_START_TIMEOUT_MS = 120_000;
 const PROVIDER_STREAM_READ_TIMEOUT_MS = 90_000;
 const PROVIDER_STREAM_PROGRESS_TIMEOUT_MS = 120_000;
-const TRIMMED_REASONING_PREFIX = "[Earlier reasoning trimmed to keep the app responsive.]\n\n";
 const STREAM_OPTIONS_PROVIDER_IDS = new Set<ModelProviderId>(["deepseek", "groq", "openai", "openrouter", "xai"]);
 const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
 const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
@@ -36,6 +54,7 @@ interface ProviderChatResponse {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: OpenAIToolCall[];
     };
   }>;
   error?: {
@@ -59,6 +78,12 @@ interface ProviderStreamChunk {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: Array<{
+        function?: { arguments?: string; name?: string };
+        id?: string;
+        index?: number;
+        type?: string;
+      }>;
     };
     message?: {
       content?: ProviderContentOutput;
@@ -66,6 +91,7 @@ interface ProviderStreamChunk {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: OpenAIToolCall[];
     };
   }>;
   error?: {
@@ -76,6 +102,9 @@ interface ProviderStreamChunk {
 
 interface AnthropicMessageResponse {
   content?: Array<{
+    id?: string;
+    input?: unknown;
+    name?: string;
     text?: string;
     thinking?: string;
     type?: string;
@@ -103,6 +132,8 @@ interface ResponsesApiResponse {
     message?: string;
   };
   output?: Array<{
+    arguments?: string;
+    name?: string;
     content?: Array<{
       text?: string;
       type?: string;
@@ -147,7 +178,15 @@ interface ResponsesStreamEvent {
 }
 
 interface AnthropicStreamChunk {
+  content_block?: {
+    id?: string;
+    input?: unknown;
+    name?: string;
+    text?: string;
+    type?: string;
+  };
   delta?: {
+    partial_json?: string;
     text?: string;
     thinking?: string;
     type?: string;
@@ -155,6 +194,7 @@ interface AnthropicStreamChunk {
   error?: {
     message?: string;
   };
+  index?: number;
   message?: {
     usage?: {
       input_tokens?: number;
@@ -170,6 +210,11 @@ interface AnthropicStreamChunk {
 
 interface ProviderModelsResponse {
   data?: Array<{
+    architecture?: {
+      input_modalities?: string[];
+      modality?: string;
+      output_modalities?: string[];
+    };
     canonical_slug?: string;
     context_length?: number;
     description?: string;
@@ -180,6 +225,17 @@ interface ProviderModelsResponse {
     max_input_tokens?: number;
     name?: string;
     owned_by?: string;
+    pricing?: {
+      audio?: string;
+      completion?: string;
+      image?: string;
+      input_cache_read?: string;
+      input_cache_write?: string;
+      internal_reasoning?: string;
+      prompt?: string;
+      request?: string;
+      web_search?: string;
+    };
     supported_parameters?: string[];
     top_provider?: {
       context_length?: number;
@@ -195,6 +251,50 @@ interface StreamSnapshot {
   content: string;
   reasoning?: string;
   usage?: ProviderUsage;
+}
+
+interface AnthropicStreamToolBlock {
+  id?: string;
+  jsonText: string;
+  name: string;
+}
+
+interface ToolCallStreamState {
+  anthropicBlocks: Map<number, AnthropicStreamToolBlock>;
+  openAIAccumulators: Map<number, OpenAIToolCallAccumulator>;
+}
+
+function createToolCallStreamState(): ToolCallStreamState {
+  return {
+    anthropicBlocks: new Map<number, AnthropicStreamToolBlock>(),
+    openAIAccumulators: new Map<number, OpenAIToolCallAccumulator>(),
+  };
+}
+
+function finalizeStreamedToolCalls(state: ToolCallStreamState): string {
+  const anthropicXml = serializeAnthropicToolUses(
+    [...state.anthropicBlocks.values()].map((block) => {
+      let input: unknown = undefined;
+      const trimmed = block.jsonText.trim();
+      if (trimmed) {
+        try {
+          input = JSON.parse(trimmed);
+        } catch {
+          input = trimmed;
+        }
+      }
+      return {
+        id: block.id,
+        input,
+        name: block.name,
+        type: "tool_use",
+      } satisfies AnthropicToolUseBlock;
+    }),
+  );
+
+  const openAIXml = serializeOpenAIToolCalls(finalizeOpenAIAccumulatedToolCalls(state.openAIAccumulators));
+
+  return [anthropicXml, openAIXml].filter(Boolean).join("\n");
 }
 
 interface ProviderStreamDelta {
@@ -340,7 +440,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   if (provider.apiStyle === "anthropic-messages") {
     const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/messages"), {
-      body: JSON.stringify(createAnthropicRequestBody(settings, messages, model, false)),
+      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
       headers: createProviderHeaders(settings.provider, apiKey),
       method: "POST",
       signal: options.signal,
@@ -366,7 +466,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   if (usesResponsesApi(settings, model)) {
     const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/responses"), {
-      body: JSON.stringify(createResponsesRequestBody(settings, messages, model, false)),
+      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
       headers: createProviderHeaders(settings.provider, apiKey),
       method: "POST",
       signal: options.signal,
@@ -391,7 +491,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
   }
 
   const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/chat/completions"), {
-    body: JSON.stringify(createProviderChatRequestBody(settings, messages, model)),
+    body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
     headers: createProviderHeaders(settings.provider, apiKey),
     method: "POST",
     signal: options.signal,
@@ -404,7 +504,9 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   const message = payload.choices?.[0]?.message;
   const extractedMessage = extractProviderMessageOutput(message);
-  const content = extractedMessage.content.trim();
+  const toolCallsXml = serializeOpenAIToolCalls(message?.tool_calls ?? []);
+  const combinedContent = appendSynthesizedToolCallsToContent(extractedMessage.content, toolCallsXml);
+  const content = combinedContent.trim();
   const reasoning = [extractReasoningText(message), extractedMessage.reasoning].filter(Boolean).join("");
 
   if (!content) {
@@ -416,6 +518,16 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
     reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(reasoning) : undefined,
     usage: normalizeProviderUsage(payload.usage),
   };
+}
+
+function appendSynthesizedToolCallsToContent(textContent: string, toolCallsXml: string): string {
+  if (!toolCallsXml) {
+    return textContent;
+  }
+  if (!textContent) {
+    return toolCallsXml;
+  }
+  return `${textContent}\n${toolCallsXml}`;
 }
 
 export async function streamProviderMessage(
@@ -442,13 +554,7 @@ export async function streamProviderMessage(
     response = await fetch(
       joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions"),
       {
-        body: JSON.stringify(
-          provider.apiStyle === "anthropic-messages"
-            ? createAnthropicRequestBody(settings, messages, model, true)
-            : useResponsesApi
-              ? createResponsesRequestBody(settings, messages, model, true)
-            : createProviderStreamRequestBody(settings, messages, model),
-        ),
+        body: JSON.stringify(createProviderRequestBody(settings, messages, model, true)),
         headers: createProviderHeaders(settings.provider, apiKey),
         method: "POST",
         signal: requestTimeout.signal,
@@ -472,6 +578,7 @@ export async function streamProviderMessage(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const toolCallState = createToolCallStreamState();
   let buffer = "";
   let content = "";
   let reasoning = "";
@@ -490,7 +597,7 @@ export async function streamProviderMessage(
 
     const separatedContent = separateInlineThinking(content);
     const nextContent = separatedContent.content;
-    const nextReasoning = createReasoningSnapshot([reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningTrimmed);
+    const nextReasoning = settings.thinking.enabled ? createReasoningSnapshot([reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningTrimmed) : undefined;
 
     if (!force && nextContent === lastFlushedContent && (nextReasoning ?? "") === lastFlushedReasoning) {
       return;
@@ -560,7 +667,7 @@ export async function streamProviderMessage(
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        if (applyStreamDelta(parseProviderStreamLine(settings.provider, line, useResponsesApi))) {
+        if (applyStreamDelta(parseProviderStreamLine(settings.provider, line, useResponsesApi, toolCallState))) {
           lastMeaningfulStreamEventAt = Date.now();
         }
       }
@@ -570,7 +677,11 @@ export async function streamProviderMessage(
       }
     }
 
-    applyStreamDelta(parseProviderStreamLine(settings.provider, buffer, useResponsesApi));
+    applyStreamDelta(parseProviderStreamLine(settings.provider, buffer, useResponsesApi, toolCallState));
+    const synthesizedToolXml = finalizeStreamedToolCalls(toolCallState);
+    if (synthesizedToolXml) {
+      content = appendSynthesizedToolCallsToContent(content, synthesizedToolXml);
+    }
     flushSnapshot(true);
   } finally {
     if (flushTimer) {
@@ -594,7 +705,7 @@ export async function streamProviderMessage(
 
   return {
     content: finalContent,
-    reasoning: createReasoningSnapshot(finalReasoning, reasoningTrimmed),
+    reasoning: settings.thinking.enabled ? createReasoningSnapshot(finalReasoning, reasoningTrimmed) : undefined,
     usage,
   };
 }
@@ -642,7 +753,7 @@ export async function fetchProviderModels(settings: ProviderSettings, options: P
     throw new Error(payload.error?.message || `${provider.label} models check failed with HTTP ${response.status}.`);
   }
 
-  return normalizeProviderModels(payload);
+  return normalizeProviderModels(payload, settings.provider);
 }
 
 export async function fetchProviderModelContextLengths(settings: ProviderSettings, models: string[], options: ProviderRequestOptions = {}) {
@@ -682,6 +793,15 @@ export function createProviderChatRequestBody(settings: ProviderSettings, messag
     applyOpenRouterFreeModelRouting(body, model, messages);
   }
 
+  if (modelSupportsNativeTools(settings, model)) {
+    const toolNames = selectNativeToolNames(settings);
+    const tools = toOpenAITools(toolNames);
+    if (tools.length > 0) {
+      body.tools = tools;
+      body.tool_choice = "auto";
+    }
+  }
+
   applyReasoningToRequestBody(settings, body);
   return body;
 }
@@ -719,12 +839,37 @@ export function createResponsesRequestBody(settings: ProviderSettings, messages:
 
   applyLocalSamplingParameters(settings, body);
   applyResponsesReasoningToRequestBody(settings, body);
+  const nativeTools = modelSupportsNativeTools(settings, model) ? toOpenAIResponsesTools(selectNativeToolNames(settings)) : [];
+  const mcpTools = createOpenAIResponsesMcpTools(settings);
+  const tools = [...nativeTools, ...mcpTools];
+
+  if (tools.length > 0) {
+    body.tools = tools;
+  }
+
+  if (nativeTools.length > 0) {
+    body.tool_choice = "auto";
+  }
 
   return body;
 }
 
-export function createProviderUsageRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages)) {
-  return usesResponsesApi(settings, model) ? createResponsesRequestBody(settings, messages, model, true) : createProviderStreamRequestBody(settings, messages, model);
+export function createProviderRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true) {
+  const provider = getModelProvider(settings.provider);
+
+  if (provider.apiStyle === "anthropic-messages") {
+    return createAnthropicRequestBody(settings, messages, model, stream);
+  }
+
+  if (usesResponsesApi(settings, model)) {
+    return createResponsesRequestBody(settings, messages, model, stream);
+  }
+
+  return stream ? createProviderStreamRequestBody(settings, messages, model) : createProviderChatRequestBody(settings, messages, model);
+}
+
+export function createProviderUsageRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true) {
+  return createProviderRequestBody(settings, messages, model, stream);
 }
 
 export function createProviderMessageContent(message: ChatMessage): ProviderMessageContent {
@@ -790,6 +935,14 @@ function createAnthropicRequestBody(settings: ProviderSettings, messages: ChatMe
       type: "enabled",
       budget_tokens: thinkingBudget,
     };
+  }
+
+  if (modelSupportsNativeTools(settings, model)) {
+    const toolNames = selectNativeToolNames(settings);
+    const tools = toAnthropicTools(toolNames);
+    if (tools.length > 0) {
+      body.tools = tools;
+    }
   }
 
   return body;
@@ -869,27 +1022,15 @@ function applyReasoningToRequestBody(settings: ProviderSettings, body: Record<st
   const model = typeof body.model === "string" ? body.model : settings.model;
 
   if (!settings.thinking.enabled || !supportsProviderThinking(settings.provider, settings.thinking.effort, model)) {
+    // Hidden helper calls should not force-disable reasoning on models where the endpoint requires it.
     if (provider.reasoningMode === "openrouter") {
       body.reasoning = {
-        effort: "none",
         exclude: true,
       };
     }
 
-    if (provider.reasoningMode === "deepseek-thinking") {
-      body.thinking = { type: "disabled" };
-    }
-
     if (provider.reasoningMode === "groq-reasoning" && model.toLowerCase().includes("gpt-oss")) {
       body.include_reasoning = false;
-    }
-
-    if (provider.reasoningMode === "mistral-reasoning" && supportsProviderThinking(settings.provider, settings.thinking.effort, model)) {
-      body.reasoning_effort = "none";
-    }
-
-    if (provider.reasoningMode === "xai-reasoning" && model.toLowerCase().includes("grok-4.3")) {
-      body.reasoning_effort = "none";
     }
 
     return;
@@ -1067,7 +1208,7 @@ function assertProviderApiKey(providerId: ModelProviderId, apiKey: string) {
   }
 }
 
-function parseProviderStreamLine(providerId: ModelProviderId, line: string, useResponsesApi = false): ProviderStreamDelta | null {
+function parseProviderStreamLine(providerId: ModelProviderId, line: string, useResponsesApi = false, toolCallState?: ToolCallStreamState): ProviderStreamDelta | null {
   const trimmedLine = line.trim();
 
   if (!trimmedLine || trimmedLine.startsWith(":") || !trimmedLine.startsWith("data:")) {
@@ -1085,13 +1226,13 @@ function parseProviderStreamLine(providerId: ModelProviderId, line: string, useR
   }
 
   if (providerId === "anthropic") {
-    return parseAnthropicStreamData(data);
+    return parseAnthropicStreamData(data, toolCallState);
   }
 
-  return parseOpenAiCompatibleStreamData(data);
+  return parseOpenAiCompatibleStreamData(data, toolCallState);
 }
 
-function parseOpenAiCompatibleStreamData(data: string): ProviderStreamDelta {
+function parseOpenAiCompatibleStreamData(data: string, toolCallState?: ToolCallStreamState): ProviderStreamDelta {
   let payload: ProviderStreamChunk;
 
   try {
@@ -1107,6 +1248,10 @@ function parseOpenAiCompatibleStreamData(data: string): ProviderStreamDelta {
   const choice = payload.choices?.[0];
   const delta = choice?.delta ?? choice?.message;
   const extracted = extractProviderMessageOutput(delta);
+
+  if (toolCallState && Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
+    applyOpenAIToolCallDelta(toolCallState.openAIAccumulators, delta.tool_calls);
+  }
 
   return {
     contentDelta: extracted.content,
@@ -1142,7 +1287,7 @@ function parseResponsesStreamData(data: string): ProviderStreamDelta {
   };
 }
 
-function parseAnthropicStreamData(data: string): ProviderStreamDelta {
+function parseAnthropicStreamData(data: string, toolCallState?: ToolCallStreamState): ProviderStreamDelta {
   let payload: AnthropicStreamChunk;
 
   try {
@@ -1159,15 +1304,29 @@ function parseAnthropicStreamData(data: string): ProviderStreamDelta {
   const contentDelta = delta?.type === "text_delta" ? delta.text ?? "" : "";
   const reasoningDelta = delta?.type === "thinking_delta" ? delta.thinking ?? "" : "";
 
+  // Anthropic emits tool_use blocks across three events: content_block_start
+  // (announces the block with name+id), input_json_delta deltas (build up the
+  // arguments JSON), and content_block_stop (terminator — no payload needed).
+  if (toolCallState && typeof payload.index === "number") {
+    if (payload.type === "content_block_start" && payload.content_block?.type === "tool_use") {
+      toolCallState.anthropicBlocks.set(payload.index, {
+        id: payload.content_block.id,
+        jsonText: "",
+        name: payload.content_block.name ?? "",
+      });
+    } else if (payload.type === "content_block_delta" && delta?.type === "input_json_delta") {
+      const existing = toolCallState.anthropicBlocks.get(payload.index);
+      if (existing) {
+        existing.jsonText += delta.partial_json ?? "";
+      }
+    }
+  }
+
   return {
     contentDelta,
     reasoningDelta,
     usage: normalizeAnthropicUsage(payload.usage ?? payload.message?.usage),
   };
-}
-
-function appendReasoningDelta(reasoning: string, delta: string) {
-  return limitReasoningText(appendStreamText(reasoning, delta));
 }
 
 function shouldUseStreamSnapshot(currentText: string, snapshot: string | undefined) {
@@ -1221,7 +1380,7 @@ function createReasoningSnapshot(reasoning: string, trimmed: boolean) {
     return undefined;
   }
 
-  return trimmed ? `${TRIMMED_REASONING_PREFIX}${cleanReasoning}` : cleanReasoning;
+  return createActivityReasoningSnapshot(cleanReasoning, { trimmed });
 }
 
 function createReasoningSnapshotFromRaw(reasoning: string) {
@@ -1332,6 +1491,7 @@ function extractProviderMessageOutput(
 function extractResponsesOutput(payload: ResponsesApiResponse) {
   const textParts: string[] = [];
   const reasoningParts: string[] = [];
+  const toolCallParts: string[] = [];
 
   if (payload.output_text) {
     textParts.push(payload.output_text);
@@ -1343,6 +1503,11 @@ function extractResponsesOutput(payload: ResponsesApiResponse) {
       continue;
     }
 
+    if (item.type === "function_call" && typeof item.name === "string" && item.name.trim()) {
+      toolCallParts.push(serializeToolCallToXml(item.name, parseResponsesFunctionArguments(item.arguments)));
+      continue;
+    }
+
     if (item.type === "message" || !item.type) {
       textParts.push(...(item.content ?? []).filter((chunk) => chunk.type === "output_text" || chunk.type === "text" || !chunk.type).map((chunk) => chunk.text ?? ""));
     }
@@ -1351,9 +1516,25 @@ function extractResponsesOutput(payload: ResponsesApiResponse) {
   const separatedText = separateInlineThinking(textParts.join(""));
 
   return {
-    content: separatedText.content,
+    content: [separatedText.content, ...toolCallParts].filter(Boolean).join("\n"),
     reasoning: [reasoningParts.join(""), separatedText.reasoning].filter(Boolean).join(""),
   };
+}
+
+function parseResponsesFunctionArguments(raw: string | undefined): Record<string, unknown> | undefined {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return { value: parsed };
+  } catch {
+    return { raw: raw.trim() };
+  }
 }
 
 function separateInlineThinking(value: string) {
@@ -1391,7 +1572,7 @@ function extractThinkingChunkText(chunk: ProviderContentChunk) {
   return chunk.text ?? chunk.content ?? "";
 }
 
-function normalizeProviderModels(payload: ProviderModelsResponse): ProviderModelMetadata[] {
+function normalizeProviderModels(payload: ProviderModelsResponse, providerId: ModelProviderId): ProviderModelMetadata[] {
   const seen = new Set<string>();
 
   return (payload.data ?? []).flatMap((entry) => {
@@ -1405,10 +1586,16 @@ function normalizeProviderModels(payload: ProviderModelsResponse): ProviderModel
 
     return [
       {
+        capabilities: formatProviderModelCapabilities(entry),
         contextWindowTokens: normalizeModelContextLength(entry.context_length ?? entry.top_provider?.context_length ?? entry.max_context_length ?? entry.max_input_tokens),
         detail: formatProviderModelDetail(entry),
         id: modelId,
+        inputModalities: normalizeStringList(entry.architecture?.input_modalities),
         label: normalizeModelId(entry.display_name ?? entry.name),
+        outputModalities: normalizeStringList(entry.architecture?.output_modalities),
+        pricing: normalizeProviderModelPricing(entry.pricing, providerId),
+        supportedParameters: normalizeStringList(entry.supported_parameters),
+        useCase: entry.description ? cleanInlineText(entry.description) : undefined,
       },
     ];
   });
@@ -1418,12 +1605,80 @@ function normalizeModelId(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeStringList(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()) : undefined;
+}
+
+function normalizeProviderModelPricing(pricing: NonNullable<NonNullable<ProviderModelsResponse["data"]>[number]["pricing"]> | undefined, providerId: ModelProviderId): ModelPricing | undefined {
+  if (!pricing) {
+    return undefined;
+  }
+
+  const normalizedPricing: ModelPricing = {
+    cachedInputPerMillionTokens: parsePerTokenPrice(pricing.input_cache_read),
+    imageInputUsd: parseUnitPrice(pricing.image),
+    inputPerMillionTokens: parsePerTokenPrice(pricing.prompt),
+    internalReasoningPerMillionTokens: parsePerTokenPrice(pricing.internal_reasoning),
+    outputPerMillionTokens: parsePerTokenPrice(pricing.completion),
+    requestUsd: parseUnitPrice(pricing.request),
+    source: providerId === "openrouter" ? "openrouter" : "provider",
+    sourceLabel: providerId === "openrouter" ? "OpenRouter live catalog" : `${getModelProvider(providerId).label} live catalog`,
+    sourceUrl: providerId === "openrouter" ? "https://openrouter.ai/docs/guides/overview/models" : getModelProvider(providerId).docsUrl,
+    updatedAt: "live",
+    webSearchUsd: parseUnitPrice(pricing.web_search),
+  };
+
+  return Object.values(normalizedPricing).some((value) => typeof value === "number") ? normalizedPricing : undefined;
+}
+
+function parsePerTokenPrice(value: string | undefined) {
+  const parsed = parseUnitPrice(value);
+  return typeof parsed === "number" ? parsed * 1_000_000 : undefined;
+}
+
+function parseUnitPrice(value: string | undefined) {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function formatProviderModelCapabilities(entry: NonNullable<ProviderModelsResponse["data"]>[number]) {
+  const capabilities = new Set<string>();
+  const inputModalities = normalizeStringList(entry.architecture?.input_modalities) ?? [];
+  const supportedParameters = normalizeStringList(entry.supported_parameters) ?? [];
+
+  if (inputModalities.some((modality) => modality !== "text")) {
+    capabilities.add("Multimodal");
+  }
+
+  if (supportedParameters.includes("tools") || supportedParameters.includes("tool_choice")) {
+    capabilities.add("Tools");
+  }
+
+  if (supportedParameters.includes("reasoning") || supportedParameters.includes("include_reasoning")) {
+    capabilities.add("Reasoning");
+  }
+
+  if (supportedParameters.includes("structured_outputs") || supportedParameters.includes("response_format")) {
+    capabilities.add("Structured");
+  }
+
+  if (entry.pricing?.prompt === "0" && entry.pricing?.completion === "0") {
+    capabilities.add("Free");
+  }
+
+  return capabilities.size > 0 ? [...capabilities] : undefined;
+}
+
 function formatProviderModelDetail(entry: NonNullable<ProviderModelsResponse["data"]>[number]) {
   const detailParts = [
     entry.owned_by ? `Owned by ${entry.owned_by}.` : "",
     entry.supported_parameters?.includes("tools") ? "Supports tools." : "",
     entry.supported_parameters?.includes("reasoning") || entry.supported_parameters?.includes("include_reasoning") ? "Supports reasoning." : "",
-    entry.description ? cleanInlineText(entry.description).slice(0, 160) : "",
+    entry.description ? cleanInlineText(entry.description) : "",
   ].filter(Boolean);
 
   return detailParts.length > 0 ? detailParts.join(" ") : undefined;
@@ -1510,10 +1765,16 @@ function mergeReasoningTextParts(...parts: string[]) {
 }
 
 function extractAnthropicText(payload: AnthropicMessageResponse) {
-  return (payload.content ?? [])
+  const textBlocks = (payload.content ?? [])
     .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("");
+    .map((block) => block.text ?? "");
+  const baseText = textBlocks.join("");
+  const toolUseBlocks = (payload.content ?? []).filter((block) => block.type === "tool_use") as AnthropicToolUseBlock[];
+  const toolUseXml = serializeAnthropicToolUses(toolUseBlocks);
+  if (!toolUseXml) {
+    return baseText;
+  }
+  return baseText ? `${baseText}\n${toolUseXml}` : toolUseXml;
 }
 
 function extractAnthropicReasoning(payload: AnthropicMessageResponse) {

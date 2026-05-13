@@ -4,7 +4,7 @@ This file tracks the product state so collaborators can see what has actually be
 
 ## Current Phase: First Public Alpha
 
-Status: Windows public alpha release packaged and ready for focused collaboration. macOS and Linux have partial source support, but still need contributors on those operating systems to test, package, and finish the port before they are official release targets.
+Status: Windows public alpha v0.3.0 is being prepared as the next major collaboration update. macOS and Linux have partial source support, but still need contributors on those operating systems to test, package, and finish the port before they are official release targets.
 
 Delivered:
 
@@ -18,7 +18,7 @@ Delivered:
 - File and image attachment flow with local previews, attachment status, and image-capable model routing.
 - Web search path backed by DuckDuckGo context and source cards.
 - Source-control path with local Git status, diff, log, stage, unstage, commit, push, pull, fetch, branch, and switch tools, plus GitHub Settings browser login, repository listing, branch/tree/file reads, code search, branch creation, API-backed commits, draft pull requests, releases, release notes, and workflow runs.
-- Discord slash-command bridge setup and runtime with chat-mode selection, Discord application fields, signed interaction receiver, ngrok-backed public URL discovery, incoming channel webhook storage, GitHub-to-Discord event options, generated GitHub payload URL, and setup checklist copying.
+- Discord slash-command bridge setup and runtime with chat-mode selection, Discord application fields, signed interaction receiver, ngrok-backed public URL discovery, incoming channel webhook storage, and setup checklist copying.
 - Local computer workspace context with folder selection, browser folder fallback, file indexing, file search, read, and write helpers.
 - Typed file creation tools for TXT, Markdown, code, React, HTML, PDF, notes, duplicate-safe writes, delete-file safety, and multi-file batches.
 - Coding tool pack for chat PDF generation, inline edits, context recall, tests, TypeScript checks, SQL files, React Native screens, unit tests, API routes, dependency reports, and codebase health scans.
@@ -35,6 +35,7 @@ Delivered:
 - Repository hygiene for generated outputs, logs, local secrets, local databases, dependency folders, and build output.
 - First public Windows x64 alpha packaged with a Tauri NSIS installer, GitHub release notes, and SHA-256 checksum details.
 - Customer-facing Windows installer path with branded light/dark-safe NSIS artwork, WebView2 runtime checks, install-scope selection, Start menu metadata, license metadata, and a documented `npm.cmd run app:installer` build flow.
+- Version 0.3.0 major alpha prep for the expanded model/runtime flow, MCP surface, weather and Mapbox settings, PDF/library support, precise local editing tools, browser-preview polish, stronger terminal/session handling, self-healing tool metadata, and open-source hygiene around local-only artifacts.
 - Version 0.2.3 Terminal Stability Pack prep for PowerShell compatibility helpers, npm shim handling, live background command attachment, buffered command progress, longer verification timeouts, approval-resume dedupe, workspace-aware prompt context, Node/Python project recipes, browser-preview probing, pasted-image attachments, and external-link handoff hardening.
 - Version 0.2.2 Stability Pack 1 prep for signed updater follow-through, interactive PTY/xterm terminal stability, account-scoped database storage, safer GitHub token isolation, richer Git review/commit/push controls, web-search timeout hardening, generated chat titles, targeted response stopping, and provider stream snapshot handling.
 - Version 0.2.1 hotfix prep for GitHub browser auth reliability, clearer OAuth setup, safer missing-update-feed handling, release workflow tag resolution, and tool-run continuation fixes.

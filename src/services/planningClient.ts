@@ -1,58 +1,45 @@
+import { sanitizeLocalToolCallsForDisplay } from "../tools/computer/localToolExecutor";
 import type { ChatMessage, ChatPlanningInputAnswer, ChatPlanningInputRequest, ChatPlanningQuestion, ChatPlanningQuestionOption, ChatProgressItem } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
-import { sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
+import { streamProviderMessage, sendProviderMessage, type ProviderUsage } from "./modelProviderClient";
 
-export const DEFAULT_PLANNING_MAX_PASSES = 10;
-const MIN_PLANNING_PASSES = 2;
-const PLANNING_BATCH_SIZE = 3;
-const PLAN_STATUS_PATTERN = /^\s*(?:[-*+]\s*)?(?:[*_`~]+)?\s*PLAN_STATUS\s*:\s*(final|continue)\s*(?:[*_`~]+)?\s*$/gim;
-const PASS_HEADER_PATTERN = /^\s*(?:#{1,4}\s*)?PASS\s+(\d+)\s*(?:[-:]\s*(.+?))?\s*$/i;
-const END_PASS_PATTERN = /^\s*END_PASS\s*$/i;
 const MAX_PLANNING_QUESTIONS = 3;
 const MAX_PLANNING_OPTIONS = 3;
 
-interface PlanningStage {
-  detail: string;
-  focus: string;
-  label: string;
-}
+export type PlanningPhase = "input" | "researching" | "drafting" | "complete";
 
 interface PlanningRunOptions {
-  maxPasses: number;
   messages: ChatMessage[];
   onUpdate: (snapshot: PlanningSnapshot) => void;
+  onProviderRequest?: (request: PlanningProviderRequest) => void;
+  onProviderUsage?: (request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
+  /** Plain-text observations gathered by a prior tool-grounded research pass. */
+  researchFindings?: string;
   signal?: AbortSignal;
   settings: ProviderSettings;
 }
 
 interface PlanningRequestOptions {
+  onProviderRequest?: (request: PlanningProviderRequest) => void;
+  onProviderUsage?: (request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
   signal?: AbortSignal;
 }
 
 export interface PlanningSnapshot {
   content?: string;
-  passCount: number;
   progress: ChatProgressItem[];
-  trace?: string;
 }
 
 export interface PlanningRunResult extends PlanningSnapshot {
   content: string;
+  providerRequest?: PlanningProviderRequest;
+  usage?: ProviderUsage;
 }
 
-interface CleanPlanningResponse {
-  content: string;
-  final: boolean;
-}
-
-interface PlanningBatchStage {
-  pass: number;
-  stage: PlanningStage;
-}
-
-interface ParsedPlanningBatch {
-  final: boolean;
-  notes: string[];
+export interface PlanningProviderRequest {
+  messages: ChatMessage[];
+  settings: ProviderSettings;
+  stream: boolean;
 }
 
 interface PlanningInputDecisionPayload {
@@ -76,67 +63,23 @@ interface PlanningQuestionOptionPayload {
   label?: unknown;
 }
 
-const PLANNING_STAGES: PlanningStage[] = [
-  {
-    detail: "Goal, scope, constraints",
-    focus: "Clarify the user's goal, non-goals, constraints, assumptions, and what would make the answer useful.",
-    label: "Scope",
-  },
-  {
-    detail: "User-facing behavior",
-    focus: "Plan the user experience, states, interactions, copy, and what the user should see while work is happening.",
-    label: "Experience",
-  },
-  {
-    detail: "System shape",
-    focus: "Plan the data flow, components, services, state ownership, APIs, and integration points.",
-    label: "Architecture",
-  },
-  {
-    detail: "Ordered work",
-    focus: "Break the work into concrete implementation steps in the safest order.",
-    label: "Execution",
-  },
-  {
-    detail: "Risks and gaps",
-    focus: "Identify likely failure modes, ambiguous areas, edge cases, and product risks.",
-    label: "Risks",
-  },
-  {
-    detail: "Quality checks",
-    focus: "Plan verification, tests, visual checks, and acceptance criteria.",
-    label: "Validation",
-  },
-  {
-    detail: "Polish and ergonomics",
-    focus: "Plan responsive behavior, accessibility, copy fit, polish, and small UX details that prevent rough edges.",
-    label: "Polish",
-  },
-  {
-    detail: "Future hooks",
-    focus: "Plan extension points for future coding, tools, web access, persistence, and long-running workflows without implementing them yet.",
-    label: "Extensibility",
-  },
-  {
-    detail: "Tradeoffs",
-    focus: "Compare alternatives and record the chosen direction with concise rationale.",
-    label: "Tradeoffs",
-  },
-  {
-    detail: "Final checklist",
-    focus: "Check that the plan is coherent, complete, non-contradictory, and ready to synthesize.",
-    label: "Readiness",
-  },
-];
-
 export async function createPlanningInputRequest(
   settings: ProviderSettings,
   messages: ChatMessage[],
   options: PlanningRequestOptions = {},
 ): Promise<ChatPlanningInputRequest | null> {
-  const response = await sendProviderMessage(createPlanningInputSettings(settings), createPlanningInputMessages(messages), {
+  const providerRequest = {
+    messages: createPlanningInputMessages(messages),
+    settings: createPlanningInputSettings(settings),
+    stream: false,
+  } satisfies PlanningProviderRequest;
+
+  options.onProviderRequest?.(providerRequest);
+
+  const response = await sendProviderMessage(providerRequest.settings, providerRequest.messages, {
     signal: options.signal,
   });
+  options.onProviderUsage?.(providerRequest, response.usage);
   const payload = parsePlanningInputDecision(response.content);
 
   if (!payload?.needsInput || !Array.isArray(payload.questions)) {
@@ -158,128 +101,108 @@ export async function createPlanningInputRequest(
   };
 }
 
-export async function runPlanningMode({ maxPasses, messages, onUpdate, signal, settings }: PlanningRunOptions): Promise<PlanningRunResult> {
-  const boundedMaxPasses = clampPlanningPasses(maxPasses);
-  const passNotes: string[] = [];
-  let completedPasses = 0;
-
-  while (completedPasses < boundedMaxPasses) {
-    const batchStages = createPlanningBatchStages(completedPasses + 1, boundedMaxPasses);
-    const activePass = batchStages[0]?.pass ?? completedPasses + 1;
-
-    onUpdate({
-      passCount: completedPasses,
-      progress: createPlanningProgress(activePass, boundedMaxPasses, "active"),
-      trace: createPlanningTrace(passNotes),
-    });
-
-    const response = await sendProviderMessage(createPlanningSettings(settings), createPlanningMessages(messages, passNotes, batchStages, boundedMaxPasses), {
-      signal,
-    });
-    const parsedBatch = parsePlanningBatchResponse(response.content, batchStages);
-
-    for (const [index, stageItem] of batchStages.entries()) {
-      const note = parsedBatch.notes[index] || "No note returned.";
-
-      completedPasses = stageItem.pass;
-      passNotes.push(formatPlanningPassTrace(note, stageItem.pass, stageItem.stage));
-
-      const canStop = completedPasses >= Math.min(MIN_PLANNING_PASSES, boundedMaxPasses) && parsedBatch.final;
-      onUpdate({
-        passCount: completedPasses,
-        progress: createPlanningProgress(completedPasses, boundedMaxPasses, canStop || completedPasses === boundedMaxPasses ? "finalizing" : "between"),
-        trace: createPlanningTrace(passNotes),
-      });
-
-      await waitForUiTick();
-    }
-
-    if (completedPasses >= Math.min(MIN_PLANNING_PASSES, boundedMaxPasses) && parsedBatch.final) {
-      break;
-    }
-  }
+export async function runPlanningMode({ messages, onProviderRequest, onProviderUsage, onUpdate, researchFindings, signal, settings }: PlanningRunOptions): Promise<PlanningRunResult> {
+  const trimmedFindings = researchFindings?.trim() ?? "";
+  const researchMessages = trimmedFindings ? [createResearchFindingsMessage(trimmedFindings)] : [];
+  const planningContextMessages = [...messages, ...researchMessages];
+  const providerRequest = {
+    messages: createFinalAnswerMessages(planningContextMessages, trimmedFindings),
+    settings: createFinalAnswerSettings(settings),
+    stream: true,
+  } satisfies PlanningProviderRequest;
 
   onUpdate({
-    passCount: completedPasses,
-    progress: createPlanningProgress(completedPasses, boundedMaxPasses, "finalizing"),
-    trace: createPlanningTrace(passNotes),
+    progress: createPlanningProgress("drafting"),
   });
+  onProviderRequest?.(providerRequest);
 
   let finalContent = "";
 
   const finalResponse = await streamProviderMessage(
-    createFinalAnswerSettings(settings),
-    createFinalAnswerMessages(messages, passNotes, completedPasses, boundedMaxPasses),
+    providerRequest.settings,
+    providerRequest.messages,
     (snapshot) => {
       finalContent = snapshot.content;
       onUpdate({
         content: cleanFinalAnswerContent(finalContent),
-        passCount: completedPasses,
-        progress: createPlanningProgress(completedPasses, boundedMaxPasses, "finalizing"),
-        trace: createPlanningTrace(passNotes),
+        progress: createPlanningProgress("drafting"),
       });
     },
     {
       signal,
     },
   );
-  const planningBrief = createPlanningTrace(passNotes) ?? "";
-  const content = cleanFinalAnswerContent(finalResponse.content || finalContent) || planningBrief || "I could not produce a finished answer from the model response.";
+  onProviderUsage?.(providerRequest, finalResponse.usage);
+  const content = cleanFinalAnswerContent(finalResponse.content || finalContent) || "I could not produce a finished plan from the model response.";
 
   return {
     content,
-    passCount: completedPasses,
-    progress: createPlanningProgress(completedPasses, boundedMaxPasses, "complete"),
-    trace: createPlanningTrace(passNotes),
+    providerRequest,
+    progress: createPlanningProgress("complete"),
+    usage: finalResponse.usage,
   };
 }
 
-export function clampPlanningPasses(value: number) {
-  if (!Number.isFinite(value)) {
-    return DEFAULT_PLANNING_MAX_PASSES;
-  }
-
-  return Math.min(Math.max(Math.round(value), 1), DEFAULT_PLANNING_MAX_PASSES);
-}
-
-export function createPlanningProgress(currentPass: number, maxPasses: number, phase: "active" | "between" | "complete" | "finalizing" | "input"): ChatProgressItem[] {
-  const boundedMaxPasses = clampPlanningPasses(maxPasses);
-  const boundedCurrentPass = Math.min(Math.max(Math.round(currentPass), 0), boundedMaxPasses);
-  const displayPass = Math.min(Math.max(phase === "between" ? boundedCurrentPass + 1 : boundedCurrentPass, 1), boundedMaxPasses);
-  const stage = getPlanningStage(displayPass);
-
+export function createPlanningProgress(phase: PlanningPhase): ChatProgressItem[] {
   return [
     {
       detail: "Plan mode",
       id: "plan-context",
       label: "Read request",
-      status: boundedCurrentPass > 0 || phase === "input" || phase === "complete" ? "complete" : "active",
+      status: phase === "input" ? "active" : "complete",
     },
     {
       detail: phase === "input" ? "Waiting for your answer" : "Answered or not needed",
       id: "plan-input",
       label: "Clarify choices",
-      status: phase === "input" ? "active" : boundedCurrentPass > 0 || phase === "complete" || phase === "finalizing" ? "complete" : "pending",
+      status: phase === "input" ? "active" : "complete",
     },
     {
-      detail: `${stage.label} - pass ${displayPass} of ${boundedMaxPasses}`,
-      id: "plan-pass",
-      label: "Plan stage",
-      status: phase === "input" ? "pending" : phase === "active" ? "active" : "complete",
+      detail:
+        phase === "researching"
+          ? "Reading the codebase with read-only tools"
+          : phase === "drafting" || phase === "complete"
+            ? "Codebase facts gathered"
+            : "Waiting",
+      id: "plan-research",
+      label: "Research codebase",
+      status: phase === "researching" ? "active" : phase === "drafting" || phase === "complete" ? "complete" : "pending",
     },
     {
-      detail: phase === "between" ? "Preparing next stage" : phase === "finalizing" || phase === "complete" ? "Coverage checked" : "Cross-check notes",
-      id: "plan-review",
-      label: "Check coverage",
-      status: phase === "between" ? "active" : phase === "finalizing" || phase === "complete" || boundedCurrentPass > 0 ? "complete" : "pending",
-    },
-    {
-      detail: phase === "complete" ? "Ready" : phase === "finalizing" ? "Preparing answer" : "Waiting",
-      id: "plan-final",
-      label: "Write answer",
-      status: phase === "complete" ? "complete" : phase === "finalizing" ? "active" : "pending",
+      detail:
+        phase === "drafting"
+          ? "Writing the plan from research findings"
+          : phase === "complete"
+            ? "Plan ready"
+            : "Waiting",
+      id: "plan-write",
+      label: "Write plan",
+      status: phase === "drafting" ? "active" : phase === "complete" ? "complete" : "pending",
     },
   ];
+}
+
+function disablePlanningExecutionTools(tools: ProviderSettings["tools"]): ProviderSettings["tools"] {
+  return {
+    ...tools,
+    browserPreview: false,
+    codeEdit: false,
+    codeGeneration: false,
+    codeView: false,
+    desktopComputer: false,
+    fileBrowser: false,
+    fileCreation: false,
+    fileSafety: false,
+    fileSearch: false,
+    pdfTools: false,
+    reactNativeTools: false,
+    sourceControl: false,
+    sqlTools: false,
+    terminal: false,
+    testingTools: false,
+    typescriptTools: false,
+    webSearch: false,
+  };
 }
 
 function createPlanningInputSettings(settings: ProviderSettings): ProviderSettings {
@@ -293,34 +216,22 @@ function createPlanningInputSettings(settings: ProviderSettings): ProviderSettin
       effort: "low",
       enabled: settings.tools.thinking,
     },
-  };
-}
-
-function createPlanningSettings(settings: ProviderSettings): ProviderSettings {
-  return {
-    ...settings,
-    maxTokens: Math.max(settings.maxTokens, 1800),
-    systemPrompt: createPlanningSystemPrompt(settings.systemPrompt),
-    temperature: Math.min(settings.temperature, 0.3),
-    thinking: {
-      ...settings.thinking,
-      effort: "medium",
-      enabled: settings.tools.thinking,
-    },
+    tools: disablePlanningExecutionTools(settings.tools),
   };
 }
 
 function createFinalAnswerSettings(settings: ProviderSettings): ProviderSettings {
   return {
     ...settings,
-    maxTokens: Math.max(settings.maxTokens, 1800),
+    maxTokens: Math.max(settings.maxTokens, 2400),
     systemPrompt: createFinalAnswerSystemPrompt(settings.systemPrompt),
     temperature: Math.min(settings.temperature, 0.25),
     thinking: {
       ...settings.thinking,
-      effort: "low",
-      enabled: false,
+      effort: "medium",
+      enabled: settings.tools.thinking,
     },
+    tools: disablePlanningExecutionTools(settings.tools),
   };
 }
 
@@ -338,27 +249,17 @@ function createPlanningInputSystemPrompt(basePrompt: string) {
   ].join("\n\n");
 }
 
-function createPlanningSystemPrompt(basePrompt: string) {
-  return [
-    basePrompt,
-    "Plan mode is active. You are producing staged planning notes before a final user-facing answer.",
-    "Do not edit files, claim to run tools, or claim to inspect the filesystem in this mode.",
-    "If a DuckDuckGo web context message is present, use those provided results as web context and cite them only in the final answer. Do not claim any web browsing beyond the provided results.",
-    "Each pass has a different stage focus. Do not rewrite or revise the previous pass. Add a new focused planning note for each requested stage only.",
-    "The whole response must start with exactly one control line: PLAN_STATUS: continue or PLAN_STATUS: final.",
-    "Use PLAN_STATUS: final only when the accumulated stage notes are enough to synthesize a complete final answer. Otherwise use PLAN_STATUS: continue.",
-    "After the control line, return one block per requested pass using this exact shape: PASS N - Stage, concise note, END_PASS.",
-    "Do not repeat earlier stage notes.",
-  ].join("\n\n");
-}
-
 function createFinalAnswerSystemPrompt(basePrompt: string) {
   return [
     basePrompt,
-    "Plan mode has completed. Write only the final user-facing answer.",
-    "Do not include hidden reasoning, self-review notes, pass notes, PLAN_STATUS lines, or claims that files/tools/web were used.",
-    "If DuckDuckGo web sources were provided, use Markdown links for claims that rely on them.",
-    "Use the completed plan to give a complete, practical answer the user can act on next.",
+    "Plan mode is active. Write a single, complete user-facing plan in one response. Do not split this into passes or stages.",
+    "TOOL CALLS ARE DISABLED. Do NOT emit <tool_call> XML or fenced tool_call/json blocks. Any tool-call markup is malformed for this turn.",
+    "A prior research pass already inspected the codebase with the agent's read-only tools. Reference the actual file paths, symbols, functions, and snippets shown in RESEARCH FINDINGS. Do not invent files or functions that were not in the research.",
+    "If the user is asking for a bug fix, name each bug, the file and approximate line, and the exact change. If the user is asking for a feature, name the files to create or edit and the structure.",
+    "Format the plan as Markdown with these sections, in order:",
+    "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change.\n## Risks and edge cases\nBullet list.\n## Verification\nHow to confirm it works (tests, manual checks, commands).",
+    "Be concrete. No generic advice like 'review the codebase' or 'investigate further'. The research is already done.",
+    "If web sources were provided, use Markdown links for claims that rely on them.",
   ].join("\n\n");
 }
 
@@ -376,36 +277,17 @@ function createPlanningInputMessages(messages: ChatMessage[]): ChatMessage[] {
   ];
 }
 
-function createPlanningMessages(messages: ChatMessage[], passNotes: string[], stages: PlanningBatchStage[], maxPasses: number): ChatMessage[] {
-  const planningPrompt = [
-    `Planning passes ${stages[0]?.pass ?? 1}-${stages[stages.length - 1]?.pass ?? 1} of up to ${maxPasses}.`,
-    "Requested stages:",
-    stages.map(({ pass, stage }) => `Pass ${pass} - ${stage.label}: ${stage.focus}`).join("\n"),
-    "Write one new planning note for each requested stage only.",
-    "Do not revise, rephrase, or restate previous stage notes.",
-    "Use this exact block format for each pass:",
-    "PASS N - Stage\nNote text.\nEND_PASS",
-    passNotes.length > 0 ? "Previous stage notes for context:" : "",
-    passNotes.length > 0 ? passNotes.join("\n\n") : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  return [...messages, createSyntheticMessage("user", planningPrompt)];
-}
-
-function createFinalAnswerMessages(messages: ChatMessage[], passNotes: string[], passCount: number, maxPasses: number): ChatMessage[] {
+function createFinalAnswerMessages(messages: ChatMessage[], researchFindings: string): ChatMessage[] {
   return [
     ...messages,
     createSyntheticMessage(
       "user",
       [
-        `Planning finished after ${passCount} of ${maxPasses} allowed passes.`,
-        "Write the final answer now by synthesizing the staged planning notes into one coherent response.",
-        "The planning/thinking trail is shown elsewhere, so do not repeat internal planning process.",
-        "Use the notes as inputs, not as separate responses.",
-        "Staged planning notes:",
-        passNotes.join("\n\n") || "No staged notes were returned. Give the best complete answer from the conversation context.",
+        "Write the complete plan now in a single Markdown response.",
+        researchFindings
+          ? "Use the RESEARCH FINDINGS above as the verified state of the codebase."
+          : "No tool-grounded research findings were available. Build the best plan you can from the conversation and workspace context already in the messages.",
+        "Use the section headings: ## Goal, ## Files to change, ## Step-by-step plan, ## Risks and edge cases, ## Verification.",
       ].join("\n\n"),
     ),
   ];
@@ -441,80 +323,15 @@ function createSyntheticMessage(role: ChatMessage["role"], content: string): Cha
   };
 }
 
-function cleanPlanningResponse(content: string): CleanPlanningResponse {
-  const statusMatches = [...content.matchAll(PLAN_STATUS_PATTERN)];
-  const lastStatus = statusMatches[statusMatches.length - 1]?.[1]?.toLowerCase();
-  const cleanedContent = content.replace(PLAN_STATUS_PATTERN, "").trim();
-
-  return {
-    content: cleanedContent,
-    final: lastStatus === "final",
-  };
-}
-
-function createPlanningBatchStages(startPass: number, maxPasses: number): PlanningBatchStage[] {
-  const batchSize = Math.min(PLANNING_BATCH_SIZE, maxPasses - startPass + 1);
-
-  return Array.from({ length: batchSize }, (_, index) => {
-    const pass = startPass + index;
-
-    return {
-      pass,
-      stage: getPlanningStage(pass),
-    };
-  });
-}
-
-function parsePlanningBatchResponse(content: string, stages: PlanningBatchStage[]): ParsedPlanningBatch {
-  const cleaned = cleanPlanningResponse(content);
-  const notes: string[] = [];
-  let activeLines: string[] | null = null;
-
-  function pushActiveNote() {
-    if (!activeLines) {
-      return;
-    }
-
-    const note = cleanPlanningNote(activeLines.join("\n"));
-
-    if (note) {
-      notes.push(note);
-    }
-
-    activeLines = null;
-  }
-
-  for (const line of cleaned.content.split(/\r?\n/)) {
-    if (PASS_HEADER_PATTERN.test(line)) {
-      pushActiveNote();
-      activeLines = [];
-      continue;
-    }
-
-    if (END_PASS_PATTERN.test(line)) {
-      pushActiveNote();
-      continue;
-    }
-
-    if (activeLines) {
-      activeLines.push(line);
-    }
-  }
-
-  pushActiveNote();
-
-  if (notes.length === 0 && cleaned.content) {
-    notes.push(cleanPlanningNote(cleaned.content));
-  }
-
-  return {
-    final: cleaned.final,
-    notes: notes.slice(0, stages.length),
-  };
-}
-
-function getPlanningStage(pass: number) {
-  return PLANNING_STAGES[Math.min(Math.max(pass, 1), PLANNING_STAGES.length) - 1] ?? PLANNING_STAGES[PLANNING_STAGES.length - 1];
+function createResearchFindingsMessage(findings: string): ChatMessage {
+  return createSyntheticMessage(
+    "user",
+    [
+      "RESEARCH FINDINGS",
+      "A read-only research pass already ran the agent's file inspection tools. Treat the observations below as the verified state of the codebase. Build the plan from these specific paths, symbols, and snippets. Do not request more tool calls; the planning turn cannot execute them.",
+      findings,
+    ].join("\n\n"),
+  );
 }
 
 function parsePlanningInputDecision(content: string): PlanningInputDecisionPayload | null {
@@ -637,32 +454,5 @@ function createPlanningInputRequestId() {
 }
 
 function cleanFinalAnswerContent(content: string) {
-  return content.replace(PLAN_STATUS_PATTERN, "").trim();
-}
-
-function cleanPlanningNote(content: string) {
-  return content
-    .replace(/^NOTE\s*:\s*/gim, "")
-    .replace(END_PASS_PATTERN, "")
-    .trim();
-}
-
-function formatPlanningPassTrace(content: string, pass: number, stage: PlanningStage) {
-  const cleanContent = content.trim();
-
-  if (!cleanContent) {
-    return `Pass ${pass} - ${stage.label}\nNo note returned.`;
-  }
-
-  return `Pass ${pass} - ${stage.label}\n${cleanContent}`;
-}
-
-function createPlanningTrace(passNotes: string[]) {
-  return passNotes.length > 0 ? passNotes.join("\n\n") : undefined;
-}
-
-function waitForUiTick() {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 35);
-  });
+  return sanitizeLocalToolCallsForDisplay(content).trim();
 }

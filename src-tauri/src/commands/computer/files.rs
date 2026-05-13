@@ -3,18 +3,21 @@
 //! This module backs the desktop workspace picker, file index, Git status,
 //! text reads/writes, and delete operations used by the model tool runtime.
 
+use crate::core::fs_utils::path_to_string;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, VecDeque},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
-    io::Read,
-    path::{Path, PathBuf},
-    process::Command,
+    io::{Read, Write},
+    path::{Component, Path, PathBuf},
+    process::{Command, Output, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Emitter;
@@ -22,18 +25,16 @@ use tauri::Emitter;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-const DEFAULT_DIRECTORY_LIMIT: usize = 600;
-const DEFAULT_INDEX_LIMIT: usize = 12_000;
-const DEFAULT_INDEX_DEPTH: usize = 16;
 const EMBEDDING_DIMS: usize = 64;
-const MAX_PREVIEW_BYTES: usize = 8 * 1024;
-const MAX_READ_FILE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_INDEX_PREVIEW_BYTES: usize = 4 * 1024;
-const MAX_TEXT_INDEX_FILE_BYTES: u64 = 1_500_000;
-const MAX_GIT_UNTRACKED_FILES_FOR_STATS: usize = 200;
-const MAX_GIT_UNTRACKED_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_GIT_DIFF_PREVIEW_FILES: usize = 80;
-const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = 96 * 1024;
+const GIT_DEFAULT_COMMAND_TIMEOUT_MS: u64 = 60_000;
+const GIT_STATUS_COMMAND_TIMEOUT_MS: u64 = 3_000;
+const MAX_GIT_STATUS_CHANGED_FILES: usize = usize::MAX;
+const MAX_GIT_UNTRACKED_FILES_FOR_STATS: usize = usize::MAX;
+const MAX_GIT_UNTRACKED_FILE_BYTES: u64 = u64::MAX;
+const MAX_GIT_DIFF_PREVIEW_FILES: usize = usize::MAX;
+const MAX_GIT_DIFF_PREVIEW_LINES_PER_FILE: usize = usize::MAX;
+const MAX_GIT_DIFF_PREVIEW_LINE_CHARS: usize = usize::MAX;
+const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = u64::MAX;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
@@ -43,6 +44,7 @@ const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
     ".cache",
     ".dart_tool",
     ".expo",
+    ".gilbert",
     ".git",
     ".gradle",
     ".hg",
@@ -52,6 +54,7 @@ const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
     ".parcel-cache",
     ".pytest_cache",
     ".svn",
+    ".tools",
     ".turbo",
     ".venv",
     ".vite",
@@ -62,10 +65,43 @@ const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
     "deriveddata",
     "dist",
     "env",
+    "logs",
     "node_modules",
     "pods",
     "target",
+    "temp",
+    "tmp",
     "venv",
+];
+const SKIPPED_INDEX_FILE_NAMES: &[&str] = &[
+    ".npmrc",
+    ".pypirc",
+    ".yarnrc",
+    ".netrc",
+    "credentials",
+    "credentials.json",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+    "known_hosts",
+    "secrets.json",
+    "token.json",
+];
+const SKIPPED_INDEX_FILE_EXTENSIONS: &[&str] = &[
+    "cer",
+    "crt",
+    "db",
+    "der",
+    "key",
+    "log",
+    "p12",
+    "pem",
+    "pfx",
+    "sqlite",
+    "sqlite3",
+    "sqlite-shm",
+    "sqlite-wal",
 ];
 
 /// Shared in-memory file index state for the active desktop process.
@@ -88,10 +124,28 @@ impl Default for ComputerFileIndexState {
 struct ComputerFileIndex {
     built_at: Option<u64>,
     entries: Vec<IndexedComputerFile>,
+    ignored_entries: usize,
     roots: Vec<String>,
     scanned_directories: usize,
     skipped_entries: usize,
     truncated: bool,
+}
+
+#[derive(Clone, Debug)]
+struct IndexDirectoryScan {
+    depth: usize,
+    ignore_rules: Vec<IndexIgnoreRule>,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct IndexIgnoreRule {
+    anchored: bool,
+    base: PathBuf,
+    directory_only: bool,
+    has_slash: bool,
+    negated: bool,
+    pattern: String,
 }
 
 #[derive(Clone)]
@@ -167,6 +221,7 @@ pub struct ComputerIndexRequest {
 pub struct ComputerFileIndexSummary {
     pub built_at: Option<u64>,
     pub entry_count: usize,
+    pub ignored_entries: usize,
     pub roots: Vec<String>,
     pub scanned_directories: usize,
     pub skipped_entries: usize,
@@ -179,6 +234,7 @@ pub struct ComputerFileIndexProgress {
     pub current_path: Option<String>,
     pub done: bool,
     pub entry_count: usize,
+    pub ignored_entries: usize,
     pub request_id: u64,
     pub roots: Vec<String>,
     pub scanned_directories: usize,
@@ -189,6 +245,14 @@ pub struct ComputerFileIndexProgress {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerGitStatusRequest {
+    pub include_diff_preview: Option<bool>,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitInitRequest {
+    pub initial_branch: Option<String>,
     pub path: String,
 }
 
@@ -214,11 +278,30 @@ pub struct ComputerGitPushRequest {
     pub remote: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitWorktreeRequest {
+    pub branch_name: Option<String>,
+    pub directory_name: Option<String>,
+    pub path: String,
+    pub title: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerGitActionResult {
     pub message: String,
     pub output: Option<String>,
+    pub status: ComputerGitStatus,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitWorktreeResult {
+    pub branch_name: String,
+    pub message: String,
+    pub output: Option<String>,
+    pub path: String,
     pub status: ComputerGitStatus,
 }
 
@@ -302,6 +385,15 @@ pub struct ComputerWriteFileRequest {
     pub overwrite: Option<bool>,
     pub path: String,
     pub roots: Vec<String>,
+    /// Lowercase hex SHA-256 of the file as it was last observed by the
+    /// caller. When provided, the write is refused if the current on-disk
+    /// content does not match — this prevents the agent from clobbering a
+    /// concurrent user edit.
+    pub expected_sha256: Option<String>,
+    /// When true, force a specific line-ending family. Otherwise the writer
+    /// detects the majority EOL from the existing file (CRLF/LF) and falls
+    /// back to the platform default for new files. Accepts "crlf" or "lf".
+    pub force_eol: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,6 +401,15 @@ pub struct ComputerWriteFileRequest {
 pub struct ComputerDeleteFileRequest {
     pub path: String,
     pub roots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerMovePathRequest {
+    pub create_parent_dirs: Option<bool>,
+    pub from_path: String,
+    pub roots: Vec<String>,
+    pub to_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,6 +420,9 @@ pub struct ComputerReadFileResult {
     pub modified_at: Option<u64>,
     pub name: String,
     pub path: String,
+    /// Lowercase hex SHA-256 of the fully loaded file bytes. Omitted for
+    /// truncated reads so callers never treat a partial digest as a file guard.
+    pub sha256: Option<String>,
     pub size: u64,
     pub truncated: bool,
 }
@@ -330,6 +434,12 @@ pub struct ComputerWriteFileResult {
     pub created: bool,
     pub modified_at: Option<u64>,
     pub path: String,
+    /// Lowercase hex SHA-256 of the bytes that were actually written. Callers
+    /// can pass this back as `expected_sha256` on a follow-up write to detect
+    /// out-of-band edits.
+    pub sha256: Option<String>,
+    /// Line-ending family applied to the written bytes ("crlf" or "lf").
+    pub eol: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,6 +448,15 @@ pub struct ComputerDeleteFileResult {
     pub bytes_deleted: u64,
     pub deleted: bool,
     pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerMovePathResult {
+    pub from_path: String,
+    pub kind: ComputerFileKind,
+    pub moved: bool,
+    pub to_path: String,
 }
 
 /// Returns the user's default workspace path when the host can determine one.
@@ -374,16 +493,14 @@ fn pick_folder_blocking(start_path: Option<String>) -> Result<Option<String>, St
     Ok(dialog.pick_folder().map(path_to_string))
 }
 
-/// Lists a single directory with a capped number of entries.
+/// Lists a single directory. A caller-supplied limit is explicit; by default
+/// the model sees every readable entry in that directory.
 #[tauri::command]
 pub fn computer_list_directory(
     request: ComputerDirectoryRequest,
 ) -> Result<ComputerDirectoryListing, String> {
     let path = normalize_input_path(&request.path);
-    let limit = request
-        .limit
-        .unwrap_or(DEFAULT_DIRECTORY_LIMIT)
-        .clamp(1, 2_000);
+    let limit = request.limit.filter(|value| *value > 0);
     let mut entries = Vec::new();
     let mut inaccessible_entries = 0usize;
     let mut limited = false;
@@ -391,7 +508,7 @@ pub fn computer_list_directory(
         .map_err(|error| format!("Could not open {}: {}", path_to_string(&path), error))?;
 
     for entry_result in read_dir {
-        if entries.len() >= limit {
+        if limit.is_some_and(|max_entries| entries.len() >= max_entries) {
             limited = true;
             break;
         }
@@ -422,7 +539,9 @@ pub fn computer_list_directory(
     })
 }
 
-/// Builds a capped searchable file index and emits progress events.
+/// Builds a searchable file index and emits progress events. max_files and
+/// max_depth are explicit caller constraints; omitted values scan exhaustively
+/// while still honoring ignore and secret-file rules.
 #[tauri::command]
 pub async fn computer_build_file_index(
     app: tauri::AppHandle,
@@ -441,14 +560,8 @@ fn build_file_index_blocking(
     state: ComputerFileIndexState,
     request: ComputerIndexRequest,
 ) -> Result<ComputerFileIndexSummary, String> {
-    let max_files = request
-        .max_files
-        .unwrap_or(DEFAULT_INDEX_LIMIT)
-        .clamp(1, 100_000);
-    let max_depth = request
-        .max_depth
-        .unwrap_or(DEFAULT_INDEX_DEPTH)
-        .clamp(1, 128);
+    let max_files = request.max_files.filter(|value| *value > 0);
+    let max_depth = request.max_depth.unwrap_or(usize::MAX);
     let request_id = request.request_id.unwrap_or_else(now_millis);
     let roots = normalize_roots(request.roots);
 
@@ -462,16 +575,27 @@ fn build_file_index_blocking(
         roots: roots.iter().map(path_to_string).collect(),
         ..ComputerFileIndex::default()
     };
-    let mut queue: VecDeque<(PathBuf, usize)> =
-        roots.into_iter().map(|root| (root, 0usize)).collect();
+    let mut queue: VecDeque<IndexDirectoryScan> = roots
+        .into_iter()
+        .map(|root| IndexDirectoryScan {
+            depth: 0,
+            ignore_rules: Vec::new(),
+            path: root,
+        })
+        .collect();
     let mut last_progress_emit = Instant::now();
 
     emit_file_index_progress(&app, request_id, &next_index, None, false);
 
-    'scan: while let Some((directory, depth)) = queue.pop_front() {
+    'scan: while let Some(scan) = queue.pop_front() {
         if state.active_request_id.load(Ordering::SeqCst) != request_id {
             return Err("Indexing was replaced by a newer request.".to_string());
         }
+
+        let directory = scan.path;
+        let depth = scan.depth;
+        let mut ignore_rules = scan.ignore_rules;
+        ignore_rules.extend(read_gitignore_rules(&directory));
 
         next_index.scanned_directories += 1;
 
@@ -484,7 +608,7 @@ fn build_file_index_blocking(
         };
 
         for entry_result in read_dir {
-            if next_index.entries.len() >= max_files {
+            if max_files.is_some_and(|max_entries| next_index.entries.len() >= max_entries) {
                 next_index.truncated = true;
                 break 'scan;
             }
@@ -510,15 +634,16 @@ fn build_file_index_blocking(
                 .map(|value| value.to_string_lossy().to_string())
                 .unwrap_or_else(|| path_to_string(&path));
             let extension = file_extension(&path);
-            if should_skip_index_entry(&name, &kind) {
+            if should_skip_index_entry(&path, &name, &kind, &ignore_rules) {
                 next_index.skipped_entries += 1;
+                next_index.ignored_entries += 1;
                 continue;
             }
 
             let preview = if matches!(kind, ComputerFileKind::File)
                 && should_index_text_preview(&path, metadata.len())
             {
-                read_text_preview(&path, MAX_INDEX_PREVIEW_BYTES)
+                read_text_preview(&path)
             } else {
                 None
             };
@@ -531,7 +656,11 @@ fn build_file_index_blocking(
             );
 
             if matches!(kind, ComputerFileKind::Directory) && depth < max_depth {
-                queue.push_back((path.clone(), depth + 1));
+                queue.push_back(IndexDirectoryScan {
+                    depth: depth + 1,
+                    ignore_rules: ignore_rules.clone(),
+                    path: path.clone(),
+                });
             }
 
             next_index.entries.push(IndexedComputerFile {
@@ -601,6 +730,16 @@ pub async fn computer_get_git_status(
         .map_err(|error| format!("The Git status worker stopped unexpectedly: {}", error))?
 }
 
+/// Initializes a local Git repository in a workspace folder.
+#[tauri::command]
+pub async fn computer_git_init(
+    request: ComputerGitInitRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_init_blocking(request))
+        .await
+        .map_err(|error| format!("The Git init worker stopped unexpectedly: {}", error))?
+}
+
 /// Stages and commits local Git changes for a workspace root.
 #[tauri::command]
 pub async fn computer_git_commit(
@@ -631,8 +770,19 @@ pub async fn computer_git_push(
         .map_err(|error| format!("The Git push worker stopped unexpectedly: {}", error))?
 }
 
+/// Creates a sibling Git worktree on a fresh branch for a forked conversation.
+#[tauri::command]
+pub async fn computer_git_create_worktree(
+    request: ComputerGitWorktreeRequest,
+) -> Result<ComputerGitWorktreeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_create_worktree_blocking(request))
+        .await
+        .map_err(|error| format!("The Git worktree worker stopped unexpectedly: {}", error))?
+}
+
 fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<ComputerGitStatus, String> {
     let path = normalize_input_path(&request.path);
+    let include_diff_preview = request.include_diff_preview.unwrap_or(false);
 
     if !path.exists() {
         return Ok(create_unavailable_git_status(Some(format!(
@@ -645,14 +795,14 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         Some(root) => root,
         None => return Ok(create_unavailable_git_status(None)),
     };
-    let head_sha = run_git(&repository_path, &["rev-parse", "--short", "HEAD"])
+    let head_sha = run_git_quick(&repository_path, &["rev-parse", "--short", "HEAD"])
         .ok()
         .filter(|value| !value.is_empty());
-    let branch = run_git(&repository_path, &["branch", "--show-current"])
+    let branch = run_git_quick(&repository_path, &["branch", "--show-current"])
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| head_sha.as_ref().map(|sha| format!("detached {}", sha)));
-    let upstream = run_git(
+    let upstream = run_git_quick(
         &repository_path,
         &[
             "rev-parse",
@@ -668,14 +818,17 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
     } else {
         (0, 0)
     };
-    let remote_url = run_git(&repository_path, &["remote", "get-url", "origin"])
+    let remote_url = run_git_quick(&repository_path, &["remote", "get-url", "origin"])
         .ok()
         .filter(|value| !value.is_empty());
     let (github_owner, github_repo) = remote_url
         .as_deref()
         .and_then(parse_github_remote_url)
         .unwrap_or((None, None));
-    let status_output = match run_git(&repository_path, &["status", "--porcelain=v1"]) {
+    let status_output = match run_git_quick(
+        &repository_path,
+        &["status", "--porcelain=v1", "--untracked-files=normal"],
+    ) {
         Ok(output) => output,
         Err(error) => return Ok(create_unavailable_git_status(Some(error))),
     };
@@ -684,7 +837,7 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         .filter(|line| !line.trim().is_empty())
         .count();
     let tracked_stats = parse_git_numstat_entries(
-        &run_git(&repository_path, &["diff", "--numstat", "HEAD"]).unwrap_or_default(),
+        &run_git_quick(&repository_path, &["diff", "--numstat", "HEAD"]).unwrap_or_default(),
     );
     let tracked_additions = tracked_stats
         .iter()
@@ -694,7 +847,7 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         .iter()
         .map(|(_path, _additions, deletions)| *deletions)
         .sum::<usize>();
-    let untracked_output = run_git(
+    let untracked_output = run_git_quick(
         &repository_path,
         &["ls-files", "--others", "--exclude-standard", "-z"],
     )
@@ -703,7 +856,11 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
         count_untracked_git_additions_by_path(&repository_path, &untracked_output);
     let untracked_additions = untracked_additions_by_path.values().sum::<usize>();
     let additions = tracked_additions + untracked_additions;
-    let diff_previews = build_git_diff_previews(&repository_path, &status_output);
+    let diff_previews = if include_diff_preview {
+        build_git_diff_previews(&repository_path, &status_output)
+    } else {
+        HashMap::new()
+    };
     let files = parse_git_changed_files(
         &status_output,
         &tracked_stats,
@@ -732,6 +889,55 @@ fn get_git_status_blocking(request: ComputerGitStatusRequest) -> Result<Computer
     })
 }
 
+fn git_init_blocking(request: ComputerGitInitRequest) -> Result<ComputerGitActionResult, String> {
+    let path = normalize_input_path(&request.path);
+
+    if !path.exists() {
+        return Err(format!("{} does not exist.", path_to_string(&path)));
+    }
+
+    if !path.is_dir() {
+        return Err("Choose a folder before initializing Git.".to_string());
+    }
+
+    if let Some(repository_path) = find_git_repository_root(&path) {
+        let status = get_git_status_blocking(ComputerGitStatusRequest {
+            include_diff_preview: None,
+            path: path_to_string(&repository_path),
+        })?;
+
+        return Ok(ComputerGitActionResult {
+            message: "Git is already initialized for this folder.".to_string(),
+            output: None,
+            status,
+        });
+    }
+
+    let initial_branch = request
+        .initial_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("main")
+        .to_string();
+
+    validate_new_git_branch_name(&initial_branch)?;
+
+    let init_output = run_git(&path, &["init"])?;
+    let head_ref = format!("refs/heads/{}", initial_branch);
+    let head_output = run_git(&path, &["symbolic-ref", "HEAD", &head_ref])?;
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
+        path: path_to_string(&path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: format!("Initialized Git on {}.", initial_branch),
+        output: optional_git_output([init_output, head_output].join("\n")),
+        status,
+    })
+}
+
 fn git_commit_blocking(
     request: ComputerGitCommitRequest,
 ) -> Result<ComputerGitActionResult, String> {
@@ -749,6 +955,7 @@ fn git_commit_blocking(
 
     let output = run_git(&repository_path, &["commit", "-m", &message])?;
     let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
         path: path_to_string(&repository_path),
     })?;
 
@@ -769,6 +976,7 @@ fn git_create_branch_blocking(
 
     let output = run_git(&repository_path, &["switch", "-c", &branch_name])?;
     let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
         path: path_to_string(&repository_path),
     })?;
 
@@ -821,12 +1029,63 @@ fn git_push_blocking(request: ComputerGitPushRequest) -> Result<ComputerGitActio
         )?
     };
     let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
         path: path_to_string(&repository_path),
     })?;
 
     Ok(ComputerGitActionResult {
         message: format!("Pushed {}.", branch),
         output: optional_git_output(output),
+        status,
+    })
+}
+
+fn git_create_worktree_blocking(
+    request: ComputerGitWorktreeRequest,
+) -> Result<ComputerGitWorktreeResult, String> {
+    let repository_path = resolve_git_repository_path(&request.path)?;
+    let head = run_git(&repository_path, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|error| format!("Create the first commit before adding a worktree: {error}"))?;
+
+    if head.trim().is_empty() {
+        return Err("Create the first commit before adding a worktree.".to_string());
+    }
+
+    let branch_name = create_unique_worktree_branch_name(
+        &repository_path,
+        request.branch_name.as_deref(),
+        request.title.as_deref(),
+    )?;
+    let target_path = create_unique_worktree_path(
+        &repository_path,
+        request.directory_name.as_deref(),
+        &branch_name,
+    )?;
+    let target_path_string = path_to_string(&target_path);
+    let output = run_git(
+        &repository_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch_name,
+            &target_path_string,
+            "HEAD",
+        ],
+    )?;
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
+        path: target_path_string.clone(),
+    })?;
+
+    Ok(ComputerGitWorktreeResult {
+        branch_name: branch_name.clone(),
+        message: format!(
+            "Created worktree {} on {}.",
+            target_path_string, branch_name
+        ),
+        output: optional_git_output(output),
+        path: target_path_string,
         status,
     })
 }
@@ -843,7 +1102,7 @@ pub fn computer_search_file_index(
         return Ok(Vec::new());
     }
 
-    let limit = request.limit.unwrap_or(24).clamp(1, 100);
+    let limit = request.limit.filter(|value| *value > 0);
     let query_embedding = create_embedding(query);
     let query_lower = query.to_lowercase();
     let query_tokens = tokenize_search_query(query);
@@ -878,12 +1137,16 @@ pub fn computer_search_file_index(
         .collect::<Vec<_>>();
 
     results.sort_by(|left, right| right.score.total_cmp(&left.score));
-    results.truncate(limit);
+    if let Some(limit) = limit {
+        results.truncate(limit);
+    }
 
     Ok(results)
 }
 
-/// Reads one text file with a byte cap to keep UI/tool results responsive.
+/// Reads one text file. A byte limit is honored only when the caller asks for
+/// one; the default path returns the entire text file so long files are not
+/// silently clipped.
 #[tauri::command]
 pub fn computer_read_text_file(
     request: ComputerReadFileRequest,
@@ -896,20 +1159,24 @@ pub fn computer_read_text_file(
         return Err("Choose a text file, not a folder.".to_string());
     }
 
-    let max_bytes = request
-        .max_bytes
-        .unwrap_or(MAX_PREVIEW_BYTES)
-        .clamp(1, MAX_READ_FILE_BYTES);
     let mut file = File::open(&path)
         .map_err(|error| format!("Could not open {}: {}", path_to_string(&path), error))?;
-    let mut buffer = vec![0u8; max_bytes.saturating_add(1)];
-    let bytes_read = file
-        .read(&mut buffer)
-        .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
-    let truncated = bytes_read > max_bytes || metadata.len() > max_bytes as u64;
-    buffer.truncate(bytes_read.min(max_bytes));
+    let mut buffer = Vec::new();
+    let truncated = if let Some(max_bytes) = request.max_bytes.filter(|value| *value > 0) {
+        buffer.resize(max_bytes.saturating_add(1), 0);
+        let bytes_read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+        let truncated = bytes_read > max_bytes || metadata.len() > max_bytes as u64;
+        buffer.truncate(bytes_read.min(max_bytes));
+        truncated
+    } else {
+        file.read_to_end(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+        false
+    };
 
-    if buffer.iter().any(|byte| *byte == 0) {
+    if buffer.contains(&0) {
         return Err("This file looks binary, so Gilbert did not load it as text.".to_string());
     }
 
@@ -922,9 +1189,206 @@ pub fn computer_read_text_file(
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| path_to_string(&path)),
         path: path_to_string(&path),
+        sha256: if truncated {
+            None
+        } else {
+            Some(hex_sha256(&buffer))
+        },
         size: metadata.len(),
         truncated,
     })
+}
+
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+const ATOMIC_RENAME_BACKOFFS_MS: [u64; 5] = [50, 100, 200, 400, 800];
+const ATOMIC_EOL_SAMPLE_BYTES: usize = 64 * 1024;
+
+#[cfg(windows)]
+const WIN_ERROR_ACCESS_DENIED: i32 = 5;
+#[cfg(windows)]
+const WIN_ERROR_SHARING_VIOLATION: i32 = 32;
+#[cfg(windows)]
+const WIN_ERROR_LOCK_VIOLATION: i32 = 33;
+
+fn use_legacy_write() -> bool {
+    matches!(
+        std::env::var("GILBERT_CODEX_LEGACY_WRITE").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
+}
+
+/// Detects the majority line-ending family in a byte sample. Returns `None`
+/// when no newlines are present (caller falls back to the platform default).
+fn detect_eol_majority(bytes: &[u8]) -> Option<&'static str> {
+    let sample_end = bytes.len().min(ATOMIC_EOL_SAMPLE_BYTES);
+    let sample = &bytes[..sample_end];
+
+    let mut crlf = 0usize;
+    let mut lone_lf = 0usize;
+
+    for (index, byte) in sample.iter().enumerate() {
+        if *byte == b'\n' {
+            if index > 0 && sample[index - 1] == b'\r' {
+                crlf += 1;
+            } else {
+                lone_lf += 1;
+            }
+        }
+    }
+
+    if crlf == 0 && lone_lf == 0 {
+        return None;
+    }
+
+    if crlf > lone_lf {
+        Some("\r\n")
+    } else if lone_lf > crlf {
+        Some("\n")
+    } else {
+        // Tie: favour CRLF on Windows, LF elsewhere.
+        if cfg!(windows) {
+            Some("\r\n")
+        } else {
+            Some("\n")
+        }
+    }
+}
+
+fn has_utf8_bom(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+}
+
+/// Normalises every line ending in `content` to `target_eol`. Existing CRLFs
+/// are collapsed first so we never emit `\r\r\n` after up-conversion.
+fn normalize_eol(content: &str, target_eol: &str) -> String {
+    if content.is_empty() {
+        return String::new();
+    }
+
+    let lf_only: std::borrow::Cow<'_, str> = if content.contains('\r') {
+        std::borrow::Cow::Owned(content.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    };
+
+    if target_eol == "\n" {
+        return lf_only.into_owned();
+    }
+
+    let mut out = String::with_capacity(lf_only.len() + lf_only.matches('\n').count());
+    for ch in lf_only.chars() {
+        if ch == '\n' {
+            out.push_str("\r\n");
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn classify_eol(force: Option<&str>) -> Option<&'static str> {
+    match force {
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "crlf" | "windows" | "win" | "\r\n" => Some("\r\n"),
+            "lf" | "unix" | "posix" | "\n" => Some("\n"),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+fn eol_label(eol: &str) -> &'static str {
+    if eol == "\r\n" {
+        "crlf"
+    } else {
+        "lf"
+    }
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+#[cfg(windows)]
+fn is_windows_sharing_error(error: &std::io::Error) -> bool {
+    match error.raw_os_error() {
+        Some(code) => {
+            code == WIN_ERROR_SHARING_VIOLATION
+                || code == WIN_ERROR_LOCK_VIOLATION
+                || code == WIN_ERROR_ACCESS_DENIED
+        }
+        None => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn is_windows_sharing_error(_error: &std::io::Error) -> bool {
+    false
+}
+
+/// Writes `bytes` to `path` atomically. Strategy: create a sibling temp file
+/// in the same directory, fsync the contents, then rename over the target.
+/// On Windows the rename retries with backoff on sharing/lock errors so a
+/// transient handle (IDE, Vite watcher, antivirus) cannot corrupt the file.
+fn atomic_write_with_retry(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path has no parent directory",
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("write");
+
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.subsec_nanos())
+        .unwrap_or(0);
+    let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!(".{}.{}.{}.{}.tmp", file_name, pid, nanos, counter);
+    let tmp_path = parent.join(&tmp_name);
+
+    // Write + flush + sync the temp file. fsync is best-effort; an error here
+    // is non-fatal because the rename will still fail loudly if the temp
+    // file is unreadable.
+    {
+        let mut tmp = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)?;
+        tmp.write_all(bytes)?;
+        let _ = tmp.flush();
+        let _ = tmp.sync_all();
+    }
+
+    let mut last_err: Option<std::io::Error> = None;
+    let backoffs = std::iter::once(0u64).chain(ATOMIC_RENAME_BACKOFFS_MS.iter().copied());
+
+    for delay in backoffs {
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
+
+        match fs::rename(&tmp_path, path) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                if !is_windows_sharing_error(&err) {
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(err);
+                }
+                last_err = Some(err);
+            }
+        }
+    }
+
+    let _ = fs::remove_file(&tmp_path);
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("atomic rename failed")))
 }
 
 /// Writes one text file after checking it stays inside enabled roots.
@@ -932,16 +1396,13 @@ pub fn computer_read_text_file(
 pub fn computer_write_text_file(
     request: ComputerWriteFileRequest,
 ) -> Result<ComputerWriteFileResult, String> {
-    let path = normalize_input_path(&request.path);
     let roots = normalize_roots(request.roots);
 
     if roots.is_empty() {
         return Err("Choose a folder workspace before writing files.".to_string());
     }
 
-    if has_parent_dir_component(&path) {
-        return Err("Refusing to write through a path that contains '..'.".to_string());
-    }
+    let path = normalize_workspace_path(&request.path, &roots)?;
 
     if !path_is_inside_roots(&path, &roots) {
         return Err(
@@ -950,6 +1411,9 @@ pub fn computer_write_text_file(
     }
 
     let created = !path.exists();
+    let mut existing_bytes: Vec<u8> = Vec::new();
+    let mut preserve_bom = false;
+    let mut detected_eol: Option<&'static str> = None;
 
     if !created {
         let metadata = fs::metadata(&path)
@@ -962,11 +1426,42 @@ pub fn computer_write_text_file(
         if request.overwrite == Some(false) {
             return Err("That file already exists and overwrite is disabled.".to_string());
         }
+
+        if let Some(expected) = request.expected_sha256.as_deref() {
+            let mut file = File::open(&path)
+                .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+            file.read_to_end(&mut existing_bytes)
+                .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+            let actual = hex_sha256(&existing_bytes);
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(format!(
+                    "Refusing to write {}: file changed since it was last read (expected sha256 {}, on-disk sha256 {}). Re-read the file before retrying.",
+                    path_to_string(&path),
+                    expected,
+                    actual
+                ));
+            }
+        }
+
+        // We may already have the bytes from the SHA check above; if not,
+        // sample the head of the file just to detect EOL/BOM cheaply.
+        if existing_bytes.is_empty() {
+            if let Ok(mut file) = File::open(&path) {
+                let mut sample = vec![0u8; ATOMIC_EOL_SAMPLE_BYTES];
+                if let Ok(read) = file.read(&mut sample) {
+                    sample.truncate(read);
+                    existing_bytes = sample;
+                }
+            }
+        }
+
+        preserve_bom = has_utf8_bom(&existing_bytes);
+        detected_eol = detect_eol_majority(&existing_bytes);
     }
 
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            if request.create_parent_dirs.unwrap_or(false) {
+            if request.create_parent_dirs.unwrap_or(true) {
                 fs::create_dir_all(parent).map_err(|error| {
                     format!("Could not create {}: {}", path_to_string(parent), error)
                 })?;
@@ -979,8 +1474,38 @@ pub fn computer_write_text_file(
         }
     }
 
-    fs::write(&path, request.content.as_bytes())
-        .map_err(|error| format!("Could not write {}: {}", path_to_string(&path), error))?;
+    // Strip an incoming UTF-8 BOM so we don't double it after preservation.
+    let content_no_bom = request
+        .content
+        .strip_prefix('\u{feff}')
+        .unwrap_or(&request.content);
+
+    let forced_eol = classify_eol(request.force_eol.as_deref());
+    let target_eol =
+        forced_eol
+            .or(detected_eol)
+            .unwrap_or(if cfg!(windows) { "\r\n" } else { "\n" });
+
+    let normalized = normalize_eol(content_no_bom, target_eol);
+
+    let mut payload: Vec<u8> = Vec::with_capacity(normalized.len() + 3);
+    if preserve_bom {
+        payload.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    }
+    payload.extend_from_slice(normalized.as_bytes());
+
+    if use_legacy_write() {
+        fs::write(&path, &payload)
+            .map_err(|error| format!("Could not write {}: {}", path_to_string(&path), error))?;
+    } else {
+        atomic_write_with_retry(&path, &payload).map_err(|error| {
+            format!(
+                "Could not atomically write {}: {}",
+                path_to_string(&path),
+                error
+            )
+        })?;
+    }
 
     let metadata = fs::metadata(&path).map_err(|error| {
         format!(
@@ -991,10 +1516,12 @@ pub fn computer_write_text_file(
     })?;
 
     Ok(ComputerWriteFileResult {
-        bytes_written: request.content.len(),
+        bytes_written: payload.len(),
         created,
         modified_at: modified_millis(&metadata),
         path: path_to_string(&path),
+        sha256: Some(hex_sha256(&payload)),
+        eol: Some(eol_label(target_eol).to_string()),
     })
 }
 
@@ -1003,16 +1530,13 @@ pub fn computer_write_text_file(
 pub fn computer_delete_file(
     request: ComputerDeleteFileRequest,
 ) -> Result<ComputerDeleteFileResult, String> {
-    let path = normalize_input_path(&request.path);
     let roots = normalize_roots(request.roots);
 
     if roots.is_empty() {
         return Err("Choose a folder workspace before deleting files.".to_string());
     }
 
-    if has_parent_dir_component(&path) {
-        return Err("Refusing to delete through a path that contains '..'.".to_string());
-    }
+    let path = normalize_workspace_path(&request.path, &roots)?;
 
     if !path_is_inside_roots(&path, &roots) {
         return Err(
@@ -1039,11 +1563,93 @@ pub fn computer_delete_file(
     })
 }
 
+/// Moves or renames a file or folder after checking both paths stay inside enabled roots.
+#[tauri::command]
+pub fn computer_move_path(
+    request: ComputerMovePathRequest,
+) -> Result<ComputerMovePathResult, String> {
+    let roots = normalize_roots(request.roots);
+
+    if roots.is_empty() {
+        return Err("Choose a folder workspace before moving or renaming paths.".to_string());
+    }
+
+    let from_path = normalize_workspace_path(&request.from_path, &roots)?;
+    let to_path = normalize_workspace_path(&request.to_path, &roots)?;
+
+    if !path_is_inside_roots(&from_path, &roots) || !path_is_inside_roots(&to_path, &roots) {
+        return Err(
+            "Moves and renames are only allowed inside the selected or current workspace folder."
+                .to_string(),
+        );
+    }
+
+    if from_path == to_path {
+        return Err("The source and destination paths are the same.".to_string());
+    }
+
+    let metadata = fs::symlink_metadata(&from_path).map_err(|error| {
+        format!(
+            "Could not inspect {}: {}",
+            path_to_string(&from_path),
+            error
+        )
+    })?;
+    let kind = file_kind_from_metadata(&metadata);
+
+    if to_path.exists() {
+        return Err(format!(
+            "The destination already exists: {}",
+            path_to_string(&to_path)
+        ));
+    }
+
+    if metadata.is_dir() {
+        let source_compare = fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
+        let destination_compare = existing_path_for_compare(&to_path);
+        if destination_compare.starts_with(source_compare) {
+            return Err("Refusing to move a folder into itself.".to_string());
+        }
+    }
+
+    if let Some(parent) = to_path.parent() {
+        if !parent.exists() {
+            if request.create_parent_dirs.unwrap_or(true) {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!("Could not create {}: {}", path_to_string(parent), error)
+                })?;
+            } else {
+                return Err(format!(
+                    "Destination parent folder does not exist: {}",
+                    path_to_string(parent)
+                ));
+            }
+        }
+    }
+
+    fs::rename(&from_path, &to_path).map_err(|error| {
+        format!(
+            "Could not move {} to {}: {}",
+            path_to_string(&from_path),
+            path_to_string(&to_path),
+            error
+        )
+    })?;
+
+    Ok(ComputerMovePathResult {
+        from_path: path_to_string(&from_path),
+        kind,
+        moved: true,
+        to_path: path_to_string(&to_path),
+    })
+}
+
 impl ComputerFileIndex {
     fn summary(&self) -> ComputerFileIndexSummary {
         ComputerFileIndexSummary {
             built_at: self.built_at,
             entry_count: self.entries.len(),
+            ignored_entries: self.ignored_entries,
             roots: self.roots.clone(),
             scanned_directories: self.scanned_directories,
             skipped_entries: self.skipped_entries,
@@ -1053,7 +1659,7 @@ impl ComputerFileIndex {
 }
 
 fn should_emit_file_index_progress(last_emit: &Instant, entry_count: usize) -> bool {
-    entry_count % INDEX_PROGRESS_ENTRY_INTERVAL == 0
+    entry_count.is_multiple_of(INDEX_PROGRESS_ENTRY_INTERVAL)
         || last_emit.elapsed() >= Duration::from_millis(INDEX_PROGRESS_INTERVAL_MS)
 }
 
@@ -1078,6 +1684,7 @@ fn emit_file_index_progress_from_summary(
         current_path,
         done,
         entry_count: summary.entry_count,
+        ignored_entries: summary.ignored_entries,
         request_id,
         roots: summary.roots.clone(),
         scanned_directories: summary.scanned_directories,
@@ -1109,7 +1716,7 @@ fn list_system_roots() -> Vec<ComputerDrive> {
             }
         }
 
-        return drives;
+        drives
     }
 
     #[cfg(not(windows))]
@@ -1176,6 +1783,65 @@ fn normalize_input_path(path: &str) -> PathBuf {
     }
 
     PathBuf::from(trimmed)
+}
+
+fn normalize_workspace_path(path: &str, roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let raw_path = normalize_input_path(path);
+
+    if has_parent_dir_component(&raw_path) {
+        return Err("Refusing to use a path that contains '..'.".to_string());
+    }
+
+    if raw_path.is_absolute() || roots.is_empty() {
+        return Ok(raw_path);
+    }
+
+    let relative_path = strip_repeated_workspace_folder(&raw_path, &roots[0]);
+    Ok(roots[0].join(relative_path))
+}
+
+fn strip_repeated_workspace_folder(path: &Path, root: &Path) -> PathBuf {
+    let mut parts = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_os_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return path_buf_from_parts(parts);
+    }
+
+    let Some(root_name) = root.file_name() else {
+        return path_buf_from_parts(parts);
+    };
+
+    if comparable_path_segment(&parts[0].to_string_lossy())
+        == comparable_path_segment(&root_name.to_string_lossy())
+    {
+        parts.remove(0);
+    }
+
+    path_buf_from_parts(parts)
+}
+
+fn path_buf_from_parts(parts: Vec<std::ffi::OsString>) -> PathBuf {
+    let mut path = PathBuf::new();
+
+    for part in parts {
+        path.push(part);
+    }
+
+    path
+}
+
+fn comparable_path_segment(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
 }
 
 fn has_parent_dir_component(path: &Path) -> bool {
@@ -1266,22 +1932,214 @@ fn file_extension(path: &Path) -> Option<String> {
         .filter(|extension| !extension.is_empty())
 }
 
-fn should_skip_index_entry(name: &str, kind: &ComputerFileKind) -> bool {
-    if !matches!(kind, ComputerFileKind::Directory) {
-        return false;
-    }
-
-    let normalized_name = name.to_ascii_lowercase();
-    SKIPPED_INDEX_DIRECTORY_NAMES
-        .iter()
-        .any(|skipped_name| *skipped_name == normalized_name)
+fn should_skip_index_entry(
+    path: &Path,
+    name: &str,
+    kind: &ComputerFileKind,
+    ignore_rules: &[IndexIgnoreRule],
+) -> bool {
+    is_hard_skipped_index_entry(name, kind)
+        || is_ignored_by_gitignore_rules(path, kind, ignore_rules)
 }
 
-fn should_index_text_preview(path: &Path, size: u64) -> bool {
-    if size > MAX_TEXT_INDEX_FILE_BYTES {
+fn is_hard_skipped_index_entry(name: &str, kind: &ComputerFileKind) -> bool {
+    let normalized_name = name.to_ascii_lowercase();
+
+    match kind {
+        ComputerFileKind::Directory => SKIPPED_INDEX_DIRECTORY_NAMES
+            .iter()
+            .any(|skipped_name| *skipped_name == normalized_name),
+        ComputerFileKind::File => {
+            if normalized_name == ".env" || normalized_name.starts_with(".env.") {
+                return true;
+            }
+
+            if SKIPPED_INDEX_FILE_NAMES
+                .iter()
+                .any(|skipped_name| *skipped_name == normalized_name)
+            {
+                return true;
+            }
+
+            file_extension(Path::new(&normalized_name))
+                .map(|extension| {
+                    SKIPPED_INDEX_FILE_EXTENSIONS
+                        .iter()
+                        .any(|skipped_extension| *skipped_extension == extension)
+                })
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn read_gitignore_rules(directory: &Path) -> Vec<IndexIgnoreRule> {
+    let gitignore_path = directory.join(".gitignore");
+    let Ok(contents) = fs::read_to_string(gitignore_path) else {
+        return Vec::new();
+    };
+
+    parse_gitignore_rules_from_text(directory, &contents)
+}
+
+fn parse_gitignore_rules_from_text(base: &Path, contents: &str) -> Vec<IndexIgnoreRule> {
+    contents
+        .lines()
+        .filter_map(|line| parse_gitignore_rule_line(base, line))
+        .collect()
+}
+
+fn parse_gitignore_rule_line(base: &Path, line: &str) -> Option<IndexIgnoreRule> {
+    let mut pattern = line.trim();
+
+    if pattern.is_empty() {
+        return None;
+    }
+
+    if let Some(comment) = pattern.strip_prefix("\\#") {
+        pattern = comment;
+    } else if pattern.starts_with('#') {
+        return None;
+    }
+
+    let mut negated = false;
+    if let Some(literal_bang) = pattern.strip_prefix("\\!") {
+        pattern = literal_bang;
+    } else if let Some(rest) = pattern.strip_prefix('!') {
+        negated = true;
+        pattern = rest.trim_start();
+    }
+
+    let mut pattern = pattern.replace('\\', "/");
+    let directory_only = pattern.ends_with('/');
+    while pattern.ends_with('/') {
+        pattern.pop();
+    }
+
+    let anchored = pattern.starts_with('/');
+    while pattern.starts_with('/') {
+        pattern.remove(0);
+    }
+
+    let pattern = pattern.trim().to_string();
+    if pattern.is_empty() {
+        return None;
+    }
+
+    Some(IndexIgnoreRule {
+        anchored,
+        base: base.to_path_buf(),
+        directory_only,
+        has_slash: pattern.contains('/'),
+        negated,
+        pattern,
+    })
+}
+
+fn is_ignored_by_gitignore_rules(
+    path: &Path,
+    kind: &ComputerFileKind,
+    ignore_rules: &[IndexIgnoreRule],
+) -> bool {
+    let mut ignored = false;
+
+    for rule in ignore_rules {
+        if gitignore_rule_matches(rule, path, kind) {
+            ignored = !rule.negated;
+        }
+    }
+
+    ignored
+}
+
+fn gitignore_rule_matches(rule: &IndexIgnoreRule, path: &Path, kind: &ComputerFileKind) -> bool {
+    if rule.directory_only && !matches!(kind, ComputerFileKind::Directory) {
         return false;
     }
 
+    let Ok(relative_path) = path.strip_prefix(&rule.base) else {
+        return false;
+    };
+    let relative_path = path_to_slash_lossy(relative_path);
+
+    if relative_path.is_empty() {
+        return false;
+    }
+
+    if rule.anchored || rule.has_slash {
+        return wildcard_path_matches(&rule.pattern, &relative_path);
+    }
+
+    relative_path
+        .split('/')
+        .any(|component| wildcard_match_segment(&rule.pattern, component))
+}
+
+fn wildcard_path_matches(pattern: &str, path: &str) -> bool {
+    let pattern_parts: Vec<&str> = pattern.split('/').filter(|part| !part.is_empty()).collect();
+    let path_parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    wildcard_path_segments_match(&pattern_parts, &path_parts)
+}
+
+fn wildcard_path_segments_match(pattern_parts: &[&str], path_parts: &[&str]) -> bool {
+    match (pattern_parts.split_first(), path_parts.split_first()) {
+        (None, None) => true,
+        (None, Some(_)) => false,
+        (Some((&"**", remaining_patterns)), _) => {
+            wildcard_path_segments_match(remaining_patterns, path_parts)
+                || (!path_parts.is_empty()
+                    && wildcard_path_segments_match(pattern_parts, &path_parts[1..]))
+        }
+        (Some((pattern, remaining_patterns)), Some((path_part, remaining_path_parts))) => {
+            wildcard_match_segment(pattern, path_part)
+                && wildcard_path_segments_match(remaining_patterns, remaining_path_parts)
+        }
+        (Some(_), None) => false,
+    }
+}
+
+fn wildcard_match_segment(pattern: &str, text: &str) -> bool {
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    let mut matches = vec![vec![false; text_chars.len() + 1]; pattern_chars.len() + 1];
+    matches[0][0] = true;
+
+    for pattern_index in 1..=pattern_chars.len() {
+        if pattern_chars[pattern_index - 1] == '*' {
+            matches[pattern_index][0] = matches[pattern_index - 1][0];
+        }
+    }
+
+    for pattern_index in 1..=pattern_chars.len() {
+        for text_index in 1..=text_chars.len() {
+            matches[pattern_index][text_index] = match pattern_chars[pattern_index - 1] {
+                '*' => {
+                    matches[pattern_index - 1][text_index] || matches[pattern_index][text_index - 1]
+                }
+                '?' => matches[pattern_index - 1][text_index - 1],
+                expected => {
+                    expected == text_chars[text_index - 1]
+                        && matches[pattern_index - 1][text_index - 1]
+                }
+            };
+        }
+    }
+
+    matches[pattern_chars.len()][text_chars.len()]
+}
+
+fn path_to_slash_lossy(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().replace('\\', "/")),
+            Component::ParentDir => Some("..".to_string()),
+            Component::CurDir | Component::Prefix(_) | Component::RootDir => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn should_index_text_preview(path: &Path, _size: u64) -> bool {
     matches!(
         file_extension(path).as_deref(),
         Some(
@@ -1330,19 +2188,17 @@ fn should_index_text_preview(path: &Path, size: u64) -> bool {
     )
 }
 
-fn read_text_preview(path: &Path, max_bytes: usize) -> Option<String> {
+fn read_text_preview(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
-    let mut buffer = vec![0u8; max_bytes];
-    let bytes_read = file.read(&mut buffer).ok()?;
-    buffer.truncate(bytes_read);
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).ok()?;
 
-    if buffer.iter().any(|byte| *byte == 0) {
+    if buffer.contains(&0) {
         return None;
     }
 
     let preview = String::from_utf8_lossy(&buffer)
         .lines()
-        .take(32)
         .collect::<Vec<_>>()
         .join("\n");
     let trimmed = preview.trim();
@@ -1523,8 +2379,6 @@ fn score_entry(
         "path"
     } else if content_score > 0.0 {
         "content"
-    } else if semantic_score > 0.0 {
-        "semantic"
     } else {
         "semantic"
     };
@@ -1583,19 +2437,13 @@ fn find_preview_snippet(
 }
 
 fn trim_search_preview(line: &str) -> String {
-    let trimmed = line.trim();
-
-    if trimmed.chars().count() <= 420 {
-        return trimmed.to_string();
-    }
-
-    trimmed.chars().take(420).collect()
+    line.trim().to_string()
 }
 
 fn push_match(matches: &mut Vec<String>, value: &str) {
     let cleaned = value.trim().to_ascii_lowercase();
 
-    if cleaned.is_empty() || matches.len() >= 10 || matches.iter().any(|item| item == &cleaned) {
+    if cleaned.is_empty() || matches.iter().any(|item| item == &cleaned) {
         return;
     }
 
@@ -1667,18 +2515,62 @@ fn find_git_repository_root(path: &Path) -> Option<PathBuf> {
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_with_timeout(
+        path,
+        args,
+        Duration::from_millis(GIT_DEFAULT_COMMAND_TIMEOUT_MS),
+    )
+}
+
+fn run_git_quick(path: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_with_timeout(
+        path,
+        args,
+        Duration::from_millis(GIT_STATUS_COMMAND_TIMEOUT_MS),
+    )
+}
+
+fn run_git_with_timeout(path: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut command = Command::new("git");
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    let output = command
+    let mut child = command
         .arg("-C")
         .arg(path)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("Could not run git: {}", error))?;
 
+    let started_at = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("Could not read git output: {}", error))?;
+                return parse_git_output(output);
+            }
+            Ok(None) if started_at.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "Git timed out after {}s while running: git {}",
+                    timeout.as_secs().max(1),
+                    args.join(" ")
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => return Err(format!("Could not poll git: {}", error)),
+        }
+    }
+}
+
+fn parse_git_output(output: Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1695,6 +2587,17 @@ fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn validate_git_branch_name(repository_path: &Path, branch_name: &str) -> Result<(), String> {
+    validate_new_git_branch_name(branch_name)?;
+
+    run_git(
+        repository_path,
+        &["check-ref-format", "--branch", branch_name],
+    )
+    .map(|_| ())
+    .map_err(|_| "Enter a valid Git branch name.".to_string())
+}
+
+fn validate_new_git_branch_name(branch_name: &str) -> Result<(), String> {
     if branch_name.is_empty() {
         return Err("Enter a branch name before creating a branch.".to_string());
     }
@@ -1707,12 +2610,7 @@ fn validate_git_branch_name(repository_path: &Path, branch_name: &str) -> Result
         return Err("Branch names cannot start with '-' or contain whitespace.".to_string());
     }
 
-    run_git(
-        repository_path,
-        &["check-ref-format", "--branch", branch_name],
-    )
-    .map(|_| ())
-    .map_err(|_| "Enter a valid Git branch name.".to_string())
+    Ok(())
 }
 
 fn validate_git_remote_name(remote: &str) -> Result<(), String> {
@@ -1726,6 +2624,116 @@ fn validate_git_remote_name(remote: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn create_unique_worktree_branch_name(
+    repository_path: &Path,
+    requested_branch: Option<&str>,
+    title: Option<&str>,
+) -> Result<String, String> {
+    let base_branch = requested_branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_start_matches("refs/heads/").to_string())
+        .unwrap_or_else(|| {
+            let slug = title
+                .map(sanitize_worktree_slug)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "chat".to_string());
+            format!("codex/fork-{}-{}", slug, now_millis())
+        });
+
+    for index in 0..1000 {
+        let candidate = if index == 0 {
+            base_branch.clone()
+        } else {
+            format!("{}-{}", base_branch, index + 1)
+        };
+
+        validate_git_branch_name(repository_path, &candidate)?;
+
+        if !git_branch_exists(repository_path, &candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    Err("Could not find an available worktree branch name.".to_string())
+}
+
+fn create_unique_worktree_path(
+    repository_path: &Path,
+    requested_directory: Option<&str>,
+    branch_name: &str,
+) -> Result<PathBuf, String> {
+    let parent = repository_path
+        .parent()
+        .ok_or_else(|| "Could not find a parent folder for the Git worktree.".to_string())?;
+    let repo_name = repository_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "workspace".to_string());
+    let requested = requested_directory
+        .map(sanitize_worktree_directory_name)
+        .filter(|value| !value.is_empty());
+    let branch_slug = branch_name
+        .rsplit('/')
+        .next()
+        .map(sanitize_worktree_directory_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "fork".to_string());
+    let base_directory = requested.unwrap_or_else(|| format!("{}-{}", repo_name, branch_slug));
+
+    for index in 0..1000 {
+        let directory_name = if index == 0 {
+            base_directory.clone()
+        } else {
+            format!("{}-{}", base_directory, index + 1)
+        };
+        let candidate = parent.join(directory_name);
+
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err("Could not find an available folder for the Git worktree.".to_string())
+}
+
+fn git_branch_exists(repository_path: &Path, branch_name: &str) -> bool {
+    let ref_name = format!("refs/heads/{}", branch_name);
+    run_git(repository_path, &["rev-parse", "--verify", &ref_name]).is_ok()
+}
+
+fn sanitize_worktree_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+
+    slug.trim_matches('-').to_string()
+}
+
+fn sanitize_worktree_directory_name(value: &str) -> String {
+    let slug = sanitize_worktree_slug(value);
+
+    if slug.is_empty() {
+        "fork".to_string()
+    } else {
+        slug
+    }
 }
 
 fn optional_git_output(output: String) -> Option<String> {
@@ -1745,7 +2753,7 @@ struct GitDiffPreview {
 }
 
 fn get_git_ahead_behind(repository_path: &Path) -> Option<(usize, usize)> {
-    let output = run_git(
+    let output = run_git_quick(
         repository_path,
         &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
     )
@@ -1761,7 +2769,7 @@ fn build_git_diff_previews(
     repository_path: &Path,
     status_output: &str,
 ) -> HashMap<String, GitDiffPreview> {
-    let diff_output = run_git(
+    let diff_output = run_git_quick(
         repository_path,
         &[
             "diff",
@@ -1959,9 +2967,14 @@ fn create_untracked_git_diff_preview(
 
     let text = String::from_utf8_lossy(&bytes);
     let mut lines = Vec::new();
-    let truncated = false;
+    let mut truncated = false;
 
     for (index, line) in text.lines().enumerate() {
+        if lines.len() >= MAX_GIT_DIFF_PREVIEW_LINES_PER_FILE {
+            truncated = true;
+            break;
+        }
+
         lines.push(ComputerGitDiffLine {
             content: truncate_git_diff_line(line),
             kind: "add".to_string(),
@@ -1985,6 +2998,11 @@ fn push_git_diff_preview_line(
     let Some(preview) = previews.get_mut(key) else {
         return;
     };
+
+    if preview.lines.len() >= MAX_GIT_DIFF_PREVIEW_LINES_PER_FILE {
+        preview.truncated = true;
+        return;
+    }
 
     preview.lines.push(line);
 }
@@ -2018,7 +3036,7 @@ fn parse_git_diff_hunk_header(line: &str) -> Option<(usize, usize)> {
 }
 
 fn parse_git_diff_hunk_start(part: &str) -> Option<usize> {
-    part.trim_start_matches(|character| character == '-' || character == '+')
+    part.trim_start_matches(['-', '+'])
         .split(',')
         .next()?
         .parse::<usize>()
@@ -2026,7 +3044,16 @@ fn parse_git_diff_hunk_start(part: &str) -> Option<usize> {
 }
 
 fn truncate_git_diff_line(line: &str) -> String {
-    line.to_string()
+    if line.chars().count() <= MAX_GIT_DIFF_PREVIEW_LINE_CHARS {
+        return line.to_string();
+    }
+
+    let mut truncated = line
+        .chars()
+        .take(MAX_GIT_DIFF_PREVIEW_LINE_CHARS)
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn parse_git_numstat_entries(output: &str) -> Vec<(String, usize, usize)> {
@@ -2077,6 +3104,7 @@ fn parse_git_changed_files(
 
     status_output
         .lines()
+        .take(MAX_GIT_STATUS_CHANGED_FILES)
         .filter_map(|line| {
             let trimmed = line.trim_end();
 
@@ -2163,10 +3191,8 @@ fn parse_github_remote_url(remote_url: &str) -> Option<(Option<String>, Option<S
         rest
     } else if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
         rest
-    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
-        rest
     } else {
-        return None;
+        trimmed.strip_prefix("ssh://git@github.com/")?
     };
     let mut parts = path.split('/');
     let owner = parts
@@ -2185,6 +3211,176 @@ fn parse_github_remote_url(remote_url: &str) -> Option<(Option<String>, Option<S
     Some((owner, repo))
 }
 
-fn path_to_string(path: impl AsRef<Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn temp_index_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let root = std::env::temp_dir().join(format!(
+            "gilbertcodex-file-index-{}-{}-{}",
+            label,
+            std::process::id(),
+            nonce
+        ));
+        fs::create_dir_all(&root).expect("create temp index root");
+        root
+    }
+
+    #[test]
+    fn file_index_skips_secret_generated_entries_without_gitignore() {
+        assert!(should_skip_index_entry(
+            Path::new(".env.local"),
+            ".env.local",
+            &ComputerFileKind::File,
+            &[]
+        ));
+        assert!(should_skip_index_entry(
+            Path::new("workspace.sqlite3"),
+            "workspace.sqlite3",
+            &ComputerFileKind::File,
+            &[]
+        ));
+        assert!(should_skip_index_entry(
+            Path::new(".tools"),
+            ".tools",
+            &ComputerFileKind::Directory,
+            &[]
+        ));
+        assert!(!should_skip_index_entry(
+            Path::new("src/main.rs"),
+            "main.rs",
+            &ComputerFileKind::File,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn file_index_gitignore_rules_match_common_patterns() {
+        let base = temp_index_root("gitignore-rules");
+        let rules = parse_gitignore_rules_from_text(
+            &base,
+            "ignored-dir/\n*.cache\n!/keep.cache\n/secrets.json\nlogs/*.log\n",
+        );
+
+        assert!(is_ignored_by_gitignore_rules(
+            &base.join("src").join("ignored-dir"),
+            &ComputerFileKind::Directory,
+            &rules
+        ));
+        assert!(is_ignored_by_gitignore_rules(
+            &base.join("nested").join("data.cache"),
+            &ComputerFileKind::File,
+            &rules
+        ));
+        assert!(!is_ignored_by_gitignore_rules(
+            &base.join("keep.cache"),
+            &ComputerFileKind::File,
+            &rules
+        ));
+        assert!(is_ignored_by_gitignore_rules(
+            &base.join("secrets.json"),
+            &ComputerFileKind::File,
+            &rules
+        ));
+        assert!(!is_ignored_by_gitignore_rules(
+            &base.join("src").join("secrets.json"),
+            &ComputerFileKind::File,
+            &rules
+        ));
+        assert!(is_ignored_by_gitignore_rules(
+            &base.join("logs").join("dev.log"),
+            &ComputerFileKind::File,
+            &rules
+        ));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_index_reads_gitignore_from_each_directory() {
+        let base = temp_index_root("read-gitignore");
+        fs::write(base.join(".gitignore"), "ignored-root.txt\n").expect("write root gitignore");
+        let nested = base.join("nested");
+        fs::create_dir_all(&nested).expect("create nested dir");
+        fs::write(nested.join(".gitignore"), "ignored-nested.txt\n")
+            .expect("write nested gitignore");
+
+        let root_rules = read_gitignore_rules(&base);
+        let nested_rules = read_gitignore_rules(&nested);
+
+        assert!(is_ignored_by_gitignore_rules(
+            &base.join("ignored-root.txt"),
+            &ComputerFileKind::File,
+            &root_rules
+        ));
+        assert!(is_ignored_by_gitignore_rules(
+            &nested.join("ignored-nested.txt"),
+            &ComputerFileKind::File,
+            &nested_rules
+        ));
+        assert!(!is_ignored_by_gitignore_rules(
+            &base.join("kept.txt"),
+            &ComputerFileKind::File,
+            &root_rules
+        ));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn write_text_file_creates_missing_parent_dirs_by_default() {
+        let base = temp_index_root("write-parents");
+        let path = base.join("hello").join("src").join("App.jsx");
+
+        let result = computer_write_text_file(ComputerWriteFileRequest {
+            content: "export default function App() {\n  return null;\n}\n".to_string(),
+            create_parent_dirs: None,
+            expected_sha256: None,
+            force_eol: Some("lf".to_string()),
+            overwrite: None,
+            path: path_to_string(&path),
+            roots: vec![path_to_string(&base)],
+        })
+        .expect("write nested file");
+
+        assert!(result.created);
+        assert_eq!(path_to_string(&path), result.path);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read written file"),
+            "export default function App() {\n  return null;\n}\n"
+        );
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn write_text_file_can_still_refuse_missing_parent_dirs() {
+        let base = temp_index_root("write-no-parents");
+        let path = base.join("hello").join("src").join("App.jsx");
+
+        let error = computer_write_text_file(ComputerWriteFileRequest {
+            content: "export default null;\n".to_string(),
+            create_parent_dirs: Some(false),
+            expected_sha256: None,
+            force_eol: Some("lf".to_string()),
+            overwrite: None,
+            path: path_to_string(&path),
+            roots: vec![path_to_string(&base)],
+        })
+        .expect_err("missing parent folders should be refused when explicitly disabled");
+
+        assert!(error.contains("Parent folder does not exist"));
+        assert!(!path.exists());
+
+        let _ = fs::remove_dir_all(base);
+    }
 }

@@ -6,7 +6,10 @@
 
 use crate::{
     commands::auth,
-    core::storage::{self, SYSTEM_NAMESPACE},
+    core::{
+        fs_utils::{delete_legacy_file_and_empty_parent as delete_legacy_file, path_to_string},
+        storage::{self, SYSTEM_NAMESPACE},
+    },
 };
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::Method;
@@ -33,10 +36,6 @@ const USER_AGENT: &str = "GilbertCodex/0.1 (desktop source control)";
 const DEFAULT_OAUTH_SCOPE: &str = "repo workflow delete_repo admin:repo_hook admin:org admin:public_key admin:org_hook gist notifications user project write:packages read:packages delete:packages admin:gpg_key codespace read:audit_log security_events";
 const DEFAULT_PER_PAGE: usize = 30;
 const MAX_PER_PAGE: usize = 100;
-const DEFAULT_TREE_LIMIT: usize = 900;
-const MAX_TREE_LIMIT: usize = 5_000;
-const DEFAULT_READ_BYTES: usize = 1024 * 1024;
-const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
 const GITHUB_HTTP_TIMEOUT_SECS: u64 = 18;
 const GITHUB_HTTP_CONNECT_TIMEOUT_SECS: u64 = 8;
 
@@ -966,15 +965,12 @@ pub async fn github_list_tree(
     }
 
     let tree = github_api::<GithubTreeApi>(&client, &token, Method::GET, url, None).await?;
-    let limit = request
-        .limit
-        .unwrap_or(DEFAULT_TREE_LIMIT)
-        .clamp(1, MAX_TREE_LIMIT);
-    let truncated_by_limit = tree.tree.len() > limit;
+    let limit = request.limit.filter(|value| *value > 0);
+    let truncated_by_limit = limit.is_some_and(|max_entries| tree.tree.len() > max_entries);
     let entries = tree
         .tree
         .into_iter()
-        .take(limit)
+        .take(limit.unwrap_or(usize::MAX))
         .filter_map(GithubTreeEntry::from_api)
         .collect();
 
@@ -1015,16 +1011,12 @@ pub async fn github_read_file(
     }
 
     let decoded = decode_github_file_content(file.content.as_deref(), file.encoding.as_deref())?;
-    let max_bytes = request
-        .max_bytes
-        .unwrap_or(DEFAULT_READ_BYTES)
-        .clamp(1, MAX_READ_BYTES);
-    let truncated = decoded.len() > max_bytes;
-    let content_bytes = if truncated {
-        &decoded[..max_bytes]
-    } else {
-        decoded.as_slice()
-    };
+    let max_bytes = request.max_bytes.filter(|value| *value > 0);
+    let truncated = max_bytes.is_some_and(|max_bytes| decoded.len() > max_bytes);
+    let content_bytes = max_bytes
+        .filter(|max_bytes| decoded.len() > *max_bytes)
+        .map(|max_bytes| &decoded[..max_bytes])
+        .unwrap_or_else(|| decoded.as_slice());
     let content = String::from_utf8_lossy(content_bytes).to_string();
 
     Ok(GithubReadFileResponse {
@@ -1686,12 +1678,8 @@ async fn github_api<T: DeserializeOwned>(
         return Err(format_github_error(status.as_u16(), &text));
     }
 
-    serde_json::from_str::<T>(&text).map_err(|error| {
-        format!(
-            "Could not parse GitHub response: {error}. Response started with: {}",
-            text.chars().take(240).collect::<String>()
-        )
-    })
+    serde_json::from_str::<T>(&text)
+        .map_err(|error| format!("Could not parse GitHub response: {error}. Full response: {text}"))
 }
 
 async fn github_api_empty(
@@ -2114,7 +2102,7 @@ fn format_github_error(status: u16, body: &str) -> String {
                 .map(ToString::to_string)
         })
         .filter(|message| !message.trim().is_empty())
-        .unwrap_or_else(|| body.chars().take(320).collect::<String>());
+        .unwrap_or_else(|| body.to_string());
 
     format!("GitHub request failed with HTTP {status}: {message}")
 }
@@ -2292,33 +2280,4 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or_default()
-}
-
-fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
-}
-
-fn delete_legacy_file(path: &PathBuf, label: &str) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(path).map_err(|error| {
-        format!(
-            "Could not remove the old {label} at {}: {error}",
-            path_to_string(path)
-        )
-    })?;
-
-    if let Some(parent) = path.parent() {
-        let is_empty = fs::read_dir(parent)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-
-        if is_empty {
-            let _ = fs::remove_dir(parent);
-        }
-    }
-
-    Ok(())
 }

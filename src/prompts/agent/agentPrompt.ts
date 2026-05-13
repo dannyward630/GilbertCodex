@@ -7,6 +7,7 @@ import {
 } from "./promptRetrieval";
 import { createRuntimeToolPrompt } from "./runtimeToolPrompt";
 import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "../../tools/workspaceContext";
+import { formatBackgroundTerminalSessionsForPrompt } from "../../lib/terminalSessions";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
 
@@ -36,6 +37,7 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings }: Agent
   const sections = [
     formatCurrentRuntimeContext(),
     formatCurrentWorkspaceContext(),
+    formatBackgroundTerminalSessionsForPrompt(),
     ...selectedChunks.map((entry) => formatPromptChunk(entry)),
     formatConfiguredSystemPrompt(settings.systemPrompt),
     formatUserInstructions(settings.userInstructions),
@@ -48,6 +50,7 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings }: Agent
         settings,
       }),
     ),
+    formatSessionLedger(messages),
     formatPromptOptimizationSection(selectedChunks),
   ].filter(Boolean);
   const prompt = clampPromptText(sections.join("\n\n"), MAX_TOTAL_SYSTEM_PROMPT_TOKENS);
@@ -119,6 +122,93 @@ function formatRuntimePolicySection(content: string) {
   }
 
   return ["# Runtime Policy", trimmed].join("\n\n");
+}
+
+const MAX_LEDGER_ENTRIES = 30;
+const MAX_LEDGER_INPUT_CHARS = 140;
+
+interface LedgerEntry {
+  detail?: string;
+  label: string;
+  tool: string;
+}
+
+/**
+ * Builds a "session ledger" — a compact, dedup'd record of completed tool
+ * actions across the conversation. The model gets this as part of the system
+ * prompt every turn so a follow-up like "thanks, what's next?" doesn't cause
+ * it to re-run a task that already succeeded.
+ *
+ * Kept short on purpose (<=30 entries, ~140 chars each). The full tool
+ * outputs already live in the message context surface; the ledger is the
+ * "you already did this — don't redo it" reminder layer.
+ */
+function formatSessionLedger(messages: ChatMessage[]): string {
+  const entries: LedgerEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.toolCalls)) {
+      continue;
+    }
+    for (const toolCall of message.toolCalls) {
+      if (toolCall.status !== "complete") {
+        continue;
+      }
+      const tool = sanitizeLedgerToken(toolCall.label || "tool");
+      const detail = summarizeLedgerInput(toolCall.input);
+      const key = `${tool}::${detail ?? ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({ detail, label: toolCall.label || tool, tool });
+    }
+  }
+
+  if (entries.length === 0) {
+    return "";
+  }
+
+  const totalCount = entries.length;
+  const visibleEntries = totalCount > MAX_LEDGER_ENTRIES ? entries.slice(-MAX_LEDGER_ENTRIES) : entries;
+  const omittedCount = totalCount - visibleEntries.length;
+
+  const lines = [
+    "# Session Ledger",
+    "The following tool actions already completed in this conversation. Do not redo any of them. If the user's follow-up does not contradict a prior result, build on it — read the latest tool output and continue. Re-running an identical action is wasteful and confuses the user.",
+    omittedCount > 0
+      ? `Showing the most recent ${visibleEntries.length} of ${totalCount} completed tool actions (${omittedCount} older entries omitted).`
+      : `Total completed tool actions: ${totalCount}.`,
+    "",
+    ...visibleEntries.map((entry) => entry.detail ? `- ${entry.label}: ${entry.detail}` : `- ${entry.label}`),
+  ];
+
+  return lines.join("\n");
+}
+
+function sanitizeLedgerToken(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 60);
+}
+
+function summarizeLedgerInput(input: string | undefined): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  // Take the most distinguishing line — typically "Path: ..." or
+  // "Command: ..." or "Query: ..." — instead of the whole approval-style
+  // preview. Falls back to the first non-empty line.
+  const lines = input.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const distinguishing = lines.find((line) =>
+    /^(Path|Command|Query|URL|Repository|Branch|Tag):/i.test(line),
+  );
+  const chosen = distinguishing ?? lines[0];
+  if (!chosen) {
+    return undefined;
+  }
+  return chosen.length > MAX_LEDGER_INPUT_CHARS
+    ? `${chosen.slice(0, MAX_LEDGER_INPUT_CHARS - 1)}…`
+    : chosen;
 }
 
 function formatPromptOptimizationSection(selectedChunks: SelectedPromptChunk[]) {

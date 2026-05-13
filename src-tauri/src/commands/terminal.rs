@@ -1,3 +1,4 @@
+use crate::core::fs_utils::path_to_string;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
@@ -6,6 +7,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
     thread,
@@ -143,12 +145,15 @@ function global:which {
 }
 "#;
 
-const MAX_BUFFERED_CHUNKS: usize = 1_500;
+const MAX_BUFFERED_CHUNKS: usize = usize::MAX;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
 const STREAM_READ_BYTES: usize = 8 * 1024;
 const DEFAULT_RUN_TIMEOUT_MS: u64 = 45_000;
 const MAX_RUN_TIMEOUT_MS: u64 = 600_000;
-const MAX_RUN_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RUN_OUTPUT_BYTES: usize = usize::MAX;
+const COMMAND_KILL_WAIT_MS: u64 = 1_500;
+const COMMAND_READER_DRAIN_WAIT_MS: u64 = 750;
+const SESSION_KILL_WAIT_MS: u64 = 750;
 
 #[derive(Default)]
 pub struct TerminalState {
@@ -594,7 +599,10 @@ pub fn terminal_kill_session(
         .map(|mut session| {
             if let Some(child) = session.active_child.as_mut() {
                 let _ = child.kill();
-                let _ = child.wait();
+                wait_for_pty_child_exit(
+                    child.as_mut(),
+                    Duration::from_millis(SESSION_KILL_WAIT_MS),
+                );
             }
             session.active_stdin.take();
             session.active_pty.take();
@@ -627,6 +635,7 @@ fn run_command_blocking(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    scrub_inherited_dev_env(&mut command);
 
     let mut child = command
         .spawn()
@@ -635,23 +644,29 @@ fn run_command_blocking(
     let stdout = Arc::new(Mutex::new(Vec::new()));
     let stderr = Arc::new(Mutex::new(Vec::new()));
     let output_limit_reached = Arc::new(AtomicBool::new(false));
-    let mut readers = Vec::new();
+    let (reader_done_tx, reader_done_rx) = mpsc::channel();
+    let mut reader_count = 0;
 
     if let Some(child_stdout) = child.stdout.take() {
-        readers.push(read_terminal_stream_to_buffer(
+        reader_count += 1;
+        read_terminal_stream_to_buffer(
             child_stdout,
             Arc::clone(&stdout),
             Arc::clone(&output_limit_reached),
-        ));
+            reader_done_tx.clone(),
+        );
     }
 
     if let Some(child_stderr) = child.stderr.take() {
-        readers.push(read_terminal_stream_to_buffer(
+        reader_count += 1;
+        read_terminal_stream_to_buffer(
             child_stderr,
             Arc::clone(&stderr),
             Arc::clone(&output_limit_reached),
-        ));
+            reader_done_tx.clone(),
+        );
     }
+    drop(reader_done_tx);
 
     let (exit_code, timed_out) = loop {
         if let Some(status) = child
@@ -662,27 +677,31 @@ fn run_command_blocking(
         }
 
         if output_limit_reached.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let status = child.wait().map_err(|error| {
-                format!("Could not stop high-output terminal command: {}", error)
-            })?;
-            break (status.code(), false);
+            let status = stop_process_child_with_deadline(
+                &mut child,
+                Duration::from_millis(COMMAND_KILL_WAIT_MS),
+            )
+            .map_err(|error| format!("Could not stop high-output terminal command: {}", error))?;
+            break (status.and_then(|status| status.code()), false);
         }
 
         if started_at.elapsed() >= Duration::from_millis(timeout_ms) {
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .map_err(|error| format!("Could not stop timed-out terminal command: {}", error))?;
-            break (status.code(), true);
+            let status = stop_process_child_with_deadline(
+                &mut child,
+                Duration::from_millis(COMMAND_KILL_WAIT_MS),
+            )
+            .map_err(|error| format!("Could not stop timed-out terminal command: {}", error))?;
+            break (status.and_then(|status| status.code()), true);
         }
 
         thread::sleep(Duration::from_millis(80));
     };
 
-    for reader in readers {
-        let _ = reader.join();
-    }
+    wait_for_reader_completion(
+        reader_count,
+        &reader_done_rx,
+        Duration::from_millis(COMMAND_READER_DRAIN_WAIT_MS),
+    );
 
     Ok(TerminalRunCommandResponse {
         duration_ms: started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
@@ -806,18 +825,17 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
     }
 }
 
+type InteractiveTerminalParts = (
+    Box<dyn PtyChild + Send + Sync>,
+    Box<dyn MasterPty + Send>,
+    Box<dyn Write + Send>,
+);
+
 fn spawn_interactive_terminal(
     shell: &TerminalShell,
     working_directory: &Path,
     output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
-) -> Result<
-    (
-        Box<dyn PtyChild + Send + Sync>,
-        Box<dyn MasterPty + Send>,
-        Box<dyn Write + Send>,
-    ),
-    String,
-> {
+) -> Result<InteractiveTerminalParts, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -964,6 +982,52 @@ fn configure_pty_command(command: &mut CommandBuilder, working_directory: &Path)
     command.env("GILBERT_CODEX_TERMINAL", "1");
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    // Strip env that the host (GilbertCodex itself, especially when launched
+    // via `tauri dev`) leaks into children — most notoriously the Vite/dev
+    // server PORT vars that have been pinning user projects to port 1420.
+    for key in inherited_env_vars_to_scrub() {
+        command.env_remove(key);
+    }
+}
+
+/// Env vars that must NEVER inherit from the GilbertCodex host process into
+/// AI-spawned tool commands. Keeping these around causes user projects to
+/// silently bind to GilbertCodex's own dev port, copy our HMR config, or
+/// pick up secrets from our build environment.
+fn inherited_env_vars_to_scrub() -> &'static [&'static str] {
+    &[
+        "PORT",
+        "HOST",
+        "HOSTNAME",
+        "BIND_ADDRESS",
+        "VITE_PORT",
+        "VITE_HOST",
+        "VITE_HMR_HOST",
+        "VITE_HMR_PORT",
+        "VITE_DEV_SERVER_URL",
+        "VITE_USER_NODE_ENV",
+        "TAURI_DEBUG",
+        "TAURI_PLATFORM",
+        "TAURI_PLATFORM_TYPE",
+        "TAURI_PLATFORM_VERSION",
+        "TAURI_FAMILY",
+        "TAURI_ARCH",
+        "TAURI_DEV_HOST",
+        "WEBPACK_DEV_SERVER",
+        "WDS_SOCKET_HOST",
+        "WDS_SOCKET_PORT",
+        "BROWSER",
+        "FAST_REFRESH",
+        "REACT_APP_DEV_SERVER",
+    ]
+}
+
+/// Same scrub list applied to a plain `std::process::Command`. Both PTY and
+/// piped spawns must go through one of these helpers.
+fn scrub_inherited_dev_env(command: &mut Command) {
+    for key in inherited_env_vars_to_scrub() {
+        command.env_remove(key);
+    }
 }
 
 fn default_terminal_shell() -> TerminalShell {
@@ -1098,8 +1162,8 @@ fn read_terminal_stream_to_buffer<R>(
     mut reader: R,
     output: Arc<Mutex<Vec<u8>>>,
     output_limit_reached: Arc<AtomicBool>,
-) -> thread::JoinHandle<()>
-where
+    done: Sender<()>,
+) where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
@@ -1136,7 +1200,57 @@ where
                 break;
             }
         }
-    })
+        let _ = done.send(());
+    });
+}
+
+fn wait_for_reader_completion(reader_count: usize, done: &Receiver<()>, timeout: Duration) {
+    if reader_count == 0 {
+        return;
+    }
+
+    let started_at = Instant::now();
+
+    for _ in 0..reader_count {
+        let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
+            break;
+        };
+
+        if remaining.is_zero() || done.recv_timeout(remaining).is_err() {
+            break;
+        }
+    }
+}
+
+fn stop_process_child_with_deadline(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let _ = child.kill();
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+
+        if started_at.elapsed() >= timeout {
+            return Ok(None);
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_pty_child_exit(child: &mut dyn PtyChild, timeout: Duration) {
+    let started_at = Instant::now();
+
+    while started_at.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+        }
+    }
 }
 
 fn mark_output_limit_reached(output: &mut Vec<u8>, output_limit_reached: &AtomicBool) {
@@ -1308,10 +1422,6 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or_default()
-}
-
-fn path_to_string(path: impl AsRef<Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
 }
 
 fn bytes_to_string(output: &Arc<Mutex<Vec<u8>>>) -> String {

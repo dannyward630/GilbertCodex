@@ -22,10 +22,12 @@ import {
 } from "./models";
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
+import { DEFAULT_MCP_SETTINGS, normalizeMcpSettings } from "../types/mcp";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import { cleanupLegacyDeviceStorage, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
 import type {
   ChatAttachment,
+  ChatArtifact,
   ChatContextCompaction,
   ChatFileAttachment,
   ChatImageAttachment,
@@ -38,7 +40,22 @@ import type { AgentApproval } from "../types/agentRun";
 import type { LocalPermissionMode, LocalWorkspaceIndexStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
-import type { AppearanceMode, ProviderSettings, ReasoningEffort, ThinkingSettings, WebSearchSettings } from "../types/settings";
+import type { PdfLibraryOrigin, PdfLibraryRecord, PdfLibrarySourceFormat, PdfLibraryState, PdfProjectInstruction } from "../types/pdfLibrary";
+import {
+  DEFAULT_BRAVE_SEARCH_SETTINGS,
+  type AppearanceMode,
+  type BraveSearchFreshness,
+  type BraveSearchRequestMethod,
+  type BraveSearchResultFilter,
+  type BraveSearchSafeSearch,
+  type BraveSearchUnits,
+  type BraveAnswersModel,
+  type ProviderSettings,
+  type ReasoningEffort,
+  type ThinkingSettings,
+  type WebSearchProvider,
+  type WebSearchSettings,
+} from "../types/settings";
 
 const CHATS_KEY = "gilbert-codex.chats.v1";
 const PROJECTS_KEY = "gilbert-codex.projects.v1";
@@ -54,6 +71,9 @@ const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
 const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
 const BROWSER_AUTH_DB_KEY = "gilbert-codex.local-auth-db.v1";
 const BROWSER_AGENT_RUNS_KEY = "gilbert-codex.agent-runs.v1";
+const PDF_LIBRARY_KEY = "gilbert-codex.pdf-library.v1";
+const MAPBOX_SETTINGS_KEY = "gilbert-codex.mapbox-settings.v1";
+const WEATHER_LOCATION_KEY = "gilbert-codex.weather-location.v1";
 const PERSISTED_STORAGE_KEYS = [
   CHATS_KEY,
   PROJECTS_KEY,
@@ -68,8 +88,12 @@ const PERSISTED_STORAGE_KEYS = [
   BROWSER_PREVIEW_SESSION_KEY,
   LEGACY_BROWSER_PREVIEW_SESSION_KEY,
   BROWSER_AGENT_RUNS_KEY,
+  PDF_LIBRARY_KEY,
+  MAPBOX_SETTINGS_KEY,
+  WEATHER_LOCATION_KEY,
 ];
 const LEGACY_BROWSER_ONLY_KEYS = [BROWSER_AUTH_DB_KEY];
+const PENDING_DEVICE_WRITE_PREFIX = "gilbert-codex.pending-device-write.v1.";
 let storageNamespace = "legacy";
 let deviceDatabasePath: string | null = null;
 let deviceStorageInitialized = false;
@@ -78,17 +102,25 @@ let storageInitializationToken = 0;
 const deviceStorageWriteQueues = new Map<string, Promise<void>>();
 const deviceStoragePendingWrites = new Map<string, { key: string; namespace: string; value: string }>();
 
+interface PendingDeviceStorageWrite {
+  key: string;
+  namespace: string;
+  updatedAt: number;
+  value: string;
+}
+
 export const defaultProviderSettings: ProviderSettings = {
   apiKeys: {},
   baseUrls: getDefaultProviderBaseUrls(),
   maxTokens: DEFAULT_LOCAL_MAX_TOKENS,
+  mcp: DEFAULT_MCP_SETTINGS,
   model: DEFAULT_CHAT_MODEL,
   openRouterApiKey: "",
   provider: DEFAULT_PROVIDER_ID,
   providerModels: getDefaultProviderModels(),
   systemPrompt: "You are Gilbert Codex, a careful local coding assistant. Be concise, practical, and honest about limitations.",
   thinking: {
-    effort: "high",
+    effort: "medium",
     enabled: true,
   },
   temperature: DEFAULT_LOCAL_TEMPERATURE,
@@ -97,6 +129,7 @@ export const defaultProviderSettings: ProviderSettings = {
   tools: DEFAULT_TOOL_REGISTRY_SETTINGS,
   userInstructions: "",
   webSearch: {
+    brave: DEFAULT_BRAVE_SEARCH_SETTINGS,
     enabled: false,
     maxResults: DEFAULT_WEB_SEARCH_MAX_RESULTS,
     provider: "duckduckgo",
@@ -141,8 +174,14 @@ export async function initializeDeviceStorage(userId: string | null) {
   }
 
   deviceDatabasePath = snapshot?.databasePath ?? null;
-  deviceStorageValues = new Map(Object.entries(snapshot?.values ?? {}));
+  const recoveredStorage = recoverPendingDeviceStorageWrites(namespace, snapshot?.values ?? {});
+  deviceStorageValues = new Map(Object.entries(recoveredStorage.values));
   deviceStorageInitialized = true;
+
+  for (const recoveredWrite of recoveredStorage.pendingWrites) {
+    queueDeviceStorageWrite(recoveredWrite.namespace, recoveredWrite.key, recoveredWrite.value);
+  }
+
   purgeLegacyBrowserStorage();
   void cleanupLegacyDeviceStorage().catch(() => undefined);
 }
@@ -232,6 +271,7 @@ export function loadProviderSettings(): ProviderSettings {
     apiKeys,
     baseUrls,
     maxTokens: normalizeMaxTokens(storedSettings?.maxTokens, defaultProviderSettings.maxTokens),
+    mcp: normalizeMcpSettings(storedSettings?.mcp),
     model,
     openRouterApiKey: apiKeys.openrouter ?? "",
     provider,
@@ -261,6 +301,7 @@ export function saveProviderSettings(settings: ProviderSettings) {
     ...settings,
     apiKeys,
     baseUrls,
+    mcp: normalizeMcpSettings(settings.mcp),
     openRouterApiKey: apiKeys.openrouter ?? "",
     providerModels,
     thinking: normalizeThinkingSettings(settings.thinking),
@@ -322,6 +363,14 @@ export function saveDiscordBridgeSettings(settings: DiscordBridgeSettings) {
   writeJson(DISCORD_BRIDGE_KEY, normalizeDiscordBridgeSettings(settings));
 }
 
+export function loadPdfLibraryState(): PdfLibraryState {
+  return normalizePdfLibraryState(readJson<Partial<PdfLibraryState>>(PDF_LIBRARY_KEY));
+}
+
+export function savePdfLibraryState(state: PdfLibraryState) {
+  writeJson(PDF_LIBRARY_KEY, normalizePdfLibraryState(state));
+}
+
 export function loadPersistentString(key: string) {
   return readString(key);
 }
@@ -357,6 +406,7 @@ function readString(key: string) {
 
 function writeString(key: string, value: string) {
   if (deviceStorageInitialized && isDeviceDatabaseAvailable()) {
+    writePendingDeviceStorageRecovery(storageNamespace, key, value);
     deviceStorageValues.set(key, value);
     queueDeviceStorageWrite(storageNamespace, key, value);
     return;
@@ -400,10 +450,131 @@ async function drainDeviceStorageWriteQueue(queueKey: string) {
 
     try {
       await saveDeviceDatabaseValue(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
+      clearPendingDeviceStorageRecovery(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
     } catch {
       return;
     }
   }
+}
+
+function recoverPendingDeviceStorageWrites(namespace: string, values: Record<string, string>) {
+  const pendingWrites = readPendingDeviceStorageRecoveries(namespace);
+
+  if (pendingWrites.length === 0) {
+    return {
+      pendingWrites,
+      values,
+    };
+  }
+
+  const recoveredValues = {
+    ...values,
+  };
+
+  for (const pendingWrite of pendingWrites) {
+    recoveredValues[pendingWrite.key] = pendingWrite.value;
+  }
+
+  return {
+    pendingWrites,
+    values: recoveredValues,
+  };
+}
+
+function writePendingDeviceStorageRecovery(namespace: string, key: string, value: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const pendingWrite: PendingDeviceStorageWrite = {
+    key,
+    namespace,
+    updatedAt: Date.now(),
+    value,
+  };
+
+  try {
+    window.localStorage.setItem(pendingDeviceStorageKey(namespace, key), JSON.stringify(pendingWrite));
+  } catch {
+    return;
+  }
+}
+
+function clearPendingDeviceStorageRecovery(namespace: string, key: string, value: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const storageKey = pendingDeviceStorageKey(namespace, key);
+    const pendingWrite = parsePendingDeviceStorageWrite(window.localStorage.getItem(storageKey));
+
+    if (!pendingWrite || pendingWrite.value === value) {
+      window.localStorage.removeItem(storageKey);
+    }
+  } catch {
+    return;
+  }
+}
+
+function readPendingDeviceStorageRecoveries(namespace: string) {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const pendingWrites: PendingDeviceStorageWrite[] = [];
+  const namespacePrefix = pendingDeviceStorageNamespacePrefix(namespace);
+
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const storageKey = window.localStorage.key(index);
+
+      if (!storageKey?.startsWith(namespacePrefix)) {
+        continue;
+      }
+
+      const pendingWrite = parsePendingDeviceStorageWrite(window.localStorage.getItem(storageKey));
+
+      if (pendingWrite?.namespace === namespace) {
+        pendingWrites.push(pendingWrite);
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  return pendingWrites.sort((left, right) => left.updatedAt - right.updatedAt);
+}
+
+function parsePendingDeviceStorageWrite(value: string | null): PendingDeviceStorageWrite | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const pendingWrite = JSON.parse(value) as Partial<PendingDeviceStorageWrite>;
+
+    if (typeof pendingWrite.namespace !== "string" || typeof pendingWrite.key !== "string" || typeof pendingWrite.value !== "string") {
+      return null;
+    }
+
+    return {
+      key: pendingWrite.key,
+      namespace: pendingWrite.namespace,
+      updatedAt: typeof pendingWrite.updatedAt === "number" && Number.isFinite(pendingWrite.updatedAt) ? pendingWrite.updatedAt : 0,
+      value: pendingWrite.value,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function pendingDeviceStorageNamespacePrefix(namespace: string) {
+  return `${PENDING_DEVICE_WRITE_PREFIX}${encodeURIComponent(namespace)}.`;
+}
+
+function pendingDeviceStorageKey(namespace: string, key: string) {
+  return `${pendingDeviceStorageNamespacePrefix(namespace)}${encodeURIComponent(key)}`;
 }
 
 function scopedStorageKey(key: string) {
@@ -546,6 +717,7 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     agentRunId: typeof message.agentRunId === "string" && message.agentRunId ? message.agentRunId : undefined,
     agentRunStatus: normalizeAgentRunStatus(message.agentRunStatus),
     approvals: normalizeAgentApprovals(message.approvals),
+    artifacts: normalizeArtifacts(message.artifacts),
     attachments: normalizeAttachments(message.attachments),
     contextCompactions: normalizeContextCompactions(message.contextCompactions),
     content: legacyDiscordMessage?.content ?? (typeof message.content === "string" ? message.content : ""),
@@ -616,6 +788,45 @@ function findLegacyDiscordValue(lines: string[], label: string) {
 
 function normalizeOptionalText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeArtifacts(value: unknown): ChatArtifact[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const artifacts = value.flatMap((item) => {
+    if (typeof item !== "object" || !item) {
+      return [];
+    }
+
+    const artifact = item as Partial<ChatArtifact>;
+    const title = typeof artifact.title === "string" && artifact.title.trim() ? artifact.title.trim() : "";
+
+    if (!title) {
+      return [];
+    }
+
+    return [
+      {
+        detail: normalizeOptionalText(artifact.detail),
+        id: normalizeOptionalText(artifact.id),
+        kind: normalizeArtifactKind(artifact.kind),
+        mimeType: normalizeOptionalText(artifact.mimeType),
+        sizeBytes: typeof artifact.sizeBytes === "number" && Number.isFinite(artifact.sizeBytes) ? artifact.sizeBytes : undefined,
+        sourceFormat: artifact.sourceFormat === "markdown" || artifact.sourceFormat === "text" ? artifact.sourceFormat : undefined,
+        sourceText: typeof artifact.sourceText === "string" ? artifact.sourceText : undefined,
+        title,
+        url: typeof artifact.url === "string" ? artifact.url : undefined,
+      } satisfies ChatArtifact,
+    ];
+  });
+
+  return artifacts.length > 0 ? artifacts : undefined;
+}
+
+function normalizeArtifactKind(value: unknown): ChatArtifact["kind"] | undefined {
+  return value === "code" || value === "document" || value === "file" || value === "image" || value === "other" || value === "preview" ? value : undefined;
 }
 
 function normalizeContextCompactions(value: unknown): ChatContextCompaction[] | undefined {
@@ -698,6 +909,7 @@ function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
     return [
       {
         detail: typeof toolCall.detail === "string" ? toolCall.detail : undefined,
+        fileChanges: normalizeToolCallFileChanges(toolCall.fileChanges),
         id: typeof toolCall.id === "string" && toolCall.id ? toolCall.id : `tool-call-${Date.now()}`,
         input: typeof toolCall.input === "string" ? toolCall.input : undefined,
         label: toolCall.label,
@@ -709,6 +921,66 @@ function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
   });
 
   return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+function normalizeToolCallFileChanges(value: unknown): ChatToolCall["fileChanges"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const fileChanges = value.flatMap((item) => {
+    if (typeof item !== "object" || !item) {
+      return [];
+    }
+
+    const change = item as NonNullable<ChatToolCall["fileChanges"]>[number];
+    if (typeof change.path !== "string" || !change.path.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        additions: typeof change.additions === "number" && Number.isFinite(change.additions) ? Math.max(0, Math.round(change.additions)) : 0,
+        deletions: typeof change.deletions === "number" && Number.isFinite(change.deletions) ? Math.max(0, Math.round(change.deletions)) : 0,
+        diffPreview: normalizeToolCallDiffPreview(change.diffPreview),
+        diffTruncated: typeof change.diffTruncated === "boolean" ? change.diffTruncated : undefined,
+        kind: change.kind === "create" || change.kind === "delete" || change.kind === "move" || change.kind === "update" ? change.kind : undefined,
+        path: change.path,
+      },
+    ];
+  });
+
+  return fileChanges.length > 0 ? fileChanges : undefined;
+}
+
+function normalizeToolCallDiffPreview(value: unknown): NonNullable<NonNullable<ChatToolCall["fileChanges"]>[number]["diffPreview"]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const lines = value.flatMap((item) => {
+    if (typeof item !== "object" || !item) {
+      return [];
+    }
+
+    const line = item as NonNullable<NonNullable<ChatToolCall["fileChanges"]>[number]["diffPreview"]>[number];
+    const kind = line.kind === "add" || line.kind === "context" || line.kind === "hunk" || line.kind === "meta" || line.kind === "remove" ? line.kind : undefined;
+
+    if (!kind || typeof line.content !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        content: line.content,
+        kind,
+        newLine: normalizeOptionalNumber(line.newLine),
+        oldLine: normalizeOptionalNumber(line.oldLine),
+      },
+    ];
+  });
+
+  return lines.length > 0 ? lines.slice(0, 120) : undefined;
 }
 
 function normalizeToolCallTerminal(value: unknown): ChatToolCall["terminal"] {
@@ -856,9 +1128,15 @@ function normalizeAttachment(value: unknown): ChatAttachment | null {
   }
 
   if (kind === "file") {
+    const file = attachment as Partial<ChatFileAttachment>;
+    const dataUrl = typeof file.dataUrl === "string" && file.dataUrl.startsWith("data:") ? file.dataUrl : undefined;
+    const text = typeof file.text === "string" ? file.text : undefined;
+
     return {
       ...base,
+      dataUrl,
       kind: "file",
+      text,
     } satisfies ChatFileAttachment;
   }
 
@@ -867,6 +1145,119 @@ function normalizeAttachment(value: unknown): ChatAttachment | null {
 
 function normalizeOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function normalizePdfLibraryState(value: unknown): PdfLibraryState {
+  const state = typeof value === "object" && value ? (value as Partial<PdfLibraryState>) : {};
+  const deletedSourceIds = Array.isArray(state.deletedSourceIds)
+    ? Array.from(new Set(state.deletedSourceIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim())))
+    : [];
+  const records = Array.isArray(state.records)
+    ? state.records.flatMap((record) => {
+        const normalized = normalizePdfLibraryRecord(record);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+
+  return {
+    deletedSourceIds,
+    projectInstructions: normalizePdfProjectInstructions(state.projectInstructions),
+    records,
+  };
+}
+
+function normalizePdfProjectInstructions(value: unknown): Record<string, PdfProjectInstruction> {
+  if (typeof value !== "object" || !value) {
+    return {};
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).flatMap(([projectKey, item]) => {
+    if (typeof item !== "object" || !item) {
+      return [];
+    }
+
+    const instruction = item as Partial<PdfProjectInstruction>;
+    const project = normalizeProjectName(typeof instruction.project === "string" ? instruction.project : projectKey);
+    const markdown = typeof instruction.markdown === "string" ? instruction.markdown : "";
+
+    if (!markdown.trim()) {
+      return [];
+    }
+
+    return [
+      [
+        project,
+        {
+          markdown,
+          project,
+          updatedAt: typeof instruction.updatedAt === "string" && instruction.updatedAt ? instruction.updatedAt : new Date().toISOString(),
+        } satisfies PdfProjectInstruction,
+      ] as const,
+    ];
+  });
+
+  return Object.fromEntries(entries);
+}
+
+function normalizePdfLibraryRecord(value: unknown): PdfLibraryRecord | null {
+  if (typeof value !== "object" || !value) {
+    return null;
+  }
+
+  const record = value as Partial<PdfLibraryRecord>;
+  const title = typeof record.title === "string" && record.title.trim() ? record.title.trim() : typeof record.fileName === "string" && record.fileName.trim() ? record.fileName.trim() : "";
+
+  if (!title) {
+    return null;
+  }
+
+  const id =
+    typeof record.id === "string" && record.id.trim()
+      ? record.id.trim()
+      : `pdf-${hashStableText(`${title}:${record.createdAt ?? ""}:${record.sourceId ?? ""}`)}`;
+  const now = new Date().toISOString();
+
+  return {
+    chatId: normalizeOptionalText(record.chatId),
+    createdAt: typeof record.createdAt === "string" && record.createdAt ? record.createdAt : now,
+    dataUrl: normalizePdfDataUrl(record.dataUrl),
+    enabledAsContext: Boolean(record.enabledAsContext),
+    fileName: typeof record.fileName === "string" && record.fileName.trim() ? record.fileName.trim() : title,
+    guidanceMarkdown: typeof record.guidanceMarkdown === "string" ? record.guidanceMarkdown : undefined,
+    id,
+    messageId: normalizeOptionalText(record.messageId),
+    mimeType: typeof record.mimeType === "string" && record.mimeType.trim() ? record.mimeType.trim() : "application/pdf",
+    origin: normalizePdfOrigin(record.origin),
+    project: normalizeProjectName(record.project),
+    sizeBytes: normalizeNumber(record.sizeBytes, 0),
+    sourceFormat: normalizePdfSourceFormat(record.sourceFormat),
+    sourceId: normalizeOptionalText(record.sourceId),
+    sourceText: typeof record.sourceText === "string" ? record.sourceText : undefined,
+    title,
+    updatedAt: typeof record.updatedAt === "string" && record.updatedAt ? record.updatedAt : now,
+  };
+}
+
+function normalizePdfDataUrl(value: unknown) {
+  return typeof value === "string" && value.startsWith("data:application/pdf") ? value : undefined;
+}
+
+function normalizePdfOrigin(value: unknown): PdfLibraryOrigin {
+  return value === "ai" || value === "manual" || value === "upload" ? value : "manual";
+}
+
+function normalizePdfSourceFormat(value: unknown): PdfLibrarySourceFormat | undefined {
+  return value === "markdown" || value === "text" ? value : undefined;
+}
+
+function hashStableText(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
 }
 
 function normalizeThinkingSettings(value: unknown): ThinkingSettings {
@@ -885,10 +1276,192 @@ function normalizeWebSearchSettings(value: unknown): WebSearchSettings {
   const maxResults = normalizeNumber(storedSettings.maxResults, defaultProviderSettings.webSearch.maxResults);
 
   return {
+    brave: normalizeBraveSearchSettings(storedSettings.brave),
     enabled: typeof storedSettings.enabled === "boolean" ? storedSettings.enabled : defaultProviderSettings.webSearch.enabled,
     maxResults: Math.min(Math.max(Math.round(maxResults), 1), MAX_WEB_SEARCH_RESULTS),
-    provider: storedSettings.provider === "duckduckgo" ? storedSettings.provider : "duckduckgo",
+    provider: normalizeWebSearchProvider(storedSettings.provider),
   };
+}
+
+function normalizeWebSearchProvider(value: unknown): WebSearchProvider {
+  return value === "brave" || value === "duckduckgo" ? value : defaultProviderSettings.webSearch.provider;
+}
+
+function normalizeBraveSearchSettings(value: unknown) {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<WebSearchSettings["brave"]>) : {};
+
+  return {
+    apiKey: normalizeText(storedSettings.apiKey, DEFAULT_BRAVE_SEARCH_SETTINGS.apiKey),
+    apiVersion: normalizeDateText(storedSettings.apiVersion),
+    answersMaxCompletionTokens: normalizeIntegerRange(storedSettings.answersMaxCompletionTokens, DEFAULT_BRAVE_SEARCH_SETTINGS.answersMaxCompletionTokens, 128, 4000),
+    answersModel: normalizeBraveAnswersModel(storedSettings.answersModel),
+    cacheControlNoCache: normalizeBoolean(storedSettings.cacheControlNoCache, DEFAULT_BRAVE_SEARCH_SETTINGS.cacheControlNoCache),
+    country: normalizeCountryCode(storedSettings.country, DEFAULT_BRAVE_SEARCH_SETTINGS.country),
+    enableAnswers: normalizeBoolean(storedSettings.enableAnswers, DEFAULT_BRAVE_SEARCH_SETTINGS.enableAnswers),
+    enableImageSearch: normalizeBoolean(storedSettings.enableImageSearch, DEFAULT_BRAVE_SEARCH_SETTINGS.enableImageSearch),
+    enableNewsSearch: normalizeBoolean(storedSettings.enableNewsSearch, DEFAULT_BRAVE_SEARCH_SETTINGS.enableNewsSearch),
+    enablePlaceSearch: normalizeBoolean(storedSettings.enablePlaceSearch, DEFAULT_BRAVE_SEARCH_SETTINGS.enablePlaceSearch),
+    enableRichCallback: normalizeBoolean(storedSettings.enableRichCallback, DEFAULT_BRAVE_SEARCH_SETTINGS.enableRichCallback),
+    enableSemanticRerank: normalizeBoolean(storedSettings.enableSemanticRerank, DEFAULT_BRAVE_SEARCH_SETTINGS.enableSemanticRerank),
+    enableVideoSearch: normalizeBoolean(storedSettings.enableVideoSearch, DEFAULT_BRAVE_SEARCH_SETTINGS.enableVideoSearch),
+    extraSnippets: normalizeBoolean(storedSettings.extraSnippets, DEFAULT_BRAVE_SEARCH_SETTINGS.extraSnippets),
+    freshness: normalizeBraveFreshness(storedSettings.freshness),
+    freshnessEndDate: normalizeDateText(storedSettings.freshnessEndDate),
+    freshnessStartDate: normalizeDateText(storedSettings.freshnessStartDate),
+    goggles: normalizeText(storedSettings.goggles, DEFAULT_BRAVE_SEARCH_SETTINGS.goggles),
+    imageResultCount: normalizeIntegerRange(storedSettings.imageResultCount, DEFAULT_BRAVE_SEARCH_SETTINGS.imageResultCount, 1, 24),
+    includeFetchMetadata: normalizeBoolean(storedSettings.includeFetchMetadata, DEFAULT_BRAVE_SEARCH_SETTINGS.includeFetchMetadata),
+    locationCity: normalizeShortText(storedSettings.locationCity, DEFAULT_BRAVE_SEARCH_SETTINGS.locationCity, 80),
+    locationCountry: normalizeOptionalCountryCode(storedSettings.locationCountry),
+    locationLatitude: normalizeCoordinateText(storedSettings.locationLatitude, -90, 90),
+    locationLongitude: normalizeCoordinateText(storedSettings.locationLongitude, -180, 180),
+    locationPostalCode: normalizeShortText(storedSettings.locationPostalCode, DEFAULT_BRAVE_SEARCH_SETTINGS.locationPostalCode, 24),
+    locationState: normalizeShortText(storedSettings.locationState, DEFAULT_BRAVE_SEARCH_SETTINGS.locationState, 3),
+    locationStateName: normalizeShortText(storedSettings.locationStateName, DEFAULT_BRAVE_SEARCH_SETTINGS.locationStateName, 80),
+    locationTimezone: normalizeTimezoneText(storedSettings.locationTimezone),
+    newsResultCount: normalizeIntegerRange(storedSettings.newsResultCount, DEFAULT_BRAVE_SEARCH_SETTINGS.newsResultCount, 1, 24),
+    offset: normalizeIntegerRange(storedSettings.offset, DEFAULT_BRAVE_SEARCH_SETTINGS.offset, 0, 9),
+    operators: normalizeBoolean(storedSettings.operators, DEFAULT_BRAVE_SEARCH_SETTINGS.operators),
+    placeLocation: normalizeShortText(storedSettings.placeLocation, DEFAULT_BRAVE_SEARCH_SETTINGS.placeLocation, 120),
+    placeRadiusMeters: normalizeIntegerRange(storedSettings.placeRadiusMeters, DEFAULT_BRAVE_SEARCH_SETTINGS.placeRadiusMeters, 1, 50000),
+    placeResultCount: normalizeIntegerRange(storedSettings.placeResultCount, DEFAULT_BRAVE_SEARCH_SETTINGS.placeResultCount, 1, 24),
+    requestMethod: normalizeBraveRequestMethod(storedSettings.requestMethod),
+    resultFilter: normalizeBraveResultFilter(storedSettings.resultFilter),
+    safesearch: normalizeBraveSafeSearch(storedSettings.safesearch),
+    searchLang: normalizeLanguageCode(storedSettings.searchLang, DEFAULT_BRAVE_SEARCH_SETTINGS.searchLang),
+    showImageResults: normalizeBoolean(storedSettings.showImageResults, DEFAULT_BRAVE_SEARCH_SETTINGS.showImageResults),
+    spellcheck: normalizeBoolean(storedSettings.spellcheck, DEFAULT_BRAVE_SEARCH_SETTINGS.spellcheck),
+    summary: normalizeBoolean(storedSettings.summary, DEFAULT_BRAVE_SEARCH_SETTINGS.summary),
+    textDecorations: normalizeBoolean(storedSettings.textDecorations, DEFAULT_BRAVE_SEARCH_SETTINGS.textDecorations),
+    uiLang: normalizeUiLanguageCode(storedSettings.uiLang, DEFAULT_BRAVE_SEARCH_SETTINGS.uiLang),
+    units: normalizeBraveUnits(storedSettings.units),
+    videoResultCount: normalizeIntegerRange(storedSettings.videoResultCount, DEFAULT_BRAVE_SEARCH_SETTINGS.videoResultCount, 1, 24),
+  };
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeCountryCode(value: unknown, fallback: string) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  return normalized.length === 2 ? normalized : fallback;
+}
+
+function normalizeOptionalCountryCode(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  return normalized.length === 2 ? normalized : "";
+}
+
+function normalizeLanguageCode(value: unknown, fallback: string) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/[^a-z-]/g, "").slice(0, 8);
+  return normalized.length >= 2 ? normalized : fallback;
+}
+
+function normalizeUiLanguageCode(value: unknown, fallback: string) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().replace(/[^a-zA-Z-]/g, "").slice(0, 12);
+  return normalized.length >= 2 ? normalized : fallback;
+}
+
+function normalizeDateText(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeIntegerRange(value: unknown, fallback: number, min: number, max: number) {
+  const normalized = normalizeNumber(value, fallback);
+  return Math.min(Math.max(Math.round(normalized), min), max);
+}
+
+function normalizeCoordinateText(value: unknown, min: number, max: number) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return "";
+  }
+
+  const rawValue = String(value).trim();
+  const parsed = Number.parseFloat(rawValue);
+
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return "";
+  }
+
+  return rawValue.replace(/[^0-9.+-]/g, "").slice(0, 16);
+}
+
+function normalizeShortText(value: unknown, fallback: string, maxLength: number) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.replace(/[\r\n\t]/g, " ").trim().slice(0, maxLength);
+}
+
+function normalizeTimezoneText(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().replace(/[^a-zA-Z0-9_+\-/]/g, "").slice(0, 64);
+}
+
+function normalizeBraveFreshness(value: unknown): BraveSearchFreshness {
+  return value === "any" || value === "custom" || value === "pd" || value === "pw" || value === "pm" || value === "py" ? value : DEFAULT_BRAVE_SEARCH_SETTINGS.freshness;
+}
+
+function normalizeBraveSafeSearch(value: unknown): BraveSearchSafeSearch {
+  return value === "off" || value === "moderate" || value === "strict" ? value : DEFAULT_BRAVE_SEARCH_SETTINGS.safesearch;
+}
+
+function normalizeBraveUnits(value: unknown): BraveSearchUnits {
+  return value === "imperial" || value === "metric" ? value : DEFAULT_BRAVE_SEARCH_SETTINGS.units;
+}
+
+function normalizeBraveRequestMethod(value: unknown): BraveSearchRequestMethod {
+  return value === "post" || value === "get" ? value : DEFAULT_BRAVE_SEARCH_SETTINGS.requestMethod;
+}
+
+function normalizeBraveAnswersModel(value: unknown): BraveAnswersModel {
+  return value === "brave-pro" || value === "brave" ? value : DEFAULT_BRAVE_SEARCH_SETTINGS.answersModel;
+}
+
+function normalizeBraveResultFilter(value: unknown): BraveSearchResultFilter[] {
+  if (!Array.isArray(value)) {
+    return DEFAULT_BRAVE_SEARCH_SETTINGS.resultFilter;
+  }
+
+  const filters = new Set<BraveSearchResultFilter>();
+
+  for (const item of value) {
+    if (isBraveResultFilter(item)) {
+      filters.add(item);
+    }
+  }
+
+  return [...filters];
+}
+
+function isBraveResultFilter(value: unknown): value is BraveSearchResultFilter {
+  return value === "discussions" || value === "faq" || value === "infobox" || value === "locations" || value === "news" || value === "query" || value === "summarizer" || value === "videos" || value === "web";
 }
 
 function normalizeWorkspaceDependencySettings(value: unknown) {

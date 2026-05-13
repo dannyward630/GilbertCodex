@@ -6,7 +6,7 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 
-const appUrl = process.env.GILBERT_CODEX_CAPTURE_URL ?? "http://127.0.0.1:1420";
+const appUrl = process.env.GILBERT_CODEX_CAPTURE_URL ?? "http://localhost:1420";
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const assetDir = path.join(repoRoot, "docs", "assets", "readme");
 const now = Date.now();
@@ -87,8 +87,8 @@ function createSeedState() {
               detail: "Release checklist for public alpha",
               id: "artifact-release",
               kind: "file",
-              title: "docs/releases/v0.2.3.md",
-              url: "docs/releases/v0.2.3.md",
+              title: "docs/releases/v0.3.0.md",
+              url: "docs/releases/v0.3.0.md",
             },
           ],
           sources: [
@@ -115,7 +115,7 @@ function createSeedState() {
               detail: "Read project docs and release notes",
               id: "tool-read-docs",
               label: "read_files",
-              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.2.3.md",
+              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.3.0.md",
               status: "complete",
             },
             {
@@ -163,7 +163,7 @@ function createSeedState() {
               label: "run_terminal",
               status: "active",
               terminal: {
-                command: "npm.cmd run dev -- --host 127.0.0.1 --port 1420",
+                command: "npm.cmd run dev -- --host localhost --port 1420",
                 live: true,
                 shell: "powershell",
                 workingDirectory: demoWorkspacePath,

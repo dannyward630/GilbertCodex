@@ -5,21 +5,84 @@ use std::time::{Duration, Instant};
 const DUCKDUCKGO_API_URL: &str = "https://api.duckduckgo.com/";
 const DUCKDUCKGO_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 const DUCKDUCKGO_LITE_URL: &str = "https://lite.duckduckgo.com/lite/";
+const BRAVE_WEB_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/web/search";
+const BRAVE_NEWS_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/news/search";
+const BRAVE_VIDEO_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/videos/search";
+const BRAVE_IMAGE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/images/search";
+const BRAVE_PLACE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/local/place_search";
+const BRAVE_ANSWERS_URL: &str = "https://api.search.brave.com/res/v1/chat/completions";
+const BRAVE_SEARCH_PAGE_URL: &str = "https://search.brave.com/search";
 const MAX_DUCKDUCKGO_RESULTS: usize = 6;
+const MAX_BRAVE_RESULTS: usize = 20;
+const MAX_BRAVE_VERTICAL_RESULTS: usize = 50;
 const DUCKDUCKGO_CONNECT_TIMEOUT_SECS: u64 = 4;
 const DUCKDUCKGO_CLIENT_TIMEOUT_SECS: u64 = 8;
 const DUCKDUCKGO_API_TIMEOUT_SECS: u64 = 4;
 const DUCKDUCKGO_HTML_TIMEOUT_SECS: u64 = 5;
 const DUCKDUCKGO_TOTAL_BUDGET_SECS: u64 = 16;
+const BRAVE_CONNECT_TIMEOUT_SECS: u64 = 4;
+const BRAVE_CLIENT_TIMEOUT_SECS: u64 = 10;
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 GilbertCodex/0.1";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuckDuckGoSearchResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
     pub url: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BraveSearchOptions {
+    api_key: String,
+    api_version: Option<String>,
+    answers_max_completion_tokens: Option<usize>,
+    answers_model: Option<String>,
+    cache_control_no_cache: Option<bool>,
+    country: Option<String>,
+    enable_answers: Option<bool>,
+    enable_image_search: Option<bool>,
+    enable_news_search: Option<bool>,
+    enable_place_search: Option<bool>,
+    enable_rich_callback: Option<bool>,
+    enable_video_search: Option<bool>,
+    extra_snippets: Option<bool>,
+    freshness: Option<String>,
+    goggles: Option<Vec<String>>,
+    image_result_count: Option<usize>,
+    include_fetch_metadata: Option<bool>,
+    location_city: Option<String>,
+    location_country: Option<String>,
+    location_latitude: Option<String>,
+    location_longitude: Option<String>,
+    location_postal_code: Option<String>,
+    location_state: Option<String>,
+    location_state_name: Option<String>,
+    location_timezone: Option<String>,
+    news_result_count: Option<usize>,
+    offset: Option<usize>,
+    operators: Option<bool>,
+    place_location: Option<String>,
+    place_radius_meters: Option<usize>,
+    place_result_count: Option<usize>,
+    request_method: Option<String>,
+    result_filter: Option<Vec<String>>,
+    safesearch: Option<String>,
+    search_lang: Option<String>,
+    spellcheck: Option<bool>,
+    summary: Option<bool>,
+    text_decorations: Option<bool>,
+    ui_lang: Option<String>,
+    units: Option<String>,
+    video_result_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +180,824 @@ pub async fn duckduckgo_search(
     }
 
     Err(last_error.unwrap_or_else(|| "DuckDuckGo returned no usable sources.".to_string()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn brave_search(
+    query: String,
+    max_results: Option<usize>,
+    options: BraveSearchOptions,
+) -> Result<Vec<DuckDuckGoSearchResult>, String> {
+    let trimmed_query = trim_search_query(&query, 400, 50);
+
+    if trimmed_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let api_key = options.api_key.trim();
+
+    if api_key.is_empty() {
+        return Err("Add a Brave Search API key in Settings > Brave Search.".to_string());
+    }
+
+    let result_limit = max_results
+        .unwrap_or(MAX_DUCKDUCKGO_RESULTS)
+        .clamp(1, MAX_BRAVE_RESULTS);
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(BRAVE_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(BRAVE_CLIENT_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("Could not create Brave Search client: {error}"))?;
+    let news_count = options
+        .news_result_count
+        .unwrap_or(result_limit)
+        .clamp(1, MAX_BRAVE_VERTICAL_RESULTS);
+    let video_count = options
+        .video_result_count
+        .unwrap_or(4)
+        .clamp(1, MAX_BRAVE_VERTICAL_RESULTS);
+    let image_count = options
+        .image_result_count
+        .unwrap_or(6)
+        .clamp(1, MAX_BRAVE_VERTICAL_RESULTS);
+    let place_count = options
+        .place_result_count
+        .unwrap_or(6)
+        .clamp(1, MAX_BRAVE_VERTICAL_RESULTS);
+    let web_future =
+        fetch_brave_web_results(&client, api_key, &trimmed_query, result_limit, &options);
+    let news_future = fetch_optional_brave_vertical(
+        &client,
+        api_key,
+        &trimmed_query,
+        news_count,
+        &options,
+        options.enable_news_search.unwrap_or(false),
+        BraveVertical::News,
+    );
+    let video_future = fetch_optional_brave_vertical(
+        &client,
+        api_key,
+        &trimmed_query,
+        video_count,
+        &options,
+        options.enable_video_search.unwrap_or(false),
+        BraveVertical::Videos,
+    );
+    let image_future = fetch_optional_brave_vertical(
+        &client,
+        api_key,
+        &trimmed_query,
+        image_count,
+        &options,
+        options.enable_image_search.unwrap_or(false),
+        BraveVertical::Images,
+    );
+    let place_future = fetch_optional_brave_vertical(
+        &client,
+        api_key,
+        &trimmed_query,
+        place_count,
+        &options,
+        options.enable_place_search.unwrap_or(false),
+        BraveVertical::Places,
+    );
+    let answer_future = fetch_optional_brave_answer(
+        &client,
+        api_key,
+        &trimmed_query,
+        &options,
+        options.enable_answers.unwrap_or(false),
+    );
+    let (web_results, news_results, video_results, image_results, place_results, answer_results) = tokio::join!(
+        web_future,
+        news_future,
+        video_future,
+        image_future,
+        place_future,
+        answer_future
+    );
+    let mut results = Vec::new();
+    let mut seen_urls = HashSet::new();
+    let mut errors = Vec::new();
+    let combined_limit = result_limit + news_count + video_count + image_count + place_count + 1;
+
+    for result_set in [
+        web_results,
+        news_results,
+        video_results,
+        place_results,
+        answer_results,
+        image_results,
+    ] {
+        match result_set {
+            Ok(result_set) => {
+                extend_search_results(&mut results, &mut seen_urls, result_set, combined_limit);
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    if results.is_empty() {
+        return Err(errors
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "Brave Search returned no usable sources.".to_string()));
+    }
+
+    Ok(results)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BraveVertical {
+    News,
+    Videos,
+    Images,
+    Places,
+}
+
+impl BraveVertical {
+    fn endpoint(self) -> &'static str {
+        match self {
+            BraveVertical::News => BRAVE_NEWS_SEARCH_URL,
+            BraveVertical::Videos => BRAVE_VIDEO_SEARCH_URL,
+            BraveVertical::Images => BRAVE_IMAGE_SEARCH_URL,
+            BraveVertical::Places => BRAVE_PLACE_SEARCH_URL,
+        }
+    }
+
+    fn source_type(self) -> &'static str {
+        match self {
+            BraveVertical::News => "news",
+            BraveVertical::Videos => "video",
+            BraveVertical::Images => "image",
+            BraveVertical::Places => "place",
+        }
+    }
+
+    fn supports_post(self) -> bool {
+        matches!(self, BraveVertical::News | BraveVertical::Videos)
+    }
+}
+
+async fn fetch_brave_web_results(
+    client: &reqwest::Client,
+    api_key: &str,
+    query: &str,
+    max_results: usize,
+    options: &BraveSearchOptions,
+) -> Result<Vec<DuckDuckGoSearchResult>, String> {
+    let payload = fetch_brave_json(
+        client,
+        api_key,
+        BRAVE_WEB_SEARCH_URL,
+        build_brave_search_params(query, max_results, options, true),
+        options,
+        true,
+    )
+    .await?;
+
+    Ok(parse_brave_results(&payload, max_results))
+}
+
+async fn fetch_optional_brave_vertical(
+    client: &reqwest::Client,
+    api_key: &str,
+    query: &str,
+    max_results: usize,
+    options: &BraveSearchOptions,
+    enabled: bool,
+    vertical: BraveVertical,
+) -> Result<Vec<DuckDuckGoSearchResult>, String> {
+    if !enabled {
+        return Ok(Vec::new());
+    }
+
+    let mut params = build_brave_search_params(query, max_results, options, false);
+
+    if matches!(vertical, BraveVertical::Places) {
+        append_optional_param(&mut params, "location", options.place_location.as_deref());
+        append_optional_usize_param(&mut params, "radius", options.place_radius_meters);
+    }
+
+    let payload = fetch_brave_json(
+        client,
+        api_key,
+        vertical.endpoint(),
+        params,
+        options,
+        vertical.supports_post(),
+    )
+    .await?;
+
+    Ok(parse_brave_vertical_results(
+        &payload,
+        max_results,
+        vertical.source_type(),
+        query,
+    ))
+}
+
+async fn fetch_optional_brave_answer(
+    client: &reqwest::Client,
+    api_key: &str,
+    query: &str,
+    options: &BraveSearchOptions,
+    enabled: bool,
+) -> Result<Vec<DuckDuckGoSearchResult>, String> {
+    if !enabled {
+        return Ok(Vec::new());
+    }
+
+    let body = serde_json::json!({
+        "messages": [
+            {
+                "role": "user",
+                "content": query,
+            }
+        ],
+        "model": options.answers_model.as_deref().unwrap_or("brave"),
+        "max_completion_tokens": options.answers_max_completion_tokens.unwrap_or(700).clamp(128, 4000),
+    });
+    let request = apply_brave_headers(
+        client
+            .post(BRAVE_ANSWERS_URL)
+            .header("Accept", "application/json")
+            .header("Accept-Encoding", "gzip")
+            .header("Content-Type", "application/json")
+            .header("X-Subscription-Token", api_key)
+            .json(&body),
+        options,
+    )?;
+    let payload = send_brave_request(request, "Brave Answers").await?;
+    let content = first_json_string(
+        &payload,
+        &[
+            &["choices", "0", "message", "content"],
+            &["choices", "0", "delta", "content"],
+            &["message", "content"],
+            &["answer"],
+            &["content"],
+        ],
+    )
+    .unwrap_or_default();
+
+    if content.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let search_url = reqwest::Url::parse_with_params(BRAVE_SEARCH_PAGE_URL, &[("q", query)])
+        .map_err(|error| format!("Could not build Brave Answers source URL: {error}"))?;
+
+    Ok(vec![DuckDuckGoSearchResult {
+        image_url: None,
+        source_type: Some("answer".to_string()),
+        snippet: collapse_whitespace(&content),
+        thumbnail_url: None,
+        title: "Brave Answers".to_string(),
+        url: search_url.to_string(),
+    }])
+}
+
+async fn fetch_brave_json(
+    client: &reqwest::Client,
+    api_key: &str,
+    endpoint: &str,
+    params: Vec<(String, String)>,
+    options: &BraveSearchOptions,
+    supports_post: bool,
+) -> Result<serde_json::Value, String> {
+    let method = options.request_method.as_deref().unwrap_or("get");
+    let request = if supports_post && method.eq_ignore_ascii_case("post") {
+        let body = create_brave_post_body(&params);
+
+        client
+            .post(endpoint)
+            .header("Content-Type", "application/json")
+            .json(&body)
+    } else {
+        let url = reqwest::Url::parse_with_params(
+            endpoint,
+            params
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+        .map_err(|error| format!("Could not build Brave Search URL: {error}"))?;
+
+        client.get(url)
+    };
+    let request = apply_brave_headers(
+        request
+            .header("Accept", "application/json")
+            .header("Accept-Encoding", "gzip")
+            .header("X-Subscription-Token", api_key),
+        options,
+    )?;
+
+    send_brave_request(request, "Brave Search").await
+}
+
+fn create_brave_post_body(params: &[(String, String)]) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+
+    for (key, value) in params {
+        let next_value = create_brave_post_value(key, value);
+
+        if let Some(existing_value) = map.get_mut(key) {
+            match existing_value {
+                serde_json::Value::Array(values) => values.push(next_value),
+                previous_value => {
+                    let previous = previous_value.take();
+                    *previous_value = serde_json::Value::Array(vec![previous, next_value]);
+                }
+            }
+        } else {
+            map.insert(key.clone(), next_value);
+        }
+    }
+
+    serde_json::Value::Object(map)
+}
+
+fn create_brave_post_value(key: &str, value: &str) -> serde_json::Value {
+    match key {
+        "count" | "offset" | "radius" => value
+            .parse::<u64>()
+            .map(serde_json::Value::from)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+        "enable_rich_callback"
+        | "extra_snippets"
+        | "include_fetch_metadata"
+        | "operators"
+        | "spellcheck"
+        | "summary"
+        | "text_decorations" => {
+            serde_json::Value::Bool(value.eq_ignore_ascii_case("true") || value == "1")
+        }
+        "result_filter" => serde_json::Value::Array(
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| serde_json::Value::String(item.to_string()))
+                .collect(),
+        ),
+        _ => serde_json::Value::String(value.to_string()),
+    }
+}
+
+async fn send_brave_request(
+    request: reqwest::RequestBuilder,
+    label: &str,
+) -> Result<serde_json::Value, String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("{label} request failed: {error}"))?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read {label} response: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format_brave_error(status.as_u16(), &response_text));
+    }
+
+    serde_json::from_str::<serde_json::Value>(&response_text)
+        .map_err(|error| format!("Could not parse {label} response: {error}"))
+}
+
+fn apply_brave_headers(
+    mut request: reqwest::RequestBuilder,
+    options: &BraveSearchOptions,
+) -> Result<reqwest::RequestBuilder, String> {
+    if options.cache_control_no_cache.unwrap_or(false) {
+        request = request.header("Cache-Control", "no-cache");
+    }
+
+    request = append_optional_header(request, "api-version", options.api_version.as_deref())?;
+    request = append_optional_header(request, "x-loc-lat", options.location_latitude.as_deref())?;
+    request = append_optional_header(request, "x-loc-long", options.location_longitude.as_deref())?;
+    request = append_optional_header(
+        request,
+        "x-loc-timezone",
+        options.location_timezone.as_deref(),
+    )?;
+    request = append_optional_header(request, "x-loc-city", options.location_city.as_deref())?;
+    request = append_optional_header(request, "x-loc-state", options.location_state.as_deref())?;
+    request = append_optional_header(
+        request,
+        "x-loc-state-name",
+        options.location_state_name.as_deref(),
+    )?;
+    request = append_optional_header(
+        request,
+        "x-loc-country",
+        options.location_country.as_deref(),
+    )?;
+    append_optional_header(
+        request,
+        "x-loc-postal-code",
+        options.location_postal_code.as_deref(),
+    )
+}
+
+#[cfg(test)]
+fn build_brave_search_url(
+    query: &str,
+    max_results: usize,
+    options: &BraveSearchOptions,
+) -> Result<reqwest::Url, String> {
+    let params = build_brave_search_params(query, max_results, options, true);
+
+    reqwest::Url::parse_with_params(
+        BRAVE_WEB_SEARCH_URL,
+        params
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .map_err(|error| format!("Could not build Brave Search URL: {error}"))
+}
+
+fn build_brave_search_params(
+    query: &str,
+    max_results: usize,
+    options: &BraveSearchOptions,
+    include_web_only_params: bool,
+) -> Vec<(String, String)> {
+    let mut params = vec![
+        ("q".to_string(), query.to_string()),
+        ("count".to_string(), max_results.to_string()),
+    ];
+
+    append_optional_param(&mut params, "country", options.country.as_deref());
+    append_optional_param(&mut params, "search_lang", options.search_lang.as_deref());
+    append_optional_param(&mut params, "ui_lang", options.ui_lang.as_deref());
+    append_optional_param(&mut params, "safesearch", options.safesearch.as_deref());
+    append_optional_param(&mut params, "freshness", options.freshness.as_deref());
+    append_optional_param(&mut params, "units", options.units.as_deref());
+    append_optional_usize_param(
+        &mut params,
+        "offset",
+        options.offset.map(|offset| offset.min(9)),
+    );
+    append_repeated_optional_param(&mut params, "goggles", options.goggles.as_deref());
+    append_bool_param(&mut params, "extra_snippets", options.extra_snippets);
+    append_bool_param(&mut params, "spellcheck", options.spellcheck);
+    append_bool_param(&mut params, "text_decorations", options.text_decorations);
+    append_bool_param(&mut params, "operators", options.operators);
+    if include_web_only_params {
+        append_bool_param(&mut params, "summary", options.summary);
+        append_bool_param(
+            &mut params,
+            "enable_rich_callback",
+            options.enable_rich_callback,
+        );
+    }
+    append_bool_param(
+        &mut params,
+        "include_fetch_metadata",
+        options.include_fetch_metadata,
+    );
+
+    if include_web_only_params {
+        if let Some(result_filter) = options
+            .result_filter
+            .as_ref()
+            .filter(|filters| !filters.is_empty())
+        {
+            params.push(("result_filter".to_string(), result_filter.join(",")));
+        }
+    }
+
+    params
+}
+
+fn append_optional_param(params: &mut Vec<(String, String)>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push((key.to_string(), value.to_string()));
+    }
+}
+
+fn append_repeated_optional_param(
+    params: &mut Vec<(String, String)>,
+    key: &str,
+    values: Option<&[String]>,
+) {
+    for value in values.unwrap_or_default() {
+        append_optional_param(params, key, Some(value));
+    }
+}
+
+fn append_optional_usize_param(
+    params: &mut Vec<(String, String)>,
+    key: &str,
+    value: Option<usize>,
+) {
+    if let Some(value) = value {
+        params.push((key.to_string(), value.to_string()));
+    }
+}
+
+fn append_bool_param(params: &mut Vec<(String, String)>, key: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        params.push((
+            key.to_string(),
+            (if value { "true" } else { "false" }).to_string(),
+        ));
+    }
+}
+
+fn append_optional_header(
+    request: reqwest::RequestBuilder,
+    key: &'static str,
+    value: Option<&str>,
+) -> Result<reqwest::RequestBuilder, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(request);
+    };
+    let header_value = reqwest::header::HeaderValue::from_str(value)
+        .map_err(|error| format!("Invalid Brave Search header {key}: {error}"))?;
+
+    Ok(request.header(key, header_value))
+}
+
+fn parse_brave_results(
+    payload: &serde_json::Value,
+    max_results: usize,
+) -> Vec<DuckDuckGoSearchResult> {
+    let mut results = Vec::new();
+    let mut seen_urls = HashSet::new();
+
+    for (section, source_type) in [
+        ("web", "web"),
+        ("news", "news"),
+        ("videos", "video"),
+        ("discussions", "web"),
+        ("faq", "web"),
+        ("infobox", "web"),
+        ("locations", "place"),
+    ] {
+        if let Some(items) = payload
+            .get(section)
+            .and_then(|section_value| section_value.get("results"))
+            .and_then(serde_json::Value::as_array)
+        {
+            collect_brave_result_items(
+                items,
+                max_results,
+                &mut seen_urls,
+                &mut results,
+                source_type,
+            );
+        }
+
+        if results.len() >= max_results {
+            break;
+        }
+    }
+
+    results
+}
+
+fn parse_brave_vertical_results(
+    payload: &serde_json::Value,
+    max_results: usize,
+    source_type: &str,
+    query: &str,
+) -> Vec<DuckDuckGoSearchResult> {
+    let mut results = Vec::new();
+    let mut seen_urls = HashSet::new();
+
+    for path in [
+        &["results"][..],
+        &["web", "results"][..],
+        &["news", "results"][..],
+        &["videos", "results"][..],
+        &["images", "results"][..],
+        &["locations", "results"][..],
+        &["places", "results"][..],
+    ] {
+        if let Some(items) = json_path(payload, path).and_then(serde_json::Value::as_array) {
+            for item in items {
+                if results.len() >= max_results {
+                    break;
+                }
+
+                let Some(result) = parse_brave_result_item(item, source_type, Some(query)) else {
+                    continue;
+                };
+
+                push_search_result_with_media(&mut results, &mut seen_urls, result, max_results);
+            }
+        }
+
+        if results.len() >= max_results {
+            break;
+        }
+    }
+
+    results
+}
+
+fn collect_brave_result_items(
+    items: &[serde_json::Value],
+    max_results: usize,
+    seen_urls: &mut HashSet<String>,
+    results: &mut Vec<DuckDuckGoSearchResult>,
+    source_type: &str,
+) {
+    for item in items {
+        if results.len() >= max_results {
+            break;
+        }
+
+        let Some(result) = parse_brave_result_item(item, source_type, None) else {
+            continue;
+        };
+
+        push_search_result_with_media(results, seen_urls, result, max_results);
+    }
+}
+
+fn parse_brave_result_item(
+    item: &serde_json::Value,
+    source_type: &str,
+    fallback_query: Option<&str>,
+) -> Option<DuckDuckGoSearchResult> {
+    let url = first_json_string(
+        item,
+        &[
+            &["url"],
+            &["website"],
+            &["provider_url"],
+            &["page_url"],
+            &["source_url"],
+            &["properties", "url"],
+            &["profile", "url"],
+            &["meta_url", "href"],
+        ],
+    )
+    .or_else(|| fallback_query.and_then(create_brave_search_result_url))?;
+    let title = first_json_string(item, &[&["title"], &["name"], &["question"], &["source"]])?;
+    let mut snippet_parts = Vec::new();
+
+    if let Some(description) = first_json_string(
+        item,
+        &[
+            &["description"],
+            &["short_description"],
+            &["description_ai"],
+            &["snippet"],
+            &["answer"],
+            &["text"],
+            &["content"],
+            &["profile", "long_name"],
+            &["profile", "name"],
+            &["category"],
+            &["address", "displayAddress"],
+            &["postal_address", "displayAddress"],
+            &["categories"],
+            &["serves_cuisine"],
+        ],
+    ) {
+        snippet_parts.push(description);
+    }
+
+    if let Some(extra_snippets) = item
+        .get("extra_snippets")
+        .and_then(serde_json::Value::as_array)
+    {
+        for snippet in extra_snippets {
+            if let Some(text) = snippet
+                .as_str()
+                .map(collapse_whitespace)
+                .filter(|value| !value.is_empty())
+            {
+                snippet_parts.push(text);
+            }
+        }
+    }
+    if let Some(age) = first_json_string(item, &[&["age"], &["published"], &["published_time"]]) {
+        snippet_parts.push(format!("Published: {age}"));
+    }
+    if let Some(source) = first_json_string(item, &[&["source"], &["publisher"], &["provider"]]) {
+        snippet_parts.push(format!("Source: {source}"));
+    }
+
+    let image_url = first_json_string(
+        item,
+        &[
+            &["properties", "url"],
+            &["image", "url"],
+            &["image_url"],
+            &["thumbnail", "original"],
+            &["thumbnail", "src"],
+        ],
+    );
+    let thumbnail_url = first_json_string(
+        item,
+        &[
+            &["thumbnail", "src"],
+            &["thumbnail", "url"],
+            &["thumbnail"],
+            &["properties", "placeholder"],
+            &["image", "thumbnail"],
+        ],
+    );
+
+    Some(DuckDuckGoSearchResult {
+        image_url: image_url.filter(|url| is_external_result_url(url)),
+        snippet: collapse_whitespace(&snippet_parts.join(" ")),
+        source_type: Some(source_type.to_string()),
+        thumbnail_url: thumbnail_url.filter(|url| is_external_result_url(url)),
+        title: collapse_whitespace(&title),
+        url,
+    })
+}
+
+fn first_json_string(payload: &serde_json::Value, paths: &[&[&str]]) -> Option<String> {
+    for path in paths {
+        if let Some(value) = json_path(payload, path)
+            .and_then(serde_json::Value::as_str)
+            .map(collapse_whitespace)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+
+        if let Some(value) = json_path(payload, path)
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value.to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+
+        if let Some(values) = json_path(payload, path).and_then(serde_json::Value::as_array) {
+            let joined = values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(collapse_whitespace)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            if !joined.is_empty() {
+                return Some(joined);
+            }
+        }
+    }
+
+    None
+}
+
+fn json_path<'a>(payload: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    let mut current = payload;
+
+    for segment in path {
+        current = if let Ok(index) = segment.parse::<usize>() {
+            current.get(index)?
+        } else {
+            current.get(*segment)?
+        };
+    }
+
+    Some(current)
+}
+
+fn create_brave_search_result_url(query: &str) -> Option<String> {
+    reqwest::Url::parse_with_params(BRAVE_SEARCH_PAGE_URL, &[("q", query)])
+        .ok()
+        .map(|url| url.to_string())
+}
+
+fn format_brave_error(status: u16, response_text: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(response_text)
+        .ok()
+        .and_then(|payload| {
+            first_json_string(
+                &payload,
+                &[
+                    &["error", "message"],
+                    &["error", "detail"],
+                    &["error", "reason"],
+                    &["error", "code"],
+                    &["message"],
+                    &["detail"],
+                ],
+            )
+        })
+        .unwrap_or_else(|| match status {
+            401 | 403 => "Check the Brave Search API key.".to_string(),
+            422 => "Check the Brave Search query and filter settings.".to_string(),
+            429 => "Brave Search rate limit reached.".to_string(),
+            _ => "The Brave Search API returned an error.".to_string(),
+        });
+
+    format!("Brave Search failed with HTTP {status}: {detail}")
 }
 
 async fn fetch_duckduckgo_instant_answer(
@@ -415,10 +1296,30 @@ fn push_search_result(
     }
 
     results.push(DuckDuckGoSearchResult {
+        image_url: None,
         snippet,
+        source_type: Some("web".to_string()),
+        thumbnail_url: None,
         title,
         url,
     });
+}
+
+fn push_search_result_with_media(
+    results: &mut Vec<DuckDuckGoSearchResult>,
+    seen_urls: &mut HashSet<String>,
+    result: DuckDuckGoSearchResult,
+    max_results: usize,
+) {
+    if results.len() >= max_results
+        || result.title.is_empty()
+        || !is_external_result_url(&result.url)
+        || !seen_urls.insert(result.url.clone())
+    {
+        return;
+    }
+
+    results.push(result);
 }
 
 fn extract_result_link(chunk: &str) -> Option<(String, String)> {
@@ -511,6 +1412,17 @@ fn normalize_duckduckgo_url(raw_url: &str) -> Option<String> {
     }
 }
 
+fn trim_search_query(query: &str, max_chars: usize, max_words: usize) -> String {
+    query
+        .split_whitespace()
+        .take(max_words)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
 fn is_external_result_url(url: &str) -> bool {
     reqwest::Url::parse(url)
         .ok()
@@ -595,6 +1507,52 @@ fn collapse_whitespace(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn default_brave_options() -> BraveSearchOptions {
+        BraveSearchOptions {
+            api_key: "test-key".to_string(),
+            api_version: None,
+            answers_max_completion_tokens: None,
+            answers_model: None,
+            cache_control_no_cache: None,
+            country: None,
+            enable_answers: None,
+            enable_image_search: None,
+            enable_news_search: None,
+            enable_place_search: None,
+            enable_rich_callback: None,
+            enable_video_search: None,
+            extra_snippets: None,
+            freshness: None,
+            goggles: None,
+            image_result_count: None,
+            include_fetch_metadata: None,
+            location_city: None,
+            location_country: None,
+            location_latitude: None,
+            location_longitude: None,
+            location_postal_code: None,
+            location_state: None,
+            location_state_name: None,
+            location_timezone: None,
+            news_result_count: None,
+            offset: None,
+            operators: None,
+            place_location: None,
+            place_radius_meters: None,
+            place_result_count: None,
+            request_method: None,
+            result_filter: None,
+            safesearch: None,
+            search_lang: None,
+            spellcheck: None,
+            summary: None,
+            text_decorations: None,
+            ui_lang: None,
+            units: None,
+            video_result_count: None,
+        }
+    }
+
     #[test]
     fn parses_duckduckgo_html_results_and_caps_at_six() {
         let html = (0..8)
@@ -624,5 +1582,161 @@ mod tests {
         assert_eq!(results[0].title, "Result 0");
         assert_eq!(results[0].url, "https://example0.com/story");
         assert_eq!(results[0].snippet, "Snippet 0");
+    }
+
+    #[test]
+    fn parses_brave_web_results_with_extra_snippets() {
+        let payload = serde_json::json!({
+            "web": {
+                "results": [
+                    {
+                        "title": "Brave Search API",
+                        "url": "https://api-dashboard.search.brave.com/app/documentation/web-search",
+                        "description": "Web Search provides access to Brave's web index.",
+                        "extra_snippets": ["Supports freshness filters.", "Supports country and language targeting."]
+                    },
+                    {
+                        "title": "Duplicate",
+                        "url": "https://api-dashboard.search.brave.com/app/documentation/web-search",
+                        "description": "Duplicate source"
+                    }
+                ]
+            },
+            "news": {
+                "results": [
+                    {
+                        "title": "Brave API News",
+                        "url": "https://brave.com/search/api/",
+                        "description": "API plans and features."
+                    }
+                ]
+            }
+        });
+
+        let results = parse_brave_results(&payload, 4);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Brave Search API");
+        assert_eq!(
+            results[0].url,
+            "https://api-dashboard.search.brave.com/app/documentation/web-search"
+        );
+        assert!(results[0].snippet.contains("freshness filters"));
+        assert_eq!(results[1].title, "Brave API News");
+    }
+
+    #[test]
+    fn builds_brave_url_with_advanced_options() {
+        let options = BraveSearchOptions {
+            country: Some("US".to_string()),
+            enable_rich_callback: Some(true),
+            extra_snippets: Some(true),
+            freshness: Some("pw".to_string()),
+            goggles: Some(vec![
+                "https://example.com/first.goggle".to_string(),
+                "https://example.com/second.goggle".to_string(),
+            ]),
+            include_fetch_metadata: Some(true),
+            offset: Some(2),
+            operators: Some(true),
+            result_filter: Some(vec!["web".to_string(), "news".to_string()]),
+            safesearch: Some("moderate".to_string()),
+            search_lang: Some("en".to_string()),
+            spellcheck: Some(true),
+            summary: Some(true),
+            text_decorations: Some(false),
+            ui_lang: Some("en-US".to_string()),
+            units: Some("imperial".to_string()),
+            ..default_brave_options()
+        };
+
+        let url = build_brave_search_url("brave api", 12, &options).expect("valid Brave URL");
+        let query = url.query().unwrap_or_default();
+
+        assert!(query.contains("count=12"));
+        assert!(query.contains("offset=2"));
+        assert!(query.contains("result_filter=web%2Cnews"));
+        assert!(query.contains("enable_rich_callback=true"));
+        assert!(query.contains("include_fetch_metadata=true"));
+        assert_eq!(
+            url.query_pairs()
+                .filter(|(key, _)| key == "goggles")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn builds_brave_post_body_with_typed_values() {
+        let params = vec![
+            ("q".to_string(), "brave api".to_string()),
+            ("count".to_string(), "3".to_string()),
+            ("offset".to_string(), "1".to_string()),
+            ("spellcheck".to_string(), "true".to_string()),
+            ("text_decorations".to_string(), "false".to_string()),
+            ("result_filter".to_string(), "web,news".to_string()),
+            (
+                "goggles".to_string(),
+                "https://example.com/first.goggle".to_string(),
+            ),
+            (
+                "goggles".to_string(),
+                "https://example.com/second.goggle".to_string(),
+            ),
+        ];
+
+        let body = create_brave_post_body(&params);
+
+        assert_eq!(body.get("q"), Some(&serde_json::json!("brave api")));
+        assert_eq!(body.get("count"), Some(&serde_json::json!(3)));
+        assert_eq!(body.get("offset"), Some(&serde_json::json!(1)));
+        assert_eq!(body.get("spellcheck"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            body.get("text_decorations"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            body.get("result_filter"),
+            Some(&serde_json::json!(["web", "news"]))
+        );
+        assert_eq!(
+            body.get("goggles"),
+            Some(&serde_json::json!([
+                "https://example.com/first.goggle",
+                "https://example.com/second.goggle"
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_brave_image_results_with_media_urls() {
+        let payload = serde_json::json!({
+            "results": [
+                {
+                    "title": "Storm shelf cloud",
+                    "url": "https://example.com/storm-photo",
+                    "source": "Example Images",
+                    "thumbnail": {
+                        "src": "https://img.example.com/thumb.jpg"
+                    },
+                    "properties": {
+                        "url": "https://img.example.com/full.jpg"
+                    }
+                }
+            ]
+        });
+
+        let results = parse_brave_vertical_results(&payload, 4, "image", "storm cloud");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_type.as_deref(), Some("image"));
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://img.example.com/thumb.jpg")
+        );
+        assert_eq!(
+            results[0].image_url.as_deref(),
+            Some("https://img.example.com/full.jpg")
+        );
     }
 }

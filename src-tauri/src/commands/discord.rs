@@ -4,9 +4,10 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     convert::TryInto,
+    env,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,7 +16,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -55,17 +56,12 @@ impl Drop for DiscordBridgeRuntime {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DiscordTunnelProvider {
     Local,
+    #[default]
     Ngrok,
-}
-
-impl Default for DiscordTunnelProvider {
-    fn default() -> Self {
-        Self::Ngrok
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -228,6 +224,7 @@ pub fn discord_bridge_start(
 
     let (public_url, tunnel_child, message) = match tunnel_provider {
         DiscordTunnelProvider::Ngrok => match start_ngrok_tunnel(
+            &app,
             port,
             request.ngrok_path.as_deref(),
             request.ngrok_auth_token.as_deref(),
@@ -593,14 +590,14 @@ fn handle_discord_connection(
 }
 
 fn handle_application_command(
-    mut stream: &mut TcpStream,
+    stream: &mut TcpStream,
     app: AppHandle,
     config: DiscordBridgeServerConfig,
     payload: Value,
 ) {
     if !interaction_is_allowed(&payload, &config) {
         write_json_response(
-            &mut stream,
+            stream,
             200,
             &interaction_message_response(
                 "Gilbert is not configured to respond in this Discord server or channel.",
@@ -614,7 +611,7 @@ fn handle_application_command(
 
     if prompt.trim().is_empty() {
         write_json_response(
-            &mut stream,
+            stream,
             200,
             &interaction_message_response(
                 "Add a prompt to the slash command so Gilbert knows what to do.",
@@ -650,7 +647,7 @@ fn handle_application_command(
 
     let ephemeral = config.response_style == "ephemeral";
     let _ = app.emit(DISCORD_INTERACTION_EVENT, event);
-    write_json_response(&mut stream, 200, &deferred_interaction_response(ephemeral));
+    write_json_response(stream, 200, &deferred_interaction_response(ephemeral));
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
@@ -820,7 +817,7 @@ fn validate_public_key(public_key: &str) -> Result<(), String> {
 fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
     let value = value.trim();
 
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("Expected an even-length hex value.".to_string());
     }
 
@@ -993,11 +990,12 @@ fn is_valid_slash_command_name(value: &str) -> bool {
 }
 
 fn start_ngrok_tunnel(
+    app: &AppHandle,
     port: u16,
     ngrok_path: Option<&str>,
     ngrok_auth_token: Option<&str>,
 ) -> Result<(Child, String), String> {
-    let executable = resolve_ngrok_executable(ngrok_path);
+    let executable = resolve_ngrok_executable(app, ngrok_path);
     let upstream = format!("http://127.0.0.1:{}", port);
     let auth_token = ngrok_auth_token
         .map(str::trim)
@@ -1085,17 +1083,36 @@ fn check_ngrok_config(executable: &str) -> Result<(), String> {
     ))
 }
 
-fn resolve_ngrok_executable(ngrok_path: Option<&str>) -> String {
+fn resolve_ngrok_executable(app: &AppHandle, ngrok_path: Option<&str>) -> String {
+    resolve_ngrok_executable_with_roots(ngrok_path, &ngrok_search_roots(app))
+}
+
+fn resolve_ngrok_executable_with_roots(ngrok_path: Option<&str>, roots: &[PathBuf]) -> String {
     let configured_path = ngrok_path
-        .map(str::trim)
+        .map(trim_ngrok_path_value)
         .filter(|value| !value.is_empty())
         .unwrap_or("ngrok");
 
     if configured_path != "ngrok" {
+        let configured_candidate = PathBuf::from(configured_path);
+
+        if let Some(executable) = resolve_ngrok_candidate(&configured_candidate) {
+            return executable.to_string_lossy().to_string();
+        }
+
+        if !configured_candidate.is_absolute() {
+            for root in roots {
+                if let Some(executable) = resolve_ngrok_candidate(&root.join(&configured_candidate))
+                {
+                    return executable.to_string_lossy().to_string();
+                }
+            }
+        }
+
         return configured_path.to_string();
     }
 
-    for candidate in ngrok_path_candidates() {
+    for candidate in ngrok_path_candidates(roots) {
         if candidate.is_file() {
             return candidate.to_string_lossy().to_string();
         }
@@ -1104,26 +1121,93 @@ fn resolve_ngrok_executable(ngrok_path: Option<&str>) -> String {
     configured_path.to_string()
 }
 
-fn ngrok_path_candidates() -> Vec<PathBuf> {
+fn ngrok_path_candidates(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(current_dir) = std::env::current_dir() {
-        push_ngrok_candidates(&mut candidates, current_dir.join(".tools").join("ngrok"));
-        push_ngrok_candidates(&mut candidates, current_dir.join("tools").join("ngrok"));
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    if let Some(repo_root) = manifest_dir.parent() {
-        push_ngrok_candidates(&mut candidates, repo_root.join(".tools").join("ngrok"));
-        push_ngrok_candidates(&mut candidates, repo_root.join("tools").join("ngrok"));
+    for root in roots {
+        push_ngrok_candidates(&mut candidates, root.join(".tools").join("ngrok"));
+        push_ngrok_candidates(&mut candidates, root.join("tools").join("ngrok"));
     }
 
     candidates
 }
 
+fn ngrok_search_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(current_dir) = env::current_dir() {
+        push_ngrok_root(&mut roots, current_dir);
+    }
+
+    if let Ok(current_exe) = env::current_exe() {
+        push_ngrok_root_and_ancestors(&mut roots, current_exe);
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    push_ngrok_root_and_ancestors(&mut roots, manifest_dir);
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push_ngrok_root_and_ancestors(&mut roots, resource_dir);
+    }
+
+    if let Ok(app_data_dir) = app.path().app_data_dir() {
+        push_ngrok_root_and_ancestors(&mut roots, app_data_dir);
+    }
+
+    if let Ok(documents_dir) = app.path().document_dir() {
+        push_ngrok_root(&mut roots, documents_dir.join("GilbertCodex"));
+        push_ngrok_root(&mut roots, documents_dir);
+    }
+
+    roots
+}
+
 fn push_ngrok_candidates(candidates: &mut Vec<PathBuf>, directory: PathBuf) {
     candidates.push(directory.join(ngrok_executable_name()));
+}
+
+fn resolve_ngrok_candidate(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+
+    if path.is_dir() {
+        let executable = path.join(ngrok_executable_name());
+
+        if executable.is_file() {
+            return Some(executable);
+        }
+    }
+
+    None
+}
+
+fn push_ngrok_root_and_ancestors(roots: &mut Vec<PathBuf>, path: PathBuf) {
+    let start = if path.is_file() {
+        path.parent().map(Path::to_path_buf)
+    } else {
+        Some(path)
+    };
+
+    if let Some(start) = start {
+        for ancestor in start.ancestors().take(8) {
+            push_ngrok_root(roots, ancestor.to_path_buf());
+        }
+    }
+}
+
+fn push_ngrok_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
+    if !roots.iter().any(|existing| existing == &root) {
+        roots.push(root);
+    }
+}
+
+fn trim_ngrok_path_value(value: &str) -> &str {
+    value
+        .trim()
+        .trim_matches(|character| character == '"' || character == '\'')
+        .trim()
 }
 
 fn ngrok_executable_name() -> &'static str {
@@ -1261,4 +1345,72 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn resolves_default_ngrok_from_repo_tools_folder() {
+        let root = temp_ngrok_root("default");
+        let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
+
+        let resolved = resolve_ngrok_executable_with_roots(None, &[root.clone()]);
+
+        assert_eq!(PathBuf::from(resolved), executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_relative_configured_ngrok_directory() {
+        let root = temp_ngrok_root("relative");
+        let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
+
+        let resolved = resolve_ngrok_executable_with_roots(Some(".tools/ngrok"), &[root.clone()]);
+
+        assert_eq!(PathBuf::from(resolved), executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_quoted_configured_ngrok_directory() {
+        let root = temp_ngrok_root("quoted");
+        let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
+
+        let resolved =
+            resolve_ngrok_executable_with_roots(Some("\".tools/ngrok\""), &[root.clone()]);
+
+        assert_eq!(PathBuf::from(resolved), executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn leaves_ngrok_on_path_when_no_local_executable_exists() {
+        let root = temp_ngrok_root("missing");
+
+        let resolved = resolve_ngrok_executable_with_roots(None, &[root.clone()]);
+
+        assert_eq!(resolved, "ngrok");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn temp_ngrok_root(label: &str) -> PathBuf {
+        let root = env::temp_dir().join(format!(
+            "gilbert-codex-ngrok-{label}-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create temp ngrok test root");
+        root
+    }
+
+    fn create_ngrok_executable(directory: &Path) -> PathBuf {
+        fs::create_dir_all(directory).expect("create ngrok test directory");
+        let executable = directory.join(ngrok_executable_name());
+        fs::write(&executable, b"test ngrok").expect("write ngrok test executable");
+        executable
+    }
 }

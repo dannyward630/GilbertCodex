@@ -48,6 +48,92 @@ export interface ModelProviderDefinition {
   requiresApiKey: boolean;
 }
 
+export type ModelCatalogCategoryId =
+  | "recommended"
+  | "free"
+  | "tool-calling"
+  | "coding"
+  | "reasoning"
+  | "fast"
+  | "long-context"
+  | "multimodal"
+  | "general"
+  | "local";
+
+export interface ModelCatalogCategory {
+  description: string;
+  id: ModelCatalogCategoryId;
+  label: string;
+}
+
+export interface ModelPricing {
+  cachedInputPerMillionTokens?: number;
+  imageInputUsd?: number;
+  inputPerMillionTokens?: number;
+  internalReasoningPerMillionTokens?: number;
+  note?: string;
+  outputPerMillionTokens?: number;
+  requestUsd?: number;
+  source?: "local" | "openrouter" | "provider";
+  sourceLabel?: string;
+  sourceUrl?: string;
+  updatedAt?: string;
+  webSearchUsd?: number;
+}
+
+export const MODEL_CATALOG_CATEGORIES: ModelCatalogCategory[] = [
+  {
+    description: "Curated defaults that balance reliability, capability, and cost.",
+    id: "recommended",
+    label: "Recommended",
+  },
+  {
+    description: "No-cost models and routes, including OpenRouter free-tier models.",
+    id: "free",
+    label: "Free models",
+  },
+  {
+    description: "Models with function calling, tool use, structured actions, or agent tool orchestration.",
+    id: "tool-calling",
+    label: "Tool calling",
+  },
+  {
+    description: "Best fits for code editing, repository work, and software agents.",
+    id: "coding",
+    label: "Coding & agents",
+  },
+  {
+    description: "Higher-depth models for hard reasoning, planning, and research.",
+    id: "reasoning",
+    label: "Deep reasoning",
+  },
+  {
+    description: "Lower-latency or lower-cost models for quick everyday work.",
+    id: "fast",
+    label: "Fast & low cost",
+  },
+  {
+    description: "Large context windows for long repos, documents, and tool traces.",
+    id: "long-context",
+    label: "Long context",
+  },
+  {
+    description: "Models that accept images, files, audio, or video alongside text.",
+    id: "multimodal",
+    label: "Multimodal",
+  },
+  {
+    description: "General hosted models and live catalog entries.",
+    id: "general",
+    label: "General",
+  },
+  {
+    description: "Local OpenAI-compatible servers and self-hosted runtimes.",
+    id: "local",
+    label: "Local",
+  },
+];
+
 const DEFAULT_PROVIDER_BASE_URLS: Required<Record<ModelProviderId, string>> = {
   anthropic: "https://api.anthropic.com/v1",
   deepseek: "https://api.deepseek.com",
@@ -63,31 +149,17 @@ const DEFAULT_PROVIDER_BASE_URLS: Required<Record<ModelProviderId, string>> = {
 };
 
 const DEFAULT_PROVIDER_MODELS: Required<Record<ModelProviderId, string>> = {
-  anthropic: "claude-opus-4-1-20250805",
+  anthropic: "claude-sonnet-4-6",
   deepseek: "deepseek-v4-pro",
   google: "gemini-2.5-pro",
   groq: "openai/gpt-oss-120b",
   lmstudio: "",
   mistral: "mistral-medium-3.5",
   ollama: "",
-  openai: "gpt-5.2",
+  openai: "gpt-5.4",
   openrouter: DEFAULT_CHAT_MODEL,
   vllm: "",
   xai: "grok-4.3",
-};
-
-const PROVIDER_DOCS_URLS: Required<Record<ModelProviderId, string>> = {
-  anthropic: "https://docs.anthropic.com/",
-  deepseek: "https://api-docs.deepseek.com/",
-  google: "https://ai.google.dev/gemini-api/docs",
-  groq: "https://console.groq.com/docs",
-  lmstudio: "https://lmstudio.ai/docs",
-  mistral: "https://docs.mistral.ai/",
-  ollama: "https://github.com/ollama/ollama/blob/main/docs/openai.md",
-  openai: "https://platform.openai.com/docs",
-  openrouter: "https://openrouter.ai/docs",
-  vllm: "https://docs.vllm.ai/en/stable/serving/openai_compatible_server.html",
-  xai: "https://docs.x.ai/",
 };
 
 const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinition> = {
@@ -99,7 +171,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.anthropic,
     defaultBaseUrl: DEFAULT_PROVIDER_BASE_URLS.anthropic,
     defaultModel: DEFAULT_PROVIDER_MODELS.anthropic,
-    detail: "Claude models through the Anthropic Messages API.",
+    detail: "Current Claude models through the Anthropic Messages API.",
     docsUrl: "https://platform.claude.com/docs/en/about-claude/models/overview",
     label: "Anthropic",
     listModelsPath: "/models",
@@ -206,7 +278,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS.openai,
     defaultBaseUrl: DEFAULT_PROVIDER_BASE_URLS.openai,
     defaultModel: DEFAULT_PROVIDER_MODELS.openai,
-    detail: "OpenAI GPT-5.2 chat and reasoning models.",
+    detail: "OpenAI GPT models for coding, professional work, and reasoning.",
     docsUrl: "https://developers.openai.com/api/docs/models",
     label: "OpenAI",
     listModelsPath: "/models",
@@ -262,70 +334,316 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
 };
 
 export interface ChatModelOption {
+  capabilities?: string[];
+  category?: ModelCatalogCategoryId;
   contextWindowTokens?: number;
   detail: string;
   id: string;
   label: string;
+  pricing?: ModelPricing;
   provider: ModelProviderId;
+  useCase?: string;
   value: string;
 }
 
 export interface ProviderModelMetadata {
+  capabilities?: string[];
+  category?: ModelCatalogCategoryId;
   contextWindowTokens?: number;
   detail?: string;
   id: string;
+  inputModalities?: string[];
   label?: string;
+  outputModalities?: string[];
+  pricing?: ModelPricing;
+  supportedParameters?: string[];
+  useCase?: string;
 }
 
-function modelOption(provider: ModelProviderId, id: string, label: string, value: string, detail: string, contextWindowTokens?: number): ChatModelOption {
+type ChatModelOptionExtras = Pick<ChatModelOption, "capabilities" | "category" | "pricing" | "useCase">;
+
+function modelOption(
+  provider: ModelProviderId,
+  id: string,
+  label: string,
+  value: string,
+  detail: string,
+  contextWindowTokens?: number,
+  extras: ChatModelOptionExtras = {},
+): ChatModelOption {
   return {
     contextWindowTokens,
     detail,
     id,
     label,
+    ...extras,
     provider,
     value,
   };
 }
 
+const MODEL_PRICE_VERIFIED_AT = "2026-05";
+
+const PROVIDER_PRICE_SOURCE_URLS: Partial<Record<ModelProviderId, string>> = {
+  anthropic: "https://platform.claude.com/docs/en/about-claude/pricing",
+  deepseek: "https://api-docs.deepseek.com/quick_start/pricing/",
+  google: "https://ai.google.dev/gemini-api/docs/pricing",
+  groq: "https://console.groq.com/docs/models",
+  mistral: "https://docs.mistral.ai/models",
+  openai: "https://developers.openai.com/api/docs/pricing",
+  openrouter: "https://openrouter.ai/docs/guides/overview/models",
+  xai: "https://docs.x.ai/developers/pricing",
+};
+
+function providerPricing(provider: ModelProviderId, pricing: Omit<ModelPricing, "source" | "sourceLabel" | "sourceUrl" | "updatedAt">): ModelPricing {
+  return {
+    ...pricing,
+    source: provider === "openrouter" ? "openrouter" : "provider",
+    sourceLabel: getModelProviderLabel(provider),
+    sourceUrl: PROVIDER_PRICE_SOURCE_URLS[provider],
+    updatedAt: MODEL_PRICE_VERIFIED_AT,
+  };
+}
+
+function freeOpenRouterPricing(note = "Free OpenRouter route. Free-tier rate limits and provider availability can still apply."): ModelPricing {
+  return providerPricing("openrouter", {
+    inputPerMillionTokens: 0,
+    note,
+    outputPerMillionTokens: 0,
+  });
+}
+
+function routedPricing(note: string, provider: ModelProviderId = "openrouter"): ModelPricing {
+  return providerPricing(provider, { note });
+}
+
+function getModelProviderLabel(provider: ModelProviderId) {
+  return MODEL_PROVIDER_DEFINITIONS[provider].label;
+}
+
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  modelOption("openrouter", "openrouter-free-auto", "Auto Route Free", DEFAULT_CHAT_MODEL, "Speed-biased free routing across three reliable OpenRouter free models.", 200_000),
-  modelOption("openrouter", "openrouter-auto", "OpenRouter Auto", OPENROUTER_AUTO_MODEL, "OpenRouter's official Auto Router chooses from a curated high-quality model pool based on the prompt.", 1_000_000),
-  modelOption("openrouter", "cobuddy-free", "CoBuddy", COBUDDY_CHAT_MODEL, "Free fast coding and agent model on OpenRouter.", 131_072),
-  modelOption("openrouter", "laguna-xs-free", "Laguna XS.2", LAGUNA_XS_CHAT_MODEL, "Free compact coding model for quick responses.", 131_072),
-  modelOption("openrouter", "ring-free", "Ring 2.6 1T", RING_CHAT_MODEL, "Free reasoning route on OpenRouter.", 262_144),
-  modelOption("openrouter", "laguna-free", "Laguna M.1", LAGUNA_CHAT_MODEL, "Free Poolside route on OpenRouter.", 128_000),
-  modelOption("openrouter", "owl-alpha", "Owl Alpha", OWL_ALPHA_MODEL, "OpenRouter alpha route.", 128_000),
-  modelOption("openrouter", "nemotron-3-super", "Nemotron 3 Super", NEMOTRON_3_SUPER_MODEL, "Free NVIDIA 120B route on OpenRouter.", 262_144),
-  modelOption("openrouter", "nemotron-omni", "Nemotron Omni", IMAGE_REASONING_MODEL, "OpenRouter image-capable reasoning route.", 128_000),
-  modelOption("openrouter", "openrouter-gpt-latest", "OpenAI GPT Latest", "~openai/gpt-latest", "OpenRouter's latest OpenAI GPT family router.", 1_050_000),
-  modelOption("openrouter", "openrouter-claude-sonnet-latest", "Claude Sonnet Latest", "~anthropic/claude-sonnet-latest", "OpenRouter's latest Claude Sonnet family router.", 1_000_000),
-  modelOption("openrouter", "openrouter-gemini-pro-latest", "Gemini Pro Latest", "~google/gemini-pro-latest", "OpenRouter's latest Gemini Pro family router.", 1_048_576),
-  modelOption("openrouter", "openrouter-grok-43", "Grok 4.3", "x-ai/grok-4.3", "xAI's current Grok model via OpenRouter.", 1_000_000),
-  modelOption("openrouter", "openrouter-deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek/deepseek-v4-pro", "DeepSeek V4 Pro through OpenRouter.", 1_000_000),
-  modelOption("openai", "openai-gpt-52", "GPT-5.2", "gpt-5.2", "Flagship model for complex reasoning and coding.", 400_000),
-  modelOption("openai", "openai-gpt-51", "GPT-5.1", "gpt-5.1", "Strong reasoning model for coding and professional work.", 400_000),
-  modelOption("openai", "openai-gpt-5-mini", "GPT-5 Mini", "gpt-5-mini", "Lower-latency GPT-5 family model for focused tasks.", 400_000),
-  modelOption("openai", "openai-gpt-5-nano", "GPT-5 Nano", "gpt-5-nano", "Small GPT-5 family model for fast background tasks.", 400_000),
-  modelOption("anthropic", "anthropic-opus-41", "Claude Opus 4.1", "claude-opus-4-1-20250805", "Most capable current Claude model for complex coding and agentic work.", 200_000),
-  modelOption("anthropic", "anthropic-opus-4", "Claude Opus 4", "claude-opus-4-20250514", "Previous Opus 4 snapshot for stable high-intelligence tasks.", 200_000),
-  modelOption("anthropic", "anthropic-sonnet-4", "Claude Sonnet 4", "claude-sonnet-4-20250514", "Balanced Claude model with strong speed and intelligence.", 200_000),
-  modelOption("anthropic", "anthropic-haiku-35", "Claude Haiku 3.5", "claude-3-5-haiku-20241022", "Fast Claude option for lighter tasks.", 200_000),
-  modelOption("google", "google-gemini-25-pro", "Gemini 2.5 Pro", "gemini-2.5-pro", "Stable Gemini model for deep reasoning and coding.", 1_048_576),
-  modelOption("google", "google-gemini-25-flash", "Gemini 2.5 Flash", "gemini-2.5-flash", "Fast multimodal Gemini model.", 1_048_576),
-  modelOption("google", "google-gemini-25-flash-lite", "Gemini 2.5 Flash-Lite", "gemini-2.5-flash-lite", "Cost-efficient Gemini workhorse model.", 1_048_576),
-  modelOption("xai", "xai-grok-43", "Grok 4.3", "grok-4.3", "xAI's recommended current chat model.", 1_000_000),
-  modelOption("xai", "xai-grok-4-fast", "Grok 4 Fast", "grok-4-fast-reasoning", "Cost-efficient long-context Grok reasoning model.", 2_000_000),
-  modelOption("xai", "xai-grok-code-fast", "Grok Code Fast", "grok-code-fast-1", "Fast Grok model tuned for agentic coding.", 256_000),
-  modelOption("groq", "groq-gpt-oss-120b", "GPT-OSS 120B", "openai/gpt-oss-120b", "Groq's flagship GPT-OSS route.", 131_072),
-  modelOption("groq", "groq-gpt-oss-20b", "GPT-OSS 20B", "openai/gpt-oss-20b", "Smaller, very fast GPT-OSS route.", 131_072),
-  modelOption("groq", "groq-compound", "Groq Compound", "groq/compound", "Groq system with built-in agentic tools.", 131_072),
-  modelOption("groq", "groq-llama-33-70b", "Llama 3.3 70B", "llama-3.3-70b-versatile", "Fast Llama production model.", 131_072),
-  modelOption("mistral", "mistral-medium-35", "Mistral Medium 3.5", "mistral-medium-3.5", "Current frontier-class Mistral coding and agent model.", 256_000),
-  modelOption("mistral", "mistral-large-3", "Mistral Large 3", "mistral-large-2512", "Latest large general-purpose Mistral family.", 256_000),
-  modelOption("mistral", "mistral-devstral-2", "Devstral 2", "devstral-2512", "Mistral's frontier code agent model.", 256_000),
-  modelOption("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro", "DeepSeek's strongest V4 model.", 1_000_000),
-  modelOption("deepseek", "deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash", "DeepSeek's fast V4 model.", 1_000_000),
+  modelOption("openrouter", "openrouter-free-auto", "Auto Route Free", DEFAULT_CHAT_MODEL, "Speed-biased free routing across reliable OpenRouter free coding and reasoning models.", 262_144, {
+    capabilities: ["Free", "Tools", "Reasoning"],
+    category: "recommended",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Default cost-free path for everyday coding, chat, and local-agent loops.",
+  }),
+  modelOption("openrouter", "openrouter-auto", "OpenRouter Auto", OPENROUTER_AUTO_MODEL, "OpenRouter Auto Router selects the best model for each prompt from a curated high-quality pool.", 2_000_000, {
+    capabilities: ["Auto routing", "Tools", "Variable price"],
+    category: "recommended",
+    pricing: routedPricing("No Auto Router surcharge. You pay the standard rate for whichever model OpenRouter selects."),
+    useCase: "Use when the prompt mix is unpredictable and the router should trade off quality, task type, and cost.",
+  }),
+  modelOption("openrouter", "cobuddy-free", "CoBuddy", COBUDDY_CHAT_MODEL, "Free Baidu coding model on OpenRouter with native tool support.", 131_072, {
+    capabilities: ["Free", "Coding", "Tools"],
+    category: "coding",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Fast code generation and agent workflows when budget matters more than maximum depth.",
+  }),
+  modelOption("openrouter", "laguna-xs-free", "Laguna XS.2", LAGUNA_XS_CHAT_MODEL, "Free compact Poolside coding-agent model with tool calling and reasoning support.", 131_072, {
+    capabilities: ["Free", "Coding", "Fast"],
+    category: "fast",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Quick code edits, short explanations, and low-latency agent turns.",
+  }),
+  modelOption("openrouter", "ring-free", "Ring 2.6 1T", RING_CHAT_MODEL, "Free 1T-scale thinking model built for real-world agent workflows.", 262_144, {
+    capabilities: ["Free", "Reasoning", "Tools"],
+    category: "reasoning",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Harder free reasoning tasks, tool-heavy flows, and cost-free planning.",
+  }),
+  modelOption("openrouter", "laguna-free", "Laguna M.1", LAGUNA_CHAT_MODEL, "Free Poolside flagship coding-agent route with reasoning and tool calling.", 131_072, {
+    capabilities: ["Free", "Coding", "Tools"],
+    category: "coding",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Complex codebase work where a free Poolside coding model is preferred.",
+  }),
+  modelOption("openrouter", "owl-alpha", "Owl Alpha", OWL_ALPHA_MODEL, "Free OpenRouter alpha foundation model for agentic workloads, tools, and long-context tasks.", 1_048_756, {
+    capabilities: ["Free", "Agentic", "Long context"],
+    category: "long-context",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Experimental long-context agent work where free routing is acceptable.",
+  }),
+  modelOption("openrouter", "nemotron-3-super", "Nemotron 3 Super", NEMOTRON_3_SUPER_MODEL, "Free NVIDIA 120B reasoning route on OpenRouter.", 262_144, {
+    capabilities: ["Free", "Reasoning"],
+    category: "reasoning",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Free reasoning, analysis, and large-model drafting.",
+  }),
+  modelOption("openrouter", "nemotron-omni", "Nemotron Omni", IMAGE_REASONING_MODEL, "Free multimodal NVIDIA reasoning route for text, image, audio, and video inputs.", 256_000, {
+    capabilities: ["Free", "Vision", "Audio", "Video"],
+    category: "multimodal",
+    pricing: freeOpenRouterPricing(),
+    useCase: "Image-aware or media-aware reasoning through OpenRouter's free route.",
+  }),
+  modelOption("openrouter", "openrouter-gpt-latest", "OpenAI GPT Latest", "~openai/gpt-latest", "OpenRouter router that always redirects to the latest OpenAI GPT family model.", 1_050_000, {
+    capabilities: ["Latest", "Reasoning", "Tools"],
+    category: "reasoning",
+    pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 30 }),
+    useCase: "Premium OpenAI-family reasoning, coding, and professional work through OpenRouter.",
+  }),
+  modelOption("openrouter", "openrouter-claude-sonnet-latest", "Claude Sonnet Latest", "~anthropic/claude-sonnet-latest", "OpenRouter router that always redirects to the latest Claude Sonnet family model.", 1_000_000, {
+    capabilities: ["Latest", "Coding", "Vision"],
+    category: "coding",
+    pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.3, inputPerMillionTokens: 3, outputPerMillionTokens: 15 }),
+    useCase: "Balanced coding, agents, writing, and long-context review through OpenRouter.",
+  }),
+  modelOption("openrouter", "openrouter-gemini-pro-latest", "Gemini Pro Latest", "~google/gemini-pro-latest", "OpenRouter router that always redirects to the latest Gemini Pro family model.", 1_048_576, {
+    capabilities: ["Latest", "Long context", "Multimodal"],
+    category: "long-context",
+    pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.2, inputPerMillionTokens: 2, outputPerMillionTokens: 12 }),
+    useCase: "Large multimodal context, document analysis, and long repo review through OpenRouter.",
+  }),
+  modelOption("openrouter", "openrouter-grok-43", "Grok 4.3", "x-ai/grok-4.3", "xAI Grok 4.3 reasoning model via OpenRouter with text and image input.", 1_000_000, {
+    capabilities: ["Reasoning", "Tools", "Vision"],
+    category: "reasoning",
+    pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.2, inputPerMillionTokens: 1.25, outputPerMillionTokens: 2.5 }),
+    useCase: "Agentic workflows, instruction following, and factual long-context work through OpenRouter.",
+  }),
+  modelOption("openrouter", "openrouter-deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek/deepseek-v4-pro", "DeepSeek V4 Pro through OpenRouter.", 1_000_000, {
+    capabilities: ["Coding", "Reasoning", "Tools"],
+    category: "coding",
+    pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.003625, inputPerMillionTokens: 0.435, note: "Current DeepSeek promotional rate through 2026-05-31; OpenRouter live metadata may override this.", outputPerMillionTokens: 0.87 }),
+    useCase: "High-value coding, long-context analysis, and agentic workflows at aggressive token pricing.",
+  }),
+  modelOption("openai", "openai-gpt-55", "GPT-5.5", "gpt-5.5", "OpenAI frontier model for complex coding and professional work.", 1_050_000, {
+    capabilities: ["Reasoning", "Coding", "Tools"],
+    category: "reasoning",
+    pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 30 }),
+    useCase: "Best fit when answer quality on complex professional work matters more than cost.",
+  }),
+  modelOption("openai", "openai-gpt-54", "GPT-5.4", "gpt-5.4", "More affordable OpenAI model for coding and professional work.", 400_000, {
+    capabilities: ["Coding", "Reasoning", "Tools"],
+    category: "recommended",
+    pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.25, inputPerMillionTokens: 2.5, outputPerMillionTokens: 15 }),
+    useCase: "Default direct OpenAI choice for coding, tool use, and reliable professional work.",
+  }),
+  modelOption("openai", "openai-gpt-54-mini", "GPT-5.4 Mini", "gpt-5.4-mini", "OpenAI mini model for coding, computer use, and subagents.", 400_000, {
+    capabilities: ["Fast", "Coding", "Tools"],
+    category: "fast",
+    pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.075, inputPerMillionTokens: 0.75, outputPerMillionTokens: 4.5 }),
+    useCase: "Subagents, focused implementation work, and lower-cost coding passes.",
+  }),
+  modelOption("openai", "openai-gpt-5-nano", "GPT-5 Nano", "gpt-5-nano", "Small OpenAI model for high-volume background tasks.", 400_000, {
+    capabilities: ["Fast", "Low cost"],
+    category: "fast",
+    pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.005, inputPerMillionTokens: 0.05, outputPerMillionTokens: 0.4 }),
+    useCase: "Classification, summarization, extraction, and inexpensive background work.",
+  }),
+  modelOption("anthropic", "anthropic-opus-47", "Claude Opus 4.7", "claude-opus-4-7", "Anthropic's most capable generally available model for complex reasoning and agentic coding.", 1_000_000, {
+    capabilities: ["Reasoning", "Coding", "Vision"],
+    category: "reasoning",
+    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
+    useCase: "Most complex agentic coding, planning, and reasoning tasks on Claude.",
+  }),
+  modelOption("anthropic", "anthropic-opus-46", "Claude Opus 4.6", "claude-opus-4-6", "Highly intelligent broadly available Claude model with exceptional coding and reasoning performance.", 1_000_000, {
+    capabilities: ["Reasoning", "Coding", "Vision"],
+    category: "reasoning",
+    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
+    useCase: "Complex coding and reasoning when Opus depth is preferred.",
+  }),
+  modelOption("anthropic", "anthropic-sonnet-46", "Claude Sonnet 4.6", "claude-sonnet-4-6", "Claude model with the best combination of speed and intelligence.", 1_000_000, {
+    capabilities: ["Coding", "Vision", "Balanced"],
+    category: "recommended",
+    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.3, inputPerMillionTokens: 3, outputPerMillionTokens: 15 }),
+    useCase: "Daily coding, agent runs, long-context review, and strong general reasoning.",
+  }),
+  modelOption("anthropic", "anthropic-haiku-45", "Claude Haiku 4.5", "claude-haiku-4-5-20251001", "Fast Claude model with near-frontier intelligence.", 200_000, {
+    capabilities: ["Fast", "Vision"],
+    category: "fast",
+    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.1, inputPerMillionTokens: 1, outputPerMillionTokens: 5 }),
+    useCase: "Responsive Claude-backed drafting, small edits, triage, and lighter coding tasks.",
+  }),
+  modelOption("google", "google-gemini-25-pro", "Gemini 2.5 Pro", "gemini-2.5-pro", "Google's state-of-the-art multipurpose model for coding and complex reasoning.", 1_048_576, {
+    capabilities: ["Long context", "Reasoning", "Multimodal"],
+    category: "long-context",
+    pricing: providerPricing("google", { cachedInputPerMillionTokens: 0.125, inputPerMillionTokens: 1.25, note: "Listed rate applies up to 200K prompt tokens; Google lists higher rates above 200K.", outputPerMillionTokens: 10 }),
+    useCase: "Deep reasoning, long documents, multimodal analysis, and code understanding.",
+  }),
+  modelOption("google", "google-gemini-25-flash", "Gemini 2.5 Flash", "gemini-2.5-flash", "Hybrid reasoning Gemini model for low-latency, high-volume multimodal tasks.", 1_048_576, {
+    capabilities: ["Fast", "Long context", "Multimodal"],
+    category: "fast",
+    pricing: providerPricing("google", { cachedInputPerMillionTokens: 0.03, inputPerMillionTokens: 0.3, outputPerMillionTokens: 2.5 }),
+    useCase: "Fast multimodal agents, chat, extraction, and high-throughput app features.",
+  }),
+  modelOption("google", "google-gemini-25-flash-lite", "Gemini 2.5 Flash-Lite", "gemini-2.5-flash-lite", "Google's smallest and most cost-effective Gemini 2.5 model for scale.", 1_048_576, {
+    capabilities: ["Low cost", "Long context", "Multimodal"],
+    category: "fast",
+    pricing: providerPricing("google", { cachedInputPerMillionTokens: 0.01, inputPerMillionTokens: 0.1, outputPerMillionTokens: 0.4 }),
+    useCase: "High-volume summarization, classification, extraction, and fast user-facing help.",
+  }),
+  modelOption("xai", "xai-grok-43", "Grok 4.3", "grok-4.3", "xAI reasoning model for agentic workflows and instruction-following tasks.", 1_000_000, {
+    capabilities: ["Reasoning", "Tools", "Vision"],
+    category: "recommended",
+    pricing: providerPricing("xai", { cachedInputPerMillionTokens: 0.2, inputPerMillionTokens: 1.25, outputPerMillionTokens: 2.5 }),
+    useCase: "Agentic workflows, tool use, factual analysis, and long-context chat.",
+  }),
+  modelOption("xai", "xai-grok-41-fast-reasoning", "Grok 4.1 Fast Reasoning", "grok-4-1-fast-reasoning", "xAI cost-efficient long-context reasoning model.", 2_000_000, {
+    capabilities: ["Fast", "Reasoning", "Long context"],
+    category: "fast",
+    pricing: providerPricing("xai", { cachedInputPerMillionTokens: 0.05, inputPerMillionTokens: 0.2, outputPerMillionTokens: 0.5 }),
+    useCase: "Long-context reasoning with lower latency and lower cost than flagship Grok.",
+  }),
+  modelOption("xai", "xai-grok-41-fast", "Grok 4.1 Fast", "grok-4-1-fast-non-reasoning", "xAI cost-efficient long-context Grok model without reasoning overhead.", 2_000_000, {
+    capabilities: ["Fast", "Long context", "Tools"],
+    category: "fast",
+    pricing: providerPricing("xai", { cachedInputPerMillionTokens: 0.05, inputPerMillionTokens: 0.2, outputPerMillionTokens: 0.5 }),
+    useCase: "Fast long-context chat, extraction, and high-throughput non-reasoning work.",
+  }),
+  modelOption("groq", "groq-gpt-oss-120b", "GPT-OSS 120B", "openai/gpt-oss-120b", "Groq-hosted GPT-OSS 120B for high-capability agentic use, tools, browser search, code execution, and reasoning.", 131_072, {
+    capabilities: ["Fast", "Reasoning", "Tools"],
+    category: "coding",
+    pricing: providerPricing("groq", { cachedInputPerMillionTokens: 0.075, inputPerMillionTokens: 0.15, outputPerMillionTokens: 0.6 }),
+    useCase: "Very fast coding agents, research workflows, math, and tool-heavy tasks.",
+  }),
+  modelOption("groq", "groq-gpt-oss-20b", "GPT-OSS 20B", "openai/gpt-oss-20b", "Smaller Groq-hosted GPT-OSS route for very fast reasoning-capable work.", 131_072, {
+    capabilities: ["Very fast", "Reasoning"],
+    category: "fast",
+    pricing: providerPricing("groq", { inputPerMillionTokens: 0.075, outputPerMillionTokens: 0.3 }),
+    useCase: "Fast drafts, classification, short coding tasks, and inexpensive reasoning turns.",
+  }),
+  modelOption("groq", "groq-compound", "Groq Compound", "groq/compound", "Groq system that selectively uses built-in tools such as web search, code execution, website visits, browser automation, and Wolfram Alpha.", 131_072, {
+    capabilities: ["Tools", "Web", "Code execution"],
+    category: "coding",
+    pricing: routedPricing("Final price depends on underlying model usage plus built-in tool charges.", "groq"),
+    useCase: "Queries that need Groq-managed web, code, and tool orchestration.",
+  }),
+  modelOption("groq", "groq-llama-33-70b", "Llama 3.3 70B", "llama-3.3-70b-versatile", "Groq-hosted Meta Llama 3.3 70B for multilingual NLP, code generation, and math.", 131_072, {
+    capabilities: ["Fast", "Tools", "JSON"],
+    category: "general",
+    pricing: providerPricing("groq", { inputPerMillionTokens: 0.59, outputPerMillionTokens: 0.79 }),
+    useCase: "Real-time general chat, support bots, multilingual work, coding, and math.",
+  }),
+  modelOption("mistral", "mistral-medium-35", "Mistral Medium 3.5", "mistral-medium-3.5", "Mistral frontier-class multimodal model optimized for agentic and coding use cases.", 256_000, {
+    capabilities: ["Coding", "Agents", "Vision"],
+    category: "coding",
+    pricing: providerPricing("mistral", { inputPerMillionTokens: 1.5, outputPerMillionTokens: 7.5 }),
+    useCase: "Agentic coding, structured outputs, document Q&A, and complex instruction following.",
+  }),
+  modelOption("mistral", "mistral-large-3", "Mistral Large 3", "mistral-large-2512", "Mistral state-of-the-art open-weight general-purpose multimodal model.", 256_000, {
+    capabilities: ["Open weight", "Vision", "Tools"],
+    category: "general",
+    pricing: providerPricing("mistral", { inputPerMillionTokens: 0.5, outputPerMillionTokens: 1.5 }),
+    useCase: "General multimodal work, tool use, structured outputs, and open-weight deployments.",
+  }),
+  modelOption("mistral", "mistral-devstral-2", "Devstral 2", "devstral-2512", "Mistral frontier code-agent model for software engineering tasks.", 256_000, {
+    capabilities: ["Coding", "Agents", "Tools"],
+    category: "coding",
+    pricing: providerPricing("mistral", { inputPerMillionTokens: 0.4, outputPerMillionTokens: 2 }),
+    useCase: "Codebase exploration, multi-file editing, and software-engineering agents.",
+  }),
+  modelOption("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro", "DeepSeek's strongest V4 model with thinking and non-thinking modes, JSON output, and tool calls.", 1_000_000, {
+    capabilities: ["Coding", "Reasoning", "Tools"],
+    category: "coding",
+    pricing: providerPricing("deepseek", { cachedInputPerMillionTokens: 0.003625, inputPerMillionTokens: 0.435, note: "Current DeepSeek promotional rate through 2026-05-31; regular listed input/output rates are higher.", outputPerMillionTokens: 0.87 }),
+    useCase: "Hard coding, long-context analysis, agent workflows, and high-value reasoning.",
+  }),
+  modelOption("deepseek", "deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash", "DeepSeek fast V4 model with thinking and non-thinking modes, JSON output, and tool calls.", 1_000_000, {
+    capabilities: ["Fast", "Coding", "Tools"],
+    category: "fast",
+    pricing: providerPricing("deepseek", { cachedInputPerMillionTokens: 0.0028, inputPerMillionTokens: 0.14, outputPerMillionTokens: 0.28 }),
+    useCase: "Low-cost chat, routine coding, summarization, extraction, and high-volume agent work.",
+  }),
 ];
 
 export interface ModelProviderCatalogItem extends ModelProviderDefinition {
@@ -384,15 +702,15 @@ export function normalizeProviderModelId(provider: ModelProviderId, model: strin
     return DEFAULT_PROVIDER_MODELS.google;
   }
 
-  if (provider === "openai" && (normalizedModel === "gpt-5.5" || normalizedModel === "gpt-5.4" || normalizedModel === "gpt-5.4-mini" || normalizedModel === "gpt-5.4-nano")) {
+  if (provider === "openai" && (normalizedModel === "gpt-5.2" || normalizedModel === "gpt-5.1" || normalizedModel === "gpt-5")) {
     return DEFAULT_PROVIDER_MODELS.openai;
   }
 
-  if (provider === "anthropic" && (normalizedModel === "claude-opus-4-7" || normalizedModel === "claude-sonnet-4-6" || normalizedModel === "claude-haiku-4-5-20251001")) {
+  if (provider === "anthropic" && (normalizedModel === "claude-opus-4-1-20250805" || normalizedModel === "claude-opus-4-20250514" || normalizedModel === "claude-sonnet-4-20250514")) {
     return DEFAULT_PROVIDER_MODELS.anthropic;
   }
 
-  if (provider === "xai" && normalizedModel.startsWith("grok-4.20")) {
+  if (provider === "xai" && (normalizedModel.startsWith("grok-4.20") || normalizedModel === "grok-4-fast-reasoning" || normalizedModel === "grok-4-fast-non-reasoning")) {
     return DEFAULT_PROVIDER_MODELS.xai;
   }
 
@@ -499,11 +817,15 @@ function createDiscoveredModelOption(provider: ModelProviderId, model: ProviderM
   const modelId = model.id.trim();
 
   return {
+    capabilities: model.capabilities,
+    category: model.category,
     contextWindowTokens: model.contextWindowTokens,
     detail: model.detail || `Discovered from ${getModelProvider(provider).label} /models.`,
     id: `${provider}-live-${hashModelId(modelId)}`,
     label: model.label?.trim() || modelId,
+    pricing: model.pricing,
     provider,
+    useCase: model.useCase,
     value: modelId,
   };
 }

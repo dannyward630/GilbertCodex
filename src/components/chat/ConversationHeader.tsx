@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Archive,
   Clock3,
@@ -16,13 +16,24 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { IconButton } from "../common/IconButton";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 
 interface ConversationHeaderProps {
   browserPreviewOpen: boolean;
   browserPreviewEnabled: boolean;
   inspectorAvailable: boolean;
   inspectorOpen: boolean;
+  onAddAutomation: () => void;
+  onArchive: () => void;
+  onCopyDeeplink: () => void;
+  onCopyMarkdown: () => void;
+  onCopySessionId: () => void;
+  onCopyWorkingDirectory: () => void;
+  onForkLocal: () => void;
+  onForkWorktree: () => void;
+  onOpenNewWindow: () => void;
   onOpenSideChat: () => void;
+  onRename: () => void;
   onToggleBrowserPreview: () => void;
   onToggleInspector: () => void;
   onTogglePin: () => void;
@@ -47,7 +58,17 @@ export function ConversationHeader({
   browserPreviewEnabled,
   inspectorAvailable,
   inspectorOpen,
+  onAddAutomation,
+  onArchive,
+  onCopyDeeplink,
+  onCopyMarkdown,
+  onCopySessionId,
+  onCopyWorkingDirectory,
+  onForkLocal,
+  onForkWorktree,
+  onOpenNewWindow,
   onOpenSideChat,
+  onRename,
   onToggleBrowserPreview,
   onToggleInspector,
   onTogglePin,
@@ -69,32 +90,38 @@ export function ConversationHeader({
     {
       icon: Pencil,
       label: "Rename chat",
+      onSelect: onRename,
       shortcut: "Ctrl+Alt+R",
     },
     {
       icon: Archive,
       label: "Archive chat",
+      onSelect: onArchive,
       shortcut: "Ctrl+Shift+A",
     },
     {
       icon: Copy,
       label: "Copy working directory",
+      onSelect: onCopyWorkingDirectory,
       separatorBefore: true,
       shortcut: "Ctrl+Shift+C",
     },
     {
       icon: Copy,
       label: "Copy session ID",
+      onSelect: onCopySessionId,
       shortcut: "Ctrl+Alt+C",
     },
     {
       icon: Copy,
       label: "Copy deeplink",
+      onSelect: onCopyDeeplink,
       shortcut: "Ctrl+Alt+L",
     },
     {
       icon: Copy,
       label: "Copy as Markdown",
+      onSelect: onCopyMarkdown,
     },
     {
       icon: MessageCirclePlus,
@@ -103,54 +130,33 @@ export function ConversationHeader({
       separatorBefore: true,
     },
     {
-      disabled: true,
       icon: Laptop,
       label: "Fork into local",
+      onSelect: onForkLocal,
     },
     {
-      disabled: true,
       icon: GitFork,
       label: "Fork into new worktree",
+      onSelect: onForkWorktree,
     },
     {
-      disabled: true,
       icon: Clock3,
       label: "Add automation...",
+      onSelect: onAddAutomation,
     },
     {
       icon: ExternalLink,
       label: "Open in new window",
+      onSelect: onOpenNewWindow,
       separatorBefore: true,
     },
   ];
 
-  useEffect(() => {
-    if (!optionsOpen) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (optionsRef.current?.contains(event.target as Node)) {
-        return;
-      }
-
-      setOptionsOpen(false);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOptionsOpen(false);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [optionsOpen]);
+  useDismissableLayer({
+    active: optionsOpen,
+    onDismiss: () => setOptionsOpen(false),
+    refs: [optionsRef],
+  });
 
   function handleMenuItemSelect(item: ConversationMenuItem) {
     if (item.disabled) {
@@ -164,7 +170,7 @@ export function ConversationHeader({
   return (
     <header className="conversation-header">
       <div className="conversation-title">
-        <h1>{title}</h1>
+        <h1 key={title}>{title}</h1>
         <div className="conversation-menu-anchor" data-open={optionsOpen} ref={optionsRef}>
           <button
             className="conversation-options-button"

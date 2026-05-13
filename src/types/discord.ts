@@ -1,7 +1,6 @@
 export type DiscordBridgeMode = "bot-gateway" | "interactions" | "webhook-relay";
 export type DiscordBridgeResponseStyle = "channel" | "ephemeral" | "thread";
 export type DiscordTunnelProvider = "local" | "ngrok";
-export type DiscordGithubEvent = "issues" | "issue_comment" | "pull_request" | "push" | "release";
 
 export const DISCORD_BRIDGE_MODE_LABELS: Record<DiscordBridgeMode, string> = {
   "bot-gateway": "Bot gateway",
@@ -20,8 +19,6 @@ export const DISCORD_TUNNEL_PROVIDER_LABELS: Record<DiscordTunnelProvider, strin
   ngrok: "ngrok",
 };
 
-export const DISCORD_GITHUB_WEBHOOK_EVENTS: DiscordGithubEvent[] = ["push", "pull_request", "issues", "issue_comment", "release"];
-
 export interface DiscordBridgeSettings {
   allowedChannelIds: string;
   allowedGuildIds: string;
@@ -30,9 +27,6 @@ export interface DiscordBridgeSettings {
   bridgePort: number;
   botToken: string;
   enabled: boolean;
-  githubEvents: DiscordGithubEvent[];
-  githubRepository: string;
-  githubWebhookSecret: string;
   incomingWebhookUrl: string;
   interactionsEndpointUrl: string;
   mode: DiscordBridgeMode;
@@ -52,9 +46,6 @@ export const DEFAULT_DISCORD_BRIDGE_SETTINGS: DiscordBridgeSettings = {
   bridgePort: 8787,
   botToken: "",
   enabled: false,
-  githubEvents: ["push", "pull_request", "issues"],
-  githubRepository: "",
-  githubWebhookSecret: "",
   incomingWebhookUrl: "",
   interactionsEndpointUrl: "",
   mode: "interactions",
@@ -71,11 +62,8 @@ export function normalizeDiscordBridgeSettings(value: unknown): DiscordBridgeSet
   const mode = normalizeDiscordBridgeMode(storedSettings.mode);
   const responseStyle = normalizeDiscordBridgeResponseStyle(storedSettings.responseStyle);
   const tunnelProvider = normalizeDiscordTunnelProvider(storedSettings.tunnelProvider);
-  const githubEvents = normalizeDiscordGithubEvents(storedSettings.githubEvents);
 
   return {
-    ...DEFAULT_DISCORD_BRIDGE_SETTINGS,
-    ...storedSettings,
     allowedChannelIds: normalizeText(storedSettings.allowedChannelIds),
     allowedGuildIds: normalizeText(storedSettings.allowedGuildIds),
     applicationId: normalizeText(storedSettings.applicationId),
@@ -83,9 +71,6 @@ export function normalizeDiscordBridgeSettings(value: unknown): DiscordBridgeSet
     bridgePort: normalizeBridgePort(storedSettings.bridgePort),
     botToken: normalizeText(storedSettings.botToken),
     enabled: typeof storedSettings.enabled === "boolean" ? storedSettings.enabled : DEFAULT_DISCORD_BRIDGE_SETTINGS.enabled,
-    githubEvents,
-    githubRepository: normalizeText(storedSettings.githubRepository),
-    githubWebhookSecret: normalizeText(storedSettings.githubWebhookSecret),
     incomingWebhookUrl: normalizeText(storedSettings.incomingWebhookUrl),
     interactionsEndpointUrl: normalizeText(storedSettings.interactionsEndpointUrl),
     mode,
@@ -130,14 +115,6 @@ function normalizeBridgePort(value: unknown) {
   }
 
   return DEFAULT_DISCORD_BRIDGE_SETTINGS.bridgePort;
-}
-
-function normalizeDiscordGithubEvents(value: unknown): DiscordGithubEvent[] {
-  const events = Array.isArray(value)
-    ? value.filter((event): event is DiscordGithubEvent => DISCORD_GITHUB_WEBHOOK_EVENTS.includes(event as DiscordGithubEvent))
-    : DEFAULT_DISCORD_BRIDGE_SETTINGS.githubEvents;
-
-  return Array.from(new Set(events.length > 0 ? events : DEFAULT_DISCORD_BRIDGE_SETTINGS.githubEvents));
 }
 
 function normalizeText(value: unknown) {

@@ -979,60 +979,232 @@
   line-height: 1.35;
 }
 
-.discord-github-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  min-width: 0;
-}
-
-.discord-event-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-
-.discord-event-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 38px;
-  padding: 0 10px;
-  color: var(--text-muted);
-  border: 1px solid var(--field-border);
-  border-radius: 8px;
-  background: var(--field-bg);
-  font-size: 12px;
-  font-weight: 730;
-}
-
-.discord-event-toggle:has(input:checked) {
-  color: var(--text);
-  border-color: var(--composer-focus-border);
-  background: var(--surface-raised);
-}
-
-.discord-event-toggle input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--blue);
-}
-
-.discord-event-toggle span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .discord-action-row {
   flex-wrap: wrap;
 }
 
 .discord-doc-link {
   text-decoration: none;
+}
+
+.integration-docs-card {
+  grid-column: 1 / -1;
+  gap: 18px;
+}
+
+.integration-docs-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 22px;
+  min-width: 0;
+}
+
+.integration-doc-section {
+  min-width: 0;
+}
+
+.integration-doc-section h3 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.integration-doc-steps {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.integration-doc-steps li {
+  min-width: 0;
+  padding-left: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.integration-doc-steps li::marker {
+  color: var(--blue);
+  font-weight: 850;
+}
+
+.integration-doc-steps code {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.integration-doc-link-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.integration-doc-link-list a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.integration-doc-link-list a:hover {
+  color: var(--text);
+  border-color: var(--composer-focus-border);
+  background: var(--surface-raised);
+}
+
+.integration-doc-link-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-doc-link-list svg {
+  color: var(--blue);
+}
+
+.integration-doc-note {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.settings-shell[data-section="mapbox"] {
+  width: min(1240px, 100%);
+}
+
+.mapbox-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.mapbox-token-card {
+  gap: 16px;
+}
+
+.mapbox-token-health {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, #ffd27a 34%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, #ffd27a 8%, transparent);
+}
+
+.mapbox-token-health[data-ready="true"] {
+  border-color: color-mix(in srgb, var(--green) 34%, transparent);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.mapbox-token-health > span {
+  grid-row: 1 / span 2;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #ffd27a;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #ffd27a 16%, transparent);
+}
+
+.mapbox-token-health[data-ready="true"] > span {
+  background: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 16%, transparent);
+}
+
+.mapbox-token-health strong,
+.mapbox-token-health small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapbox-token-health strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.mapbox-token-health small {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.mapbox-style-preset-grid,
+.mapbox-projection-grid {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.mapbox-style-preset-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mapbox-projection-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mapbox-style-preset-grid button,
+.mapbox-projection-grid button {
+  min-height: 36px;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.mapbox-style-preset-grid button:hover,
+.mapbox-style-preset-grid button[data-selected="true"],
+.mapbox-projection-grid button:hover,
+.mapbox-projection-grid button[data-selected="true"] {
+  color: var(--text);
+  border-color: var(--composer-focus-border);
+  background: var(--surface-raised);
+}
+
+.settings-row input {
+  min-width: 0;
+  color: var(--text);
+  accent-color: var(--blue);
 }
 
 .settings-shell[data-section="github"] {
@@ -1407,6 +1579,201 @@
   font-weight: 700;
 }
 
+.settings-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  min-width: max-content;
+  padding: 0 14px;
+  color: var(--app-bg);
+  border: 1px solid color-mix(in srgb, var(--text) 72%, transparent);
+  border-radius: 8px;
+  background: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.settings-action-button:hover {
+  background: color-mix(in srgb, var(--text) 86%, white 14%);
+}
+
+.pdf-metrics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pdf-metric-card {
+  gap: 8px;
+  min-height: 104px;
+}
+
+.pdf-metric-card span {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.pdf-metric-card strong {
+  color: var(--text);
+  font-size: 30px;
+  line-height: 1;
+}
+
+.pdf-upload-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  min-width: 0;
+}
+
+.pdf-library-layout {
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
+  align-items: start;
+}
+
+.pdf-records-card,
+.pdf-project-card {
+  min-width: 0;
+}
+
+.pdf-record-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pdf-record-row {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.pdf-record-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pdf-record-title {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pdf-record-title > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.pdf-record-title span,
+.pdf-record-title strong,
+.pdf-record-title small {
+  display: block;
+  min-width: 0;
+}
+
+.pdf-record-title strong {
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pdf-record-title small {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pdf-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.pdf-record-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.pdf-record-actions button:hover,
+.pdf-record-actions button.active {
+  color: var(--text);
+  border-color: var(--composer-focus-border);
+  background: var(--surface-raised);
+}
+
+.pdf-guidance-editor textarea {
+  min-height: 92px;
+}
+
+.pdf-project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.pdf-project-list button {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 12px;
+  font-weight: 740;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-project-list button:hover,
+.pdf-project-list button.active {
+  color: var(--text);
+  border-color: var(--composer-focus-border);
+  background: var(--surface-raised);
+}
+
+.pdf-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  min-height: 170px;
+  padding: 18px;
+  color: var(--text-dim);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  text-align: center;
+}
+
+.pdf-empty-state strong {
+  color: var(--text);
+}
+
 @media (max-width: 820px) {
   .settings-page {
     padding: 20px;
@@ -1453,17 +1820,17 @@
   }
 
   .discord-settings-layout,
-  .discord-github-grid,
   .discord-runtime-grid {
     grid-template-columns: 1fr;
   }
 
-  .discord-readiness-list,
-  .discord-event-grid {
+  .discord-readiness-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .github-settings-layout,
+  .mapbox-settings-layout,
+  .integration-docs-body,
   .github-upgrade-banner {
     grid-template-columns: 1fr;
   }
@@ -1483,6 +1850,29 @@
   .github-device-actions {
     justify-content: flex-start;
   }
+
+  .mapbox-style-preset-grid,
+  .mapbox-projection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pdf-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pdf-upload-row,
+  .pdf-library-layout,
+  .pdf-record-header {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-record-header {
+    display: grid;
+  }
+
+  .pdf-record-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 520px) {
@@ -1491,8 +1881,20 @@
     grid-template-columns: 1fr;
   }
 
-  .discord-readiness-list,
-  .discord-event-grid {
+  .discord-readiness-list {
+    grid-template-columns: 1fr;
+  }
+
+  .mapbox-style-preset-grid,
+  .mapbox-projection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .integration-doc-link-list {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-metrics-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,7 +1,8 @@
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { closeWindow, maximizeWindow, minimizeWindow, startWindowDrag } from "../../app/windowClient";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { WindowControls } from "./WindowControls";
 
 type AuthMenuId = "file" | "edit" | "view" | "window" | "help";
@@ -109,30 +110,12 @@ export function AuthTopBar({ activeMode, hasAccounts, onModeChange }: AuthTopBar
     [activeMode, hasAccounts, onModeChange],
   );
 
-  useEffect(() => {
-    if (!openMenu) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (!topbarRef.current?.contains(event.target as Node)) {
-        setOpenMenu(null);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpenMenu(null);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [openMenu]);
+  useDismissableLayer({
+    active: openMenu !== null,
+    keyboardTarget: "window",
+    onDismiss: () => setOpenMenu(null),
+    refs: [topbarRef],
+  });
 
   function isInteractiveTarget(target: HTMLElement) {
     return Boolean(target.closest("button, input, textarea, select, a, [role='menu'], [data-topbar-interactive='true']"));

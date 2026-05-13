@@ -11,7 +11,7 @@ description: Use when the workspace is a Node.js, npm, Yarn, pnpm, Bun, React, N
 - A `workspaces` field or `pnpm-workspace.yaml` means a monorepo. Run package-level commands with `cwd` set to the specific package folder, not the repo root.
 
 ## Bootstrap a new project
-- Scaffold with the official starter, not a hand-rolled one: `npm create vite@latest`, `npx create-next-app@latest`, `npx create-expo-app`, etc. Use the package manager already detected.
+- Scaffold with the app's structured create_vite_project tool for Vite React projects when it is available. If the user explicitly wants an official starter, use `npm create vite@latest . -- --template react` from an already selected fresh project folder; pass a project name only when intentionally creating a child folder. For other stacks, use official starters such as `npx create-next-app@latest` or `npx create-expo-app`. Starter downloads can sit quiet on a cold npm cache, so run them noninteractively and allow about 300 seconds before deciding they failed.
 - Install once with the detected manager: `npm install`, `pnpm install`, `yarn install`, or `bun install`. Add packages with `npm install <pkg>` and dev deps with `--save-dev` so the file diff is clear in review.
 - Verify the install: confirm `node_modules` exists and the first `npm run build` or `npm run typecheck` passes before adding more dependencies.
 
@@ -29,4 +29,5 @@ description: Use when the workspace is a Node.js, npm, Yarn, pnpm, Bun, React, N
 
 ## Verify before saying it works
 - Type and build first: `npm run typecheck`, `npm run build`, or whatever the project exposes. Tests next: `npm test`, `npm run test`, or `npm run test -- --run` for Vitest.
-- For dev servers, start with `run_terminal` background, then `open_browser_preview` on the printed localhost URL to confirm it renders. Read the terminal output for actual errors instead of trusting the exit code alone.
+- When the user asks to run or view the app, start dev servers yourself with `run_terminal`. `npm run dev`, `vite`, `next dev`, watchers, and hot-reloaders are managed as background terminal sessions; use the returned localhost URL with `open_browser_preview` for verification.
+- Know the common dev ports and let `run_terminal` manage collisions: Vite/SvelteKit 5173, Next/React 3000, Astro 4321, Angular 4200, Storybook 6006, Expo 8081. If a preferred port is occupied, the terminal tool selects and passes the next free port. Do not guess uncommon localhost service ports such as 8787 unless the user explicitly asks for that port or a tracked dev-server session printed it.

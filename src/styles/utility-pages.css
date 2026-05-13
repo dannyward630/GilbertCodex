@@ -156,14 +156,7 @@
   gap: 12px;
 }
 
-.tool-support-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .tool-surface-card,
-.workflow-card,
 .workflow-template-card,
 .workflow-signal-card,
 .workflow-gap-card,
@@ -227,7 +220,6 @@
 
 .tool-surface-card[data-status="Gated"] .tool-card-icon,
 .tool-surface-card[data-status="Queued"] .tool-card-icon,
-.workflow-card[data-status="Queued"] .tool-card-icon,
 .workflow-template-card[data-ready="false"] .tool-card-icon,
 .workflow-gap-card[data-status="Partial"] .tool-card-icon,
 .workflow-gap-card[data-status="Missing"] .tool-card-icon {
@@ -236,8 +228,7 @@
 }
 
 .tool-surface-card[data-status="Planned"] .tool-card-icon,
-.tool-surface-card[data-status="Preview"] .tool-card-icon,
-.workflow-card[data-status="Draft"] .tool-card-icon {
+.tool-surface-card[data-status="Preview"] .tool-card-icon {
   color: var(--text-muted);
   background: var(--surface-raised);
 }
@@ -251,7 +242,6 @@
 }
 
 .tool-surface-card h3,
-.workflow-card h3,
 .workflow-template-card h3 {
   margin: 0;
   color: var(--text);
@@ -261,7 +251,6 @@
 }
 
 .tool-surface-card p,
-.workflow-card p,
 .workflow-template-card p,
 .workflow-signal-card p,
 .workflow-gap-card p {
@@ -405,16 +394,10 @@
   line-height: 1.4;
 }
 
-.workflow-grid,
 .workflow-template-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-}
-
-.workflow-card {
-  min-height: 220px;
-  padding: 16px;
 }
 
 .workflow-run-list {
@@ -561,10 +544,305 @@
   gap: 10px;
 }
 
+.mcp-runtime-banner,
+.mcp-empty-state,
+.mcp-server-card,
+.mcp-starter-card,
+.mcp-concept-card,
+.mcp-setup-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 94%, var(--text) 3%), var(--surface-panel)),
+    var(--surface-panel);
+}
+
+.mcp-runtime-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 86px;
+  padding: 15px;
+}
+
+.mcp-runtime-banner[data-ready="true"] {
+  border-color: color-mix(in srgb, var(--green) 38%, var(--line));
+}
+
+.mcp-runtime-banner[data-ready="true"] .tool-card-icon {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.mcp-runtime-banner[data-ready="false"] .tool-card-icon {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+.mcp-runtime-banner strong,
+.mcp-empty-state strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.mcp-runtime-banner p,
+.mcp-empty-state p,
+.mcp-starter-card p,
+.mcp-concept-card p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.46;
+}
+
+.mcp-server-grid,
+.mcp-starter-grid,
+.mcp-concept-grid,
+.mcp-setup-grid,
+.mcp-doc-link-grid {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mcp-server-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mcp-starter-grid,
+.mcp-concept-grid,
+.mcp-setup-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mcp-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 82px;
+  padding: 16px;
+}
+
+.mcp-empty-state svg {
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+
+.mcp-server-card,
+.mcp-starter-card,
+.mcp-concept-card,
+.mcp-setup-card {
+  display: grid;
+  align-content: start;
+  gap: 13px;
+  padding: 15px;
+}
+
+.mcp-server-card[data-enabled="false"] {
+  opacity: 0.68;
+}
+
+.mcp-card-actions,
+.mcp-field-grid {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-field-grid {
+  align-items: start;
+}
+
+.mcp-field-grid > .mcp-field {
+  flex: 1 1 0;
+}
+
+.mcp-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.mcp-field input,
+.mcp-field select,
+.mcp-field textarea {
+  width: 100%;
+  min-width: 0;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  outline: none;
+}
+
+.mcp-field input,
+.mcp-field select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.mcp-field textarea {
+  min-height: 76px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.mcp-field input:focus,
+.mcp-field select:focus,
+.mcp-field textarea:focus {
+  border-color: color-mix(in srgb, var(--blue) 54%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 16%, transparent);
+}
+
+.mcp-checkbox-field {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.mcp-checkbox-field input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--green);
+}
+
+.mcp-icon-button,
+.mcp-starter-card button,
+.mcp-setup-card button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.mcp-icon-button {
+  width: 32px;
+  padding: 0;
+}
+
+.mcp-icon-button:hover,
+.mcp-starter-card button:hover,
+.mcp-setup-card button:hover {
+  border-color: color-mix(in srgb, var(--blue) 48%, var(--line));
+}
+
+.mcp-starter-card h3,
+.mcp-concept-card h3,
+.mcp-setup-card h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.mcp-starter-card code {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.mcp-setup-card {
+  min-height: 292px;
+}
+
+.mcp-setup-card ol {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.48;
+}
+
+.mcp-setup-card pre {
+  overflow: auto;
+  max-height: 220px;
+  margin: 0;
+  padding: 12px;
+  color: var(--text-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-base) 86%, black 14%);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mcp-copy-status {
+  width: fit-content;
+  min-height: 30px;
+  padding: 8px 10px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 34%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.mcp-doc-link-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.mcp-doc-link-grid a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 11px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  font-size: 12px;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.mcp-doc-link-grid a span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-doc-link-grid a:hover,
+.mcp-doc-link-grid a:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 48%, var(--line));
+  background: color-mix(in srgb, var(--blue) 11%, var(--surface-panel));
+}
+
 @media (max-width: 1180px) {
   .tool-surface-grid,
-  .tool-support-grid,
-  .workflow-grid,
   .workflow-template-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -572,6 +850,11 @@
   .tool-flow-panel,
   .utility-stat-grid,
   .workflow-signal-grid,
+  .mcp-server-grid,
+  .mcp-starter-grid,
+  .mcp-concept-grid,
+  .mcp-setup-grid,
+  .mcp-doc-link-grid,
   .workflow-gap-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -592,14 +875,26 @@
   }
 
   .tool-surface-grid,
-  .tool-support-grid,
-  .workflow-grid,
   .workflow-template-grid,
   .workflow-signal-grid,
   .workflow-gap-grid,
+  .mcp-server-grid,
+  .mcp-starter-grid,
+  .mcp-concept-grid,
+  .mcp-setup-grid,
+  .mcp-doc-link-grid,
   .tool-flow-panel,
   .utility-stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mcp-field-grid,
+  .mcp-runtime-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-field-grid {
+    display: grid;
   }
 
   .workflow-run-row {

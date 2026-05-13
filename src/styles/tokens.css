@@ -45,6 +45,15 @@
   --composer-muted: #aeb4b8;
   --composer-control-bg: rgba(255, 255, 255, 0.065);
   --composer-control-hover: rgba(255, 255, 255, 0.1);
+  --modal-scrim: rgba(5, 7, 10, 0.76);
+  --pdf-viewer-bg: #14171c;
+  --pdf-viewer-bg-2: #1b2028;
+  --pdf-viewer-rail: #171b21;
+  --pdf-paper: #fffefa;
+  --pdf-paper-text: #172033;
+  --pdf-paper-muted: #526070;
+  --pdf-paper-line: #d9dee8;
+  --pdf-paper-soft: #f7f8fb;
   --page-frame-radius: 18px;
   --shadow-lg: 0 22px 64px rgba(0, 0, 0, 0.36);
   --shadow-popover: 0 24px 62px rgba(0, 0, 0, 0.45);
@@ -92,6 +101,15 @@
   --composer-muted: #65707c;
   --composer-control-bg: rgba(20, 28, 36, 0.075);
   --composer-control-hover: rgba(20, 28, 36, 0.12);
+  --modal-scrim: rgba(33, 41, 54, 0.46);
+  --pdf-viewer-bg: #e5e9ef;
+  --pdf-viewer-bg-2: #f3f5f8;
+  --pdf-viewer-rail: #f8fafc;
+  --pdf-paper: #fffefa;
+  --pdf-paper-text: #172033;
+  --pdf-paper-muted: #526070;
+  --pdf-paper-line: #d9dee8;
+  --pdf-paper-soft: #f7f8fb;
   --shadow-lg: 0 24px 58px rgba(29, 38, 51, 0.18);
   --shadow-popover: 0 24px 52px rgba(29, 38, 51, 0.18);
 }

@@ -1,35 +1,60 @@
 import type { ChatSource } from "../../types/chat";
-import { createChatSourcesFromWebResults, searchDuckDuckGo } from "../../services/webSearchClient";
+import { createChatSourcesFromWebResults, formatWebSearchErrorMessage, formatWebSearchProviderLabel, searchWebWithProvider } from "../../services/webSearchClient";
+import type { WebSearchSettings } from "../../types/settings";
 
 export interface WebToolExecutionResult {
   content: string;
   sources: ChatSource[];
+  // True when the search itself failed (network error, provider error). False
+  // when the search ran but returned zero results — that's a successful call
+  // with empty data, not an error.
+  isError?: boolean;
+  errorCode?: string;
 }
 
 interface WebToolExecutionOptions {
   signal?: AbortSignal;
 }
 
-export async function executeWebSearchTool(args: Record<string, string>, fallbackQuery: string, maxResults: number, options: WebToolExecutionOptions = {}): Promise<WebToolExecutionResult> {
+export async function executeWebSearchTool(
+  args: Record<string, string>,
+  fallbackQuery: string,
+  maxResults: number,
+  settings: WebSearchSettings,
+  options: WebToolExecutionOptions = {},
+): Promise<WebToolExecutionResult> {
   const query = argValue(args, ["query", "q", "search", "text"]) || fallbackQuery;
   const resultLimit = Math.min(Math.max(numberArg(args, ["max_results", "maxResults", "limit"], maxResults), 1), maxResults);
+  const webSearchSettings: WebSearchSettings = {
+    ...settings,
+    maxResults: resultLimit,
+  };
+  const providerLabel = formatWebSearchProviderLabel(webSearchSettings.provider);
 
   if (!query.trim()) {
     return {
-      content: formatWebSearchResults("", [], "Skipped because web_search did not include a query."),
+      content: formatWebSearchResults("", [], providerLabel, "Skipped because web_search did not include a query."),
       sources: [],
+      isError: true,
+      errorCode: "missing_query",
     };
   }
 
   try {
-    const results = await searchDuckDuckGo(query, {
+    const searchResponse = await searchWebWithProvider(query, webSearchSettings, {
+      includeVisualResults: false,
       maxResults: resultLimit,
       signal: options.signal,
     });
-    const sources = createChatSourcesFromWebResults(results);
+    const sources = createChatSourcesFromWebResults(searchResponse.results);
+    const resultProviderLabel = formatWebSearchProviderLabel(searchResponse.provider);
+    const fallbackNote =
+      searchResponse.fallbackError && searchResponse.provider !== searchResponse.primaryProvider
+        ? `${providerLabel} failed, so ${resultProviderLabel} fallback results were used: ${searchResponse.fallbackError}`
+        : undefined;
 
     return {
-      content: formatWebSearchResults(query, sources),
+      content: formatWebSearchResults(query, sources, resultProviderLabel, fallbackNote),
       sources,
     };
   } catch (error) {
@@ -37,22 +62,24 @@ export async function executeWebSearchTool(args: Record<string, string>, fallbac
       throw error;
     }
 
-    const detail = error instanceof Error ? error.message : "DuckDuckGo search failed.";
+    const detail = formatWebSearchErrorMessage(error, `${providerLabel} search failed.`);
 
     return {
-      content: formatWebSearchResults(query, [], detail),
+      content: formatWebSearchResults(query, [], providerLabel, detail),
       sources: [],
+      isError: true,
+      errorCode: "web_search_failed",
     };
   }
 }
 
 export function isWebToolName(tool: string) {
-  return ["web_search", "web-search", "search_web", "search-web", "duckduckgo_search", "duckduckgo-search", "web"].includes(tool);
+  return ["web_search", "web-search", "search_web", "search-web", "brave_search", "brave-search", "duckduckgo_search", "duckduckgo-search", "web"].includes(tool);
 }
 
-function formatWebSearchResults(query: string, sources: ChatSource[], error?: string) {
+function formatWebSearchResults(query: string, sources: ChatSource[], providerLabel: string, error?: string) {
   return [
-    "WEB TOOL RESULTS - DuckDuckGo",
+    `WEB TOOL RESULTS - ${providerLabel}`,
     query ? `Query: ${query}` : "",
     `Sources: ${sources.length}`,
     sources.length > 0

@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/app";
 import type { DiscordBridgeResponseStyle, DiscordTunnelProvider } from "../types/discord";
+import { unregisterBackgroundTerminalSession } from "../lib/terminalSessions";
 import type {
   TerminalCreateSessionRequest,
   TerminalCreateSessionResponse,
@@ -122,6 +123,18 @@ export interface AppUpdateCheckResponse {
   version?: string | null;
 }
 
+export interface WeatherFetchJsonRequest {
+  token?: string;
+  url: string;
+}
+
+export interface WeatherFetchJsonResponse {
+  contentType?: string | null;
+  payload: unknown;
+  status: number;
+  url: string;
+}
+
 export type AppUpdateInstallEvent =
   | {
       event: "started";
@@ -189,6 +202,84 @@ export async function installAppUpdate(onEvent: (event: AppUpdateInstallEvent) =
 /** Runs one native browser automation action from the in-app browser preview. */
 export async function runBrowserAutomation(request: BrowserAutomationRequest): Promise<BrowserAutomationResponse> {
   return invoke<BrowserAutomationResponse>("browser_automation", { request });
+}
+
+export async function fetchWeatherJson(request: WeatherFetchJsonRequest): Promise<WeatherFetchJsonResponse> {
+  if (isTauriDesktopRuntime()) {
+    return invoke<WeatherFetchJsonResponse>("weather_fetch_json", { request });
+  }
+
+  const url = validateBrowserWeatherFetchUrl(request.url);
+  const headers: Record<string, string> = {
+    Accept: "application/geo+json, application/ld+json, application/json, text/csv, text/plain;q=0.8, */*;q=0.5",
+  };
+
+  if (shouldAttachBrowserWeatherToken(url) && request.token?.trim()) {
+    headers.token = request.token.trim();
+  }
+
+  const response = await fetch(url.href, {
+    cache: "no-store",
+    headers,
+    method: "GET",
+  });
+  const contentType = response.headers.get("content-type");
+  const text = await response.text();
+  const payload = parseWeatherResponsePayload(text);
+
+  if (!response.ok) {
+    throw new Error(`Weather request failed with HTTP ${response.status}: ${summarizeWeatherPayload(payload)}`);
+  }
+
+  return {
+    contentType,
+    payload,
+    status: response.status,
+    url: response.url || url.href,
+  };
+}
+
+const BROWSER_WEATHER_ALLOWED_HOSTS = [
+  "noaa.gov",
+  "weather.gov",
+  "api.weather.gov",
+  "digital.weather.gov",
+  "forecast.weather.gov",
+  "mapservices.weather.noaa.gov",
+  "www.ncei.noaa.gov",
+  "www.nws.noaa.gov",
+  "opengeo.ncep.noaa.gov",
+  "mrms.ncep.noaa.gov",
+  "nomads.ncep.noaa.gov",
+  "radar.weather.gov",
+  "water.noaa.gov",
+  "api.water.noaa.gov",
+  "api.tidesandcurrents.noaa.gov",
+  "aviationweather.gov",
+  "www.aviationweather.gov",
+  "www.nhc.noaa.gov",
+  "www.spc.noaa.gov",
+  "www.cpc.ncep.noaa.gov",
+  "www.swpc.noaa.gov",
+];
+
+function validateBrowserWeatherFetchUrl(rawUrl: string) {
+  const url = new URL(rawUrl.trim());
+
+  if (url.protocol !== "https:") {
+    throw new Error("Weather requests must use https URLs.");
+  }
+
+  const host = url.hostname.toLowerCase();
+  if (!BROWSER_WEATHER_ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
+    throw new Error(`Weather requests are limited to official NOAA/NWS hosts. Blocked host: ${host}`);
+  }
+
+  return url;
+}
+
+function shouldAttachBrowserWeatherToken(url: URL) {
+  return url.hostname.toLowerCase() === "www.ncei.noaa.gov" && url.pathname.startsWith("/cdo-web/");
 }
 
 export async function getUserConfigInfo(): Promise<UserConfigInfo> {
@@ -313,8 +404,41 @@ function createWorkspaceDependencyPreviewDiagnostic(message: string): WorkspaceD
   };
 }
 
+function parseWeatherResponsePayload(text: string) {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { text };
+  }
+}
+
+function summarizeWeatherPayload(payload: unknown) {
+  if (typeof payload === "object" && payload) {
+    const record = payload as Record<string, unknown>;
+    const message = record.detail ?? record.message ?? record.errorMessage ?? record.text;
+
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().slice(0, 600);
+    }
+  }
+
+  if (typeof payload === "string") {
+    return payload.trim().slice(0, 600);
+  }
+
+  try {
+    return JSON.stringify(payload).slice(0, 600);
+  } catch {
+    return "No readable error body.";
+  }
+}
+
 export async function createTerminalSession(request: TerminalCreateSessionRequest): Promise<TerminalCreateSessionResponse> {
-  return invoke<TerminalCreateSessionResponse>("terminal_create_session", { request });
+  return withNativeCommandTimeout(
+    invoke<TerminalCreateSessionResponse>("terminal_create_session", { request }),
+    5_000,
+    "Terminal session startup",
+  );
 }
 
 export async function getDefaultTerminalWorkingDirectory(): Promise<string> {
@@ -327,40 +451,102 @@ export async function getDefaultTerminalWorkingDirectory(): Promise<string> {
 
 /** Runs a command through the native terminal session manager. */
 export async function runTerminalCommand(request: TerminalRunCommandRequest): Promise<TerminalRunCommandResponse> {
-  return invoke<TerminalRunCommandResponse>("terminal_run_command", { request });
+  const commandTimeoutMs = Math.max(1_000, request.timeoutMs ?? 45_000);
+  return withNativeCommandTimeout(
+    invoke<TerminalRunCommandResponse>("terminal_run_command", { request }),
+    commandTimeoutMs + 4_000,
+    "Terminal command runner",
+  );
 }
 
 export async function writeTerminalSession(sessionId: string, input: string): Promise<void> {
-  return invoke<void>("terminal_write_session", {
-    request: {
-      input,
-      sessionId,
-    },
-  });
+  return withNativeCommandTimeout(
+    invoke<void>("terminal_write_session", {
+      request: {
+        input,
+        sessionId,
+      },
+    }),
+    5_000,
+    "Terminal input",
+  );
 }
 
 export async function resizeTerminalSession(sessionId: string, cols: number, rows: number): Promise<void> {
-  return invoke<void>("terminal_resize_session", {
-    request: {
-      cols,
-      rows,
-      sessionId,
-    },
-  });
+  return withNativeCommandTimeout(
+    invoke<void>("terminal_resize_session", {
+      request: {
+        cols,
+        rows,
+        sessionId,
+      },
+    }),
+    3_000,
+    "Terminal resize",
+  );
 }
 
 export async function drainTerminalSession(sessionId: string): Promise<TerminalDrainResponse> {
-  return invoke<TerminalDrainResponse>("terminal_drain_session", {
-    request: {
-      sessionId,
-    },
-  });
+  return withNativeCommandTimeout(
+    invoke<TerminalDrainResponse>("terminal_drain_session", {
+      request: {
+        sessionId,
+      },
+    }),
+    2_500,
+    "Terminal output drain",
+  );
 }
 
 export async function killTerminalSession(sessionId: string): Promise<void> {
-  return invoke<void>("terminal_kill_session", {
-    request: {
-      sessionId,
-    },
+  try {
+    return await withNativeCommandTimeout(
+      invoke<void>("terminal_kill_session", {
+        request: {
+          sessionId,
+        },
+      }),
+      2_500,
+      "Terminal stop",
+    );
+  } finally {
+    unregisterBackgroundTerminalSession(sessionId);
+  }
+}
+
+function withNativeCommandTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  const safeTimeoutMs = Math.max(1_000, Math.min(timeoutMs, 610_000));
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(new Error(`${label} did not respond within ${Math.round(safeTimeoutMs / 1000)} seconds.`));
+    }, safeTimeoutMs);
+
+    promise.then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        window.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
   });
 }

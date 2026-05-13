@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Gilbert Codex",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "identifier": "com.gilbert.codex",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -28,7 +28,8 @@
         "frame-src": "http: https:",
         "img-src": "'self' asset: http://asset.localhost blob: data: http: https:",
         "script-src": "'self'",
-        "style-src": "'self' 'unsafe-inline'"
+        "style-src": "'self' 'unsafe-inline'",
+        "worker-src": "'self' blob:"
       }
     }
   },
@@ -79,7 +80,7 @@
         "https://github.com/UrbanWafflezz/GilbertCodex/releases/latest/download/latest.json"
       ],
       "windows": {
-        "installMode": "passive"
+        "installMode": "basicUi"
       }
     }
   }

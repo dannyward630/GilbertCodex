@@ -1,6 +1,9 @@
 use crate::{
     commands::auth,
-    core::storage::{self, DeviceStorageSeed, DeviceStorageSnapshot},
+    core::{
+        fs_utils::path_to_string,
+        storage::{self, DeviceStorageSeed, DeviceStorageSnapshot},
+    },
 };
 use rusqlite::Connection;
 use serde::Serialize;
@@ -196,7 +199,7 @@ pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewR
         add_record_context(&record.key, &record.value, &mut context);
 
         let definition = category_for_key(&record.key);
-        let size_bytes = record.value.as_bytes().len() as u64;
+        let size_bytes = record.value.len() as u64;
         add_category_usage(&mut categories, &definition, size_bytes);
 
         records.push(DatabaseStorageRecord {
@@ -501,7 +504,13 @@ fn label_for_key(key: &str) -> &'static str {
 }
 
 fn is_sensitive_key(key: &str) -> bool {
-    matches!(key, "local-auth-db.v1" | "github-account.v1")
+    matches!(
+        key,
+        "local-auth-db.v1"
+            | "github-account.v1"
+            | "gilbert-codex.provider-settings.v1"
+            | "gilbert-codex.discord-bridge.v1"
+    )
 }
 
 fn summarize_record(key: &str, raw: &str) -> String {
@@ -653,10 +662,10 @@ fn add_chat_context(value: &Value, context: &mut DatabaseContextSummary) {
             }
 
             if let Some(content) = message.get("content").and_then(Value::as_str) {
-                context.content_bytes += content.as_bytes().len() as u64;
+                context.content_bytes += content.len() as u64;
             }
             if let Some(reasoning) = message.get("reasoning").and_then(Value::as_str) {
-                context.reasoning_bytes += reasoning.as_bytes().len() as u64;
+                context.reasoning_bytes += reasoning.len() as u64;
             }
             if let Some(thinking) = message.get("thinking") {
                 context.thinking_bytes += serde_json::to_vec(thinking)
@@ -704,8 +713,4 @@ fn count_array(value: &Value, field: &str) -> u64 {
         .and_then(Value::as_array)
         .map(|items| items.len() as u64)
         .unwrap_or(0)
-}
-
-fn path_to_string(path: impl AsRef<Path>) -> String {
-    path.as_ref().to_string_lossy().to_string()
 }

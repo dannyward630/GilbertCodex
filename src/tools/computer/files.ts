@@ -9,7 +9,9 @@ import type {
   ComputerFileIndexProgress,
   ComputerFileIndexSummary,
   ComputerGitStatus,
+  ComputerGitWorktreeResult,
   ComputerDeleteFileResult,
+  ComputerMovePathResult,
   ComputerReadFileResult,
   ComputerSearchResult,
   ComputerWriteFileResult,
@@ -22,15 +24,29 @@ import type { ToolRegistrySettings } from "../../types/tools";
 import { describeCodingTools } from "../coding";
 import { describeFileCreationTools } from "../fileCreation";
 
-const DEFAULT_FOLDER_INDEX_LIMIT = 12_000;
-const DEFAULT_FULL_COMPUTER_INDEX_LIMIT = 25_000;
-const DEFAULT_FOLDER_DEPTH = 18;
-const DEFAULT_FULL_COMPUTER_DEPTH = 9;
-const MAX_CONTEXT_CHARS = 26_000;
-const MAX_GILBERT_MEMORY_CHARS = 16_000;
-const MAX_GILBERT_MEMORY_IMPORT_DEPTH = 5;
-const MAX_SNIPPET_CHARS = 2_600;
+const DEFAULT_FOLDER_INDEX_LIMIT: number | undefined = undefined;
+const DEFAULT_FULL_COMPUTER_INDEX_LIMIT: number | undefined = undefined;
+const DEFAULT_FOLDER_DEPTH: number | undefined = undefined;
+const DEFAULT_FULL_COMPUTER_DEPTH: number | undefined = undefined;
+const MAX_GILBERT_MEMORY_IMPORT_DEPTH = 3;
+const MAX_GILBERT_MEMORY_FILE_BYTES = 24 * 1024;
+const MAX_GILBERT_MEMORY_CONTEXT_CHARS = 12_000;
 const COMPUTER_FILE_INDEX_PROGRESS_EVENT = "computer-file-index-progress";
+const GIT_STATUS_CACHE_TTL_MS = 4_000;
+const GIT_STATUS_RICH_CACHE_TTL_MS = 1_500;
+const CONTEXT_SEARCH_RESULT_LIMIT = 8;
+const CONTEXT_DIRECTORY_LISTING_LIMIT = 40;
+const CONTEXT_GIT_CHANGED_FILE_LIMIT = 36;
+const LOCAL_WORKSPACE_CONTEXT_MAX_CHARS = 24_000;
+const SEARCH_PREVIEW_MAX_CHARS = 360;
+
+interface ComputerGitStatusOptions {
+  force?: boolean;
+  includeDiffPreview?: boolean;
+}
+
+const gitStatusCache = new Map<string, { capturedAt: number; status: ComputerGitStatus }>();
+const pendingGitStatusRequests = new Map<string, Promise<ComputerGitStatus>>();
 
 /** Project-local memory file imported into workspace context when present. */
 export const GILBERT_PROJECT_MEMORY_FILE = "GILBERT.md";
@@ -75,11 +91,47 @@ interface BrowserIndexedEntry extends ComputerSearchResult {
 }
 
 const BROWSER_WORKSPACE_PREFIX = "browser-folder://";
+const BROWSER_INDEX_SKIPPED_DIRECTORIES = new Set([
+  ".cache",
+  ".dart_tool",
+  ".expo",
+  ".git",
+  ".gilbert",
+  ".gradle",
+  ".hg",
+  ".idea",
+  ".next",
+  ".nuxt",
+  ".parcel-cache",
+  ".pytest_cache",
+  ".svn",
+  ".tools",
+  ".turbo",
+  ".venv",
+  ".vite",
+  ".vscode",
+  "__pycache__",
+  "build",
+  "coverage",
+  "deriveddata",
+  "dist",
+  "env",
+  "logs",
+  "node_modules",
+  "pods",
+  "target",
+  "temp",
+  "tmp",
+  "venv",
+]);
+const BROWSER_INDEX_SKIPPED_FILES = new Set([".npmrc", ".pypirc", ".yarnrc", ".netrc", "credentials", "credentials.json", "secrets.json", "token.json"]);
+const BROWSER_INDEX_SKIPPED_EXTENSIONS = new Set(["cer", "crt", "db", "der", "key", "log", "p12", "pem", "pfx", "sqlite", "sqlite3", "sqlite-shm", "sqlite-wal"]);
 const browserWorkspaceRoots = new Map<string, BrowserWorkspaceRoot>();
 let browserIndexEntries: BrowserIndexedEntry[] = [];
 let browserIndexSummary: ComputerFileIndexSummary = {
   builtAt: undefined,
   entryCount: 0,
+  ignoredEntries: 0,
   roots: [],
   scannedDirectories: 0,
   skippedEntries: 0,
@@ -171,7 +223,7 @@ export async function listenForComputerFolderDrops(onDrop: (paths: string[]) => 
 }
 
 /** Lists one directory from the native command layer or browser folder fallback. */
-export async function listComputerDirectory(path: string, limit = 600) {
+export async function listComputerDirectory(path: string, limit?: number) {
   if (isBrowserWorkspacePath(path)) {
     return await listBrowserDirectory(path, limit);
   }
@@ -182,18 +234,23 @@ export async function listComputerDirectory(path: string, limit = 600) {
 
   return await invoke<ComputerDirectoryListing>("computer_list_directory", {
     request: {
-      limit,
+      ...(limit === undefined ? {} : { limit }),
       path,
     },
   });
 }
 
-/** Builds a capped hybrid file index for the selected workspace scope. */
+/** Builds the hybrid file index for the selected workspace scope. */
 export async function buildComputerFileIndex(roots: string[], scope: LocalWorkspaceScope, requestId = Date.now()) {
   const fullComputer = scope === "full-computer";
+  const indexRoots = getIndexableWorkspaceRoots(roots, scope);
 
-  if (!isTauriDesktopRuntime() || roots.some(isBrowserWorkspacePath)) {
-    return await buildBrowserFileIndex(roots, fullComputer ? DEFAULT_FULL_COMPUTER_DEPTH : DEFAULT_FOLDER_DEPTH, fullComputer ? DEFAULT_FULL_COMPUTER_INDEX_LIMIT : DEFAULT_FOLDER_INDEX_LIMIT);
+  if (indexRoots.length === 0) {
+    return emptyComputerFileIndexSummary();
+  }
+
+  if (!isTauriDesktopRuntime() || indexRoots.some(isBrowserWorkspacePath)) {
+    return await buildBrowserFileIndex(indexRoots, fullComputer ? DEFAULT_FULL_COMPUTER_DEPTH : DEFAULT_FOLDER_DEPTH, fullComputer ? DEFAULT_FULL_COMPUTER_INDEX_LIMIT : DEFAULT_FOLDER_INDEX_LIMIT);
   }
 
   return await invoke<ComputerFileIndexSummary>("computer_build_file_index", {
@@ -201,7 +258,7 @@ export async function buildComputerFileIndex(roots: string[], scope: LocalWorksp
       maxDepth: fullComputer ? DEFAULT_FULL_COMPUTER_DEPTH : DEFAULT_FOLDER_DEPTH,
       maxFiles: fullComputer ? DEFAULT_FULL_COMPUTER_INDEX_LIMIT : DEFAULT_FOLDER_INDEX_LIMIT,
       requestId,
-      roots,
+      roots: indexRoots,
     },
   });
 }
@@ -227,13 +284,55 @@ export async function getComputerFileIndexSummary() {
 }
 
 /** Reads local Git status for a workspace root when native git is available. */
-export async function getComputerGitStatus(path: string): Promise<ComputerGitStatus> {
+export async function getComputerGitStatus(path: string, options: ComputerGitStatusOptions = {}): Promise<ComputerGitStatus> {
   if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
     return createUnavailableGitStatus(path ? "Git status is available in the desktop app for real folders." : "Choose a project folder first.");
   }
 
-  return await invoke<ComputerGitStatus>("computer_get_git_status", {
+  const includeDiffPreview = options.includeDiffPreview === true;
+  const cacheKey = createGitStatusCacheKey(path, includeDiffPreview);
+  const pending = pendingGitStatusRequests.get(cacheKey);
+
+  if (pending) {
+    return pending;
+  }
+
+  const cached = gitStatusCache.get(cacheKey);
+  const cacheTtl = includeDiffPreview ? GIT_STATUS_RICH_CACHE_TTL_MS : GIT_STATUS_CACHE_TTL_MS;
+
+  if (!options.force && cached && Date.now() - cached.capturedAt < cacheTtl) {
+    return cached.status;
+  }
+
+  const request = invoke<ComputerGitStatus>("computer_get_git_status", {
     request: {
+      includeDiffPreview,
+      path,
+    },
+  }).then((status) => {
+    gitStatusCache.set(cacheKey, { capturedAt: Date.now(), status });
+    return status;
+  }).finally(() => {
+    pendingGitStatusRequests.delete(cacheKey);
+  });
+
+  pendingGitStatusRequests.set(cacheKey, request);
+  return request;
+}
+
+function createGitStatusCacheKey(path: string, includeDiffPreview: boolean) {
+  return `${includeDiffPreview ? "rich" : "summary"}:${path.trim().toLowerCase()}`;
+}
+
+/** Initializes Git in a selected local project folder. */
+export async function initComputerGitRepository(path: string, initialBranch = "main"): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_init", {
+    request: {
+      initialBranch,
       path,
     },
   });
@@ -282,8 +381,24 @@ export async function pushComputerGitBranch(path: string, remote = "origin"): Pr
   });
 }
 
+/** Creates a sibling Git worktree on a fresh branch for a forked chat. */
+export async function createComputerGitWorktree(path: string, request: { branchName?: string; directoryName?: string; title?: string } = {}): Promise<ComputerGitWorktreeResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git worktrees are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitWorktreeResult>("computer_git_create_worktree", {
+    request: {
+      branchName: request.branchName,
+      directoryName: request.directoryName,
+      path,
+      title: request.title,
+    },
+  });
+}
+
 /** Searches the current file index and optionally filters results to selected roots. */
-export async function searchComputerFiles(query: string, limit = 24, roots: string[] = []) {
+export async function searchComputerFiles(query: string, limit?: number, roots: string[] = []) {
   const filterToRoots = (results: ComputerSearchResult[]) => (roots.length > 0 ? results.filter((result) => roots.some((root) => isPathInsideRoot(result.path, root))) : results);
 
   if (!isTauriDesktopRuntime()) {
@@ -292,7 +407,7 @@ export async function searchComputerFiles(query: string, limit = 24, roots: stri
 
   const results = await invoke<ComputerSearchResult[]>("computer_search_file_index", {
     request: {
-      limit,
+      ...(limit === undefined ? {} : { limit }),
       query,
     },
   });
@@ -301,7 +416,7 @@ export async function searchComputerFiles(query: string, limit = 24, roots: stri
 }
 
 /** Reads a text file through the active desktop or browser workspace backend. */
-export async function readComputerTextFile(path: string, maxBytes = 16 * 1024 * 1024) {
+export async function readComputerTextFile(path: string, maxBytes?: number) {
   if (isBrowserWorkspacePath(path)) {
     return await readBrowserTextFile(path, maxBytes);
   }
@@ -312,14 +427,32 @@ export async function readComputerTextFile(path: string, maxBytes = 16 * 1024 * 
 
   return await invoke<ComputerReadFileResult>("computer_read_text_file", {
     request: {
-      maxBytes,
+      ...(maxBytes === undefined ? {} : { maxBytes }),
       path,
     },
   });
 }
 
+export interface WriteComputerTextFileOptions {
+  createParentDirs?: boolean;
+  overwrite?: boolean;
+  /**
+   * Lowercase hex SHA-256 of the file as it was last observed. When provided,
+   * the Rust backend refuses to write if the on-disk content no longer
+   * matches — guards against clobbering concurrent user edits.
+   */
+  expectedSha256?: string;
+  /** Force a specific line-ending family. Defaults to majority-of-existing. */
+  forceEol?: "crlf" | "lf";
+}
+
 /** Writes a text file after the caller has already resolved permission policy. */
-export async function writeComputerTextFile(path: string, content: string, roots: string[], options: { createParentDirs?: boolean; overwrite?: boolean } = {}) {
+export async function writeComputerTextFile(
+  path: string,
+  content: string,
+  roots: string[],
+  options: WriteComputerTextFileOptions = {},
+) {
   if (isBrowserWorkspacePath(path)) {
     return await writeBrowserTextFile(path, content, roots, options);
   }
@@ -331,10 +464,12 @@ export async function writeComputerTextFile(path: string, content: string, roots
   return await invoke<ComputerWriteFileResult>("computer_write_text_file", {
     request: {
       content,
-      createParentDirs: options.createParentDirs ?? false,
+      createParentDirs: options.createParentDirs ?? true,
       overwrite: options.overwrite ?? true,
       path,
       roots,
+      expectedSha256: options.expectedSha256,
+      forceEol: options.forceEol,
     },
   });
 }
@@ -357,6 +492,31 @@ export async function deleteComputerFile(path: string, roots: string[]) {
   });
 }
 
+/** Moves or renames a file or folder through the desktop backend. */
+export async function moveComputerPath(
+  fromPath: string,
+  toPath: string,
+  roots: string[],
+  options: { createParentDirs?: boolean } = {},
+) {
+  if (isBrowserWorkspacePath(fromPath) || isBrowserWorkspacePath(toPath)) {
+    throw new Error("Rename and move operations are available in the desktop app for real folders.");
+  }
+
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Use the desktop app before renaming or moving files and folders.");
+  }
+
+  return await invoke<ComputerMovePathResult>("computer_move_path", {
+    request: {
+      createParentDirs: options.createParentDirs ?? true,
+      fromPath,
+      roots,
+      toPath,
+    },
+  });
+}
+
 /** Resolves saved workspace settings to concrete roots used by context and tools. */
 export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSettings) {
   if (!settings.enabled) {
@@ -369,7 +529,7 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
     }
 
     const drives = await listComputerDrives();
-    return drives.map((drive) => drive.path);
+    return mergeFullComputerRoots(settings.roots, drives);
   }
 
   if (settings.roots.length > 0) {
@@ -381,7 +541,12 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
 
 /**
  * Builds the compact model-visible workspace context from roots, Git status,
- * project memories, directory listings, search results, and text snippets.
+ * project memories, directory listings, and existing index hits.
+ *
+ * This function must stay advisory. It should never scan or read a whole
+ * project just to start a provider request; exact code evidence belongs in
+ * explicit search/read/view tool calls so the model can gather only what the
+ * current task needs.
  */
 export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings) {
   if (!settings.enabled) {
@@ -389,35 +554,49 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
   }
 
   const roots = await resolveLocalWorkspaceRoots(settings);
+  const contextRoots = settings.scope === "full-computer" ? getIndexableWorkspaceRoots(roots, settings.scope) : roots;
 
   if (roots.length === 0) {
     return createWorkspaceHeader(settings, [], undefined, "No readable roots are selected yet.", toolSettings);
   }
 
-  const summary = await ensureComputerFileIndex(settings, roots);
-  const gitStatuses = await Promise.all(roots.slice(0, settings.scope === "full-computer" ? 4 : 2).map((root) => getComputerGitStatus(root).catch((error) => createUnavailableGitStatus(readErrorMessage(error, "Git status unavailable.")))));
-  const projectMemories = await readGilbertProjectMemories(roots);
-  const searchResults = await searchComputerFiles(prompt, 18, roots).catch(() => []);
-  const hintedFolders = await resolvePromptFolders(prompt, roots);
+  if (settings.scope === "full-computer" && contextRoots.length === 0) {
+    return createWorkspaceHeader(
+      settings,
+      roots,
+      undefined,
+      "Full computer access is enabled lazily. Gilbert can read, write, list, search, and run tools against specific paths you request, but it will not index or load whole drive roots into context.",
+      toolSettings,
+    );
+  }
+
+  const summary = await getMatchingComputerFileIndexSummary(contextRoots);
+  const gitStatuses = await Promise.all(contextRoots.map((root) => getComputerGitStatus(root).catch((error) => createUnavailableGitStatus(readErrorMessage(error, "Git status unavailable.")))));
+  const projectMemories = await readGilbertProjectMemories(contextRoots);
+  const searchResults = summary && summary.entryCount > 0
+    ? await searchComputerFiles(prompt, CONTEXT_SEARCH_RESULT_LIMIT, contextRoots).catch(() => [])
+    : [];
+  const hintedFolders = await resolvePromptFolders(prompt, contextRoots);
   const listings = await Promise.all(
-    uniquePaths([...hintedFolders, ...roots.slice(0, settings.scope === "full-computer" ? 6 : 3)]).map(async (root) => {
+    uniquePaths([...hintedFolders, ...contextRoots]).map(async (root) => {
       try {
-        return await listComputerDirectory(root, 80);
+        return await listComputerDirectory(root, CONTEXT_DIRECTORY_LISTING_LIMIT);
       } catch {
         return null;
       }
     }),
   );
-  const snippets = await collectTextSnippets(searchResults);
 
   return limitContext(
     [
       createWorkspaceHeader(settings, roots, summary, undefined, toolSettings),
+      settings.scope === "full-computer"
+        ? "Full computer scope is lazy: automatic context and indexing use only the focused project/folder roots above. Drive roots remain available for explicit tool paths, but they are not scanned or listed unless a tool call targets them."
+        : "",
       formatGitStatuses(gitStatuses),
       formatGilbertProjectMemories(projectMemories),
       formatRootListings(listings.flatMap((listing) => (listing ? [listing] : []))),
-      formatSearchResults(searchResults),
-      formatTextSnippets(snippets),
+      formatSearchResults(searchResults, Boolean(summary && summary.entryCount > 0)),
     ]
       .filter(Boolean)
       .join("\n\n"),
@@ -452,14 +631,55 @@ export function localWorkspaceScopeLabel(scope: LocalWorkspaceScope) {
   return "Current folder";
 }
 
+/**
+ * Full-computer scope expands permissions to host drive roots, but the active
+ * project/folder roots stay first so relative tool paths and terminal commands
+ * still start where the user was working.
+ */
+export function mergeFullComputerRoots(preferredRoots: string[], drives: ComputerDrive[]) {
+  return uniquePaths([...preferredRoots.filter((root) => !isSystemRootPath(root)), ...drives.map((drive) => drive.path)]);
+}
+
+export function getIndexableWorkspaceRoots(roots: string[], scope: LocalWorkspaceScope) {
+  if (scope !== "full-computer") {
+    return roots;
+  }
+
+  return roots.filter((root) => !isSystemRootPath(root));
+}
+
+function emptyComputerFileIndexSummary(): ComputerFileIndexSummary {
+  return {
+    builtAt: Date.now(),
+    entryCount: 0,
+    ignoredEntries: 0,
+    roots: [],
+    scannedDirectories: 0,
+    skippedEntries: 0,
+    truncated: false,
+  };
+}
+
+function isSystemRootPath(path: string) {
+  const normalized = path.trim().replace(/\\/g, "/");
+  const withoutTrailingSlash = normalized.replace(/\/+$/, "");
+
+  return (
+    normalized === "/" ||
+    withoutTrailingSlash === "" ||
+    /^[a-zA-Z]:$/.test(withoutTrailingSlash)
+  );
+}
+
 export function formatIndexSummary(summary?: ComputerFileIndexSummary) {
   if (!summary || summary.entryCount === 0) {
     return "Not indexed";
   }
 
   const entryCount = new Intl.NumberFormat().format(summary.entryCount);
-  const suffix = summary.truncated ? " indexed, capped for speed" : " indexed";
-  return `${entryCount}${suffix}`;
+  const ignored = summary.ignoredEntries > 0 ? `, ${new Intl.NumberFormat().format(summary.ignoredEntries)} ignored` : "";
+  const suffix = summary.truncated ? " indexed, stopped at the explicit index limit" : " indexed";
+  return `${entryCount}${suffix}${ignored}`;
 }
 
 export function formatLocalWorkspaceIndexStatus(settings: LocalWorkspaceSettings) {
@@ -497,14 +717,14 @@ function registerBrowserWorkspaceRoot(handle: BrowserDirectoryHandle) {
   return path;
 }
 
-async function listBrowserDirectory(path: string, limit: number): Promise<ComputerDirectoryListing> {
+async function listBrowserDirectory(path: string, limit?: number): Promise<ComputerDirectoryListing> {
   const resolved = await resolveBrowserDirectory(path);
   const entries: ComputerDirectoryListing["entries"] = [];
   let inaccessibleEntries = 0;
   let limited = false;
 
   for await (const handle of iterateDirectoryHandles(resolved.handle)) {
-    if (entries.length >= limit) {
+    if (limit !== undefined && entries.length >= limit) {
       limited = true;
       break;
     }
@@ -550,10 +770,11 @@ async function listBrowserDirectory(path: string, limit: number): Promise<Comput
   };
 }
 
-async function buildBrowserFileIndex(roots: string[], maxDepth: number, maxFiles: number): Promise<ComputerFileIndexSummary> {
+async function buildBrowserFileIndex(roots: string[], maxDepth?: number, maxFiles?: number): Promise<ComputerFileIndexSummary> {
   const rootPaths = uniquePaths(roots.filter(isBrowserWorkspacePath));
   const nextEntries: BrowserIndexedEntry[] = [];
   let scannedDirectories = 0;
+  let ignoredEntries = 0;
   let skippedEntries = 0;
   let truncated = false;
 
@@ -567,12 +788,18 @@ async function buildBrowserFileIndex(roots: string[], maxDepth: number, maxFiles
         scannedDirectories += 1;
 
         for await (const handle of iterateDirectoryHandles(item.handle)) {
-          if (nextEntries.length >= maxFiles) {
+          if (maxFiles !== undefined && nextEntries.length >= maxFiles) {
             truncated = true;
             break;
           }
 
           const entryPath = joinBrowserPath(item.path, handle.name);
+
+          if (shouldSkipBrowserIndexEntry(handle.name, handle.kind)) {
+            ignoredEntries += 1;
+            skippedEntries += 1;
+            continue;
+          }
 
           if (handle.kind === "directory") {
             nextEntries.push({
@@ -583,15 +810,15 @@ async function buildBrowserFileIndex(roots: string[], maxDepth: number, maxFiles
               score: 0,
             });
 
-            if (item.depth < maxDepth) {
+            if (maxDepth === undefined || item.depth < maxDepth) {
               queue.push({ depth: item.depth + 1, handle, path: entryPath });
             }
           } else {
             try {
               const file = await handle.getFile();
               const extension = fileExtensionFromName(handle.name);
-              const content = shouldReadBrowserFile(file) ? await readFilePreview(file, 16 * 1024) : "";
-              const preview = content ? content.split(/\r?\n/).slice(0, 18).join("\n") : undefined;
+              const content = shouldReadBrowserFile(file) ? await readFilePreview(file) : "";
+              const preview = content || undefined;
 
               nextEntries.push({
                 content,
@@ -628,6 +855,7 @@ async function buildBrowserFileIndex(roots: string[], maxDepth: number, maxFiles
   browserIndexSummary = {
     builtAt: Date.now(),
     entryCount: nextEntries.length,
+    ignoredEntries,
     roots: rootPaths,
     scannedDirectories,
     skippedEntries,
@@ -637,7 +865,26 @@ async function buildBrowserFileIndex(roots: string[], maxDepth: number, maxFiles
   return browserIndexSummary;
 }
 
-function searchBrowserFileIndex(query: string, limit: number) {
+function shouldSkipBrowserIndexEntry(name: string, kind: BrowserFileSystemHandle["kind"]) {
+  const normalizedName = name.toLowerCase();
+
+  if (kind === "directory") {
+    return BROWSER_INDEX_SKIPPED_DIRECTORIES.has(normalizedName);
+  }
+
+  if (normalizedName === ".env" || normalizedName.startsWith(".env.")) {
+    return true;
+  }
+
+  if (BROWSER_INDEX_SKIPPED_FILES.has(normalizedName)) {
+    return true;
+  }
+
+  const extension = fileExtensionFromName(normalizedName);
+  return extension ? BROWSER_INDEX_SKIPPED_EXTENSIONS.has(extension) : false;
+}
+
+function searchBrowserFileIndex(query: string, limit?: number) {
   const tokens = tokenize(query);
 
   if (tokens.length === 0) {
@@ -651,13 +898,14 @@ function searchBrowserFileIndex(query: string, limit: number) {
     }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score)
-    .slice(0, limit)
+    .slice(0, limit ?? undefined)
     .map(({ content, haystack, ...entry }) => entry);
 }
 
-async function readBrowserTextFile(path: string, maxBytes: number): Promise<ComputerReadFileResult> {
+async function readBrowserTextFile(path: string, maxBytes?: number): Promise<ComputerReadFileResult> {
   const { file, handle } = await resolveBrowserFile(path);
   const content = await readFilePreview(file, maxBytes);
+  const truncated = maxBytes !== undefined && file.size > maxBytes;
 
   return {
     content,
@@ -665,8 +913,9 @@ async function readBrowserTextFile(path: string, maxBytes: number): Promise<Comp
     modifiedAt: file.lastModified,
     name: handle.name,
     path,
+    sha256: truncated ? undefined : await hashTextSha256(content),
     size: file.size,
-    truncated: file.size > maxBytes,
+    truncated,
   };
 }
 
@@ -674,7 +923,7 @@ async function writeBrowserTextFile(
   path: string,
   content: string,
   roots: string[],
-  options: { createParentDirs?: boolean; overwrite?: boolean },
+  options: WriteComputerTextFileOptions,
 ): Promise<ComputerWriteFileResult> {
   if (!roots.some((root) => isPathInsideRoot(path, root))) {
     throw new Error("Writes are only allowed inside the selected browser folder.");
@@ -695,7 +944,7 @@ async function writeBrowserTextFile(
       throw new Error("This browser cannot create folders in that workspace.");
     }
 
-    directoryHandle = await directoryHandle.getDirectoryHandle(part, { create: options.createParentDirs ?? false });
+    directoryHandle = await directoryHandle.getDirectoryHandle(part, { create: options.createParentDirs ?? true });
     resolvedPath = joinBrowserPath(resolvedPath, part);
   }
 
@@ -706,13 +955,25 @@ async function writeBrowserTextFile(
   let created = false;
 
   try {
-    await directoryHandle.getFileHandle(fileName);
+    const existingHandle = await directoryHandle.getFileHandle(fileName);
 
     if (options.overwrite === false) {
       throw new Error("That file already exists and overwrite is disabled.");
     }
+
+    if (options.expectedSha256) {
+      const existingFile = await existingHandle.getFile();
+      const existingContent = await existingFile.text();
+      const actualSha256 = await hashTextSha256(existingContent);
+      if (actualSha256 && actualSha256.toLowerCase() !== options.expectedSha256.toLowerCase()) {
+        throw new Error(`Refusing to write ${path}: file changed since it was last read (expected sha256 ${options.expectedSha256}, on-disk sha256 ${actualSha256}). Re-read the file before retrying.`);
+      }
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes("overwrite is disabled")) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.includes("file changed since it was last read")) {
       throw error;
     }
 
@@ -734,7 +995,19 @@ async function writeBrowserTextFile(
     created,
     modifiedAt: Date.now(),
     path: joinBrowserPath(resolvedPath, fileName),
+    sha256: await hashTextSha256(content),
   };
+}
+
+async function hashTextSha256(content: string): Promise<string | undefined> {
+  if (!globalThis.crypto?.subtle) {
+    return undefined;
+  }
+
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function deleteBrowserFile(path: string, roots: string[]): Promise<ComputerDeleteFileResult> {
@@ -774,29 +1047,14 @@ async function deleteBrowserFile(path: string, roots: string[]): Promise<Compute
   };
 }
 
-async function ensureComputerFileIndex(settings: LocalWorkspaceSettings, roots: string[]) {
+async function getMatchingComputerFileIndexSummary(roots: string[]) {
   const currentSummary = await getComputerFileIndexSummary().catch(() => undefined);
 
   if (currentSummary && currentSummary.entryCount > 0 && sameRootSet(currentSummary.roots, roots)) {
     return currentSummary;
   }
 
-  return await buildComputerFileIndex(roots, settings.scope);
-}
-
-async function collectTextSnippets(searchResults: ComputerSearchResult[]) {
-  const snippets: ComputerReadFileResult[] = [];
-  const textResults = searchResults.filter((result) => result.kind === "file" && isProbablyTextExtension(result.extension)).slice(0, 4);
-
-  for (const result of textResults) {
-    try {
-      snippets.push(await readComputerTextFile(result.path, 16 * 1024));
-    } catch {
-      continue;
-    }
-  }
-
-  return snippets;
+  return undefined;
 }
 
 function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[], summary?: ComputerFileIndexSummary, issue?: string, toolSettings?: ToolRegistrySettings) {
@@ -810,6 +1068,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
         "create_html_file",
         "create_pdf_file",
         "create_files",
+        "create_vite_project",
       ]
     : [];
   const codingTools = [
@@ -817,6 +1076,9 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.fileSafety ? "check_duplicate_file" : "",
     tools.fileSafety ? "prevent_duplicate_file_create" : "",
     tools.pdfTools ? "create_chat_pdf" : "",
+    tools.pdfTools ? "list_pdfs" : "",
+    tools.pdfTools ? "read_pdf" : "",
+    tools.pdfTools ? "edit_pdf_text" : "",
     tools.codeEdit ? "inline_edit" : "",
     tools.testingTools ? "run_tests" : "",
     tools.testingTools ? "create_unit_test" : "",
@@ -838,9 +1100,12 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     tools.fileBrowser ? "build_index" : "",
     tools.codeEdit ? "edit_file" : "",
     tools.codeEdit ? "write_file" : "",
+    tools.codeEdit ? "rename_path" : "",
+    tools.codeEdit ? "move_path" : "",
     ...fileCreationTools,
     ...codingTools,
     tools.sourceControl ? "git_status" : "",
+    tools.sourceControl ? "git_init" : "",
     tools.sourceControl ? "git_diff" : "",
     tools.sourceControl ? "git_log" : "",
     tools.sourceControl ? "git_stage" : "",
@@ -867,19 +1132,22 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     "LOCAL COMPUTER FILE TOOL",
     "Tool access: Gilbert can view drives, open folders, read text files, use the local vector file index, and make precise workspace edits when local work is enabled.",
       `Runtime tools enabled from Toolbox: ${runtimeTools.length > 0 ? runtimeTools.join(", ") : "none"}.`,
-      `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed up to ${MAX_GILBERT_MEMORY_IMPORT_DEPTH} levels.`,
+      `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed recursively with cycle protection.`,
+      "Automatic workspace context is intentionally capped and may include only root metadata, a shallow listing, bounded project memory, and existing index hits. It is a map, not the territory.",
+      "Workspace context, index hits, and project memory are hints, not proof. For local code/project work, call tools for fresh evidence: list/search/read current files before deciding, re-read/list changed files after writes, and run the relevant command before claiming the app works.",
       "Auto full mode is the no-approval workspace mode: file edits, writes, custom tools, terminal commands, and mutating source-control actions may run inside the enabled roots without stopping for approval. Review and Ask first modes still require confirmation for mutating tools.",
-      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, git_status/git_diff/git_stage/git_commit/git_push for local version-control work when Source Control is enabled, run_terminal for local project commands when Terminal is enabled, and open_browser_preview to inspect a local app URL in the in-app browser.",
-      "Edit syntax: read existing files with view_code first, then prefer edit_file/inline_edit with old_text/new_text, start_line/end_line/content, insert_at_line/content, or start_char/end_char/content. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text when available so Gilbert can refuse the edit if the file changed. Use write_file mainly for new files or intentional full-file replacement.",
+      "Use recall_context when you need project memory plus likely code locations, search_files to locate code by file name, path, content, or semantic meaning, view_code for exact line/character windows, edit_file for focused replacements down to a single letter or punctuation mark, rename_path/move_path for file or folder renames, create_vite_project for complete new Vite React projects only, git_init/git_status/git_diff/git_stage/git_commit/git_push for local version-control work when Source Control is enabled, run_terminal for local project commands when Terminal is enabled, create_tool/run_tool for reusable Python, TypeScript, JavaScript/Node, or shell helpers, and open_browser_preview to inspect a local app URL or tracked background dev-server session in the in-app browser.",
+      "For existing Vite/React apps, use edit_file/inline_edit instead of re-scaffolding. If the selected workspace root exists but is empty and the user asked for a new Vite/React starter app, scaffold directly into that root and do not inspect the parent folder. create_vite_project with repair_missing=true may fill missing starter files after an interrupted scaffold, but it preserves every existing file. For plain Hello World/starter app requests, finalize after scaffold, install, build, and dev-server startup succeed instead of continuing to polish.",
+      "Edit syntax: read existing files with view_code first, then use edit_file/inline_edit with old_text/new_text (old_string/new_string and old_str/new_str also work), start_line/end_line/content, insert_at_line/content, insert_line/new_str, or start_char/end_char/content. Use rename_path with path and new_name to rename a file or folder in place, and move_path with from_path/to_path to move within enabled roots. write_file, create_files, and move_path create missing parent folders by default when the destination stays inside enabled roots. Line numbers are 1-based, character indexes are 0-based and end-exclusive, and stale out-of-range coordinates are rejected instead of guessed. For targeted line or character edits, include expected_text or expected_string when available so Gilbert can refuse the edit if the file changed. Multiple exact text edits to the same file may run sequentially in one pass; unanchored/full-file mutations still require a fresh pass. write_file is create-only by default and can replace an existing file only with replace_entire_file=true plus expected_sha256 from a fresh full read.",
       tools.fileCreation ? describeFileCreationTools() : "",
       describeCodingTools(),
-      "For reusable one-off automation, create_tool writes a platform shell script under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output.",
-    "If more file evidence is needed, request a compact <tool_call> for the app to execute. The app shows tool calls in Activity; final answers should explain the result clearly.",
+      "For reusable one-off automation, create_tool writes a Python, TypeScript, JavaScript/Node, PowerShell, cmd, Bash, Zsh, or sh tool under .gilbert/tools, run_tool executes it, and edit_file can refine that script after reading command output. Prefer args_json for structured inputs. Use new descriptive helper names; do not shadow built-in read, edit, write, terminal, Git, web, or MCP tools to work around malformed arguments.",
+    "If more file evidence is needed, use the available tool path so the app can execute it and show real Activity records. Do not explain the hidden tool-call format in visible answers; final answers should explain the result clearly.",
     "Use the local context below as real computer file evidence. Do not claim you cannot access files when this tool context is present.",
     `Mode: ${localPermissionModeLabel(settings.permissionMode)}`,
     `Scope: ${localWorkspaceScopeLabel(settings.scope)}`,
     `Roots: ${roots.length > 0 ? roots.join(" | ") : "none"}`,
-    `Index: ${summary ? `${summary.entryCount} entries, ${summary.scannedDirectories} folders scanned, ${summary.skippedEntries} skipped${summary.truncated ? ", capped for speed" : ""}` : "not built"}`,
+    `Index: ${summary ? `${summary.entryCount} entries, ${summary.scannedDirectories} folders scanned, ${summary.skippedEntries} skipped, ${summary.ignoredEntries ?? 0} ignored by ignore/secret rules${summary.truncated ? ", stopped at an explicit index limit" : ""}` : "not preloaded for this request"}`,
     `Permission rule: ${permissionRules[settings.permissionMode]}`,
     issue ? `Tool note: ${issue}` : "",
   ]
@@ -914,10 +1182,14 @@ function formatGitStatuses(statuses: ComputerGitStatus[]) {
       const repository = status.githubOwner && status.githubRepo ? `${status.githubOwner}/${status.githubRepo}` : status.remoteUrl || "No GitHub remote detected";
       const branch = status.branch || "unknown branch";
       const changes = status.clean ? "working tree clean" : formatGitChangeSummary(status);
+      const changedFiles = formatGitStatusFiles(status);
 
-      return `- ${status.repositoryRoot || "repository"}: ${repository}, branch ${branch}, ${changes}.`;
+      return [
+        `- ${status.repositoryRoot || "repository"}: ${repository}, branch ${branch}, ${changes}.`,
+        changedFiles,
+      ].filter(Boolean).join("\n");
     }),
-    "Use this Git state when answering branch, GitHub repository, or changed-file questions for the selected project.",
+    "Use this Git state when answering branch, local status, uncommitted-change, next-commit, next-push, or changed-file questions for the selected project. If the user asks for all details, call git_status and git_diff instead of relying only on this lightweight summary.",
   ].join("\n");
 }
 
@@ -927,6 +1199,27 @@ function formatGitChangeSummary(status: ComputerGitStatus) {
   const deletions = status.deletions > 0 ? `-${status.deletions}` : "";
 
   return [changed, additions, deletions].filter(Boolean).join(" ");
+}
+
+function formatGitStatusFiles(status: ComputerGitStatus) {
+  const files = status.files ?? [];
+
+  if (files.length === 0) {
+    return "";
+  }
+
+  const visibleFiles = files.slice(0, CONTEXT_GIT_CHANGED_FILE_LIMIT).map((file) => {
+    const stats = [file.additions > 0 ? `+${file.additions}` : "", file.deletions > 0 ? `-${file.deletions}` : ""].filter(Boolean).join(" ");
+    const oldPath = file.oldPath ? `${file.oldPath} -> ` : "";
+    return `  - ${file.status}: ${oldPath}${file.path}${stats ? ` (${stats})` : ""}`;
+  });
+  const omitted = files.length - visibleFiles.length;
+
+  return [
+    "  Changed files:",
+    ...visibleFiles,
+    omitted > 0 ? `  - (${omitted} more changed files omitted from automatic context; call git_status/git_diff for the full current list.)` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function readErrorMessage(error: unknown, fallback: string) {
@@ -958,9 +1251,7 @@ export function createGilbertProjectMemoryTemplate() {
 export async function readGilbertProjectMemories(roots: string[]) {
   const visited = new Set<string>();
   const memories: GilbertProjectMemory[] = [];
-  let remainingChars = MAX_GILBERT_MEMORY_CHARS;
-
-  for (const root of roots.slice(0, 8)) {
+  for (const root of roots) {
     const candidates = [
       joinPathParts(root, [GILBERT_PROJECT_MEMORY_FILE]),
       joinPathParts(root, ["Gilbert.md"]),
@@ -969,23 +1260,10 @@ export async function readGilbertProjectMemories(roots: string[]) {
     ];
 
     for (const candidate of candidates) {
-      if (remainingChars <= 0) {
-        return memories;
-      }
-
-      const loaded = await readGilbertMemoryFile(candidate, visited, 0, remainingChars);
+      const loaded = await readGilbertMemoryFile(candidate, visited, 0);
 
       for (const memory of loaded) {
-        if (remainingChars <= 0) {
-          return memories;
-        }
-
-        const content = memory.content.slice(0, remainingChars);
-        memories.push({
-          ...memory,
-          content,
-        });
-        remainingChars -= content.length;
+        memories.push(memory);
       }
     }
   }
@@ -993,32 +1271,28 @@ export async function readGilbertProjectMemories(roots: string[]) {
   return memories;
 }
 
-async function readGilbertMemoryFile(path: string, visited: Set<string>, depth: number, remainingChars: number): Promise<GilbertProjectMemory[]> {
+async function readGilbertMemoryFile(path: string, visited: Set<string>, depth: number): Promise<GilbertProjectMemory[]> {
   const key = normalizePathKey(path);
 
-  if (!key || visited.has(key) || depth > MAX_GILBERT_MEMORY_IMPORT_DEPTH || remainingChars <= 0) {
+  if (!key || visited.has(key) || depth > MAX_GILBERT_MEMORY_IMPORT_DEPTH) {
     return [];
   }
 
   visited.add(key);
 
   try {
-    const file = await readComputerTextFile(path, Math.min(64 * 1024, Math.max(4 * 1024, remainingChars)));
-    const content = file.content.slice(0, remainingChars);
+    const file = await readComputerTextFile(path, MAX_GILBERT_MEMORY_FILE_BYTES);
+    const content = file.truncated
+      ? `${file.content}\n[Project memory truncated after ${MAX_GILBERT_MEMORY_FILE_BYTES} bytes. Use read_file on ${file.path} for exact omitted text.]`
+      : file.content;
     const memories: GilbertProjectMemory[] = [{ content, path: file.path }];
-    let importBudget = remainingChars - content.length;
 
     for (const importPath of extractGilbertMemoryImports(content)) {
-      if (importBudget <= 0) {
-        break;
-      }
-
       const resolvedImportPath = resolveGilbertMemoryImportPath(file.path, importPath);
-      const imported = await readGilbertMemoryFile(resolvedImportPath, visited, depth + 1, importBudget);
+      const imported = await readGilbertMemoryFile(resolvedImportPath, visited, depth + 1);
 
       for (const memory of imported) {
         memories.push(memory);
-        importBudget -= memory.content.length;
       }
     }
 
@@ -1082,11 +1356,30 @@ function formatGilbertProjectMemories(memories: GilbertProjectMemory[]) {
     return "";
   }
 
+  let remaining = MAX_GILBERT_MEMORY_CONTEXT_CHARS;
+  const formattedMemories: string[] = [];
+  let omitted = 0;
+
+  for (const memory of memories) {
+    const header = `--- ${memory.path}`;
+    const available = remaining - header.length - 2;
+
+    if (available <= 160) {
+      omitted += 1;
+      continue;
+    }
+
+    const content = limitInlineText(memory.content, available, `[Project memory context truncated. Use read_file on ${memory.path} for exact omitted text.]`);
+    formattedMemories.push(`${header}\n${content}`);
+    remaining -= header.length + content.length + 4;
+  }
+
   return [
     "GILBERT PROJECT MEMORY",
-    "The following Markdown files are loaded like project instructions. Follow them unless they conflict with explicit user instructions or safety rules.",
-    ...memories.map((memory) => `--- ${memory.path}\n${memory.content}`),
-  ].join("\n\n");
+    "The following Markdown files are loaded like bounded project instructions. Follow them unless they conflict with explicit user instructions or safety rules. Use read_file for exact omitted memory text.",
+    ...formattedMemories,
+    omitted > 0 ? `[${omitted} project memory file${omitted === 1 ? "" : "s"} omitted from automatic context budget.]` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 function formatRootListings(listings: ComputerDirectoryListing[]) {
@@ -1097,11 +1390,15 @@ function formatRootListings(listings: ComputerDirectoryListing[]) {
   return [
     "ROOT DIRECTORY SNAPSHOT",
     ...listings.map((listing) => {
-      const rows = listing.entries.slice(0, 26).map((entry) => {
+      const rows = listing.entries.map((entry) => {
         const marker = entry.kind === "directory" ? "[dir]" : "[file]";
         return `${marker} ${entry.path}`;
       });
-      return [`${listing.path}${listing.limited ? " (limited)" : ""}`, ...rows].join("\n");
+      return [
+        `${listing.path}${listing.limited ? " (limited)" : ""}`,
+        ...rows,
+        listing.limited ? "Use list_directory with an explicit path for more entries." : "",
+      ].filter(Boolean).join("\n");
     }),
   ].join("\n\n");
 }
@@ -1119,7 +1416,7 @@ async function resolvePromptFolders(prompt: string, roots: string[]) {
         (normalizedPrompt.includes("download") && key.includes("download"))
       );
     });
-    folders.push(...(matchingRoots.length > 0 ? matchingRoots : roots.slice(0, 3)));
+    folders.push(...(matchingRoots.length > 0 ? matchingRoots : roots));
   }
 
   const defaultWorkspace = await getDefaultComputerWorkspace().catch(() => "");
@@ -1211,35 +1508,29 @@ function pushIfPresent(values: string[], value?: string) {
   }
 }
 
-function formatSearchResults(results: ComputerSearchResult[]) {
+function formatSearchResults(results: ComputerSearchResult[], indexReady: boolean) {
+  if (!indexReady) {
+    return [
+      "HYBRID FILE SEARCH RESULTS",
+      "The file index was not preloaded for this request, so Gilbert did not search or read the folder automatically.",
+      "Use search_files, recall_context, list_directory, view_code, or read_file to gather only the exact project context needed for the task.",
+    ].join("\n");
+  }
+
   if (results.length === 0) {
     return "HYBRID FILE SEARCH RESULTS\nNo local file matches were found for this request yet.";
   }
 
   return [
     "HYBRID FILE SEARCH RESULTS",
-    ...results.slice(0, 18).map((result, index) => {
+    ...results.map((result, index) => {
       const matchKind = result.matchKind ? `, ${result.matchKind}` : "";
       const line = result.line ? `, line ${result.line}` : "";
-      const matches = result.matches?.length ? `, matches: ${result.matches.slice(0, 6).join(", ")}` : "";
-      const preview = result.preview ? `\n  preview: ${result.preview.replace(/\s+/g, " ").slice(0, 260)}` : "";
+      const matches = result.matches?.length ? `, matches: ${result.matches.join(", ")}` : "";
+      const preview = result.preview ? `\n  preview: ${limitInlineText(result.preview.replace(/\s+/g, " "), SEARCH_PREVIEW_MAX_CHARS)}` : "";
       return `${index + 1}. ${result.path} (${result.kind}${matchKind}${line}, score ${result.score.toFixed(3)}${matches})${preview}`;
     }),
   ].join("\n");
-}
-
-function formatTextSnippets(snippets: ComputerReadFileResult[]) {
-  if (snippets.length === 0) {
-    return "";
-  }
-
-  return [
-    "READABLE FILE SNIPPETS",
-    ...snippets.map((snippet) => {
-      const content = snippet.content.slice(0, MAX_SNIPPET_CHARS);
-      return `--- ${snippet.path}${snippet.truncated ? " (truncated)" : ""}\n${content}`;
-    }),
-  ].join("\n\n");
 }
 
 function createBrowserWorkspacePath(name: string) {
@@ -1353,11 +1644,11 @@ function fileExtensionFromName(name: string) {
 }
 
 function shouldReadBrowserFile(file: File) {
-  return file.size <= 1_500_000 && isProbablyTextExtension(fileExtensionFromName(file.name));
+  return isProbablyTextExtension(fileExtensionFromName(file.name));
 }
 
-async function readFilePreview(file: File, maxBytes: number) {
-  const text = await file.slice(0, maxBytes).text();
+async function readFilePreview(file: File, maxBytes?: number) {
+  const text = maxBytes === undefined ? await file.text() : await file.slice(0, maxBytes).text();
 
   if (text.includes("\u0000")) {
     throw new Error("This file looks binary, so Gilbert did not load it as text.");
@@ -1437,7 +1728,7 @@ function scoreBrowserEntry(entry: BrowserIndexedEntry, query: string, tokens: st
   return {
     line: snippet?.line,
     matchKind,
-    matches: Array.from(matches).slice(0, 10),
+    matches: Array.from(matches),
     preview: snippet?.preview ?? entry.preview,
     score,
   } satisfies Pick<ComputerSearchResult, "line" | "matchKind" | "matches" | "preview" | "score">;
@@ -1468,8 +1759,8 @@ function findBrowserContentSnippet(content: string, queryLower: string, tokens: 
     if (matches.size > 0) {
       return {
         line: index + 1,
-        matches: Array.from(matches).slice(0, 8),
-        preview: line.trim().slice(0, 420),
+        matches: Array.from(matches),
+        preview: line.trim(),
       };
     }
   }
@@ -1569,9 +1860,22 @@ function isProbablyTextExtension(extension?: string) {
 }
 
 function limitContext(content: string) {
-  if (content.length <= MAX_CONTEXT_CHARS) {
-    return content;
+  return limitInlineText(
+    content,
+    LOCAL_WORKSPACE_CONTEXT_MAX_CHARS,
+    "[Automatic workspace context truncated before sending to the model. Use search_files, view_code, read_file, git_status, or git_diff for exact omitted context.]",
+  );
+}
+
+function limitInlineText(content: string, maxChars: number, marker = "[Context truncated.]") {
+  const trimmed = content.trim();
+
+  if (trimmed.length <= maxChars) {
+    return trimmed;
   }
 
-  return `${content.slice(0, MAX_CONTEXT_CHARS)}\n\n[Local workspace context truncated for speed.]`;
+  const budget = Math.max(maxChars - marker.length - 2, 0);
+  const clipped = trimmed.slice(0, budget).replace(/\s+\S*$/, "").trim();
+
+  return clipped ? `${clipped}\n${marker}` : marker;
 }

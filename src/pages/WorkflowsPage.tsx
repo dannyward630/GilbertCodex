@@ -9,7 +9,6 @@ import {
   Globe2,
   Hammer,
   MonitorUp,
-  PenTool,
   Repeat2,
   ShieldCheck,
   Sparkles,
@@ -19,6 +18,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo } from "react";
+import { UtilityPageShell } from "../components/utility/UtilityPageShell";
 import { formatChatAge } from "../lib/chatUtils";
 import type { AgentRun, AgentRunStatus } from "../types/agentRun";
 import type { ChatSendInput, ChatSummary } from "../types/chat";
@@ -263,7 +263,7 @@ export function WorkflowsPage({
       content: createWorkflowPrompt(template, localWorkspace),
       localWorkspace,
       mode: template.mode,
-      planning: template.mode === "plan" ? { maxPasses: 3 } : undefined,
+      planning: template.mode === "plan" ? {} : undefined,
       webSearch: template.webSearch && toolSettings.webSearch
         ? {
             enabled: true,
@@ -275,34 +275,20 @@ export function WorkflowsPage({
   }
 
   return (
-    <div className="utility-page">
-      <section className="utility-shell" aria-labelledby="workflows-title">
-        <header className="utility-header">
-          <div>
-            <p className="eyebrow">Workflows</p>
-            <h1 id="workflows-title">Agent command center</h1>
-          </div>
-          <div className="utility-header-actions" aria-label="Workflow status">
-            <span>{formatWorkspaceScope(localWorkspace)}</span>
-            <span>{formatApprovalMode(localWorkspace.permissionMode)}</span>
-          </div>
-        </header>
-
-        <div className="utility-stat-grid" aria-label="Workflow overview">
-          {workflowStats.map((item) => {
-            const Icon = item.icon;
-
-            return (
-              <article className="utility-stat-card" key={item.label}>
-                <Icon size={18} aria-hidden="true" />
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-                <small>{item.detail}</small>
-              </article>
-            );
-          })}
-        </div>
-
+    <UtilityPageShell
+      actions={
+        <>
+          <span>{formatWorkspaceScope(localWorkspace)}</span>
+          <span>{formatApprovalMode(localWorkspace.permissionMode)}</span>
+        </>
+      }
+      actionsLabel="Workflow status"
+      eyebrow="Workflows"
+      stats={workflowStats}
+      statsLabel="Workflow overview"
+      title="Agent command center"
+      titleId="workflows-title"
+    >
         <section className="utility-section" aria-labelledby="workflow-live-title">
           <div className="utility-section-heading">
             <h2 id="workflow-live-title">{activeRuns.length > 0 ? "Active Runs" : "Recent Runs"}</h2>
@@ -388,8 +374,7 @@ export function WorkflowsPage({
             })}
           </div>
         </section>
-      </section>
-    </div>
+    </UtilityPageShell>
   );
 }
 

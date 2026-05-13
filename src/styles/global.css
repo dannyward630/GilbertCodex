@@ -5,6 +5,7 @@
 @import "./conversation.css";
 @import "./chat.css";
 @import "./composer.css";
+@import "./model-selector.css";
 @import "./thinking.css";
 @import "./inspector.css";
 @import "./git-review.css";
@@ -12,10 +13,14 @@
 @import "./terminal.css";
 @import "./search.css";
 @import "./dialogs.css";
+@import "./onboarding.css";
 @import "./settings.css";
 @import "./utility-pages.css";
+@import "./radar.css";
 @import "./responsive.css";
 @import "./theme.css";
+@import "./motion.css";
+@import "./elevation.css";
 
 * {
   scrollbar-width: none;
