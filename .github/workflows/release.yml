@@ -113,7 +113,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ steps.release_tag.outputs.tag }}"
-          $installer = Get-ChildItem -LiteralPath "src-tauri/target/release/bundle/nsis" -Filter "Gilbert-Codex-*-setup.exe" |
+          $version = $tag.TrimStart("v")
+          $bundleDir = "src-tauri/target/release/bundle/nsis"
+          $installer = Get-ChildItem -LiteralPath $bundleDir -File |
+            Where-Object { $_.Name -match "^Gilbert-Codex-.+-setup\.exe$" -or $_.Name -match "^Gilbert Codex_.+_x64-setup\.exe$" } |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
@@ -121,7 +124,8 @@ jobs:
             throw "Could not find the NSIS setup executable to checksum."
           }
 
+          $assetName = "Gilbert-Codex-$version-x64-setup.exe"
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
-          $checksumPath = "$($installer.FullName).sha256"
-          "$hash  $($installer.Name)" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
+          $checksumPath = Join-Path $env:RUNNER_TEMP "$assetName.sha256"
+          "$hash  $assetName" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
           gh release upload $tag $checksumPath --clobber
