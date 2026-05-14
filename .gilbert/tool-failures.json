@@ -1,0 +1,109 @@
+{
+  "failures": [
+    {
+      "args": {
+        "command": "cd \"C:\\Users\\Kobe Work\\Documents\\GilbertCodex\" && pwsh -File \".\\scripts\\count-loc.ps1\"",
+        "timeout": "30000"
+      },
+      "at": 1778710446425,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "Get-ChildItem -Recurse -File -Include *.ts,*.tsx,*.rs,*.js,*.jsx,*.json,*.md,*.sql,*.ps1,*.html,*.css -Exclude node_modules,dist,.tmp,.cursor,.claude,.codex-logs,.codex-security-scans,.codex-vscode,.github,docs,public,scripts,.tools,.gilbert | ForEach-Object { $lines = (Get-Content $_.FullName -ErrorAction SilentlyContinue).Count; [PSCustomObject]@{File=$_.FullName; Lines=$lines} } | Measure-Object -Property Lines -Sum | ForEach-Object { \"Total lines: $($_.Sum)\" }",
+        "cwd": "C:\\Users\\Kobe Work\\Documents\\GilbertCodex",
+        "timeout": "300"
+      },
+      "at": 1778708219226,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "find . -type f \\( -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.rs\" -o -name \"*.js\" -o -name \"*.jsx\" -o -name \"*.json\" -o -name \"*.md\" -o -name \"*.sql\" -o -name \"*.ps1\" -o -name \"*.html\" -o -name \"*.css\" \\) -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" -not -path \"*/dist/*\" -not -path \"*/.tmp/*\" -not -path \"*/.cursor/*\" -not -path \"*/.claude/*\" -not -path \"*/.codex-*/*\" -not -path \"*/.github/*\" -not -path \"*/docs/*\" -not -path \"*/public/*\" -not -path \"*/scripts/*\" -not -path \"*/.tools/*\" -not -path \"*/.gilbert/*\" | sort | xargs wc -l 2>/dev/null | tail -5 && echo \"---\" && find . -type f \\( -…",
+        "cwd": "C:\\Users\\Kobe Work\\Documents\\GilbertCodex",
+        "timeout": "300"
+      },
+      "at": 1778708192794,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "Get-ChildItem -Path 'C:\\Users\\Kobe Work\\Documents\\GilbertCodex' -Recurse -Include *.ts,*.tsx,*.rs,*.css,*.mjs,*.ps1,*.json,*.toml,*.lock,*.html,*.md | Where-Object {\n    $_.FullName -notmatch '\\\\node_modules\\\\' -and\n    $_.FullName -notmatch '\\\\target\\\\' -and\n   $_.FullName -notmatch '\\\\dist\\\\' -and\n   $_.FullName -notmatch '\\.git\\\\' -and\n   $_.FullName -notmatch '\\.github\\\\' -and\n    $_.FullName -notmatch '\\\\docs\\\\' -and\n    $_.FullName -notmatch '\\\\public\\\\' -and\n   $_.FullName -notmatch '\\\\scripts\\\\' -and\n    $_.FullName -notmatch '\\.lock$'\n} | ForEach-Object {\n   $count = (Get-Content $_.F…",
+        "description": "Comprehensive line count of all project source files excluding node_modules, target, dist, .git, docs, etc.",
+        "timeout": "30000"
+      },
+      "at": 1778707506101,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "Get-ChildItem -Path 'C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src-tauri' -Recurse -Include *.rs,*.toml,*.lock,*.json,*.conf | ForEach-Object {\n   $count = (Get-Content $_.FullName -ReadCount 0).Count\n    $rel = $_.FullName.Replace('C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\','')\n    if ($count -gt 0) {\n        Write-Host (\"{0,-70} {1,6}\" -f $rel, $count)\n    }\n}",
+        "description": "Count lines in src-tauri Rust and config files",
+        "timeout": "1500"
+      },
+      "at": 1778707482791,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "Get-ChildItem -Path 'C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src\\components' -Recurse -Include *.ts,*.tsx,*.css | ForEach-Object {\n   $count = (Get-Content $_.FullName -ReadCount 0).Count\n    $rel = $_.FullName.Replace('C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\',')\n    Write-Host (\"{0,-70} {1,6}\" -f $rel, $count)\n}",
+        "description": "Count lines in all component subdirectories",
+        "timeout": "1500"
+      },
+      "at": 1778707462730,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "cd 'C:\\Users\\Kobe Work\\Documents\\GilbertCodex'\n(Get-Content 'src/types/n8n.ts').Count\n(Get-Content 'src/types/navigation.ts').Count\n(Get-Content 'src/selfHeal/overrides.ts').Count",
+        "description": "Count lines for the 3 files that had escaping issues"
+      },
+      "at": 1778707461831,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "cd \"C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src-tauri\"\n# Count remaining Rust/Cargo/config files\nGet-ChildItem -Recurse -Include *.rs,*.toml,*.lock,*.json,*.conf | ForEach-Object {\n    $count = (Get-Content $_.FullName -ReadCount 0).Count\n   $rel = $_.FullName.Replace('C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\',')\n   if ($count -gt 0) {\n       Write-Host (\"{0,-70} {1,6}\" -f $rel, $count)\n   }\n}",
+        "description": "Count lines in src-tauri config/Rust files"
+      },
+      "at": 1778707408329,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    },
+    {
+      "args": {
+        "command": "cd \"C:\\Users\\Kobe Work\\Documents\\GilbertCodex\"\n# Fix the paths that failed due to escape chars and count them\necho \"=== n8n.ts ===\"\n(Get-Content 'src/types/n8n.ts' -ReadCount 0).Count\necho \"=== navigation.ts ===\"\n(Get-Content 'src/types/navigation.ts' -ReadCount 0).Count\necho \"=== overides.ts ===\"\n(Get-Content 'src/selfHeal/overrides.ts' -ReadCount 0).Count",
+        "description": "Count lines for files that had path escaping issues"
+      },
+      "at": 1778707399772,
+      "cause": "timeout",
+      "signature": "run_terminal::timeout",
+      "summary": "Tool exceeded its timeout",
+      "tool": "run_terminal"
+    }
+  ],
+  "version": 1
+}
