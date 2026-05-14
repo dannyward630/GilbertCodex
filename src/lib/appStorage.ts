@@ -21,6 +21,7 @@ import {
   normalizeProviderModelId,
 } from "./models";
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
+import { normalizeToolBridgePermissionMode } from "../toolBridge/permissions";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import { cleanupLegacyDeviceStorage, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
@@ -1503,11 +1504,7 @@ function normalizeLocalWorkspaceIndexStatus(value: unknown): LocalWorkspaceIndex
 }
 
 function normalizeLocalPermissionMode(value: unknown): LocalPermissionMode {
-  if (value === "ask-first" || value === "gilbert-review" || value === "full-workspace" || value === "read-only") {
-    return value;
-  }
-
-  return "gilbert-review";
+  return normalizeToolBridgePermissionMode(value);
 }
 
 function normalizeLocalWorkspaceScope(value: unknown): LocalWorkspaceScope {

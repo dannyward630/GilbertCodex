@@ -9,7 +9,7 @@ import type { AppInfo } from "../../types/app";
 import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
-import type { ProjectSummary } from "../../types/project";
+import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
 import type { AppearanceMode } from "../../types/settings";
 import type { TerminalAttachedSession } from "../../types/terminal";
 import type { SettingsSectionId } from "../../pages/settings/types";
@@ -24,7 +24,7 @@ interface AppShellProps {
   children: ReactNode;
   desktopRuntime: boolean;
   activeChatId: string;
-  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onAppearanceModeChange: (mode: AppearanceMode) => void;
   onCloseSearch: () => void;
   onDeleteChat: (chatId: string) => void;
@@ -143,8 +143,8 @@ export function AppShell({
               chats={chats}
               open={sidebarOpen && !sidebarPresence.exiting}
               projects={projects}
-              onCreateProject={async () => {
-                const createdProjectName = await onCreateProject();
+              onCreateProject={async (options) => {
+                const createdProjectName = await onCreateProject(options);
                 closeSidebarOnSmallScreens();
                 return createdProjectName;
               }}

@@ -13,7 +13,7 @@ import type { AgentApprovalDecision } from "../types/agentRun";
 import type { ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatSendInput, ChatSummary } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../types/settings";
-import type { ProjectSummary } from "../types/project";
+import type { CreateProjectOptions, ProjectSummary } from "../types/project";
 
 interface ChatPageProps {
   appInfo: AppInfo;
@@ -32,7 +32,7 @@ interface ChatPageProps {
   model: string;
   modelContextWindows: ModelContextWindowMap;
   onComposerDraftApplied?: () => void;
-  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string, provider: ProviderSettings["provider"]) => void;
   onDeleteQueuedMessage: (messageId: string) => void;

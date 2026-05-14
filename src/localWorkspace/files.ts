@@ -650,19 +650,15 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
 }
 
 export function localPermissionModeLabel(mode: LocalPermissionMode) {
-  if (mode === "read-only") {
-    return "Read only";
+  if (mode === "full-access") {
+    return "Full access";
   }
 
-  if (mode === "ask-first") {
-    return "Ask first";
+  if (mode === "auto-review") {
+    return "Auto-review";
   }
 
-  if (mode === "full-workspace") {
-    return "Auto full";
-  }
-
-  return "Gilbert review";
+  return "Default permissions";
 }
 
 export function localWorkspaceScopeLabel(scope: LocalWorkspaceScope) {
@@ -1105,10 +1101,9 @@ async function getMatchingComputerFileIndexSummary(roots: string[]) {
 
 function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[], summary?: ComputerFileIndexSummary, issue?: string, _toolSettings?: ToolRegistrySettings) {
   const permissionRules = {
-    "ask-first": "Workspace context can be attached to prompts, but model-callable local tools are disabled.",
-    "gilbert-review": "Workspace context can be attached to prompts, but model-callable local tools are disabled.",
-    "full-workspace": "Workspace context can be attached to prompts, but model-callable local tools are disabled.",
-    "read-only": "Workspace context can be attached to prompts, but model-callable local tools are disabled.",
+    "auto-review": "Diagnostic tools and future low-risk in-workspace actions may run after policy validation; destructive and external actions still require approval.",
+    default: "Diagnostic and read-only bridge tools may run; mutating, terminal, external, network, destructive, publish, and credential-adjacent tools require approval.",
+    "full-access": "Future in-scope actions may run without routine prompts, but hard circuit breakers still block unsafe destructive, credential, Git, and outside-scope writes.",
   } satisfies Record<LocalPermissionMode, string>;
 
   return [

@@ -21,18 +21,17 @@ import {
   Gauge,
   GitBranch,
   Globe2,
-  HardDrive,
-  Home,
+  Hand,
   Image as ImageIcon,
-  Laptop,
   LoaderCircle,
   Mic,
   MicOff,
   MoreHorizontal,
   Pencil,
   Plus,
-  RefreshCw,
   Search,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -57,24 +56,13 @@ import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
 import {
-  buildComputerFileIndex,
-  createGilbertProjectMemoryTemplate,
   getComputerGitStatus,
-  formatLocalWorkspaceIndexStatus,
-  getDefaultComputerWorkspace,
-  GILBERT_PROJECT_MEMORY_FILE,
   initComputerGitRepository,
-  listenForComputerFileIndexProgress,
-  listComputerDrives,
-  localWorkspaceScopeLabel,
   localPermissionModeLabel,
-  mergeFullComputerRoots,
-  pickComputerFolder,
-  writeComputerTextFile,
 } from "../../localWorkspace/files";
 import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
-import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, ComputerGitStatus, LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
-import type { ProjectSummary } from "../../types/project";
+import type { ComputerGitStatus, LocalPermissionMode, LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
 import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
 type ComposerMenu = "attach" | "branch" | "context" | "local" | "model" | "project" | null;
@@ -129,7 +117,7 @@ interface ChatComposerProps {
   lastProviderContextUsage?: ContextWindowUsage | null;
   model: string;
   modelContextWindows: ModelContextWindowMap;
-  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onDraftApplied?: () => void;
   onDeleteQueuedMessage: (messageId: string) => void;
   onHoldQueuedMessage: (messageId: string, held: boolean) => void;
@@ -274,7 +262,6 @@ export function ChatComposer({
   onHeightChange,
   onLocalWorkspaceChange,
   onModelChange,
-  onForkWorktree,
   onReviewChanges,
   onSelectProject,
   onStopGeneration,
@@ -1206,21 +1193,17 @@ export function ChatComposer({
             type="button"
             aria-haspopup="dialog"
             aria-expanded={openMenu === "local"}
-            data-active={openMenu === "local" || localWorkspace.enabled}
+            data-active={openMenu === "local" || localWorkspace.permissionMode !== "default"}
             onClick={() => toggleMenu("local")}
           >
-            <Laptop size={14} aria-hidden="true" />
-            <span>{localWorkspace.enabled ? "Work locally" : "Local off"}</span>
+            {localWorkspace.permissionMode === "full-access" ? <ShieldAlert size={14} aria-hidden="true" /> : localWorkspace.permissionMode === "auto-review" ? <ShieldCheck size={14} aria-hidden="true" /> : <Hand size={14} aria-hidden="true" />}
+            <span>{localPermissionModeLabel(localWorkspace.permissionMode)}</span>
             <ChevronDown size={13} aria-hidden="true" />
           </button>
           {openMenu === "local" ? (
             <LocalWorkspacePopover
-              providerLabel={selectedProvider.label}
-              providerUsage={contextUsage}
-              providerUsagePercent={contextUsagePercent}
               settings={localWorkspace}
               onChange={onLocalWorkspaceChange}
-              onForkWorktree={onForkWorktree}
             />
           ) : null}
         </div>
@@ -1282,7 +1265,7 @@ function ProjectPopover({
   setProjectSearch,
 }: {
   activeProjectName: string;
-  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onSelectProject: (projectName: string) => void;
   projectSearch: string;
   projects: ProjectSummary[];
@@ -1466,489 +1449,39 @@ function GitStatusPopover({
 
 function LocalWorkspacePopover({
   onChange,
-  onForkWorktree,
-  providerLabel,
-  providerUsage,
-  providerUsagePercent,
   settings,
 }: {
   onChange: (settings: LocalWorkspaceSettings) => void;
-  onForkWorktree?: () => void | Promise<void>;
-  providerLabel: string;
-  providerUsage: ContextWindowUsage;
-  providerUsagePercent: number;
   settings: LocalWorkspaceSettings;
 }) {
-  const activeIndexRequestRef = useRef<number | null>(null);
-  const indexRequestRef = useRef(0);
-  const [drives, setDrives] = useState<ComputerDrive[]>([]);
-  const [browserPath, setBrowserPath] = useState(settings.roots[0] ?? "");
-  const [error, setError] = useState<string | null>(settings.lastError ?? null);
-  const [indexProgress, setIndexProgress] = useState<ComputerFileIndexProgress | null>(null);
-  const [indexing, setIndexing] = useState(false);
-  const [fullComputerWarningOpen, setFullComputerWarningOpen] = useState(false);
-
-  useEffect(() => {
-    let disposed = false;
-
-    async function bootstrap() {
-      setError(null);
-
-      try {
-        const [driveList, defaultWorkspace] = await Promise.all([listComputerDrives(), getDefaultComputerWorkspace()]);
-
-        if (disposed) {
-          return;
-        }
-
-        const startPath = settings.roots[0] || defaultWorkspace || driveList[0]?.path || "";
-        setDrives(driveList);
-        setBrowserPath(startPath);
-      } catch (caughtError) {
-        if (!disposed) {
-          setError(readErrorMessage(caughtError, "Could not open local computer files."));
-        }
-      }
-    }
-
-    void bootstrap();
-
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    void listenForComputerFileIndexProgress((progress) => {
-      if (disposed || activeIndexRequestRef.current !== progress.requestId) {
-        return;
-      }
-
-      setIndexProgress(progress);
-    }).then((nextUnlisten) => {
-      if (disposed) {
-        nextUnlisten();
-        return;
-      }
-
-      unlisten = nextUnlisten;
-    });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
-
-  function commit(patch: Partial<LocalWorkspaceSettings>) {
+  function selectPermissionMode(permissionMode: LocalPermissionMode) {
     onChange({
       ...settings,
       lastError: undefined,
-      ...patch,
+      permissionMode,
     });
   }
-
-  function commitSettings(nextSettings: LocalWorkspaceSettings) {
-    onChange({
-      ...nextSettings,
-      lastError: nextSettings.lastError,
-    });
-  }
-
-  async function setEnabled(enabled: boolean) {
-    if (!enabled) {
-      commit({ enabled: false, indexReason: undefined, indexStatus: "idle" });
-      return;
-    }
-
-    if (settings.scope === "full-computer") {
-      setFullComputerWarningOpen(true);
-      return;
-    }
-
-    const roots = await resolveRootsForScope(settings.scope);
-    const nextSettings: LocalWorkspaceSettings = {
-      ...settings,
-      enabled: true,
-      lastError: undefined,
-      roots,
-    };
-    commitSettings(nextSettings);
-    void rebuildIndex(nextSettings, "Auto-indexing workspace");
-  }
-
-  async function selectScope(scope: LocalWorkspaceScope) {
-    if (scope === "full-computer") {
-      setFullComputerWarningOpen(true);
-      return;
-    }
-
-    await applyScope(scope);
-  }
-
-  async function applyScope(scope: LocalWorkspaceScope) {
-    setError(null);
-
-    try {
-      const roots = await resolveRootsForScope(scope);
-      const nextSettings = {
-        ...settings,
-        enabled: true,
-        permissionMode: scope === "full-computer" ? "full-workspace" : settings.permissionMode,
-        roots,
-        scope,
-        lastError: undefined,
-      };
-
-      commitSettings(nextSettings);
-      if (scope !== "full-computer") {
-        void rebuildIndex(nextSettings, "Auto-indexing folder");
-      }
-
-      if (scope !== "full-computer" && roots[0]) {
-        setBrowserPath(roots[0]);
-      }
-    } catch (caughtError) {
-      setError(readErrorMessage(caughtError, "Could not switch local workspace scope."));
-    }
-  }
-
-  async function selectPermissionMode(permissionMode: LocalPermissionMode) {
-    setError(null);
-
-    try {
-      const roots = settings.enabled && settings.roots.length > 0 ? settings.roots : await resolveRootsForScope(settings.scope);
-      const nextSettings: LocalWorkspaceSettings = {
-        ...settings,
-        enabled: true,
-        permissionMode,
-        roots,
-        lastError: undefined,
-      };
-
-      commitSettings(nextSettings);
-
-      if (!settings.enabled && roots.length > 0) {
-        void rebuildIndex(nextSettings, "Auto-indexing workspace");
-      }
-    } catch (caughtError) {
-      setError(readErrorMessage(caughtError, "Could not switch local permission mode."));
-    }
-  }
-
-  async function confirmFullComputerScope() {
-    setFullComputerWarningOpen(false);
-    await applyScope("full-computer");
-  }
-
-  async function resolveRootsForScope(scope: LocalWorkspaceScope) {
-    if (scope === "full-computer") {
-      const driveList = drives.length > 0 ? drives : await listComputerDrives();
-      setDrives(driveList);
-      return mergeFullComputerRoots(settings.roots, driveList);
-    }
-
-    if (scope === "current-folder") {
-      if (settings.roots.length > 0) {
-        return settings.roots;
-      }
-
-      const defaultWorkspace = await getDefaultComputerWorkspace();
-      return defaultWorkspace ? [defaultWorkspace] : settings.roots;
-    }
-
-    if (settings.roots.length > 0) {
-      return settings.roots;
-    }
-
-    const selectedFolder = await pickComputerFolder(browserPath || settings.roots[0]);
-    return selectedFolder ? [selectedFolder] : [];
-  }
-
-  async function rebuildIndex(settingsOverride: LocalWorkspaceSettings = settings, reason = "Indexing workspace") {
-    if (settingsOverride.scope === "full-computer") {
-      const roots = settingsOverride.roots.length > 0 ? settingsOverride.roots : await resolveRootsForScope(settingsOverride.scope);
-      onChange({
-        ...settingsOverride,
-        enabled: true,
-        indexReason: undefined,
-        indexStatus: "idle",
-        indexSummary: undefined,
-        indexUpdatedAt: undefined,
-        lastError: undefined,
-        roots,
-      });
-      setIndexing(false);
-      setIndexProgress(null);
-      setError(null);
-      return;
-    }
-
-    const requestId = indexRequestRef.current + 1;
-    indexRequestRef.current = requestId;
-    activeIndexRequestRef.current = requestId;
-    setIndexing(true);
-    setIndexProgress(null);
-    setError(null);
-
-    try {
-      const roots = settingsOverride.roots.length > 0 ? settingsOverride.roots : await resolveRootsForScope(settingsOverride.scope);
-
-      if (roots.length === 0) {
-        throw new Error("Choose a folder or enable full computer first.");
-      }
-
-      setIndexProgress(createIndexProgressFromRoots(requestId, roots));
-      onChange({
-        ...settingsOverride,
-        enabled: true,
-        indexReason: reason,
-        indexStatus: "indexing",
-        lastError: undefined,
-        roots,
-      });
-
-      const summary = await buildComputerFileIndex(roots, settingsOverride.scope, requestId);
-
-      if (indexRequestRef.current !== requestId) {
-        return;
-      }
-
-      setIndexProgress(createIndexProgressFromSummary(requestId, summary));
-      onChange({
-        ...settingsOverride,
-        enabled: true,
-        indexReason: undefined,
-        indexSummary: summary,
-        indexStatus: "idle",
-        indexUpdatedAt: new Date().toISOString(),
-        lastError: undefined,
-        roots,
-      });
-    } catch (caughtError) {
-      if (indexRequestRef.current !== requestId) {
-        return;
-      }
-
-      const message = readErrorMessage(caughtError, "Could not build the local file index.");
-      setError(message);
-
-      onChange({
-        ...settingsOverride,
-        indexReason: undefined,
-        indexStatus: "error",
-        lastError: message,
-      });
-    } finally {
-      if (indexRequestRef.current === requestId) {
-        setIndexing(false);
-        activeIndexRequestRef.current = null;
-      }
-    }
-  }
-
-  async function createProjectMemoryFile() {
-    const root = selectedRoots[0];
-
-    if (!root || settings.scope === "full-computer") {
-      setError(`${GILBERT_PROJECT_MEMORY_FILE} can be created only inside a current or selected folder workspace.`);
-      return;
-    }
-
-    setError(null);
-
-    try {
-      const memoryPath = joinLocalPath(root, GILBERT_PROJECT_MEMORY_FILE);
-      await writeComputerTextFile(memoryPath, createGilbertProjectMemoryTemplate(), [root], {
-        createParentDirs: false,
-        overwrite: false,
-      });
-      void rebuildIndex(
-        {
-          ...settings,
-          enabled: true,
-          roots: selectedRoots,
-        },
-        `Indexed ${GILBERT_PROJECT_MEMORY_FILE}`,
-      );
-    } catch (caughtError) {
-      setError(readErrorMessage(caughtError, `Could not create ${GILBERT_PROJECT_MEMORY_FILE}.`));
-    }
-  }
-
-  const selectedRoots = settings.roots.length > 0 ? settings.roots : [];
-  const liveIndexProgress = indexing && indexProgress?.requestId === indexRequestRef.current ? indexProgress : null;
 
   return (
-    <div className="composer-popover composer-popover-local" role="dialog" aria-label="Local computer workspace">
-      <div className="local-popover-header">
-        <span>
-          <strong>Work locally</strong>
-          <small>{settings.enabled ? `${localWorkspaceScopeLabel(settings.scope)} - ${localPermissionModeLabel(settings.permissionMode)}` : "Off"}</small>
-        </span>
-        <button className="local-switch-button" type="button" role="switch" aria-checked={settings.enabled} data-on={settings.enabled} onClick={() => void setEnabled(!settings.enabled)}>
-          <span />
-        </button>
-      </div>
-
-      <div className="local-mode-menu" aria-label="Start in">
-        <small>Start in</small>
-        <button type="button" data-selected={settings.enabled} onClick={() => void setEnabled(true)}>
-          <Laptop size={18} aria-hidden="true" />
-          <span>Work locally</span>
-          {settings.enabled ? <Check size={18} aria-hidden="true" /> : null}
-        </button>
-        <button
-          type="button"
-          disabled={!onForkWorktree || settings.roots.length === 0}
-          title={settings.roots.length === 0 ? "Choose a Git-backed project folder before creating a worktree." : "Fork this chat into a new Git worktree."}
-          onClick={() => void onForkWorktree?.()}
-        >
-          <CornerDownRight size={18} aria-hidden="true" />
-          <span>New worktree</span>
-        </button>
-        <ProviderUsageSnapshot providerLabel={providerLabel} usage={providerUsage} usagePercent={providerUsagePercent} />
-      </div>
-
-      <div className="local-scope-row" role="radiogroup" aria-label="Local workspace scope">
-        {(["current-folder", "selected-folder", "full-computer"] as LocalWorkspaceScope[]).map((scope) => {
-          const selected = settings.scope === scope;
-          const Icon = scope === "full-computer" ? HardDrive : scope === "selected-folder" ? FolderOpen : Home;
-
-          return (
-            <button key={scope} type="button" role="radio" aria-checked={selected} data-selected={selected} onClick={() => void selectScope(scope)}>
-              <Icon size={15} aria-hidden="true" />
-              <span>{localWorkspaceScopeLabel(scope)}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="local-permission-row" role="radiogroup" aria-label="Local workspace permissions">
+    <div className="composer-popover composer-popover-local" role="dialog" aria-label="Local permissions">
+      <div className="local-permission-menu" role="radiogroup" aria-label="Local permissions">
         {[
-          { icon: Wand2, label: "Auto full", mode: "full-workspace" },
-          { icon: AlertTriangle, label: "Review", mode: "gilbert-review" },
-          { icon: CloudOff, label: "Read only", mode: "read-only" },
+          { icon: Hand, label: "Default permissions", mode: "default" },
+          { icon: ShieldCheck, label: "Auto-review", mode: "auto-review" },
+          { icon: ShieldAlert, label: "Full access", mode: "full-access" },
         ].map((option) => {
-          const selected = option.mode === "gilbert-review"
-            ? settings.permissionMode === "gilbert-review" || settings.permissionMode === "ask-first"
-            : settings.permissionMode === option.mode;
+          const selected = settings.permissionMode === option.mode;
           const Icon = option.icon;
 
           return (
-            <button key={option.mode} type="button" role="radio" aria-checked={selected} data-selected={selected} onClick={() => void selectPermissionMode(option.mode as LocalPermissionMode)}>
-              <Icon size={15} aria-hidden="true" />
+            <button key={option.mode} type="button" role="radio" aria-checked={selected} data-selected={selected} onClick={() => selectPermissionMode(option.mode as LocalPermissionMode)}>
+              <Icon size={17} aria-hidden="true" />
               <span>{option.label}</span>
+              {selected ? <Check size={17} aria-hidden="true" /> : null}
             </button>
           );
         })}
       </div>
-
-      {fullComputerWarningOpen ? (
-        <div className="local-danger-popup" role="alertdialog" aria-label="Full computer access warning">
-          <div>
-            <HardDrive size={18} aria-hidden="true" />
-            <span>
-              <strong>Full computer access</strong>
-              <small>Gilbert can see all readable drives and index file names, paths, and text previews. This is powerful and can expose private files.</small>
-            </span>
-          </div>
-          <p>Full computer mode enables read/write file tools across readable drive roots when write tools are on. Use it only when you want the whole device available to the AI.</p>
-          <div>
-            <button type="button" onClick={() => setFullComputerWarningOpen(false)}>
-              Cancel
-            </button>
-            <button type="button" data-danger="true" onClick={() => void confirmFullComputerScope()}>
-              Enable full computer
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="local-index-row">
-        <button type="button" disabled={indexing || selectedRoots.length === 0 || settings.scope === "full-computer"} onClick={() => void rebuildIndex(settings, "Indexing workspace")}>
-          {indexing ? <LoaderCircle size={15} aria-hidden="true" /> : <RefreshCw size={15} aria-hidden="true" />}
-          <span>{indexing ? formatIndexButtonLabel(liveIndexProgress) : "Index now"}</span>
-        </button>
-        <button type="button" disabled={indexing || selectedRoots.length === 0 || settings.scope === "full-computer"} onClick={() => void createProjectMemoryFile()}>
-          <FileUp size={15} aria-hidden="true" />
-          <span>{GILBERT_PROJECT_MEMORY_FILE}</span>
-        </button>
-        <span>{indexing ? formatLiveIndexProgress(liveIndexProgress) : formatLocalWorkspaceIndexStatus(settings)}</span>
-      </div>
-      {indexing ? (
-        <div className="local-index-progress" role="status" aria-live="polite">
-          <span>
-            <strong>{formatLiveIndexProgress(liveIndexProgress)}</strong>
-            <small>{formatIndexCurrentPath(liveIndexProgress?.currentPath)}</small>
-          </span>
-          <div className="local-index-progress-track" aria-hidden="true">
-            <i />
-          </div>
-        </div>
-      ) : null}
-      <div className="local-popover-note">
-        Index updates automatically when you select or drop a folder. {GILBERT_PROJECT_MEMORY_FILE} is loaded as project memory when present.
-      </div>
-
-      {error ? <div className="local-popover-error">{error}</div> : null}
-    </div>
-  );
-}
-
-function ProviderUsageSnapshot({ providerLabel, usage, usagePercent }: { providerLabel: string; usage: ContextWindowUsage; usagePercent: number }) {
-  const reservePercent = Math.min(Math.round((usage.maxOutputTokens / usage.contextWindowTokens) * 100), 100);
-  const isProviderUsage = usage.tokenSource === "openrouter" || usage.tokenSource === "provider";
-  const sourceLabel =
-    usage.tokenSource === "projected"
-      ? "Projected next request"
-      : isProviderUsage
-        ? "Last provider payload"
-        : "Provider-visible request estimate";
-
-  return (
-    <div className="local-provider-usage-card" role="group" aria-label={`${providerLabel} usage`}>
-      <div className="local-provider-usage-header">
-        <Gauge size={17} aria-hidden="true" />
-        <span>
-          <strong>Provider usage</strong>
-          <small>
-            {providerLabel} - {sourceLabel}
-          </small>
-        </span>
-        <em>{formatTokenCount(usage.inputTokens)}</em>
-      </div>
-      <div className="local-provider-usage-meter" aria-hidden="true">
-        <span style={{ width: `${usagePercent}%` }} />
-        <em style={{ width: `${reservePercent}%` }} />
-      </div>
-      <dl className="local-provider-usage-list">
-        <div>
-          <dt>{isProviderUsage ? "Provider prompt" : "Provider payload estimate"}</dt>
-          <dd>{formatTokenCount(usage.inputTokens)}</dd>
-        </div>
-        <div>
-          <dt>Chat, tools, sources</dt>
-          <dd>{formatTokenCount(usage.messageTokens)}</dd>
-        </div>
-        <div>
-          <dt>System, runtime, envelope</dt>
-          <dd>{formatTokenCount(usage.systemTokens + usage.requestOverheadTokens)}</dd>
-        </div>
-        <div>
-          <dt>Response cap</dt>
-          <dd>{formatTokenCount(usage.maxOutputTokens)}</dd>
-        </div>
-        {typeof usage.openRouterTotalTokens === "number" ? (
-          <div>
-            <dt>Provider actual total</dt>
-            <dd>{formatTokenCount(usage.openRouterTotalTokens)}</dd>
-          </div>
-        ) : null}
-      </dl>
     </div>
   );
 }
@@ -2154,72 +1687,6 @@ function formatSpeechRecognitionError(error?: string) {
   }
 
   return "Voice dictation could not complete.";
-}
-
-function joinLocalPath(root: string, child: string) {
-  const separator = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${separator}${child}`;
-}
-
-function createIndexProgressFromRoots(requestId: number, roots: string[]): ComputerFileIndexProgress {
-  return {
-    done: false,
-    entryCount: 0,
-    ignoredEntries: 0,
-    requestId,
-    roots,
-    scannedDirectories: 0,
-    skippedEntries: 0,
-    truncated: false,
-  };
-}
-
-function createIndexProgressFromSummary(requestId: number, summary: ComputerFileIndexSummary): ComputerFileIndexProgress {
-  return {
-    done: true,
-    entryCount: summary.entryCount,
-    ignoredEntries: summary.ignoredEntries,
-    requestId,
-    roots: summary.roots,
-    scannedDirectories: summary.scannedDirectories,
-    skippedEntries: summary.skippedEntries,
-    truncated: summary.truncated,
-  };
-}
-
-function formatIndexButtonLabel(progress: ComputerFileIndexProgress | null) {
-  if (!progress || progress.entryCount === 0) {
-    return "Indexing";
-  }
-
-  return `Indexing ${formatCompactCount(progress.entryCount)}`;
-}
-
-function formatLiveIndexProgress(progress: ComputerFileIndexProgress | null) {
-  if (!progress) {
-    return "Starting index...";
-  }
-
-  const entries = formatCompactCount(progress.entryCount);
-  const folders = formatCompactCount(progress.scannedDirectories);
-  const ignored = progress.ignoredEntries > 0 ? `, ${formatCompactCount(progress.ignoredEntries)} ignored` : "";
-  const skipped = progress.skippedEntries > 0 ? `, ${formatCompactCount(progress.skippedEntries)} skipped` : "";
-  const cap = progress.truncated ? ", capped" : "";
-  return `${entries} items, ${folders} folders${ignored}${skipped}${cap}`;
-}
-
-function formatIndexCurrentPath(path?: string) {
-  if (!path) {
-    return "Preparing workspace scan";
-  }
-
-  const normalized = path.replace(/[\\/]+$/, "");
-  const lastBackslash = normalized.lastIndexOf("\\");
-  const lastSlash = normalized.lastIndexOf("/");
-  const index = Math.max(lastBackslash, lastSlash);
-  const name = index >= 0 ? normalized.slice(index + 1) : normalized;
-
-  return name || normalized || "Scanning";
 }
 
 function formatCompactCount(value: number) {

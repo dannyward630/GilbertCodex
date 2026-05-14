@@ -7,3 +7,7 @@ export interface ProjectSummary {
   name: string;
   updatedAt: string;
 }
+
+export interface CreateProjectOptions {
+  bindToActiveChat?: boolean;
+}

@@ -1,4 +1,4 @@
-export type LocalPermissionMode = "ask-first" | "gilbert-review" | "full-workspace" | "read-only";
+export type LocalPermissionMode = "default" | "auto-review" | "full-access";
 
 export type LocalWorkspaceScope = "current-folder" | "selected-folder" | "full-computer";
 export type LocalWorkspaceIndexStatus = "idle" | "indexing" | "error";

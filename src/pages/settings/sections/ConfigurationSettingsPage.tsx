@@ -37,8 +37,8 @@ export function ConfigurationSettingsPage({
   onSettingsPatch,
   settings,
 }: ConfigurationSettingsPageProps) {
-  const approvalPolicy = localWorkspace.permissionMode === "full-workspace" ? "never" : localWorkspace.permissionMode === "read-only" ? "untrusted" : "on-request";
-  const sandboxMode = localWorkspace.permissionMode === "read-only" ? "read-only" : localWorkspace.scope === "full-computer" ? "danger-full-access" : "workspace-write";
+  const approvalPolicy = localWorkspace.permissionMode === "full-access" ? "never" : localWorkspace.permissionMode === "default" ? "untrusted" : "on-request";
+  const sandboxMode = localWorkspace.scope === "full-computer" ? "danger-full-access" : "workspace-write";
 
   return (
     <>
@@ -87,9 +87,9 @@ export function ConfigurationSettingsPage({
           </div>
           <div className="settings-segmented-control" role="radiogroup" aria-label="Approval policy">
             {[
-              { id: "never", label: "Auto approve" },
-              { id: "on-request", label: "Ask first" },
-              { id: "untrusted", label: "Read only" },
+              { id: "untrusted", label: "Default permissions" },
+              { id: "on-request", label: "Auto-review" },
+              { id: "never", label: "Full access" },
             ].map((option) => (
               <button
                 key={option.id}
@@ -115,7 +115,6 @@ export function ConfigurationSettingsPage({
           </div>
           <div className="settings-segmented-control" role="radiogroup" aria-label="Sandbox settings">
             {[
-              { id: "read-only", label: "Read only" },
               { id: "workspace-write", label: "Workspace write" },
               { id: "danger-full-access", label: "Full access" },
             ].map((option) => (

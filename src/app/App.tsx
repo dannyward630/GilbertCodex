@@ -63,6 +63,8 @@ import {
 import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
 import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
+import { createDefaultToolRegistry, executeToolBridgeCalls } from "../toolBridge";
+import type { ProviderToolBridgeOptions, ToolExecutionContext, ToolResultMessage } from "../toolBridge";
 import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../localWorkspace/files";
 import {
   createLocalComputerProgress,
@@ -169,7 +171,7 @@ import type {
 } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { PrimaryRoute } from "../types/navigation";
-import type { ProjectSummary } from "../types/project";
+import type { CreateProjectOptions, ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
 import type { TerminalAttachedSession } from "../types/terminal";
 import { isDeepResearchThinking } from "../types/settings";
@@ -277,7 +279,7 @@ function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorksp
     indexStatus: "idle",
     indexUpdatedAt: undefined,
     lastError: undefined,
-    permissionMode: current?.permissionMode ?? "gilbert-review",
+    permissionMode: current?.permissionMode ?? "default",
     roots: [],
     scope: "selected-folder",
   };
@@ -1341,7 +1343,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     bindActiveChatToProject(project);
   }
 
-  async function openCreateProjectDialog(): Promise<string | null> {
+  async function openCreateProjectDialog(options: CreateProjectOptions = {}): Promise<string | null> {
     setSearchOpen(false);
 
     try {
@@ -1351,7 +1353,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         return null;
       }
 
-      return createProjectFromFolder(selectedPath);
+      return createProjectFromFolder(selectedPath, options);
     } catch (error) {
       setNoticeDialog({
         description: readErrorMessage(error, "Choose a readable folder from your computer."),
@@ -3178,27 +3180,28 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     };
   }
 
-  function recordProviderContextUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean } = {}) {
+  function recordProviderContextUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions } = {}) {
     setLastProviderContextUsage({
       chatId,
       usage: estimateProviderContextUsageForDisplay(messages, settings, options),
     });
   }
 
-  function recordProviderActualUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"], options: { stream?: boolean } = {}) {
+  function recordProviderActualUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"], options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions } = {}) {
     setLastProviderContextUsage({
       chatId,
       usage: applyProviderUsageToContextEstimate(estimateProviderContextUsageForDisplay(messages, settings, options), usage),
     });
   }
 
-  function estimateProviderContextUsageForDisplay(messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean } = {}) {
+  function estimateProviderContextUsageForDisplay(messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions } = {}) {
     return estimateModelProviderPayloadUsage({
       contextWindowTokens: contextWindow.tokens,
       messages,
       settings,
       source: contextWindow.source,
       stream: options.stream ?? true,
+      toolBridge: options.toolBridge,
     });
   }
 
@@ -3812,6 +3815,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const simpleLocalScaffoldRequest = isSimpleLocalScaffoldRequest(prompt) && !deepResearch;
     const maxToolPasses = deepResearch ? MAX_DEEP_RESEARCH_TOOL_PASSES : simpleLocalScaffoldRequest ? 5 : MAX_LOCAL_TOOL_PASSES;
     const maxToolExecutions = deepResearch ? MAX_DEEP_RESEARCH_TOOL_EXECUTIONS : simpleLocalScaffoldRequest ? 16 : MAX_LOCAL_TOOL_EXECUTIONS;
+    const bridgeRegistry = createDefaultToolRegistry();
+    const bridgeToolResultMessages: ToolResultMessage[] = [];
 
     function maybeFinishSimpleLocalScaffold(reasoning?: string): typeof finalResponse | null {
       if (!simpleLocalScaffoldRequest) {
@@ -4204,6 +4209,21 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
       messages = passCompaction.compacted && localProgress ? appendAutoCompactionContinuation(passCompaction.messages, prompt, totalExecutedToolCalls) : passCompaction.messages;
       let assistantResponse: Awaited<ReturnType<typeof streamProviderMessageWithRetry>>;
+      const bridgeContext: ToolExecutionContext = {
+        model: passSettings.model,
+        permissionMode: workspaceSettings.permissionMode,
+        provider: passSettings.provider,
+        signal: controller.signal,
+        workspaceRoots: workspaceSettings.roots,
+      };
+      const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext);
+      const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
+        ? {
+            toolChoice: toolBudgetReached ? "none" as const : "auto" as const,
+            toolResultMessages: bridgeToolResultMessages,
+            tools: bridgeTools,
+          }
+        : undefined;
 
       try {
         assistantResponse = await streamProviderMessageWithRetry(
@@ -4251,6 +4271,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           },
           {
             signal: controller.signal,
+            toolBridge: bridgeOptions,
           },
           messageId,
         );
@@ -4275,6 +4296,68 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           reasoning: undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
+      }
+
+      if (assistantResponse.toolCalls?.length) {
+        const activeProgress = createLocalComputerProgress("active", "Running bridge diagnostic tools");
+        let liveBridgeToolCalls: ChatToolCall[] = [];
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          content: "",
+          progress: withLocalComputerProgress(activeProgress, message.progress),
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
+        }));
+        onExternalUpdate?.({
+          progress: activeProgress,
+          status: activeProgress.label,
+        });
+
+        const bridgeRun = await executeToolBridgeCalls({
+          calls: assistantResponse.toolCalls,
+          context: bridgeContext,
+          onToolCallUpdate: (toolCall) => {
+            const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
+
+            if (!stampedToolCall) {
+              return;
+            }
+
+            liveBridgeToolCalls = upsertToolCall(liveBridgeToolCalls, stampedToolCall);
+            updateGeneratedMessage(chatId, messageId, (message) => ({
+              ...message,
+              content: "",
+              progress: withLocalComputerProgress(activeProgress, message.progress),
+              toolCalls: [...allToolCalls, ...liveBridgeToolCalls],
+            }));
+            onExternalUpdate?.({
+              progress: activeProgress,
+              status: formatDiscordToolStatus(stampedToolCall),
+              toolCall: stampedToolCall,
+            });
+          },
+          registry: bridgeRegistry,
+        });
+        const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
+        totalExecutedToolCalls += bridgeRun.executedCount;
+        bridgeToolResultMessages.push(...bridgeRun.resultMessages);
+        allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
+        localProgress = createLocalComputerProgress("complete", `${bridgeRun.executedCount} bridge diagnostic tool${bridgeRun.executedCount === 1 ? "" : "s"} ran`);
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          content: "",
+          progress: withLocalComputerProgress(localProgress, message.progress),
+          toolCalls: allToolCalls,
+        }));
+        onExternalUpdate?.({
+          progress: localProgress,
+          status: `${bridgeRun.executedCount} bridge diagnostic tool${bridgeRun.executedCount === 1 ? "" : "s"} completed.`,
+          toolCall: allToolCalls[allToolCalls.length - 1],
+        });
+
+        passIndex += 1;
+        continue;
       }
 
       const assistantToolRequestContent = routePrimitiveEvidenceBatchToWorkflow(
@@ -5062,11 +5145,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     options: Parameters<typeof streamProviderMessage>[3] = {},
     messageId?: string,
   ) {
-    recordProviderContextUsage(chatId, messages, settings);
+    recordProviderContextUsage(chatId, messages, settings, { toolBridge: options.toolBridge });
 
     try {
       const response = await streamProviderMessage(settings, messages, onUpdate, options);
-      recordProviderActualUsage(chatId, messages, settings, response.usage);
+      recordProviderActualUsage(chatId, messages, settings, response.usage, { toolBridge: options.toolBridge });
       return response;
     } catch (error) {
       if (options.signal?.aborted || !isRetryableProviderMessageError(error)) {
@@ -5095,7 +5178,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       );
       const retryMessages = [...compactedMessages, retryInstruction];
 
-      recordProviderContextUsage(chatId, retryMessages, retrySettings);
+      recordProviderContextUsage(chatId, retryMessages, retrySettings, { toolBridge: options.toolBridge });
 
       const response = await runProviderRetryWithTimeout(options.signal, (signal) =>
         streamProviderMessage(retrySettings, retryMessages, onUpdate, {
@@ -5103,7 +5186,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           signal,
         }),
       );
-      recordProviderActualUsage(chatId, retryMessages, retrySettings, response.usage);
+      recordProviderActualUsage(chatId, retryMessages, retrySettings, response.usage, { toolBridge: options.toolBridge });
       return response;
     }
   }

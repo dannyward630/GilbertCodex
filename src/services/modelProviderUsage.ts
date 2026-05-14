@@ -2,6 +2,7 @@ import { estimateTextTokens, type ContextWindowUsage, DEFAULT_CONTEXT_WINDOW_TOK
 import { createProviderUsageRequestBody, modelForMessages, type ProviderUsage } from "./modelProviderClient";
 import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
+import type { ProviderToolBridgeOptions } from "../toolBridge/types";
 
 interface ProviderContextUsageInput {
   chat: ChatSummary;
@@ -18,6 +19,7 @@ interface ProviderPayloadContextUsageInput {
   settings: ProviderSettings;
   source: "estimate" | "openrouter" | "provider";
   stream?: boolean;
+  toolBridge?: ProviderToolBridgeOptions;
 }
 
 export function estimateModelProviderContextWindowUsage({
@@ -49,6 +51,7 @@ export function estimateModelProviderPayloadUsage({
   settings,
   source,
   stream = true,
+  toolBridge,
 }: ProviderPayloadContextUsageInput): ContextWindowUsage {
   return estimateProviderUsageFromMessages({
     chatMessageCount: messages.length,
@@ -58,6 +61,7 @@ export function estimateModelProviderPayloadUsage({
     settings,
     source,
     stream,
+    toolBridge,
   });
 }
 
@@ -69,6 +73,7 @@ function estimateProviderUsageFromMessages({
   settings,
   source,
   stream = true,
+  toolBridge,
 }: {
   chatMessageCount: number;
   contextWindowTokens: number;
@@ -77,9 +82,10 @@ function estimateProviderUsageFromMessages({
   settings: ProviderSettings;
   source: "estimate" | "openrouter" | "provider";
   stream?: boolean;
+  toolBridge?: ProviderToolBridgeOptions;
 }): ContextWindowUsage {
   const model = modelForMessages(settings, messages);
-  const body = createProviderUsageRequestBody(settings, messages, model, stream);
+  const body = createProviderUsageRequestBody(settings, messages, model, stream, toolBridge);
   const requestBody = body as Record<string, unknown> & { messages?: unknown };
   const promptParts = getProviderPromptParts(requestBody, chatMessageCount, draftCount);
   const systemTokens = estimateSerializedPartsTokens(promptParts.system);

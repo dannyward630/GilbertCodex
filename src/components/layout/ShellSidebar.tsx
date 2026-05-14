@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { Clock3, Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, PlugZap, Radar, Search, Settings, Trash2, UserRound } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Radar, Search, Settings, Trash2, UserRound } from "lucide-react";
 import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
 import type { AuthUser } from "../../types/auth";
 import type { ChatMessage, ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
-import type { ProjectSummary } from "../../types/project";
+import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
 import type { SettingsSectionId } from "../../pages/settings/types";
 import type { SidebarItemActivity } from "../sidebar/SidebarSection";
 
@@ -16,7 +17,7 @@ interface ShellSidebarProps {
   activeSettingsSection: SettingsSectionId;
   authUser: AuthUser;
   chats: ChatSummary[];
-  onCreateProject: () => void | string | null | Promise<string | null | void>;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
@@ -75,6 +76,14 @@ export function ShellSidebar({
   const initialExpandedProject = activeChat && !isNoProjectName(activeChat.project) ? normalizeProjectName(activeChat.project) : projectList[0]?.name;
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(initialExpandedProject ? [initialExpandedProject] : []));
   const [projectChatLimits, setProjectChatLimits] = useState<Record<string, number>>({});
+  const [newChatMenuOpen, setNewChatMenuOpen] = useState(false);
+  const newChatMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useDismissableLayer({
+    active: newChatMenuOpen,
+    onDismiss: () => setNewChatMenuOpen(false),
+    refs: [newChatMenuRef],
+  });
 
   useEffect(() => {
     if (!activeChat?.project) {
@@ -160,6 +169,20 @@ export function ShellSidebar({
     }
   }
 
+  function handleStartFromScratchChat() {
+    setNewChatMenuOpen(false);
+    onNewChat(DEFAULT_PROJECT);
+  }
+
+  async function handleUseExistingFolderChat() {
+    setNewChatMenuOpen(false);
+    const createdProjectName = await onCreateProject({ bindToActiveChat: false });
+
+    if (typeof createdProjectName === "string" && createdProjectName.trim()) {
+      handleNewProjectChat(createdProjectName);
+    }
+  }
+
   function handleNewProjectChat(projectName: string) {
     setExpandedProjects((currentProjects) => {
       if (currentProjects.has(projectName)) {
@@ -203,10 +226,31 @@ export function ShellSidebar({
   return (
     <aside className="shell-sidebar" data-open={open}>
       <div className="sidebar-primary-actions">
-        <button className="sidebar-action" data-active={activeRoute === "chat"} type="button" onClick={() => onNewChat()}>
-          <MessageSquarePlus size={17} aria-hidden="true" />
-          <span>New chat</span>
-        </button>
+        <div className="sidebar-new-chat-anchor" ref={newChatMenuRef}>
+          <button
+            className="sidebar-action"
+            data-active={activeRoute === "chat"}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={newChatMenuOpen}
+            onClick={() => setNewChatMenuOpen((openMenu) => !openMenu)}
+          >
+            <MessageSquarePlus size={17} aria-hidden="true" />
+            <span>New chat</span>
+          </button>
+          {newChatMenuOpen ? (
+            <div className="sidebar-new-chat-menu" role="menu" aria-label="New chat">
+              <button type="button" role="menuitem" onClick={handleStartFromScratchChat}>
+                <MessageSquarePlus size={17} aria-hidden="true" />
+                <span>Start from scratch</span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => void handleUseExistingFolderChat()}>
+                <FolderPlus size={17} aria-hidden="true" />
+                <span>Use an existing folder</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
         <button className="sidebar-action" type="button" onClick={onOpenSearch}>
           <Search size={17} aria-hidden="true" />
           <span>Search</span>

@@ -15,6 +15,17 @@ import type { ModelPricing, ProviderModelMetadata } from "../lib/models";
 import { buildAgentSystemPrompt } from "../prompts/agent";
 import type { ChatMessage } from "../types/chat";
 import type { ModelProviderId, ProviderSettings, ReasoningEffort } from "../types/settings";
+import { applyToolBridgeToProviderRequest } from "../toolBridge/adapters";
+import {
+  parseAnthropicStreamToolCallDelta,
+  parseAnthropicToolCalls,
+  parseOpenAiCompatibleStreamToolCallDeltas,
+  parseOpenAiCompatibleToolCalls,
+  parseResponsesStreamToolCalls,
+  parseResponsesToolCalls,
+  parseToolCallArguments,
+} from "../toolBridge/parsers";
+import type { ProviderToolBridgeOptions, ToolCallRequest } from "../toolBridge/types";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
 
 const STREAM_FLUSH_MS = 80;
@@ -36,6 +47,7 @@ interface ProviderChatResponse {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: unknown[];
     };
   }>;
   error?: {
@@ -59,6 +71,7 @@ interface ProviderStreamChunk {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: unknown[];
     };
     message?: {
       content?: ProviderContentOutput;
@@ -66,6 +79,7 @@ interface ProviderStreamChunk {
       reasoning_content?: string;
       reasoning_details?: ProviderReasoningDetail[];
       thinking?: string;
+      tool_calls?: unknown[];
     };
   }>;
   error?: {
@@ -107,6 +121,8 @@ interface ResponsesApiResponse {
   };
   output?: Array<{
     arguments?: string;
+    call_id?: string;
+    id?: string;
     name?: string;
     content?: Array<{
       text?: string;
@@ -135,10 +151,14 @@ interface ResponsesStreamEvent {
     message?: string;
   };
   item?: {
+    arguments?: string;
+    call_id?: string;
     content?: Array<{
       text?: string;
       type?: string;
     }>;
+    id?: string;
+    name?: string;
     summary?: Array<{
       text?: string;
       type?: string;
@@ -224,6 +244,7 @@ interface ProviderModelsResponse {
 interface StreamSnapshot {
   content: string;
   reasoning?: string;
+  toolCalls?: ToolCallRequest[];
   usage?: ProviderUsage;
 }
 
@@ -232,6 +253,8 @@ interface ProviderStreamDelta {
   contentSnapshot?: string;
   reasoningDelta: string;
   reasoningSnapshot?: string;
+  toolCallDeltas?: ProviderToolCallStreamDelta[];
+  toolCallsSnapshot?: ToolCallRequest[];
   usage?: ProviderUsage;
 }
 
@@ -244,6 +267,24 @@ export interface ProviderUsage {
 
 interface ProviderRequestOptions {
   signal?: AbortSignal;
+  toolBridge?: ProviderToolBridgeOptions;
+}
+
+interface ProviderToolCallStreamDelta {
+  argumentsDelta?: string;
+  argumentsSnapshot?: unknown;
+  id?: string;
+  index: number;
+  name?: string;
+  raw?: unknown;
+}
+
+interface StreamToolCallAccumulatorEntry {
+  argumentsSnapshot?: unknown;
+  argumentsText: string;
+  id?: string;
+  name?: string;
+  raw?: unknown;
 }
 
 type ProviderMessageContent =
@@ -370,7 +411,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   if (provider.apiStyle === "anthropic-messages") {
     const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/messages"), {
-      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
+      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
       headers: createProviderHeaders(settings.provider, apiKey),
       method: "POST",
       signal: options.signal,
@@ -382,21 +423,23 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
     }
 
     const content = extractAnthropicText(payload).trim();
+    const toolCalls = parseAnthropicToolCalls(payload, settings.provider);
 
-    if (!content) {
+    if (!content && toolCalls.length === 0) {
       throw new ProviderEmptyResponseError(`${provider.label} returned no final answer.`);
     }
 
     return {
       content,
       reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(extractAnthropicReasoning(payload)) : undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: normalizeAnthropicUsage(payload.usage),
     };
   }
 
   if (usesResponsesApi(settings, model)) {
     const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/responses"), {
-      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
+      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
       headers: createProviderHeaders(settings.provider, apiKey),
       method: "POST",
       signal: options.signal,
@@ -408,20 +451,22 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
     }
 
     const { content, reasoning } = extractResponsesOutput(payload);
+    const toolCalls = parseResponsesToolCalls(payload, settings.provider);
 
-    if (!content.trim()) {
+    if (!content.trim() && toolCalls.length === 0) {
       throw new ProviderEmptyResponseError(reasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
     }
 
     return {
       content: content.trim(),
       reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(reasoning) : undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: normalizeResponsesUsage(payload.usage),
     };
   }
 
   const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/chat/completions"), {
-    body: JSON.stringify(createProviderRequestBody(settings, messages, model, false)),
+    body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
     headers: createProviderHeaders(settings.provider, apiKey),
     method: "POST",
     signal: options.signal,
@@ -436,14 +481,16 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
   const extractedMessage = extractProviderMessageOutput(message);
   const content = extractedMessage.content.trim();
   const reasoning = [extractReasoningText(message), extractedMessage.reasoning].filter(Boolean).join("");
+  const toolCalls = parseOpenAiCompatibleToolCalls(message, settings.provider);
 
-  if (!content) {
+  if (!content && toolCalls.length === 0) {
     throw new ProviderEmptyResponseError(reasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
   }
 
   return {
     content,
     reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(reasoning) : undefined,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage: normalizeProviderUsage(payload.usage),
   };
 }
@@ -472,7 +519,7 @@ export async function streamProviderMessage(
     response = await fetch(
       joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions"),
       {
-        body: JSON.stringify(createProviderRequestBody(settings, messages, model, true)),
+        body: JSON.stringify(createProviderRequestBody(settings, messages, model, true, options.toolBridge)),
         headers: createProviderHeaders(settings.provider, apiKey),
         method: "POST",
         signal: requestTimeout.signal,
@@ -504,7 +551,9 @@ export async function streamProviderMessage(
   let flushTimer: number | null = null;
   let lastFlushedContent = "";
   let lastFlushedReasoning = "";
+  let lastFlushedToolCalls = "";
   let lastMeaningfulStreamEventAt = Date.now();
+  const toolCallAccumulator = new Map<number, StreamToolCallAccumulatorEntry>();
 
   function flushSnapshot(force = false) {
     if (flushTimer) {
@@ -515,16 +564,20 @@ export async function streamProviderMessage(
     const separatedContent = separateInlineThinking(content);
     const nextContent = separatedContent.content;
     const nextReasoning = settings.thinking.enabled ? createReasoningSnapshot([reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningTrimmed) : undefined;
+    const nextToolCalls = finalizeStreamToolCalls(settings.provider, toolCallAccumulator);
+    const nextToolCallsKey = JSON.stringify(nextToolCalls.map((call) => [call.id, call.name, call.arguments]));
 
-    if (!force && nextContent === lastFlushedContent && (nextReasoning ?? "") === lastFlushedReasoning) {
+    if (!force && nextContent === lastFlushedContent && (nextReasoning ?? "") === lastFlushedReasoning && nextToolCallsKey === lastFlushedToolCalls) {
       return;
     }
 
     lastFlushedContent = nextContent;
     lastFlushedReasoning = nextReasoning ?? "";
+    lastFlushedToolCalls = nextToolCallsKey;
     onUpdate({
       content: nextContent,
       reasoning: nextReasoning,
+      toolCalls: nextToolCalls.length > 0 ? nextToolCalls : undefined,
       usage,
     });
   }
@@ -545,6 +598,7 @@ export async function streamProviderMessage(
       return false;
     }
 
+    const toolCallsChanged = applyStreamToolCallDelta(toolCallAccumulator, delta);
     const reasoningDelta = settings.thinking.enabled ? delta.reasoningDelta : "";
     const appendedContent = appendStreamText(content, delta.contentDelta);
     const nextContent = shouldUseStreamSnapshot(appendedContent, delta.contentSnapshot) ? delta.contentSnapshot! : appendedContent;
@@ -556,7 +610,7 @@ export async function streamProviderMessage(
     usage = delta.usage ?? usage;
     reasoningTrimmed = reasoningTrimmed || rawNextReasoning.length > MAX_STREAM_REASONING_CHARS;
 
-    if (nextContent !== content || nextReasoning !== reasoning) {
+    if (nextContent !== content || nextReasoning !== reasoning || toolCallsChanged) {
       content = nextContent;
       reasoning = nextReasoning;
       scheduleSnapshot();
@@ -611,14 +665,16 @@ export async function streamProviderMessage(
   const separatedFinalContent = separateInlineThinking(content);
   const finalContent = separatedFinalContent.content.trim();
   const finalReasoning = [reasoning, separatedFinalContent.reasoning].filter(Boolean).join("");
+  const finalToolCalls = finalizeStreamToolCalls(settings.provider, toolCallAccumulator);
 
-  if (!finalContent) {
+  if (!finalContent && finalToolCalls.length === 0) {
     throw new ProviderEmptyResponseError(finalReasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
   }
 
   return {
     content: finalContent,
     reasoning: settings.thinking.enabled ? createReasoningSnapshot(finalReasoning, reasoningTrimmed) : undefined,
+    toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
     usage,
   };
 }
@@ -687,7 +743,7 @@ export async function fetchProviderModelContextLengths(settings: ProviderSetting
   }, {});
 }
 
-export function createProviderChatRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages)) {
+export function createProviderChatRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), toolBridge?: ProviderToolBridgeOptions) {
   const body: Record<string, unknown> = {
     messages: [
       { role: "system", content: createProviderSystemPrompt(settings, messages) },
@@ -707,12 +763,12 @@ export function createProviderChatRequestBody(settings: ProviderSettings, messag
   }
 
   applyReasoningToRequestBody(settings, body);
-  return body;
+  return applyToolBridgeToProviderRequest(body, "openai-compatible", toolBridge);
 }
 
-export function createProviderStreamRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages)) {
+export function createProviderStreamRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), toolBridge?: ProviderToolBridgeOptions) {
   const body: Record<string, unknown> = {
-    ...createProviderChatRequestBody(settings, messages, model),
+    ...createProviderChatRequestBody(settings, messages, model, toolBridge),
     stream: true,
   };
 
@@ -729,7 +785,7 @@ export function modelForMessages(settings: ProviderSettings, _messages: ChatMess
   return normalizeProviderModelId(settings.provider, settings.model.trim() || getDefaultModelForProvider(settings.provider));
 }
 
-export function createResponsesRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = false) {
+export function createResponsesRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = false, toolBridge?: ProviderToolBridgeOptions) {
   const body: Record<string, unknown> = {
     input: messages.map((message) => ({
       content: createResponsesMessageContent(message),
@@ -744,25 +800,25 @@ export function createResponsesRequestBody(settings: ProviderSettings, messages:
   applyLocalSamplingParameters(settings, body);
   applyResponsesReasoningToRequestBody(settings, body);
 
-  return body;
+  return applyToolBridgeToProviderRequest(body, "openai-responses", toolBridge);
 }
 
-export function createProviderRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true) {
+export function createProviderRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true, toolBridge?: ProviderToolBridgeOptions) {
   const provider = getModelProvider(settings.provider);
 
   if (provider.apiStyle === "anthropic-messages") {
-    return createAnthropicRequestBody(settings, messages, model, stream);
+    return createAnthropicRequestBody(settings, messages, model, stream, toolBridge);
   }
 
   if (usesResponsesApi(settings, model)) {
-    return createResponsesRequestBody(settings, messages, model, stream);
+    return createResponsesRequestBody(settings, messages, model, stream, toolBridge);
   }
 
-  return stream ? createProviderStreamRequestBody(settings, messages, model) : createProviderChatRequestBody(settings, messages, model);
+  return stream ? createProviderStreamRequestBody(settings, messages, model, toolBridge) : createProviderChatRequestBody(settings, messages, model, toolBridge);
 }
 
-export function createProviderUsageRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true) {
-  return createProviderRequestBody(settings, messages, model, stream);
+export function createProviderUsageRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true, toolBridge?: ProviderToolBridgeOptions) {
+  return createProviderRequestBody(settings, messages, model, stream, toolBridge);
 }
 
 export function createProviderMessageContent(message: ChatMessage): ProviderMessageContent {
@@ -810,7 +866,7 @@ export function createMessageTextForProvider(message: ChatMessage) {
   return body ? `${body}\n\nAttachments:\n${summary}` : `Attachments:\n${summary}`;
 }
 
-function createAnthropicRequestBody(settings: ProviderSettings, messages: ChatMessage[], model: string, stream: boolean) {
+function createAnthropicRequestBody(settings: ProviderSettings, messages: ChatMessage[], model: string, stream: boolean, toolBridge?: ProviderToolBridgeOptions) {
   const thinkingBudget = createAnthropicThinkingBudget(settings, model);
   const body: Record<string, unknown> = {
     max_tokens: thinkingBudget ? Math.max(settings.maxTokens, thinkingBudget + 1024) : settings.maxTokens,
@@ -830,7 +886,7 @@ function createAnthropicRequestBody(settings: ProviderSettings, messages: ChatMe
     };
   }
 
-  return body;
+  return applyToolBridgeToProviderRequest(body, "anthropic-messages", toolBridge);
 }
 
 function createAnthropicMessageContent(message: ChatMessage) {
@@ -1107,7 +1163,7 @@ function parseProviderStreamLine(providerId: ModelProviderId, line: string, useR
   }
 
   if (useResponsesApi) {
-    return parseResponsesStreamData(data);
+    return parseResponsesStreamData(data, providerId);
   }
 
   if (providerId === "anthropic") {
@@ -1137,11 +1193,12 @@ function parseOpenAiCompatibleStreamData(data: string): ProviderStreamDelta {
   return {
     contentDelta: extracted.content,
     reasoningDelta: mergeReasoningTextParts(extractReasoningText(delta), extracted.reasoning),
+    toolCallDeltas: parseOpenAiCompatibleStreamToolCallDeltas(payload),
     usage: normalizeProviderUsage(payload.usage),
   };
 }
 
-function parseResponsesStreamData(data: string): ProviderStreamDelta {
+function parseResponsesStreamData(data: string, providerId: ModelProviderId): ProviderStreamDelta {
   let payload: ResponsesStreamEvent;
 
   try {
@@ -1158,12 +1215,14 @@ function parseResponsesStreamData(data: string): ProviderStreamDelta {
   const isTextDelta = type.includes("output_text.delta") || type.includes("text.delta");
   const isReasoningDelta = type.includes("reasoning") && type.includes("delta");
   const responseSnapshot = payload.response ? extractResponsesOutput(payload.response) : undefined;
+  const toolCallsSnapshot = parseResponsesStreamToolCalls(payload, providerId);
 
   return {
     contentDelta: isTextDelta ? payload.delta ?? payload.text ?? "" : "",
     contentSnapshot: responseSnapshot?.content || undefined,
     reasoningDelta: isReasoningDelta ? payload.delta ?? payload.text ?? "" : "",
     reasoningSnapshot: responseSnapshot?.reasoning || undefined,
+    toolCallsSnapshot,
     usage: normalizeResponsesUsage(payload.usage ?? payload.response?.usage),
   };
 }
@@ -1184,10 +1243,12 @@ function parseAnthropicStreamData(data: string): ProviderStreamDelta {
   const delta = payload.delta;
   const contentDelta = delta?.type === "text_delta" ? delta.text ?? "" : "";
   const reasoningDelta = delta?.type === "thinking_delta" ? delta.thinking ?? "" : "";
+  const toolCallDelta = parseAnthropicStreamToolCallDelta(payload);
 
   return {
     contentDelta,
     reasoningDelta,
+    toolCallDeltas: toolCallDelta ? [toolCallDelta] : undefined,
     usage: normalizeAnthropicUsage(payload.usage ?? payload.message?.usage),
   };
 }
@@ -1226,6 +1287,56 @@ function appendStreamText(currentText: string, nextChunk: string) {
   }
 
   return currentText + nextChunk;
+}
+
+function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumulatorEntry>, delta: ProviderStreamDelta) {
+  let changed = false;
+
+  for (const snapshotCall of delta.toolCallsSnapshot ?? []) {
+    const key = accumulator.size;
+    accumulator.set(key, {
+      argumentsSnapshot: snapshotCall.arguments,
+      argumentsText: typeof snapshotCall.arguments === "string" ? snapshotCall.arguments : JSON.stringify(snapshotCall.arguments ?? {}),
+      id: snapshotCall.id,
+      name: snapshotCall.name,
+      raw: snapshotCall.raw,
+    });
+    changed = true;
+  }
+
+  for (const toolDelta of delta.toolCallDeltas ?? []) {
+    const existing = accumulator.get(toolDelta.index) ?? {
+      argumentsText: "",
+    };
+    accumulator.set(toolDelta.index, {
+      argumentsSnapshot: toolDelta.argumentsSnapshot ?? existing.argumentsSnapshot,
+      argumentsText: `${existing.argumentsText}${toolDelta.argumentsDelta ?? ""}`,
+      id: toolDelta.id ?? existing.id,
+      name: toolDelta.name ?? existing.name,
+      raw: toolDelta.raw ?? existing.raw,
+    });
+    changed = true;
+  }
+
+  return changed;
+}
+
+function finalizeStreamToolCalls(provider: ModelProviderId, accumulator: Map<number, StreamToolCallAccumulatorEntry>): ToolCallRequest[] {
+  return [...accumulator.entries()].flatMap(([index, entry]) => {
+    if (!entry.name) {
+      return [];
+    }
+
+    return [
+      {
+        arguments: entry.argumentsSnapshot !== undefined ? entry.argumentsSnapshot : parseToolCallArguments(entry.argumentsText),
+        id: entry.id || `${entry.name}-${index + 1}`,
+        name: entry.name,
+        provider,
+        raw: entry.raw,
+      },
+    ];
+  });
 }
 
 function formatTimeoutSeconds(timeoutMs: number) {

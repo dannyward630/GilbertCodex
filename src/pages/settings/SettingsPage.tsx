@@ -517,7 +517,7 @@ export function SettingsPage({
   }
 
   function selectApprovalPolicy(policy: "never" | "on-request" | "untrusted") {
-    const permissionMode: LocalPermissionMode = policy === "never" ? "full-workspace" : policy === "untrusted" ? "read-only" : "gilbert-review";
+    const permissionMode: LocalPermissionMode = policy === "never" ? "full-access" : policy === "untrusted" ? "default" : "auto-review";
     updateLocalWorkspace({
       enabled: true,
       permissionMode,
@@ -527,7 +527,7 @@ export function SettingsPage({
 
   function selectSandboxMode(mode: "danger-full-access" | "read-only" | "workspace-write") {
     const nextScope: LocalWorkspaceScope = mode === "danger-full-access" ? "full-computer" : localWorkspace.scope === "full-computer" ? "current-folder" : localWorkspace.scope;
-    const nextPermissionMode: LocalPermissionMode = mode === "read-only" ? "read-only" : localWorkspace.permissionMode === "read-only" ? "full-workspace" : localWorkspace.permissionMode;
+    const nextPermissionMode: LocalPermissionMode = mode === "read-only" ? "default" : localWorkspace.permissionMode;
     updateLocalWorkspace({
       enabled: true,
       permissionMode: nextPermissionMode,
