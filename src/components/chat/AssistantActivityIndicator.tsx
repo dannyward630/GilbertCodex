@@ -34,6 +34,7 @@ interface AssistantActivityFileStats {
   moves: number;
   removals: number;
   updates: number;
+  writes: number;
 }
 
 interface AssistantActivityIndicatorProps {
@@ -361,6 +362,7 @@ export function createAssistantActivitySnapshot(
     latestTool,
     live,
     message,
+    toolCalls,
     waitingToolCount,
   });
   const detail = createActivityDetail({
@@ -392,6 +394,7 @@ function createActivityLabel({
   latestTool,
   live,
   message,
+  toolCalls,
   waitingToolCount,
 }: {
   activeToolCount: number;
@@ -401,6 +404,7 @@ function createActivityLabel({
   latestTool?: ChatToolCall;
   live: boolean;
   message: ChatMessage;
+  toolCalls: ChatToolCall[];
   waitingToolCount: number;
 }) {
   if (waitingToolCount > 0) {
@@ -413,6 +417,12 @@ function createActivityLabel({
 
   if (fileStats.fileCount > 0) {
     return formatCompletedFileSummary(fileStats, commandCount);
+  }
+
+  const activeToolSummary = createActiveToolSummary(toolCalls);
+
+  if (activeToolSummary) {
+    return activeToolSummary;
   }
 
   if (commandCount > 0) {
@@ -639,6 +649,8 @@ function summarizeFileItems(items: AssistantActivityFileItem[]): AssistantActivi
         stats.removals += 1;
       } else if (item.kind === "move") {
         stats.moves += 1;
+      } else if (item.kind === "write") {
+        stats.writes += 1;
       } else {
         stats.updates += 1;
       }
@@ -653,6 +665,7 @@ function summarizeFileItems(items: AssistantActivityFileItem[]): AssistantActivi
       moves: 0,
       removals: 0,
       updates: 0,
+      writes: 0,
     },
   );
 }
@@ -665,6 +678,7 @@ function formatFileStats(stats: AssistantActivityFileStats) {
   return [
     formatFileCount(stats.fileCount),
     stats.creations > 0 ? `${stats.creations} new` : "",
+    stats.writes > 0 ? `${stats.writes} written` : "",
     stats.updates > 0 ? `${stats.updates} edited` : "",
     stats.moves > 0 ? `${stats.moves} moved` : "",
     stats.removals > 0 ? `${stats.removals} deleted` : "",
@@ -676,6 +690,7 @@ function formatFileStats(stats: AssistantActivityFileStats) {
 function formatLiveFileSummary(stats: AssistantActivityFileStats, commandCount = 0) {
   const parts = [
     stats.creations > 0 ? `creating ${formatFileCount(stats.creations)}` : "",
+    stats.writes > 0 ? `writing ${formatFileCount(stats.writes)}` : "",
     stats.updates > 0 ? `editing ${formatFileCount(stats.updates)}` : "",
     stats.moves > 0 ? `moving ${formatFileCount(stats.moves)}` : "",
     stats.removals > 0 ? `deleting ${formatFileCount(stats.removals)}` : "",
@@ -692,6 +707,7 @@ function formatLiveFileSummary(stats: AssistantActivityFileStats, commandCount =
 function formatCompletedFileSummary(stats: AssistantActivityFileStats, commandCount = 0) {
   const parts = [
     stats.creations > 0 ? `created ${formatFileCount(stats.creations)}` : "",
+    stats.writes > 0 ? `wrote ${formatFileCount(stats.writes)}` : "",
     stats.updates > 0 ? `edited ${formatFileCount(stats.updates)}` : "",
     stats.moves > 0 ? `moved ${formatFileCount(stats.moves)}` : "",
     stats.removals > 0 ? `deleted ${formatFileCount(stats.removals)}` : "",
@@ -703,6 +719,63 @@ function formatCompletedFileSummary(stats: AssistantActivityFileStats, commandCo
   }
 
   return capitalizeFirst(parts.join(", "));
+}
+
+function createActiveToolSummary(toolCalls: ChatToolCall[]) {
+  const activeToolCalls = toolCalls.filter((toolCall) => toolCall.status === "active" || toolCall.status === "waiting_approval");
+
+  if (activeToolCalls.length === 0) {
+    return "";
+  }
+
+  const actionCounts = activeToolCalls.reduce<Map<string, number>>((counts, toolCall) => {
+    const action = getToolCallAction(toolCall);
+
+    if (!action) {
+      return counts;
+    }
+
+    counts.set(action, (counts.get(action) ?? 0) + 1);
+    return counts;
+  }, new Map());
+
+  if (actionCounts.size === 0) {
+    return "";
+  }
+
+  const [action, count] = [...actionCounts.entries()].sort((left, right) => right[1] - left[1])[0] ?? ["", 0];
+
+  if (!action) {
+    return "";
+  }
+
+  return count <= 1 ? `${action} file` : `${action} ${formatFileCount(count)}`;
+}
+
+function getToolCallAction(toolCall: ChatToolCall) {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label}`.toLowerCase();
+
+  if (/\b(files_write|write workspace file|write file)\b/.test(key)) {
+    return "Writing";
+  }
+
+  if (/\b(files_apply_patch|files_exact_replace|files_replace_range|files_insert_at_line|files_append)\b/.test(key) || /\b(apply workspace patch|edit file|replace file|insert text|append to workspace file)\b/.test(key)) {
+    return "Editing";
+  }
+
+  if (/\b(files_move|move workspace path)\b/.test(key)) {
+    return "Moving";
+  }
+
+  if (/\b(files_read|read workspace file|read file)\b/.test(key)) {
+    return "Reading";
+  }
+
+  if (/\b(files_search|files_list|files_tree|search workspace|list workspace|scan workspace)\b/.test(key)) {
+    return "Searching";
+  }
+
+  return "";
 }
 
 function formatToolDetail(toolCall: ChatToolCall) {

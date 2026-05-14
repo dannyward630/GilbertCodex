@@ -4848,9 +4848,24 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             );
             const hasStreamingLocalToolCalls = hasLocalComputerToolCalls(streamingToolRequestContent, toolExecutionPolicy);
             const streamingToolCalls = hasStreamingLocalToolCalls ? createActiveLocalToolCalls(streamingToolRequestContent, passIndex, toolExecutionPolicy) : [];
+            const streamingBridgeToolCalls = !hasStreamingLocalToolCalls && snapshot.toolCalls?.length
+              ? stampLocalToolCallIds(
+                  snapshot.toolCalls.map((call) =>
+                    createBridgeChatToolCall(
+                      call,
+                      bridgeRegistry.get(call.name),
+                      { content: "Preparing tool call.", ok: true },
+                      "active",
+                    ),
+                  ),
+                  passIndex,
+                )
+              : [];
             const promisedToolAction = !hasStreamingLocalToolCalls && looksLikeUnexecutedToolActionPromise(snapshot.content);
             const streamingLocalProgress = hasStreamingLocalToolCalls
               ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingToolCalls))
+              : streamingBridgeToolCalls.length > 0
+                ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingBridgeToolCalls))
               : promisedToolAction
                 ? createLocalComputerProgress("active", "Preparing tool action")
                 : localProgress;
@@ -4866,7 +4881,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               progress: streamingLocalProgress ? withLocalComputerProgress(streamingLocalProgress, message.progress) : message.progress,
               reasoning: visibleReasoning || undefined,
               thinking: message.thinking,
-              toolCalls: streamingToolCalls.length > 0 ? [...allToolCalls, ...streamingToolCalls] : message.toolCalls,
+              toolCalls: streamingToolCalls.length > 0
+                ? [...allToolCalls, ...streamingToolCalls]
+                : streamingBridgeToolCalls.length > 0
+                  ? [...allToolCalls, ...streamingBridgeToolCalls]
+                  : message.toolCalls,
             }));
             onExternalUpdate?.({
               content: visibleContent,

@@ -66,6 +66,52 @@ describe("assistant activity indicator", () => {
     });
   });
 
+  it("shows active whole-file writes as writing instead of generic thinking", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      content: "I'll update the file now.",
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: JSON.stringify({
+            content: "export const one = 1;\nexport const two = 2;\n",
+            path: "src/App.tsx",
+          }),
+          label: "Write workspace file",
+          status: "active",
+          toolId: "files_write",
+        },
+      ],
+    }), { responseStarted: true });
+
+    expect(snapshot?.label).toBe("Writing 1 file");
+    expect(snapshot?.fileItems[0]).toMatchObject({
+      estimated: true,
+      kind: "write",
+      path: "src/App.tsx",
+      status: "active",
+    });
+  });
+
+  it("shows streamed structured edit calls before arguments are fully visible", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      content: "",
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: "{}",
+          label: "Write workspace file",
+          status: "active",
+          toolId: "files_write",
+        },
+      ],
+    }));
+
+    expect(snapshot?.label).toBe("Writing file");
+    expect(snapshot?.live).toBe(true);
+  });
+
   it("keeps completed work visible after the assistant response is done", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Done.",
