@@ -56,9 +56,14 @@ import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
 import {
+  commitComputerGitChanges,
+  createComputerGitBranch,
   getComputerGitStatus,
   initComputerGitRepository,
   localPermissionModeLabel,
+  pullComputerGitBranch,
+  pushComputerGitBranch,
+  stageComputerGitChanges,
 } from "../../localWorkspace/files";
 import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
 import type { ComputerGitStatus, LocalPermissionMode, LocalWorkspaceSettings } from "../../types/localWorkspace";
@@ -300,6 +305,10 @@ export function ChatComposer({
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   const [gitInitRunning, setGitInitRunning] = useState(false);
   const [gitInitNotice, setGitInitNotice] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const [gitActionRunning, setGitActionRunning] = useState<string | null>(null);
+  const [gitActionNotice, setGitActionNotice] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const [gitCommitMessage, setGitCommitMessage] = useState("");
+  const [gitBranchName, setGitBranchName] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
@@ -350,7 +359,7 @@ export function ChatComposer({
 
   useDismissableLayer({
     active: queueMenuMessageId !== null,
-    onDismiss: () => setQueueMenuMessageId(null),
+    onDismiss: dismissQueuedMessageMenu,
     refs: [composerRef],
   });
 
@@ -411,6 +420,9 @@ export function ChatComposer({
 
   useEffect(() => {
     setGitInitNotice(null);
+    setGitActionNotice(null);
+    setGitCommitMessage("");
+    setGitBranchName("");
   }, [activeRoot]);
 
   useEffect(() => {
@@ -563,6 +575,60 @@ export function ChatComposer({
     }
   }
 
+  async function runComposerGitAction(actionId: string, action: () => Promise<{ message: string; status: ComputerGitStatus }>, success?: (message: string) => void) {
+    if (!activeRoot || gitActionRunning) {
+      return;
+    }
+
+    setGitActionRunning(actionId);
+    setGitActionNotice(null);
+
+    try {
+      const result = await action();
+      setGitStatus(result.status);
+      setGitActionNotice({ kind: "success", message: result.message });
+      success?.(result.message);
+    } catch (error) {
+      setGitActionNotice({ kind: "error", message: readErrorMessage(error, "Git action failed.") });
+    } finally {
+      setGitActionRunning(null);
+    }
+  }
+
+  function stageAllComposerGitChanges() {
+    void runComposerGitAction("stage", () => stageComputerGitChanges(activeRoot));
+  }
+
+  function pullComposerGitBranch() {
+    void runComposerGitAction("pull", () => pullComputerGitBranch(activeRoot));
+  }
+
+  function pushComposerGitBranch() {
+    void runComposerGitAction("push", () => pushComputerGitBranch(activeRoot));
+  }
+
+  function commitComposerGitChanges() {
+    const messageText = gitCommitMessage.trim();
+
+    if (!messageText) {
+      setGitActionNotice({ kind: "error", message: "Enter a commit message first." });
+      return;
+    }
+
+    void runComposerGitAction("commit", () => commitComputerGitChanges(activeRoot, messageText, true), () => setGitCommitMessage(""));
+  }
+
+  function createComposerGitBranch() {
+    const branchName = gitBranchName.trim();
+
+    if (!branchName) {
+      setGitActionNotice({ kind: "error", message: "Enter a branch name first." });
+      return;
+    }
+
+    void runComposerGitAction("branch", () => createComputerGitBranch(activeRoot, branchName), () => setGitBranchName(""));
+  }
+
   function togglePlanMode() {
     setPlanMode((currentPlanMode) => ({
       ...currentPlanMode,
@@ -704,11 +770,40 @@ export function ChatComposer({
     onHoldQueuedMessage(queuedMessage.id, true);
   }
 
+  function toggleQueuedMessageMenu(messageId: string) {
+    if (queueMenuMessageId === messageId) {
+      dismissQueuedMessageMenu();
+      return;
+    }
+
+    if (queueMenuMessageId && queuedEditDrafts[queueMenuMessageId] === undefined) {
+      onHoldQueuedMessage(queueMenuMessageId, false);
+    }
+
+    setOpenMenu(null);
+    setQueueMenuMessageId(messageId);
+    onHoldQueuedMessage(messageId, true);
+  }
+
+  function dismissQueuedMessageMenu() {
+    if (queueMenuMessageId && queuedEditDrafts[queueMenuMessageId] === undefined) {
+      onHoldQueuedMessage(queueMenuMessageId, false);
+    }
+
+    setQueueMenuMessageId(null);
+  }
+
   function updateQueuedMessageDraft(messageId: string, content: string) {
     setQueuedEditDrafts((drafts) => ({
       ...drafts,
       [messageId]: content,
     }));
+  }
+
+  function deleteQueuedMessage(messageId: string) {
+    setQueueMenuMessageId((currentId) => (currentId === messageId ? null : currentId));
+    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
+    onDeleteQueuedMessage(messageId);
   }
 
   function cancelQueuedMessageEdit(messageId: string) {
@@ -911,7 +1006,6 @@ export function ChatComposer({
               Review changes
             </button>
           </div>
-          {openMenu === "branch" ? <GitStatusPopover initNotice={gitInitNotice} initializing={gitInitRunning} loading={gitStatusLoading} onInitialize={initializeGitRepository} root={activeRoot} status={gitStatus} /> : null}
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
@@ -964,7 +1058,7 @@ export function ChatComposer({
                     <X size={14} aria-hidden="true" />
                   </button>
                 ) : (
-                  <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => onDeleteQueuedMessage(queuedMessage.id)}>
+                  <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => deleteQueuedMessage(queuedMessage.id)}>
                     <Trash2 size={14} aria-hidden="true" />
                   </button>
                 )}
@@ -976,7 +1070,7 @@ export function ChatComposer({
                     aria-haspopup="menu"
                     aria-expanded={queueMenuMessageId === queuedMessage.id}
                     title="More"
-                    onClick={() => setQueueMenuMessageId((currentId) => (currentId === queuedMessage.id ? null : queuedMessage.id))}
+                    onClick={() => toggleQueuedMessageMenu(queuedMessage.id)}
                   >
                     <MoreHorizontal size={15} aria-hidden="true" />
                   </button>
@@ -1221,7 +1315,28 @@ export function ChatComposer({
             <span>{gitBranchLabel}</span>
             <ChevronDown size={13} aria-hidden="true" />
           </button>
-          {openMenu === "branch" && !hasGitChangeSummary ? <GitStatusPopover initNotice={gitInitNotice} initializing={gitInitRunning} loading={gitStatusLoading} onInitialize={initializeGitRepository} root={activeRoot} status={gitStatus} /> : null}
+          {openMenu === "branch" ? (
+            <GitStatusPopover
+              actionNotice={gitActionNotice}
+              actionRunning={gitActionRunning}
+              branchName={gitBranchName}
+              commitMessage={gitCommitMessage}
+              initNotice={gitInitNotice}
+              initializing={gitInitRunning}
+              loading={gitStatusLoading}
+              onBranchNameChange={setGitBranchName}
+              onCommit={commitComposerGitChanges}
+              onCommitMessageChange={setGitCommitMessage}
+              onCreateBranch={createComposerGitBranch}
+              onInitialize={initializeGitRepository}
+              onPull={pullComposerGitBranch}
+              onPush={pushComposerGitBranch}
+              onReviewChanges={onReviewChanges}
+              onStageAll={stageAllComposerGitChanges}
+              root={activeRoot}
+              status={gitStatus}
+            />
+          ) : null}
         </div>
         <div className="composer-menu-anchor composer-context-root">
           <button
@@ -1358,17 +1473,41 @@ function parseProjectOptionDate(value: string) {
 }
 
 function GitStatusPopover({
+  actionNotice,
+  actionRunning,
+  branchName,
+  commitMessage,
   initNotice,
   initializing,
   loading,
+  onBranchNameChange,
+  onCommit,
+  onCommitMessageChange,
+  onCreateBranch,
   onInitialize,
+  onPull,
+  onPush,
+  onReviewChanges,
+  onStageAll,
   root,
   status,
 }: {
+  actionNotice: { kind: "error" | "success"; message: string } | null;
+  actionRunning: string | null;
+  branchName: string;
+  commitMessage: string;
   initNotice: { kind: "error" | "success"; message: string } | null;
   initializing: boolean;
   loading: boolean;
+  onBranchNameChange: (value: string) => void;
+  onCommit: () => void;
+  onCommitMessageChange: (value: string) => void;
+  onCreateBranch: () => void;
   onInitialize: () => void;
+  onPull: () => void;
+  onPush: () => void;
+  onReviewChanges?: () => void;
+  onStageAll: () => void;
   root: string;
   status: ComputerGitStatus | null;
 }) {
@@ -1440,6 +1579,53 @@ function GitStatusPopover({
         </div>
       </dl>
       <div className="git-status-file-count">{status.changedFiles === 1 ? "1 changed file" : `${status.changedFiles} changed files`}</div>
+      <div className="git-status-actions" aria-label="Git actions">
+        <div className="git-status-action-row">
+          <input
+            type="text"
+            value={commitMessage}
+            placeholder="Commit message"
+            onChange={(event) => onCommitMessageChange(event.target.value)}
+          />
+          <button type="button" disabled={Boolean(actionRunning) || !commitMessage.trim()} onClick={onCommit}>
+            {actionRunning === "commit" ? <LoaderCircle size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+            <span>Commit</span>
+          </button>
+        </div>
+        <div className="git-status-action-row">
+          <input
+            type="text"
+            value={branchName}
+            placeholder="codex/new-branch"
+            onChange={(event) => onBranchNameChange(event.target.value)}
+          />
+          <button type="button" disabled={Boolean(actionRunning) || !branchName.trim()} onClick={onCreateBranch}>
+            {actionRunning === "branch" ? <LoaderCircle size={14} aria-hidden="true" /> : <GitBranch size={14} aria-hidden="true" />}
+            <span>Branch</span>
+          </button>
+        </div>
+        <div className="git-status-action-grid">
+          <button type="button" disabled={Boolean(actionRunning) || status.changedFiles === 0} onClick={onStageAll}>
+            {actionRunning === "stage" ? <LoaderCircle size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+            <span>Stage</span>
+          </button>
+          <button type="button" disabled={Boolean(actionRunning)} onClick={onPull}>
+            {actionRunning === "pull" ? <LoaderCircle size={14} aria-hidden="true" /> : <CornerDownRight size={14} aria-hidden="true" />}
+            <span>Pull</span>
+          </button>
+          <button type="button" disabled={Boolean(actionRunning)} onClick={onPush}>
+            {actionRunning === "push" ? <LoaderCircle size={14} aria-hidden="true" /> : <ArrowUp size={14} aria-hidden="true" />}
+            <span>Push</span>
+          </button>
+          {onReviewChanges ? (
+            <button type="button" disabled={Boolean(actionRunning)} onClick={onReviewChanges}>
+              <Search size={14} aria-hidden="true" />
+              <span>Review</span>
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {actionNotice ? <div className="git-status-notice" data-kind={actionNotice.kind}>{actionNotice.message}</div> : null}
       <div className="git-status-root" title={status.repositoryRoot || root}>
         {formatCompactPath(status.repositoryRoot || root)}
       </div>

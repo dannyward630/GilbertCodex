@@ -23,11 +23,29 @@ export interface ContextWindowUsage {
   model: string;
   openRouterCompletionTokens?: number;
   openRouterTotalTokens?: number;
+  payloadBreakdown?: ContextWindowPayloadBreakdownItem[];
+  payloadSpike?: ContextWindowPayloadSpike;
   requestOverheadTokens: number;
   source: "estimate" | "openrouter" | "provider";
   systemTokens: number;
   tokenSource: "estimate" | "openrouter" | "provider" | "projected";
   totalTokens: number;
+}
+
+export interface ContextWindowPayloadBreakdownItem {
+  detail?: string;
+  id: "attachments" | "chatHistory" | "draft" | "providerEnvelope" | "system" | "toolOutput" | "toolSchemas";
+  label: string;
+  tokens: number;
+}
+
+export interface ContextWindowPayloadSpike {
+  currentInputTokens: number;
+  deltaTokens: number;
+  percentOfWindow: number;
+  previousInputTokens: number;
+  summary: string;
+  topContributors: ContextWindowPayloadBreakdownItem[];
 }
 
 export interface ContextCompactionNotice {

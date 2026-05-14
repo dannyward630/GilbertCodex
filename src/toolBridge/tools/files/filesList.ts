@@ -230,13 +230,19 @@ function formatListingPreview(
 ): string {
   if (entries.length === 0) {
     return [
-      `Directory ${path} is empty${limited ? " (listing was limited)" : ""}.`,
+      `Directory \`${path}\` is empty${limited ? " (listing was limited)" : ""}.`,
       skippedDirectories > 0 ? `Skipped ${skippedDirectories} generated/cache director${skippedDirectories === 1 ? "y" : "ies"} by default. Pass includeGenerated=true only when those folders are explicitly needed.` : "",
     ].filter(Boolean).join("\n");
   }
-  const previewLines = entries.map((entry) => `${entry.kind === "directory" ? "[dir]" : "[file]"} ${entry.path ?? entry.name}`);
+  // Wrap each path in backticks so the chat-side markdown renderer treats
+  // them as inline code and preserves every character verbatim. Without
+  // this, Windows backslashes before punctuation (e.g. `\.git`) are
+  // silently consumed by markdown escape rules and the path appears wrong.
+  const previewLines = entries.map(
+    (entry) => `${entry.kind === "directory" ? "[dir]" : "[file]"} \`${entry.path ?? entry.name}\``,
+  );
   return [
-    `${recursive ? "Recursive directory tree" : "Directory"} ${path} (${entries.length} entries):`,
+    `${recursive ? "Recursive directory tree" : "Directory"} \`${path}\` (${entries.length} entries):`,
     ...previewLines,
     skippedDirectories > 0 ? `Skipped ${skippedDirectories} generated/cache director${skippedDirectories === 1 ? "y" : "ies"} by default. Pass includeGenerated=true only when those folders are explicitly needed.` : "",
     limited ? "Listing was limited by an explicit limit or backend interruption; omit `limit` if you need every entry." : "",

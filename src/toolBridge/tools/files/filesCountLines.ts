@@ -315,7 +315,7 @@ function summarizeLineCounts(
       size: file.size,
     }));
   const content = [
-    `Counted ${formatNumber(totalLines)} line${totalLines === 1 ? "" : "s"} across ${formatNumber(files.length)} source file${files.length === 1 ? "" : "s"} in ${options.path}.`,
+    `Counted ${formatNumber(totalLines)} line${totalLines === 1 ? "" : "s"} across ${formatNumber(files.length)} source file${files.length === 1 ? "" : "s"} in \`${options.path}\`.`,
     options.includeBlankLines ? `Blank lines included (${formatNumber(totalBlankLines)} blank).` : `Blank lines excluded (${formatNumber(totalBlankLines)} blank omitted).`,
     extensionRows.length > 0
       ? `By extension: ${extensionRows.map((row) => `.${row.extension} ${formatNumber(row.lines)} in ${formatNumber(row.files)} file${row.files === 1 ? "" : "s"}`).join("; ")}.`

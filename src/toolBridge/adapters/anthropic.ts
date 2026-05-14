@@ -1,5 +1,6 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
-import { formatToolResultContent } from "../results";
+import { finalizeToolResult } from "../resultFinalizer";
+import { decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyAnthropicToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -13,8 +14,8 @@ export function applyAnthropicToolBridge(body: Record<string, unknown>, options:
       body.tool_choice = { type: "auto" };
     }
   } else if (options.toolChoice === "none") {
-    // Anthropic does not support a "none" tool_choice when there are no
-    // tools attached; the absence of `tools` is itself the disable signal.
+    // Anthropic does not support a "none" tool_choice when there are no tools
+    // attached; the absence of `tools` is itself the disable signal.
     delete body.tools;
     delete body.tool_choice;
   }
@@ -59,9 +60,14 @@ function appendAnthropicToolResultMessages(
         role: "assistant",
       });
     }
-    const rawContent = formatToolResultContent(result.result);
-    const content = formatToolResultContent(result.result, { maxChars: remainingToolResultChars });
-    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, rawContent.length);
+    const finalization = finalizeToolResult({
+      arguments: result.arguments,
+      maxProviderChars: remainingToolResultChars,
+      result: result.result,
+      toolId: result.name,
+    });
+    const content = finalization.providerContent;
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, finalization.providerRawCharCount);
 
     messages.push({
       content: [
@@ -77,12 +83,4 @@ function appendAnthropicToolResultMessages(
   }
 
   return messages;
-}
-
-function normalizeRemainingChars(value: number | null | undefined) {
-  return value === null || value === undefined || !Number.isFinite(value) ? null : Math.max(Math.floor(value), 0);
-}
-
-function decrementRemainingChars(remaining: number | null, rawLength: number) {
-  return remaining === null ? null : Math.max(remaining - rawLength, 0);
 }

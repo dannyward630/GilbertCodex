@@ -23,7 +23,7 @@ import {
   parseOpenAiCompatibleToolCalls,
   parseResponsesStreamToolCalls,
   parseResponsesToolCalls,
-  parseToolCallArguments,
+  createToolCallRequest,
 } from "../toolBridge/parsers";
 import type { ProviderToolBridgeOptions, ToolCallRequest } from "../toolBridge/types";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
@@ -272,6 +272,7 @@ interface ProviderRequestOptions {
 
 interface ProviderToolCallStreamDelta {
   argumentsDelta?: string;
+  argumentsParseError?: string;
   argumentsSnapshot?: unknown;
   id?: string;
   index: number;
@@ -280,6 +281,7 @@ interface ProviderToolCallStreamDelta {
 }
 
 interface StreamToolCallAccumulatorEntry {
+  argumentsParseError?: string;
   argumentsSnapshot?: unknown;
   argumentsText: string;
   id?: string;
@@ -1293,13 +1295,15 @@ function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumul
   let changed = false;
 
   for (const snapshotCall of delta.toolCallsSnapshot ?? []) {
-    const key = accumulator.size;
+    const key = findStreamToolCallAccumulatorKey(accumulator, snapshotCall) ?? accumulator.size;
+    const existing = accumulator.get(key);
     accumulator.set(key, {
+      argumentsParseError: snapshotCall.argumentsParseError,
       argumentsSnapshot: snapshotCall.arguments,
       argumentsText: typeof snapshotCall.arguments === "string" ? snapshotCall.arguments : JSON.stringify(snapshotCall.arguments ?? {}),
-      id: snapshotCall.id,
-      name: snapshotCall.name,
-      raw: snapshotCall.raw,
+      id: snapshotCall.id ?? existing?.id,
+      name: snapshotCall.name ?? existing?.name,
+      raw: snapshotCall.raw ?? existing?.raw,
     });
     changed = true;
   }
@@ -1309,6 +1313,7 @@ function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumul
       argumentsText: "",
     };
     accumulator.set(toolDelta.index, {
+      argumentsParseError: toolDelta.argumentsParseError ?? existing.argumentsParseError,
       argumentsSnapshot: toolDelta.argumentsSnapshot ?? existing.argumentsSnapshot,
       argumentsText: `${existing.argumentsText}${toolDelta.argumentsDelta ?? ""}`,
       id: toolDelta.id ?? existing.id,
@@ -1321,21 +1326,46 @@ function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumul
   return changed;
 }
 
+function findStreamToolCallAccumulatorKey(
+  accumulator: Map<number, StreamToolCallAccumulatorEntry>,
+  call: Pick<ToolCallRequest, "id" | "name">,
+) {
+  for (const [key, entry] of accumulator.entries()) {
+    if (call.id && entry.id === call.id) {
+      return key;
+    }
+
+    if (!call.id && call.name && entry.name === call.name) {
+      return key;
+    }
+  }
+
+  return undefined;
+}
+
 function finalizeStreamToolCalls(provider: ModelProviderId, accumulator: Map<number, StreamToolCallAccumulatorEntry>): ToolCallRequest[] {
   return [...accumulator.entries()].flatMap(([index, entry]) => {
     if (!entry.name) {
       return [];
     }
 
-    return [
-      {
-        arguments: entry.argumentsSnapshot !== undefined ? entry.argumentsSnapshot : parseToolCallArguments(entry.argumentsText),
-        id: entry.id || `${entry.name}-${index + 1}`,
-        name: entry.name,
-        provider,
-        raw: entry.raw,
-      },
-    ];
+    const request = createToolCallRequest(
+      provider,
+      entry.id || `${entry.name}-${index + 1}`,
+      entry.name,
+      entry.argumentsSnapshot !== undefined ? entry.argumentsSnapshot : entry.argumentsText,
+      entry.raw,
+    );
+
+    if (!request) {
+      return [];
+    }
+
+    if (entry.argumentsParseError && !request.argumentsParseError) {
+      request.argumentsParseError = entry.argumentsParseError;
+    }
+
+    return [request];
   });
 }
 

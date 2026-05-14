@@ -19,11 +19,9 @@ export { createFilesSearchTool } from "./filesSearch";
 export { createFilesStatTool } from "./filesStat";
 export { createFilesTreeSummaryTool } from "./filesTreeSummary";
 
-/**
- * Factory for the read-only files family. Pass a `backend` to inject a mock
- * filesystem (used in tests) or to wrap the production backend with caching,
- * logging, or audit hooks.
- */
+// Factory for the read-only files family. Pass a `backend` to inject a mock
+// filesystem (used in tests) or to wrap the production backend with caching,
+// logging, or audit hooks.
 export function createFilesTools(backend: FilesBackend = defaultFilesBackend): ToolDefinition[] {
   return [
     createFilesReadTool(backend),
@@ -37,7 +35,5 @@ export function createFilesTools(backend: FilesBackend = defaultFilesBackend): T
   ];
 }
 
-/**
- * Default-backed tool array used by {@link ../../registry.ToolRegistry}.
- */
+// Default-backed tool array consumed by the central ToolRegistry.
 export const fileTools: ToolDefinition[] = createFilesTools();

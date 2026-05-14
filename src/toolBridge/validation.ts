@@ -4,6 +4,7 @@ type SchemaType = "array" | "boolean" | "integer" | "null" | "number" | "object"
 
 interface BridgeJsonSchema {
   additionalProperties?: boolean;
+  enum?: ReadonlyArray<unknown>;
   items?: BridgeJsonSchema;
   maxItems?: number;
   maxLength?: number;
@@ -24,12 +25,13 @@ export function validateToolArguments(tool: ToolDefinition, args: unknown): Tool
     };
   }
 
+  const normalizedArgs = normalizeValueForSchema(args ?? {}, tool.inputSchema as BridgeJsonSchema);
   const errors: string[] = [];
-  validateValue(args, tool.inputSchema as BridgeJsonSchema, "arguments", errors);
+  validateValue(normalizedArgs, tool.inputSchema as BridgeJsonSchema, "arguments", errors);
 
   if (errors.length === 0) {
     return {
-      args: (args ?? {}) as Record<string, unknown>,
+      args: normalizedArgs as Record<string, unknown>,
       ok: true,
     };
   }
@@ -40,9 +42,68 @@ export function validateToolArguments(tool: ToolDefinition, args: unknown): Tool
   };
 }
 
+function normalizeValueForSchema(value: unknown, schema: BridgeJsonSchema): unknown {
+  const normalizedPrimitive = normalizePrimitiveForSchema(value, schema);
+
+  if (normalizedPrimitive !== value) {
+    return normalizedPrimitive;
+  }
+
+  if (isObject(value) && schema.properties) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, propertyValue]) => {
+        const propertySchema = schema.properties?.[key];
+        return [key, propertySchema ? normalizeValueForSchema(propertyValue, propertySchema) : propertyValue];
+      }),
+    );
+  }
+
+  if (Array.isArray(value) && schema.items) {
+    return value.map((item) => normalizeValueForSchema(item, schema.items!));
+  }
+
+  return value;
+}
+
+function normalizePrimitiveForSchema(value: unknown, schema: BridgeJsonSchema): unknown {
+  if (typeof value !== "string" || !value.trim()) {
+    return value;
+  }
+
+  const expectedTypes = schema.type ? (Array.isArray(schema.type) ? schema.type : [schema.type]) : [];
+  const trimmed = value.trim();
+
+  if (expectedTypes.includes("integer") && /^[-+]?\d+$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) ? parsed : value;
+  }
+
+  if (expectedTypes.includes("number") && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+
+  if (expectedTypes.includes("boolean")) {
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return value;
+}
+
 function validateValue(value: unknown, schema: BridgeJsonSchema, path: string, errors: string[]) {
   if (!matchesSchemaType(value, schema.type)) {
     errors.push(`${path} must be ${formatExpectedType(schema.type)}`);
+    return;
+  }
+
+  if (schema.enum && schema.enum.length > 0 && !schema.enum.includes(value as never)) {
+    errors.push(`${path} must be one of: ${schema.enum.map((entry) => formatEnumValue(entry)).join(", ")}`);
     return;
   }
 
@@ -64,6 +125,16 @@ function validateValue(value: unknown, schema: BridgeJsonSchema, path: string, e
   if (typeof value === "number") {
     validateNumber(value, schema, path, errors);
   }
+}
+
+function formatEnumValue(value: unknown) {
+  if (typeof value === "string") {
+    return `"${value}"`;
+  }
+  if (value === null) {
+    return "null";
+  }
+  return String(value);
 }
 
 function validateObject(value: Record<string, unknown>, schema: BridgeJsonSchema, path: string, errors: string[]) {

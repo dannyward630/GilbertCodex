@@ -1,9 +1,6 @@
 import type { ToolExecutionContext } from "./types";
 
-/**
- * Browser File System Access fallback prefix. Must stay in sync with
- * {@link ../localWorkspace/files.ts}.
- */
+// Browser File System Access fallback prefix. Keep in sync with localWorkspace/files.ts.
 const BROWSER_WORKSPACE_PREFIX = "browser-folder://";
 
 export type PathResolutionErrorKind =
@@ -11,12 +8,9 @@ export type PathResolutionErrorKind =
   | "invalid"
   | "no-workspace";
 
-/**
- * Raised by {@link resolveAllowedPath} when a requested path cannot be safely
- * resolved against the workspace roots in scope for a tool call. The orchestrator
- * surfaces these as structured tool errors rather than letting them surface as
- * generic "Tool execution failed."
- */
+// Thrown by resolveAllowedPath when a requested path cannot be safely resolved
+// against the workspace roots in scope. The orchestrator surfaces these as
+// structured tool errors rather than as generic "Tool execution failed."
 export class PathResolutionError extends Error {
   readonly kind: PathResolutionErrorKind;
 
@@ -28,32 +22,29 @@ export class PathResolutionError extends Error {
 }
 
 export interface ResolvedPath {
-  /** Normalized, case-folded form used for membership comparison. */
+  // Normalized, case-folded form used for membership comparison.
   comparable: string;
-  /** The path to hand back to filesystem APIs. Original separator family preserved. */
+  // The path to hand back to filesystem APIs. Original separator family preserved.
   resolved: string;
-  /** The workspace root that contains `resolved`. */
+  // The workspace root that contains `resolved`.
   root: string;
 }
 
-/**
- * Resolve a model-supplied path against the caller's workspace roots and
- * confirm it falls inside one of them. Use this in every path-touching bridge
- * tool so the security check lives in exactly one place.
- *
- * - Relative paths resolve against `workspaceRoots[0]`.
- * - `..` segments are collapsed before the membership check, so traversal
- *   attempts ("/root/../../etc/passwd") fail the comparison.
- * - Browser workspace URLs (`browser-folder://...`) are compared by exact
- *   prefix (no case folding) since their segments are URL-encoded.
- * - Desktop paths are compared case-insensitively (matches the existing
- *   workspace conventions and tolerates Windows drive-letter casing).
- *
- * Symlinks are NOT followed. The tool bridge does not currently shell out
- * to `realpath` from JS — a symlinked file inside a root will resolve as
- * if it lives there. Treat this as a known limitation: hard-gated tools
- * (terminal, destructive, etc.) still go through the approval flow.
- */
+// Resolve a model-supplied path against the caller's workspace roots and
+// confirm it falls inside one of them. Use this in every path-touching bridge
+// tool so the security check lives in exactly one place.
+//
+// Relative paths resolve against workspaceRoots[0].
+// ".." segments are collapsed before the membership check, so traversal
+// attempts like "/root/../../etc/passwd" fail the comparison.
+// Browser workspace URLs (browser-folder://...) are compared by exact prefix
+// (no case folding) since their segments are URL-encoded.
+// Desktop paths are compared case-insensitively to match existing workspace
+// conventions and tolerate Windows drive-letter casing.
+//
+// Symlinks are NOT followed. A symlinked file inside a root resolves as if it
+// lives there. Hard-gated tools (terminal, destructive, etc.) still go through
+// the approval flow, which mitigates this limitation in practice.
 export function resolveAllowedPath(
   context: Pick<ToolExecutionContext, "workspaceRoots">,
   requestedPath: unknown,
@@ -97,11 +88,9 @@ export function resolveAllowedPath(
   );
 }
 
-/**
- * Pure form of {@link resolveAllowedPath} that returns a discriminated union
- * instead of throwing. Useful from tool execute() bodies that want to convert
- * a structured failure into a `ToolExecutionResult` directly.
- */
+// Pure form of resolveAllowedPath that returns a discriminated union instead
+// of throwing. Useful from tool execute() bodies that want to convert a
+// structured failure into a ToolExecutionResult directly.
 export function tryResolveAllowedPath(
   context: Pick<ToolExecutionContext, "workspaceRoots">,
   requestedPath: unknown,
@@ -125,11 +114,13 @@ function isAbsoluteLikePath(path: string): boolean {
   if (path.startsWith("/")) {
     return true;
   }
+  // UNC path: \\server\share\...
   if (path.startsWith("\\\\")) {
-    return true; // UNC path
+    return true;
   }
+  // Windows drive letter followed by a separator.
   if (/^[a-zA-Z]:[\\/]/.test(path)) {
-    return true; // Windows drive letter with separator
+    return true;
   }
   return false;
 }
@@ -155,7 +146,7 @@ function normalizePathSegments(input: string): string {
   let body = input;
 
   if (input.startsWith("\\\\")) {
-    // UNC: \\server\share\path — keep the leading "\\server\share" intact
+    // UNC: \\server\share\path — keep the leading "\\server\share" intact.
     const rest = input.slice(2);
     const firstSlash = rest.search(/[\\/]/);
     const secondSlash = firstSlash >= 0 ? rest.slice(firstSlash + 1).search(/[\\/]/) : -1;
@@ -191,10 +182,11 @@ function collapseSegments(body: string, separator: string): string {
       continue;
     }
     if (segment === "..") {
+      // Going above the prefix is a no-op here; the membership check will
+      // still reject paths that escape every configured workspace root.
       if (stack.length > 0) {
         stack.pop();
       }
-      // Going above the prefix is a no-op; the membership check will catch it.
       continue;
     }
     stack.push(segment);
@@ -204,9 +196,9 @@ function collapseSegments(body: string, separator: string): string {
 
 function toComparable(path: string): string {
   const trimmed = path.trim();
+  // Browser folder URLs carry URL-encoded segments that ARE case-sensitive.
+  // Normalize separators but do not case-fold.
   if (trimmed.startsWith(BROWSER_WORKSPACE_PREFIX)) {
-    // Browser folder URLs carry URL-encoded segments that ARE case-sensitive.
-    // Normalize separators but do not case-fold.
     return trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
   }
   return trimmed.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();

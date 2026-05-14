@@ -410,7 +410,9 @@ function formatSearchContent(
 }
 
 function formatSearchResultLines(result: FileSearchResult) {
-  const header = `${result.path}${result.pathMatched ? " (path match)" : ""}`;
+  // Wrap the path in backticks so markdown renderers don't strip Windows
+  // backslashes that precede punctuation (e.g. `\.git`).
+  const header = `\`${result.path}\`${result.pathMatched ? " (path match)" : ""}`;
   const matchLines = result.contentMatches.flatMap((match) => [
     ...(match.before ?? []).map((line) => `  L${line.line}: ${line.preview}`),
     `  L${match.line}: ${match.preview}`,

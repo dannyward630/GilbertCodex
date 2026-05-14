@@ -1,6 +1,7 @@
 import type { JsonValue, ToolDefinition, ToolExecutionContext } from "../../types";
 import { PathResolutionError, tryResolveAllowedPath } from "../../paths";
 import { defaultFilesBackend, type FilesBackend } from "./backend";
+import { readErrorMessage, readTextFileWithModuleRecovery } from "./readUtils";
 
 const MAX_CONCURRENT_READS = 8;
 
@@ -12,6 +13,8 @@ interface BatchReadResult {
   name?: string;
   ok: boolean;
   path?: string;
+  recoveredFrom?: string;
+  recoveryNote?: string;
   requestedPath: string;
   sha256?: string | null;
   size?: number;
@@ -117,7 +120,8 @@ async function readOneFile(
   }
 
   try {
-    const file = await backend.readTextFile(resolution.path.resolved, maxBytes);
+    const read = await readTextFileWithModuleRecovery(backend, resolution.path.resolved, maxBytes);
+    const file = read.file;
     return {
       content: file.content,
       extension: file.extension ?? null,
@@ -125,13 +129,15 @@ async function readOneFile(
       name: file.name,
       ok: true,
       path: file.path,
+      recoveredFrom: read.recoveredFrom,
+      recoveryNote: read.recoveryNote,
       requestedPath,
       sha256: file.sha256 ?? null,
       size: file.size,
       truncated: file.truncated,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not read file.";
+    const message = readErrorMessage(error, "Could not read file.");
     return {
       error: message,
       ok: false,
@@ -150,16 +156,17 @@ function formatBatchReadContent(results: BatchReadResult[]) {
   for (const result of results) {
     if (!result.ok) {
       sections.push([
-        `--- ${result.requestedPath}`,
+        `--- \`${result.requestedPath}\``,
         `[ERROR] ${result.error ?? "Could not read file."}`,
       ].join("\n"));
       continue;
     }
 
     sections.push([
-      `--- ${result.path ?? result.requestedPath}`,
+      `--- \`${result.path ?? result.requestedPath}\`${result.recoveredFrom ? ` (recovered from \`${result.recoveredFrom}\`)` : ""}`,
+      result.recoveryNote,
       result.truncated ? `[TRUNCATED after requested maxBytes]\n${result.content ?? ""}` : result.content ?? "",
-    ].join("\n"));
+    ].filter((line): line is string => typeof line === "string" && line.length > 0).join("\n"));
   }
 
   return sections.join("\n\n");

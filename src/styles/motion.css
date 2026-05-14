@@ -608,8 +608,6 @@
   .model-selector-provider-strip button,
   .model-selector-toolbar button,
   .rail-row,
-  .progress-row,
-  .activity-tool-call,
   .approval-card,
   .planning-option-list button {
     transition:
@@ -631,8 +629,6 @@
   .model-selector-provider-strip button:hover,
   .model-selector-toolbar button:hover,
   .rail-row:hover,
-  .progress-row:hover,
-  .activity-tool-call:hover,
   .approval-card:hover,
   .planning-option-list button:hover {
     transform: translateY(-1px) scale(1.002);

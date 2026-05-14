@@ -89,6 +89,14 @@ export interface ComputerGitActionResult {
   status: ComputerGitStatus;
 }
 
+export interface ComputerGitDiffResult {
+  diff: string;
+  path: string;
+  repositoryRoot: string;
+  status: ComputerGitStatus;
+  truncated: boolean;
+}
+
 export interface ComputerGitWorktreeResult {
   branchName: string;
   message: string;

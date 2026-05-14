@@ -8,11 +8,9 @@ export interface ParseToolArgumentsResult {
   value: unknown;
 }
 
-/**
- * Back-compat: returns the parsed value if `value` is a JSON string, or the
- * raw `value` if parsing fails. Prefer {@link parseToolCallArgumentsDetailed}
- * inside the tool bridge so the parse error can be surfaced explicitly.
- */
+// Back-compat: returns the parsed value if `value` is a JSON string, or the
+// raw `value` if parsing fails. Prefer parseToolCallArgumentsDetailed inside
+// the tool bridge so the parse error can be surfaced explicitly.
 export function parseToolCallArguments(value: unknown) {
   const result = parseToolCallArgumentsDetailed(value);
   return result.value;
@@ -51,7 +49,11 @@ export function createToolCallRequest(
 
   const trimmedName = name.trim();
   const parsed = parseToolCallArgumentsDetailed(args);
-  const resolvedId = typeof id === "string" && id.trim() ? id : nextFallbackToolCallId(trimmedName);
+  // Trim provider-supplied ids so downstream comparisons (dedupe, telemetry,
+  // result-message correlation) never see equivalent ids that differ only in
+  // surrounding whitespace.
+  const trimmedId = typeof id === "string" ? id.trim() : "";
+  const resolvedId = trimmedId ? trimmedId : nextFallbackToolCallId(trimmedName);
 
   const request: ToolCallRequest = {
     arguments: parsed.error ? {} : parsed.value,
@@ -68,11 +70,9 @@ export function createToolCallRequest(
   return request;
 }
 
-/**
- * Monotonic, collision-free fallback id for tool calls whose provider failed
- * to supply one. Deterministic within a process — tests can reset it via
- * {@link __resetToolCallIdCounterForTests}.
- */
+// Monotonic, collision-free fallback id for tool calls whose provider failed
+// to supply one. Deterministic within a process; tests can reset it via
+// __resetToolCallIdCounterForTests.
 function nextFallbackToolCallId(name: string): string {
   toolCallIdCounter += 1;
   return `${name}-fallback-${toolCallIdCounter}`;

@@ -6,6 +6,7 @@ import type {
   ComputerDirectoryListing,
   ComputerDrive,
   ComputerGitActionResult,
+  ComputerGitDiffResult,
   ComputerFileIndexProgress,
   ComputerFileIndexSummary,
   ComputerGitStatus,
@@ -371,6 +372,45 @@ export async function createComputerGitBranch(path: string, name: string): Promi
   });
 }
 
+/** Returns a full local Git diff, including untracked text files by default. */
+export async function diffComputerGitChanges(
+  path: string,
+  options: {
+    includeUntracked?: boolean;
+    maxBytes?: number;
+    paths?: string[];
+    staged?: boolean;
+  } = {},
+): Promise<ComputerGitDiffResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitDiffResult>("computer_git_diff", {
+    request: {
+      includeUntracked: options.includeUntracked,
+      maxBytes: options.maxBytes,
+      path,
+      paths: options.paths,
+      staged: options.staged,
+    },
+  });
+}
+
+/** Stages all changes, or a precise set of paths, in a local Git repository. */
+export async function stageComputerGitChanges(path: string, paths?: string[]): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_stage", {
+    request: {
+      path,
+      paths,
+    },
+  });
+}
+
 /** Pushes the current branch and sets origin/current-branch as upstream when needed. */
 export async function pushComputerGitBranch(path: string, remote = "origin"): Promise<ComputerGitActionResult> {
   if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
@@ -381,6 +421,21 @@ export async function pushComputerGitBranch(path: string, remote = "origin"): Pr
     request: {
       path,
       remote,
+    },
+  });
+}
+
+/** Pulls the current local branch with fast-forward-only safety. */
+export async function pullComputerGitBranch(path: string, options: { branch?: string; remote?: string } = {}): Promise<ComputerGitActionResult> {
+  if (!path || !isTauriDesktopRuntime() || isBrowserWorkspacePath(path)) {
+    throw new Error(path ? "Git actions are available in the desktop app for real folders." : "Choose a project folder first.");
+  }
+
+  return await invoke<ComputerGitActionResult>("computer_git_pull", {
+    request: {
+      branch: options.branch,
+      path,
+      remote: options.remote,
     },
   });
 }
@@ -420,9 +475,9 @@ export async function searchComputerFiles(query: string, limit?: number, roots: 
 }
 
 /** Reads a text file through the active desktop or browser workspace backend. */
-export async function readComputerTextFile(path: string, maxBytes?: number) {
+export async function readComputerTextFile(path: string, maxBytes?: number, offset?: number) {
   if (isBrowserWorkspacePath(path)) {
-    return await readBrowserTextFile(path, maxBytes);
+    return await readBrowserTextFile(path, maxBytes, offset);
   }
 
   if (!isTauriDesktopRuntime()) {
@@ -434,6 +489,7 @@ export async function readComputerTextFile(path: string, maxBytes?: number) {
     {
       request: {
         ...(maxBytes === undefined ? {} : { maxBytes }),
+        ...(offset === undefined ? {} : { offset }),
         path,
       },
     },
@@ -944,10 +1000,11 @@ function searchBrowserFileIndex(query: string, limit?: number) {
     .map(({ content, haystack, ...entry }) => entry);
 }
 
-async function readBrowserTextFile(path: string, maxBytes?: number): Promise<ComputerReadFileResult> {
+async function readBrowserTextFile(path: string, maxBytes?: number, offset?: number): Promise<ComputerReadFileResult> {
   const { file, handle } = await resolveBrowserFile(path);
-  const content = await readFilePreview(file, maxBytes);
-  const truncated = maxBytes !== undefined && file.size > maxBytes;
+  const start = normalizeReadOffset(offset);
+  const content = await readFilePreview(file, maxBytes, start);
+  const truncated = start > 0 || (maxBytes !== undefined && file.size > start + maxBytes);
 
   return {
     content,
@@ -1615,14 +1672,27 @@ function shouldReadBrowserFile(file: File) {
   return isProbablyTextExtension(fileExtensionFromName(file.name));
 }
 
-async function readFilePreview(file: File, maxBytes?: number) {
-  const text = maxBytes === undefined ? await file.text() : await file.slice(0, maxBytes).text();
+async function readFilePreview(file: File, maxBytes?: number, offset = 0) {
+  if (offset > file.size) {
+    throw new Error(`Requested offset ${offset} is beyond the end of ${file.name} (${file.size} bytes).`);
+  }
+
+  const end = maxBytes === undefined ? undefined : offset + maxBytes;
+  const text = offset === 0 && maxBytes === undefined ? await file.text() : await file.slice(offset, end).text();
 
   if (text.includes("\u0000")) {
     throw new Error("This file looks binary, so Gilbert did not load it as text.");
   }
 
   return text;
+}
+
+function normalizeReadOffset(offset?: number) {
+  if (typeof offset !== "number" || !Number.isFinite(offset)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(offset));
 }
 
 function tokenize(value: string) {

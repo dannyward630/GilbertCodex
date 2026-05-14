@@ -53,11 +53,9 @@ export interface ToolDefinition {
 
 export interface ToolCallRequest {
   arguments: unknown;
-  /**
-   * If the raw arguments string could not be parsed as JSON, this field carries
-   * the parse error. The orchestrator surfaces it as the call's failure reason
-   * instead of running schema validation against a string.
-   */
+  // If the raw arguments string could not be parsed as JSON, this field carries
+  // the parse error. The orchestrator surfaces it as the call's failure reason
+  // instead of running schema validation against a string.
   argumentsParseError?: string;
   id: string;
   name: string;
@@ -74,19 +72,15 @@ export interface ToolResultMessage {
 }
 
 export interface ProviderToolBridgeOptions {
-  /**
-   * If true, the adapter will NOT synthesize a fake assistant message
-   * carrying the original tool_call(s). Set this when the caller's message
-   * history already contains the assistant turn that emitted the tool calls.
-   * Defaults to false to preserve the legacy contract: the adapter prepends
-   * a synthetic assistant message for each result so providers see a
-   * well-formed (assistant→tool) pair.
-   */
+  // If true, the adapter will NOT synthesize a fake assistant message carrying
+  // the original tool_call(s). Set this when the caller's message history
+  // already contains the assistant turn that emitted the tool calls. Defaults
+  // to false to preserve the legacy contract: the adapter prepends a synthetic
+  // assistant message for each result so providers see a well-formed
+  // (assistant -> tool) pair.
   resultsHistoryAlreadyContainsAssistantTurns?: boolean;
-  /**
-   * Maximum aggregate characters of completed tool output to place back into
-   * the next provider request. Activity keeps the full raw output separately.
-   */
+  // Maximum aggregate characters of completed tool output to place back into
+  // the next provider request. Activity keeps the full raw output separately.
   maxToolResultContentChars?: number | null;
   toolChoice?: ToolBridgeToolChoice;
   toolResultMessages?: ToolResultMessage[];
@@ -114,6 +108,7 @@ export interface ToolBridgeExecutionStep {
 
 export interface ToolBridgeExecutionBatch {
   executedCount: number;
+  handledCount: number;
   requestedCount: number;
   resultMessages: ToolResultMessage[];
   steps: ToolBridgeExecutionStep[];

@@ -877,17 +877,51 @@ function normalizeProgressItems(value: unknown): ChatProgressItem[] | undefined 
       return [];
     }
 
+    const id = normalizeProgressItemId(progressItem.id);
+
     return [
       {
         detail: progressItem.status === "active" ? "Stopped when the app reloaded." : progressItem.detail,
-        id: typeof progressItem.id === "string" ? progressItem.id : undefined,
-        label: progressItem.label,
+        id,
+        label: id === "local-computer-tools" && progressItem.label === "Local tools disabled" ? "Tool activity" : progressItem.label,
         status: progressItem.status === "pending" ? "pending" : "complete",
       } satisfies ChatProgressItem,
     ];
   });
+  const dedupedProgress = dedupeProgressItems(progress);
 
-  return progress.length > 0 ? progress : undefined;
+  return dedupedProgress.length > 0 ? dedupedProgress : undefined;
+}
+
+function normalizeProgressItemId(id: unknown) {
+  if (typeof id !== "string" || !id.trim()) {
+    return undefined;
+  }
+
+  return id === "local-tools-disabled" ? "local-computer-tools" : id;
+}
+
+function dedupeProgressItems(progress: ChatProgressItem[]) {
+  const deduped: ChatProgressItem[] = [];
+  const idIndexes = new Map<string, number>();
+
+  for (const item of progress) {
+    if (!item.id) {
+      deduped.push(item);
+      continue;
+    }
+
+    const existingIndex = idIndexes.get(item.id);
+
+    if (existingIndex === undefined) {
+      idIndexes.set(item.id, deduped.length);
+      deduped.push(item);
+    } else {
+      deduped[existingIndex] = item;
+    }
+  }
+
+  return deduped;
 }
 
 function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {

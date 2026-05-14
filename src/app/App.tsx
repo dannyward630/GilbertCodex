@@ -62,9 +62,9 @@ import {
 } from "../services/planningClient";
 import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
-import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
-import { createDefaultToolRegistry, executeToolBridgeCalls } from "../toolBridge";
-import type { ProviderToolBridgeOptions, ToolExecutionContext, ToolResultMessage } from "../toolBridge";
+import { annotateProviderPayloadSpike, applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
+import { createBridgeChatToolCall, createDefaultToolRegistry, executeToolBridgeCalls, isVisibleToolResultLeak, resolveToolPermission, validateToolArguments } from "../toolBridge";
+import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolResultMessage } from "../toolBridge";
 import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../localWorkspace/files";
 import {
   createLocalComputerProgress,
@@ -249,6 +249,8 @@ const MAX_MALFORMED_TOOL_RECOVERY_RETRIES = 2;
 const MAX_RECOVERABLE_LOCAL_EDIT_RETRIES = 4;
 const MESSAGE_RETRY_TIMEOUT_MS = 10_000;
 const CONTEXT_COMPACTION_PROGRESS_ID = "context-compaction";
+const PROVIDER_PAYLOAD_GUARDRAIL_PROGRESS_ID = "provider-payload-guardrail";
+const BRIDGE_TOOL_APPROVAL_RESUME_KIND = "bridge_tool_calls";
 const DISCORD_NEW_CHAT_COMMAND = "gilbertnewchat";
 const DISCORD_STREAM_UPDATE_INTERVAL_MS = 2_400;
 const DISCORD_STREAM_MESSAGE_LIMIT = 1_850;
@@ -3184,10 +3186,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function recordProviderContextUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions } = {}) {
+    const previousUsage = lastProviderContextUsage?.chatId === chatId ? lastProviderContextUsage.usage : null;
+    const usage = annotateProviderPayloadSpike(estimateProviderContextUsageForDisplay(messages, settings, options), previousUsage);
+
     setLastProviderContextUsage({
       chatId,
-      usage: estimateProviderContextUsageForDisplay(messages, settings, options),
+      usage,
     });
+
+    return usage;
   }
 
   function recordProviderActualUsage(chatId: string, messages: ChatMessage[], settings: ProviderSettings, usage: Awaited<ReturnType<typeof streamProviderMessage>>["usage"], options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions } = {}) {
@@ -3206,6 +3213,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       stream: options.stream ?? true,
       toolBridge: options.toolBridge,
     });
+  }
+
+  function createProviderPayloadGuardrailProgress(usage: ContextWindowUsage): ChatProgressItem | null {
+    const spike = usage.payloadSpike;
+
+    if (!spike) {
+      return null;
+    }
+
+    return {
+      detail: spike.summary,
+      id: PROVIDER_PAYLOAD_GUARDRAIL_PROGRESS_ID,
+      label: "Provider payload guardrail",
+      status: "pending",
+    };
+  }
+
+  function withProviderPayloadGuardrailProgress(guardrailProgress: ChatProgressItem | null, progress: ChatProgressItem[] | undefined) {
+    const progressWithoutGuardrail = (progress ?? []).filter((item) => item.id !== PROVIDER_PAYLOAD_GUARDRAIL_PROGRESS_ID);
+
+    return guardrailProgress ? [guardrailProgress, ...progressWithoutGuardrail] : progressWithoutGuardrail;
   }
 
   function recordPlanningProviderRequest(chatId: string, request: PlanningProviderRequest) {
@@ -3503,8 +3531,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       appendAgentRuntimeStep(runId, type, label);
+      const internalPassIndex = executedCount;
       localProgress = createLocalComputerProgress("active", label);
       visibleToolCall = agentToolCall("active", label);
+      let liveInternalToolCalls: ChatToolCall[] = [];
       updateGeneratedMessage(chatId, messageId, (message) => ({
         ...message,
         content: "",
@@ -3522,6 +3552,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         assistantContent: toolContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, runtimeMessages, prompt, controller.signal),
+        onToolCallUpdate: (_callNumber, toolCall) => {
+          const [stampedToolCall] = stampLocalToolCallIds([toolCall], internalPassIndex);
+
+          if (!stampedToolCall) {
+            return;
+          }
+
+          liveInternalToolCalls = upsertToolCall(liveInternalToolCalls, stampedToolCall);
+          attachLiveTerminalSession([stampedToolCall]);
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...message,
+            content: "",
+            progress: withLocalComputerProgress(localProgress, message.progress),
+            toolCalls: [visibleToolCall, ...liveInternalToolCalls],
+          }));
+          onExternalUpdate?.({
+            progress: localProgress,
+            status: formatDiscordToolStatus(stampedToolCall),
+            toolCall: stampedToolCall,
+          });
+        },
         settings: workspaceSettings,
         signal: controller.signal,
         toolSettings,
@@ -3540,8 +3591,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       allArtifacts.push(...(toolRun.artifacts ?? []));
       allSources.push(...toolRun.sources);
       executedCount += toolRun.executedCount;
-      attachLiveTerminalSession(toolRun.toolCalls);
-      const fileChanges = toolRun.toolCalls.flatMap((toolCall) => toolCall.fileChanges ?? []);
+      const completedInternalToolCalls = stampLocalToolCallIds(toolRun.toolCalls, internalPassIndex);
+      attachLiveTerminalSession(completedInternalToolCalls);
+      const fileChanges = completedInternalToolCalls.flatMap((toolCall) => toolCall.fileChanges ?? []);
+      const visibleToolCalls = completedInternalToolCalls.length > 0 ? [visibleToolCall, ...completedInternalToolCalls] : [visibleToolCall];
       const stepStatus: AgentRun["steps"][number]["status"] = toolRun.waitingForApproval ? "waiting_for_approval" : toolRun.toolCalls.some((toolCall) => toolCall.status === "error") ? "failed" : "completed";
       completeLatestAgentRuntimeStep(runId, stepStatus, toolRun.progress.detail);
       runtimeMessages = [
@@ -3571,7 +3624,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),
         sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
-        toolCalls: [visibleToolCall],
+        toolCalls: visibleToolCalls,
       }));
 
       if (toolRun.waitingForApproval) {
@@ -3588,7 +3641,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             pendingToolCallContent: toolContent,
             progress: toolRun.progress,
             sources: allSources,
-            toolCalls: [visibleToolCall],
+            toolCalls: visibleToolCalls,
             waitingForApproval: true,
           } satisfies AssistantToolResponse,
         };
@@ -4061,7 +4114,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
           const content = sanitizeLocalToolCallsForDisplay(response.content, toolExecutionPolicy).trim();
 
-          if (!content || looksLikeOnlyToolPrelude(content) || looksLikeInternalToolRecoveryAnswer(content) || looksLikeFabricatedToolActivity(content, allToolCalls)) {
+          if (
+            !content ||
+            looksLikeOnlyToolPrelude(content) ||
+            looksLikeInternalToolRecoveryAnswer(content) ||
+            looksLikeFabricatedToolActivity(content, allToolCalls) ||
+            isVisibleToolResultLeak(content, allToolCalls)
+          ) {
             continue;
           }
 
@@ -4093,6 +4152,283 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             tools: [],
           }
         : undefined;
+    }
+
+    function createBridgeToolContinuationInstruction(run: ToolBridgeExecutionBatch) {
+      const handledCount = getBridgeHandledCount(run);
+      const failedCount = Math.max(0, handledCount - run.executedCount);
+      return [
+        "BRIDGE TOOL RESULTS AVAILABLE",
+        `Original user request: ${prompt}`,
+        `The app just handled ${handledCount} bridge tool call${handledCount === 1 ? "" : "s"}: ${run.executedCount} succeeded, ${failedCount} failed or was skipped.`,
+        "Use the attached tool result messages as current evidence.",
+        failedCount > 0 ? "If a tool failed because the arguments were invalid JSON or failed validation, retry the operation with corrected valid JSON instead of stopping on the raw error." : "",
+        "If more work is needed, emit the next needed tool call now.",
+        "If the request is done, write the normal final answer now.",
+        "Do not answer with a raw tool result, Activity recap, Latest completed result, recovery note, or continuation note.",
+      ].filter(Boolean).join("\n\n");
+    }
+
+    function getBridgeHandledCount(run: ToolBridgeExecutionBatch) {
+      return run.handledCount || run.resultMessages.length || run.requestedCount;
+    }
+
+    function formatBridgeToolRunProgress(run: ToolBridgeExecutionBatch, noun: string) {
+      const handledCount = getBridgeHandledCount(run);
+      const pluralNoun = `${noun}${handledCount === 1 ? "" : "s"}`;
+
+      if (handledCount === 0) {
+        return `No ${noun}s ran`;
+      }
+
+      if (run.executedCount === handledCount) {
+        return `${handledCount} ${pluralNoun} ran`;
+      }
+
+      if (run.executedCount === 0) {
+        return `${handledCount} ${pluralNoun} handled with errors`;
+      }
+
+      return `${run.executedCount} of ${handledCount} ${pluralNoun} ran`;
+    }
+
+    function serializeBridgeToolApprovalResume(calls: ToolCallRequest[]) {
+      return JSON.stringify({
+        calls,
+        kind: BRIDGE_TOOL_APPROVAL_RESUME_KIND,
+        version: 1,
+      });
+    }
+
+    function parseBridgeToolApprovalResume(content: string | undefined): { calls: ToolCallRequest[] } | null {
+      if (!content) {
+        return null;
+      }
+
+      try {
+        const parsed = JSON.parse(content) as { calls?: unknown; kind?: unknown };
+
+        if (parsed.kind !== BRIDGE_TOOL_APPROVAL_RESUME_KIND || !Array.isArray(parsed.calls)) {
+          return null;
+        }
+
+        const calls = parsed.calls.filter((call): call is ToolCallRequest =>
+          Boolean(
+            call &&
+              typeof call === "object" &&
+              typeof (call as ToolCallRequest).id === "string" &&
+              typeof (call as ToolCallRequest).name === "string" &&
+              typeof (call as ToolCallRequest).provider === "string",
+          ),
+        );
+
+        return calls.length > 0 ? { calls } : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function createBridgeApprovalShell(call: ToolCallRequest, tool: ToolDefinition, preview?: string): AgentApproval {
+      const args = typeof call.arguments === "object" && call.arguments !== null && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : undefined;
+      const path = formatBridgeApprovalPath(args);
+
+      return {
+        args,
+        createdAt: new Date().toISOString(),
+        detail: path ? `${tool.title} wants to change ${path}.` : `${tool.title} wants to change files in the selected workspace.`,
+        id: createId("approval"),
+        kind: bridgeApprovalKind(tool.id),
+        path,
+        preview,
+        resumeToolCallContent: serializeBridgeToolApprovalResume([call]),
+        risk: "medium",
+        status: "pending",
+        title: tool.title,
+        tool: tool.id,
+        toolCallId: call.id,
+      };
+    }
+
+    function formatBridgeApprovalPath(args: Record<string, unknown> | undefined) {
+      if (!args) {
+        return undefined;
+      }
+
+      if (typeof args.fromPath === "string" && typeof args.toPath === "string") {
+        return `${args.fromPath} -> ${args.toPath}`;
+      }
+
+      return typeof args.path === "string" && args.path.trim() ? args.path.trim() : undefined;
+    }
+
+    function bridgeApprovalKind(toolId: string): AgentApproval["kind"] {
+      if (toolId === "files_write") {
+        return "write";
+      }
+
+      if (
+        toolId === "files_exact_replace" ||
+        toolId === "files_insert_at_line" ||
+        toolId === "files_replace_range" ||
+        toolId === "files_append" ||
+        toolId === "files_apply_patch" ||
+        toolId === "files_move"
+      ) {
+        return "edit";
+      }
+
+      return "custom_tool";
+    }
+
+    async function createBridgeApprovalPreview(tool: ToolDefinition, call: ToolCallRequest, bridgeContext: ToolExecutionContext) {
+      const validation = validateToolArguments(tool, call.arguments);
+
+      if (!validation.ok || !validation.args) {
+        return validation.error || "Invalid tool arguments.";
+      }
+
+      try {
+        const preview = await tool.execute({ ...validation.args, dryRun: true }, bridgeContext);
+        return preview.content;
+      } catch (error) {
+        return error instanceof Error ? error.message : "Could not preview this tool call.";
+      }
+    }
+
+    async function collectPendingBridgeApprovals(calls: ToolCallRequest[], bridgeContext: ToolExecutionContext) {
+      const runtimeDecisions = createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions) ?? {};
+      const approvals: AgentApproval[] = [];
+      const waitingToolCalls: ChatToolCall[] = [];
+
+      for (const call of calls) {
+        const tool = bridgeRegistry.get(call.name);
+
+        if (!tool) {
+          continue;
+        }
+
+        const permission = resolveToolPermission(tool, bridgeContext);
+
+        if (permission.allowed || !permission.requiresApproval) {
+          continue;
+        }
+
+        if (call.argumentsParseError) {
+          continue;
+        }
+
+        const validation = validateToolArguments(tool, call.arguments);
+        if (!validation.ok) {
+          continue;
+        }
+
+        const shell = createBridgeApprovalShell(call, tool);
+        const reusableDecision = runtimeDecisions[createApprovalSessionDecisionKey(shell)];
+
+        if (reusableDecision?.status === "approved") {
+          continue;
+        }
+
+        const preview = await createBridgeApprovalPreview(tool, call, bridgeContext);
+        const approval = createBridgeApprovalShell(call, tool, preview);
+        approvals.push(approval);
+        waitingToolCalls.push(createBridgeChatToolCall(
+          call,
+          tool,
+          { content: preview || permission.reason || "Approval required before this file edit can run.", ok: true },
+          "waiting_approval",
+        ));
+      }
+
+      return {
+        approvals,
+        waitingToolCalls,
+      };
+    }
+
+    const approvedBridgeResume = parseBridgeToolApprovalResume(resumeToolCallContent);
+
+    if (approvedBridgeResume) {
+      const submittedDecision = Object.values(approvalDecisions ?? {})[0];
+
+      if (submittedDecision?.status === "denied") {
+        const deniedProgress = createLocalComputerProgress("complete", "Approved file action was denied");
+        const deniedToolCalls = stampLocalToolCallIds(
+          approvedBridgeResume.calls.map((call) =>
+            createBridgeChatToolCall(call, bridgeRegistry.get(call.name), { content: "Approval denied. No file changes were applied.", ok: false, skippedReason: "Approval denied." }, "skipped"),
+          ),
+          passIndex,
+        );
+
+        return {
+          content: "Approval denied. No file changes were applied.",
+          progress: deniedProgress,
+          toolCalls: deniedToolCalls,
+        };
+      }
+
+      const activeProgress = createLocalComputerProgress("active", "Running approved file action");
+      const resumeBridgeContext: ToolExecutionContext = {
+        model: baseRuntimeSettings.model,
+        permissionMode: workspaceSettings.permissionMode,
+        provider: baseRuntimeSettings.provider,
+        signal: controller.signal,
+        workspaceRoots: workspaceSettings.roots,
+      };
+      let liveToolCalls: ChatToolCall[] = [];
+
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        agentRunStatus: "running",
+        content: "",
+        progress: withLocalComputerProgress(activeProgress, message.progress),
+      }));
+
+      const bridgeRun = await executeToolBridgeCalls({
+        approval: () => ({ approved: true }),
+        calls: approvedBridgeResume.calls,
+        context: resumeBridgeContext,
+        onToolCallUpdate: (toolCall) => {
+          const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
+
+          if (!stampedToolCall) {
+            return;
+          }
+
+          liveToolCalls = upsertToolCall(liveToolCalls, stampedToolCall);
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...message,
+            content: "",
+            progress: withLocalComputerProgress(activeProgress, message.progress),
+            toolCalls: liveToolCalls,
+          }));
+        },
+        registry: bridgeRegistry,
+      });
+      const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
+      totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
+      bridgeToolResultMessages.push(...bridgeRun.resultMessages);
+      allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
+      localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "approved file tool"));
+
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        content: "",
+        progress: withLocalComputerProgress(localProgress, message.progress),
+        toolCalls: allToolCalls,
+      }));
+
+      messages = [
+        ...messages,
+        createMessage("user", [
+          "APPROVED FILE TOOL RESULT",
+          "Use the attached tool result messages as the source of truth.",
+          "If the approved action failed because the tool arguments were invalid JSON or failed validation, retry with corrected valid JSON instead of stopping on the raw error.",
+          "If no more work is needed, finish the user's request normally.",
+        ].join("\n")),
+      ];
+      passIndex += 1;
+      resumeToolCallContent = undefined;
     }
 
     if (resumeToolCallContent) {
@@ -4223,7 +4559,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         signal: controller.signal,
         workspaceRoots: workspaceSettings.roots,
       };
-      const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext);
+      const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext, undefined, {
+        includePendingApproval: true,
+      });
       const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
         ? {
             maxToolResultContentChars: getModelVisibleToolResultCharBudget(contextWindow.tokens),
@@ -4324,8 +4662,42 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       if (assistantResponse.toolCalls?.length) {
-        const activeProgress = createLocalComputerProgress("active", "Running bridge diagnostic tools");
+        const activeProgress = createLocalComputerProgress("active", "Running bridge tools");
         let liveBridgeToolCalls: ChatToolCall[] = [];
+        const pendingBridgeApprovals = await collectPendingBridgeApprovals(assistantResponse.toolCalls, bridgeContext);
+
+        if (pendingBridgeApprovals.approvals.length > 0) {
+          const approvalProgress = createLocalComputerProgress("pending", "File tool approval required");
+          const waitingToolCalls = stampLocalToolCallIds(pendingBridgeApprovals.waitingToolCalls, passIndex);
+
+          finalResponse = {
+            approvalRequests: pendingBridgeApprovals.approvals.map((approval) => ({
+              ...approval,
+              messageId,
+            })),
+            content: "",
+            pendingToolCallContent: pendingBridgeApprovals.approvals[0]?.resumeToolCallContent,
+            progress: approvalProgress,
+            toolCalls: [...allToolCalls, ...waitingToolCalls],
+            waitingForApproval: true,
+          };
+
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...message,
+            agentRunStatus: "waiting_for_approval",
+            approvals: mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []),
+            content: "",
+            progress: withLocalComputerProgress(approvalProgress, message.progress),
+            toolCalls: finalResponse.toolCalls,
+          }));
+          onExternalUpdate?.({
+            progress: approvalProgress,
+            status: "File tool approval is needed in Gilbert Codex.",
+            toolCall: waitingToolCalls[0],
+          });
+
+          return finalResponse;
+        }
 
         updateGeneratedMessage(chatId, messageId, (message) => ({
           ...message,
@@ -4339,6 +4711,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         });
 
         const bridgeRun = await executeToolBridgeCalls({
+          approval: () => ({ approved: true }),
           calls: assistantResponse.toolCalls,
           context: bridgeContext,
           onToolCallUpdate: (toolCall) => {
@@ -4364,10 +4737,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           registry: bridgeRegistry,
         });
         const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
-        totalExecutedToolCalls += bridgeRun.executedCount;
+        totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
         bridgeToolResultMessages.push(...bridgeRun.resultMessages);
         allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
-        localProgress = createLocalComputerProgress("complete", `${bridgeRun.executedCount} bridge diagnostic tool${bridgeRun.executedCount === 1 ? "" : "s"} ran`);
+        localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "bridge tool"));
 
         updateGeneratedMessage(chatId, messageId, (message) => ({
           ...message,
@@ -4375,15 +4748,19 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           progress: withLocalComputerProgress(localProgress, message.progress),
           toolCalls: allToolCalls,
         }));
-        onExternalUpdate?.({
-          progress: localProgress,
-          status: `${bridgeRun.executedCount} bridge diagnostic tool${bridgeRun.executedCount === 1 ? "" : "s"} completed.`,
-          toolCall: allToolCalls[allToolCalls.length - 1],
-        });
+      onExternalUpdate?.({
+        progress: localProgress,
+        status: `${formatBridgeToolRunProgress(bridgeRun, "bridge tool")}.`,
+        toolCall: allToolCalls[allToolCalls.length - 1],
+      });
 
-        passIndex += 1;
-        continue;
-      }
+      messages = [
+        ...messages,
+        createMessage("user", createBridgeToolContinuationInstruction(bridgeRun)),
+      ];
+      passIndex += 1;
+      continue;
+    }
 
       const assistantToolRequestContent = routePrimitiveEvidenceBatchToWorkflow(
         createAssistantToolRequestContent(assistantResponse.content, assistantResponse.reasoning, toolExecutionPolicy),
@@ -4486,13 +4863,14 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         const fabricatedToolActivity = looksLikeFabricatedToolActivity(finalResponse.content, allToolCalls);
         const toolProtocolNarration = looksLikeToolProtocolNarration(finalResponse.content);
         const unexecutedToolActionPromise = looksLikeUnexecutedToolActionPromise(finalResponse.content);
+        const visibleToolResultLeak = isVisibleToolResultLeak(finalResponse.content, allToolCalls);
         const localToolEvidenceRequired =
           allToolCalls.length === 0 &&
           freshLocalToolEvidenceRetries < 1 &&
           !toolBudgetReached &&
           needsFreshLocalToolEvidence(prompt, workspaceSettings.enabled);
 
-        if (localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolActivity || toolProtocolNarration || unexecutedToolActionPromise) {
+        if (localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolActivity || toolProtocolNarration || unexecutedToolActionPromise || visibleToolResultLeak) {
           if (localToolEvidenceRequired) {
             freshLocalToolEvidenceRetries += 1;
           }
@@ -4507,6 +4885,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                   ? "The previous finalization attempt exposed tool-call protocol narration. Do not repeat it."
                 : unexecutedToolActionPromise
                   ? "The previous finalization attempt promised a tool action without executing it. Do not repeat the promise."
+                : visibleToolResultLeak
+                  ? "The previous finalization attempt repeated raw tool result text. Use the saved tool evidence to write a normal answer instead."
                 : "The previous finalization attempt exposed tool activity instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
               assistantResponse.reasoning,
             );
@@ -4842,10 +5222,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       : summarizeUnsuccessfulToolSection(rawLatestOutput);
 
     if (latestToolCall.status === "complete") {
-      return [
-        `Latest completed result: ${latestToolCall.label}`,
-        fallbackOutput,
-      ].filter(Boolean).join("\n\n");
+      return fallbackOutput || "I ran the requested tool, but could not produce a clean final answer. Please retry the last request.";
     }
 
     return [
@@ -5232,7 +5609,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     options: Parameters<typeof streamProviderMessage>[3] = {},
     messageId?: string,
   ) {
-    recordProviderContextUsage(chatId, messages, settings, { toolBridge: options.toolBridge });
+    const initialUsage = recordProviderContextUsage(chatId, messages, settings, { toolBridge: options.toolBridge });
+    const initialPayloadGuardrailProgress = createProviderPayloadGuardrailProgress(initialUsage);
+
+    if (messageId && initialPayloadGuardrailProgress) {
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        progress: withProviderPayloadGuardrailProgress(initialPayloadGuardrailProgress, message.progress),
+      }));
+    }
 
     try {
       const response = await streamProviderMessage(settings, messages, onUpdate, options);
@@ -5266,7 +5651,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       );
       const retryMessages = [...compactedMessages, retryInstruction];
 
-      recordProviderContextUsage(chatId, retryMessages, retrySettings, { toolBridge: options.toolBridge });
+      const retryUsage = recordProviderContextUsage(chatId, retryMessages, retrySettings, { toolBridge: options.toolBridge });
+      const retryPayloadGuardrailProgress = createProviderPayloadGuardrailProgress(retryUsage);
+
+      if (messageId && retryPayloadGuardrailProgress) {
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          progress: withProviderPayloadGuardrailProgress(retryPayloadGuardrailProgress, message.progress),
+        }));
+      }
 
       const response = await runProviderRetryWithTimeout(options.signal, (signal) =>
         streamProviderMessage(retrySettings, retryMessages, onUpdate, {

@@ -25,10 +25,8 @@ export interface ExecuteToolBridgeCallsOptions {
   approval?: ToolApprovalCallback;
   calls: ToolCallRequest[];
   context: ToolExecutionContext;
-  /**
-   * Cap concurrent tool executions per batch. Default {@link DEFAULT_BRIDGE_MAX_CONCURRENCY}.
-   * Use 1 to force strict sequential execution.
-   */
+  // Cap concurrent tool executions per batch. Defaults to
+  // DEFAULT_BRIDGE_MAX_CONCURRENCY. Use 1 to force sequential execution.
   maxConcurrency?: number;
   onToolCallUpdate?: (toolCall: ChatToolCall) => void;
   registry?: ToolRegistry;
@@ -41,12 +39,9 @@ export interface ToolBridgeOrchestratorOptions {
   maxConcurrency?: number;
   maxLoops?: number;
   onToolCallUpdate?: (toolCall: ChatToolCall) => void;
-  /**
-   * Provider format used to filter tools before advertising them on each turn.
-   * Must match the adapter the caller will use to send the request, or tools
-   * advertised by the orchestrator may be stripped out before they reach the
-   * model.
-   */
+  // Provider format used to filter tools before advertising them on each turn.
+  // Must match the adapter the caller will use to send the request, or tools
+  // advertised here may be stripped out before they reach the model.
   providerFormat?: ToolBridgeProviderFormat;
   registry?: ToolRegistry;
   send: (request: {
@@ -185,8 +180,8 @@ export async function executeToolBridgeCalls(
   const calls = options.calls;
   const total = calls.length;
 
-  // Pre-pass: deterministically flag duplicate call ids. First occurrence in
-  // the input order is the legitimate one; later occurrences are recorded as
+  // Flag duplicate call ids deterministically. First occurrence in input order
+  // is treated as the legitimate one; later occurrences are recorded as
   // skipped so we don't double-execute and don't emit colliding tool_call_ids
   // back to the provider.
   const seen = new Map<string, number>();
@@ -239,6 +234,7 @@ export async function executeToolBridgeCalls(
 
   return {
     executedCount: orderedSteps.filter((step) => step.result.ok).length,
+    handledCount: orderedSteps.length,
     requestedCount: total,
     resultMessages: orderedSteps.map((step) => step.resultMessage),
     steps: orderedSteps,
@@ -315,6 +311,28 @@ async function executeResolvedToolCall(
   onToolCallUpdate: ((toolCall: ChatToolCall) => void) | undefined,
   telemetry: ToolBridgeTelemetrySink | undefined,
 ): Promise<ToolExecutionResult> {
+  if (call.argumentsParseError) {
+    const errorMessage = createToolArgumentParseRecoveryMessage(tool, call.argumentsParseError);
+    emitTelemetry(telemetry, { callId: call.id, error: errorMessage, toolId: tool.id, type: "tool-validation-failed" });
+    return {
+      content: errorMessage,
+      error: errorMessage,
+      ok: false,
+    };
+  }
+
+  const validation = validateToolArguments(tool, call.arguments);
+
+  if (!validation.ok || !validation.args) {
+    const errorMessage = validation.error || "Invalid tool arguments.";
+    emitTelemetry(telemetry, { callId: call.id, error: errorMessage, toolId: tool.id, type: "tool-validation-failed" });
+    return {
+      content: errorMessage,
+      error: errorMessage,
+      ok: false,
+    };
+  }
+
   const permission = resolveToolPermission(tool, context);
 
   if (!permission.allowed) {
@@ -359,27 +377,6 @@ async function executeResolvedToolCall(
     if (!decision.approved) {
       return createSkippedResult(decision.reason || permission.reason || "Approval denied.");
     }
-  }
-
-  if (call.argumentsParseError) {
-    emitTelemetry(telemetry, { callId: call.id, error: call.argumentsParseError, toolId: tool.id, type: "tool-validation-failed" });
-    return {
-      content: call.argumentsParseError,
-      error: call.argumentsParseError,
-      ok: false,
-    };
-  }
-
-  const validation = validateToolArguments(tool, call.arguments);
-
-  if (!validation.ok || !validation.args) {
-    const errorMessage = validation.error || "Invalid tool arguments.";
-    emitTelemetry(telemetry, { callId: call.id, error: errorMessage, toolId: tool.id, type: "tool-validation-failed" });
-    return {
-      content: errorMessage,
-      error: errorMessage,
-      ok: false,
-    };
   }
 
   if (context.signal?.aborted) {
@@ -445,14 +442,27 @@ function createSkippedResult(reason: string): ToolExecutionResult {
   };
 }
 
+function createToolArgumentParseRecoveryMessage(tool: ToolDefinition, parseError: string) {
+  const editHint = tool.id.startsWith("files_")
+    ? "No file was changed. Retry the same operation with a valid JSON object. For large text content, keep it inside one JSON string and escape every newline as \\n, quote as \\\", and backslash as \\\\."
+    : "Retry the same tool with a valid JSON object for its arguments.";
+
+  return [
+    `Tool ${tool.id} received invalid JSON arguments.`,
+    parseError,
+    editHint,
+  ].join("\n");
+}
+
 function notifyToolUpdate(callback: ((toolCall: ChatToolCall) => void) | undefined, toolCall: ChatToolCall) {
   if (!callback) {
     return;
   }
+  // A throwing UI handler must not break tool execution.
   try {
     callback(toolCall);
   } catch {
-    // A throwing UI handler must not break tool execution. Swallow and move on.
+    // Intentionally swallow; tool execution must continue.
   }
 }
 
@@ -460,10 +470,11 @@ function emitTelemetry(sink: ToolBridgeTelemetrySink | undefined, event: ToolBri
   if (!sink) {
     return;
   }
+  // Telemetry must never break execution.
   try {
     sink(event);
   } catch {
-    // Telemetry must never break execution.
+    // Intentionally swallow.
   }
 }
 

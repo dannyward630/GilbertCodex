@@ -48,8 +48,8 @@ export function createApprovalSessionDecisionKey(approval: AgentApproval) {
 export function createLocalComputerProgress(status: ChatProgressItem["status"], detail: string): ChatProgressItem {
   return {
     detail,
-    id: "local-tools-disabled",
-    label: "Local tools disabled",
+    id: "local-computer-tools",
+    label: "Tool activity",
     status,
   };
 }

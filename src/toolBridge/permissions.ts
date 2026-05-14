@@ -33,14 +33,11 @@ const HARD_APPROVAL_RISKS: ReadonlySet<ToolBridgeRisk> = new Set([
 ]);
 
 export interface FilterToolsForPermissionOptions {
-  /**
-   * When true, tools that are gated behind an approval flow are returned
-   * alongside tools that are allowed outright. Callers that wire an approval
-   * callback into the orchestrator should pass `true` so the model can
-   * propose those tools and the approval callback can decide. The default is
-   * `false` to preserve the conservative legacy behavior of only advertising
-   * tools the model can execute without further prompting.
-   */
+  // When true, tools gated behind an approval flow are returned alongside
+  // tools that are allowed outright. Callers that wire an approval callback
+  // into the orchestrator should pass `true` so the model can propose those
+  // tools and the approval callback can decide. Defaults to `false` so we
+  // only advertise tools the model can execute without further prompting.
   includePendingApproval?: boolean;
 }
 

@@ -1,7 +1,7 @@
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
-const MAX_ACTIVITY_THINKING_NOTES = 6;
-const MAX_ACTIVITY_THINKING_NOTE_CHARS = 220;
+const MAX_ACTIVITY_THINKING_NOTES = 9;
+const MAX_ACTIVITY_THINKING_NOTE_CHARS = 280;
 const TRIMMED_ACTIVITY_REASONING_PREFIX = "Earlier thinking was summarized for Activity.";
 
 export function splitThinkingContent(content?: string) {
@@ -62,7 +62,7 @@ export function createActivityThinkingNotes(content?: string, options: { maxItem
     notes.push(note);
   }
 
-  return notes.slice(-maxItems);
+  return selectActivityNotes(notes, maxItems);
 }
 
 export function formatThinkingDuration(startedAt?: string, completedAt?: string, now = Date.now()) {
@@ -115,6 +115,7 @@ function createActivityNoteFromSegment(segment: string) {
 
   const lower = cleaned.toLowerCase();
   const paths = extractLikelyPaths(cleaned);
+  const note = createActivityNoteText(cleaned);
 
   if (paths.length > 0) {
     const pathList = paths.slice(0, 2).map((path) => `\`${path}\``).join(", ");
@@ -127,23 +128,73 @@ function createActivityNoteFromSegment(segment: string) {
     }
   }
 
+  if (/\b(scope|goal|request|user asked|trying to|need to understand|looking for)\b/.test(lower)) {
+    return `Scope: ${note}`;
+  }
+
   if (/\b(found|noticed|identified|looks like|appears|issue|problem|bug|cause|error|fails?|blocked)\b/.test(lower)) {
-    return `Found: ${shortenActivityNote(redactFirstPerson(cleaned))}`;
+    return `Found: ${stripLeadingActivityVerbs(note, ["Found", "Noticed", "Identified"])}`;
+  }
+
+  if (/\b(compare|comparing|weigh|weighing|tradeoff|option|alternative|choose|choosing|decide|deciding|prefer|avoid)\b/.test(lower)) {
+    return `Weighing: ${note}`;
+  }
+
+  if (/\b(context|surface|component|state|runtime|provider|request body|message flow|data flow|execution flow)\b/.test(lower)) {
+    return `Context: ${note}`;
   }
 
   if (/\b(solution|fix|approach|plan|next step|needs? to|should|will|going to|ready to)\b/.test(lower)) {
-    return `Next: ${shortenActivityNote(redactFirstPerson(cleaned))}`;
+    return `Next: ${note}`;
   }
 
   if (/\b(test|verify|build|typecheck|lint|run|terminal|command|diff|output|result)\b/.test(lower)) {
-    return `Checking: ${shortenActivityNote(redactFirstPerson(cleaned))}`;
+    return `Checking: ${stripLeadingActivityVerbs(note, ["Checking", "Verifying", "Running", "Testing"])}`;
   }
 
-  if (cleaned.length <= 160 && /[.!?]$/.test(cleaned)) {
-    return shortenActivityNote(redactFirstPerson(cleaned));
+  if (cleaned.length <= 240 && /[.!?]$/.test(cleaned)) {
+    return `Note: ${note}`;
   }
 
   return "";
+}
+
+function selectActivityNotes(notes: string[], maxItems: number) {
+  if (notes.length <= maxItems) {
+    return notes;
+  }
+
+  const leadCount = Math.min(2, Math.floor(maxItems / 3));
+  const leadingNotes = notes.slice(0, leadCount);
+  const trailingNotes = notes.slice(-(maxItems - leadCount));
+
+  return [...leadingNotes, ...trailingNotes];
+}
+
+function createActivityNoteText(segment: string) {
+  return sentenceCase(shortenActivityNote(redactFirstPerson(segment)));
+}
+
+function sentenceCase(note: string) {
+  if (!note) {
+    return note;
+  }
+
+  return preserveKnownToolCasing(`${note.slice(0, 1).toUpperCase()}${note.slice(1)}`);
+}
+
+function stripLeadingActivityVerbs(note: string, verbs: string[]) {
+  const pattern = new RegExp(`^(?:${verbs.join("|")})\\s+(?:that\\s+)?`, "i");
+  const stripped = note.replace(pattern, "").replace(/^the\s+/i, "").trim();
+
+  return stripped ? sentenceCase(stripped) : note;
+}
+
+function preserveKnownToolCasing(note: string) {
+  return note
+    .replace(/^Npm\b/, "npm")
+    .replace(/^Tsc\b/, "tsc")
+    .replace(/^Vite\b/, "Vite");
 }
 
 function cleanActivitySegment(segment: string) {
@@ -178,6 +229,7 @@ function redactFirstPerson(segment: string) {
     .replace(/\b(?:I|we)\s+should\b/gi, "Should")
     .replace(/\b(?:I|we)\s+(?:will|would|can|could)\b/gi, "Will")
     .replace(/\b(?:I'm|I am|we're|we are)\s+going\s+to\b/gi, "Going to")
+    .replace(/\b(?:I'm|I am|we're|we are)\s+(\w+ing)\b/gi, "$1")
     .replace(/\b(?:I'm|I am|we're|we are)\b/gi, "Working")
     .replace(/\b(?:I|we)\s+/gi, "");
 }

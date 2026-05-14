@@ -1,5 +1,6 @@
 import { createPlanningAnswersMessage } from "../services/planningClient";
 import { formatWebSearchProviderLabel } from "../services/webSearchClient";
+import { createVisibleFallbackFromToolCall, shouldToolCallForceSynthesis } from "../toolBridge";
 import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../localWorkspace/localToolRuntimeDisabled";
 import type { LocalComputerToolExecutionPolicy } from "../localWorkspace/localToolRuntimeDisabled";
 import type {
@@ -102,6 +103,14 @@ export function isToolResultFallbackAnswer(content: string) {
     normalized.includes("finished the background work for this request") ||
     normalized.includes("use continue response") ||
     normalized.includes("saved activity") ||
+    normalized.includes("saved in activity") ||
+    normalized.includes("full file content is saved") ||
+    normalized.includes("full listing is saved") ||
+    normalized.includes("full result is saved") ||
+    normalized.includes("workspace tree summary for") ||
+    /\bscanned\s+[\d,]+\s+director(?:y|ies)\s+and\s+[\d,]+\s+files?\s+to\s+depth\b/i.test(content) ||
+    content.includes("Latest completed result:") ||
+    content.includes("The run stopped on this ") ||
     content.includes("I completed the tool work. Here are the saved results:") ||
     content.includes("provider still did not return separate visible answer text")
   );
@@ -119,11 +128,7 @@ export function looksLikeInternalToolRecoveryAnswer(content: string) {
     normalized.includes("check activity for the exact tool result") ||
     normalized.includes("adaptation recommendation") ||
     /\btool\s+\d+\s+\[(?:error|failed|skipped|waiting[_ -]?approval)\]:/i.test(normalized) ||
-    /\b(summary|recap|overview)\b[\s\S]{0,120}\b(tool calls?|tools? (?:i|we|the app|it) (?:ran|used|called|executed)|terminal|git)\b/.test(normalized) ||
-    /\b(i|we|the app)\b[\s\S]{0,80}\b(ran|used|called|executed|completed)\b[\s\S]{0,80}\b(tool calls?|tools?|terminal|git)\b/.test(normalized) ||
-    /\b(tool calls?|tools?|terminal|git)\b[\s\S]{0,100}\b(completed|executed|ran successfully|returned|produced)\b/.test(normalized) ||
-    /\b(provider|app)\b[\s\S]{0,160}\b(visible answer|tool results?|completed tool|saved evidence)\b/.test(normalized) ||
-    /\b(original request|what ran|evidence)\b[\s\S]{0,240}\b(executed|completed|tool call)\b/.test(normalized)
+    /(?:^|\n)\s*(?:#{1,3}\s*)?(?:original request|what ran|evidence)\b[\s\S]{0,240}\b(executed|completed|tool call)\b/.test(normalized)
   );
 }
 
@@ -204,6 +209,13 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
 }
 
 export function createCompletedToolFallbackSummary(toolCall: ChatToolCall, output: string) {
+  if (toolCall.resultPolicy && toolCall.resultPolicy.mode !== "allow_raw") {
+    return createVisibleFallbackFromToolCall({
+      ...toolCall,
+      output,
+    });
+  }
+
   const label = toolCall.label.toLowerCase();
 
   if (/list.*(?:directory|workspace)|(?:directory|workspace).*list/i.test(label)) {
@@ -275,9 +287,9 @@ function createReadFileFallbackSummary(output: string, input?: string) {
   const lineCount = countFallbackLines(output);
 
   return [
-    `Read ${path ? path : "the requested file"} successfully.`,
-    `Content size: ${formatFallbackNumber(output.length)} characters across ${formatFallbackNumber(lineCount)} line${lineCount === 1 ? "" : "s"}.`,
-    "The full file content is saved in Activity and was not pasted into chat.",
+    `I read ${path ? `\`${path}\`` : "the requested file"} successfully.`,
+    `It is ${formatFallbackNumber(output.length)} characters across ${formatFallbackNumber(lineCount)} line${lineCount === 1 ? "" : "s"}.`,
+    "I kept the full file body out of this message so the chat stays readable, but the completed read is available to the current run.",
   ].join("\n");
 }
 
@@ -547,7 +559,17 @@ export function isInterruptedAssistantMessage(message: ChatMessage) {
 
 /** Detects the "tools completed, provider gave no visible answer" case. */
 export function shouldSynthesizeEmptyFinalFromToolResults(content: string, toolCalls: ChatToolCall[] = []) {
-  return !content.trim() && toolCalls.some((toolCall) => toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped");
+  return !content.trim() && toolCalls.some((toolCall) => {
+    if (toolCall.status !== "complete" && toolCall.status !== "error" && toolCall.status !== "skipped") {
+      return false;
+    }
+
+    if (toolCall.resultPolicy) {
+      return shouldToolCallForceSynthesis(toolCall);
+    }
+
+    return true;
+  });
 }
 
 /** Stamps stable display IDs onto tool activity generated during one execution pass. */
@@ -616,7 +638,7 @@ export function withWebSearchProgress(webSearch: ChatWebSearch | undefined, prog
 
 /** Replaces any stale local-tool progress row with the current local-tool state. */
 export function withLocalComputerProgress(localProgress: ChatProgressItem | undefined, progress: ChatProgressItem[] | undefined) {
-  const progressWithoutLocal = (progress ?? []).filter((item) => item.id !== "local-computer-tools");
+  const progressWithoutLocal = (progress ?? []).filter((item) => item.id !== "local-computer-tools" && item.id !== "local-tools-disabled");
   const nextProgress = localProgress ? [...progressWithoutLocal, localProgress] : progressWithoutLocal;
 
   return nextProgress.length > 0 ? nextProgress : undefined;

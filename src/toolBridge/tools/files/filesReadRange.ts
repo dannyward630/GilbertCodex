@@ -1,6 +1,7 @@
 import type { JsonValue, ToolDefinition, ToolExecutionResult } from "../../types";
 import { PathResolutionError, tryResolveAllowedPath } from "../../paths";
 import { defaultFilesBackend, type FilesBackend } from "./backend";
+import { readErrorMessage, readTextFileWithModuleRecovery } from "./readUtils";
 
 export function createFilesReadRangeTool(backend: FilesBackend = defaultFilesBackend): ToolDefinition {
   return {
@@ -39,14 +40,16 @@ export function createFilesReadRangeTool(backend: FilesBackend = defaultFilesBac
       }
 
       try {
-        const file = await backend.readTextFile(resolution.path.resolved);
+        const read = await readTextFileWithModuleRecovery(backend, resolution.path.resolved);
+        const file = read.file;
         const lines = splitLines(file.content);
         const totalLines = lines.length;
 
         if (startLine > totalLines) {
+          const message = `Requested startLine ${startLine} is beyond the end of \`${file.path}\` (${totalLines} line${totalLines === 1 ? "" : "s"}).`;
           return {
-            content: `Requested startLine ${startLine} is beyond the end of ${file.path} (${totalLines} line${totalLines === 1 ? "" : "s"}).`,
-            error: `Requested startLine ${startLine} is beyond the end of ${file.path} (${totalLines} line${totalLines === 1 ? "" : "s"}).`,
+            content: message,
+            error: message,
             ok: false,
           };
         }
@@ -59,9 +62,10 @@ export function createFilesReadRangeTool(backend: FilesBackend = defaultFilesBac
 
         return {
           content: [
-            `Read ${file.path} lines ${startLine}-${actualEndLine} of ${totalLines}.`,
+            read.recoveryNote,
+            `Read \`${file.path}\` lines ${startLine}-${actualEndLine} of ${totalLines}.`,
             content,
-          ].join("\n"),
+          ].filter(Boolean).join("\n"),
           data: {
             content,
             endLine: actualEndLine,
@@ -70,6 +74,8 @@ export function createFilesReadRangeTool(backend: FilesBackend = defaultFilesBac
             lineCount: selectedLines.length,
             name: file.name,
             path: file.path,
+            recoveredFrom: read.recoveredFrom ?? null,
+            recoveryNote: read.recoveryNote ?? null,
             requestedEndLine: endLine,
             requestedStartLine: startLine,
             sha256: file.sha256 ?? null,
@@ -81,7 +87,7 @@ export function createFilesReadRangeTool(backend: FilesBackend = defaultFilesBac
           ok: true,
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Could not read file range.";
+        const message = readErrorMessage(error, "Could not read file range.");
         return {
           content: message,
           error: message,

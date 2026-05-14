@@ -122,6 +122,24 @@ export interface ChatToolCallTerminal {
   workingDirectory?: string;
 }
 
+export type ChatToolResultKind =
+  | "diagnostic"
+  | "edit"
+  | "file_content"
+  | "git"
+  | "search"
+  | "summary"
+  | "terminal"
+  | "unknown";
+
+export type ChatToolResultVisibleMode = "allow_raw" | "safe_summary" | "synthesize";
+
+export interface ChatToolResultPolicy {
+  mode: ChatToolResultVisibleMode;
+  resultKind: ChatToolResultKind;
+  synthesizeAfterwards: boolean;
+}
+
 export interface ChatToolFileChange {
   additions: number;
   deletions: number;
@@ -145,8 +163,10 @@ export interface ChatToolCall {
   input?: string;
   label: string;
   output?: string;
+  resultPolicy?: ChatToolResultPolicy;
   status: ChatToolCallStatus;
   terminal?: ChatToolCallTerminal;
+  toolId?: string;
 }
 
 export type ChatWebSearchStatus = "active" | "complete" | "error";

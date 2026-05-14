@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import { validateToolArguments } from "../validation";
 import { safeStringify } from "../results";
+import { finalizeToolResult, isVisibleToolResultLeak } from "../resultFinalizer";
 
 const context: ToolExecutionContext = {
   model: "test-model",
@@ -73,6 +74,27 @@ describe("tool bridge permissions and registry", () => {
     expect(visibleReadTools).toContain("files_tree_summary");
   });
 
+  it("registers the diagnostic tool smoke test", () => {
+    const registry = createDefaultToolRegistry();
+    const visibleDiagnosticTools = registry
+      .listForContext(context, "openai-compatible")
+      .filter((tool) => tool.executorMetadata?.family === "diagnostic")
+      .map((tool) => tool.id);
+
+    expect(registry.get("tool_smoke_test")).toBeDefined();
+    expect(visibleDiagnosticTools).toContain("tool_smoke_test");
+  });
+
+  it("registers local Git and GitHub bridge tools", () => {
+    const registry = createDefaultToolRegistry();
+
+    expect(registry.get("git_status")).toBeDefined();
+    expect(registry.get("git_diff")).toBeDefined();
+    expect(registry.get("git.commit")?.id).toBe("git_commit");
+    expect(registry.get("github_list_repositories")).toBeDefined();
+    expect(registry.get("github.read_file")?.id).toBe("github_read_file");
+  });
+
   it("resolves common file tool aliases without advertising duplicate tools", () => {
     const registry = createDefaultToolRegistry();
     const advertisedToolIds = registry.listForContext(context, "openai-compatible").map((tool) => tool.id);
@@ -82,6 +104,9 @@ describe("tool bridge permissions and registry", () => {
     expect(registry.get("grep")?.id).toBe("files_search");
     expect(registry.get("ls")?.id).toBe("files_list");
     expect(registry.get("tree")?.id).toBe("files_tree_summary");
+    expect(registry.get("files_edit")?.id).toBe("files_exact_replace");
+    expect(registry.get("file_edit")?.id).toBe("files_exact_replace");
+    expect(registry.get("files_applypatch")?.id).toBe("files_apply_patch");
     expect(advertisedToolIds).toContain("files_read");
     expect(advertisedToolIds).toContain("files_search");
     expect(advertisedToolIds).toContain("files_tree_summary");
@@ -186,6 +211,29 @@ describe("tool bridge validation", () => {
     expect(validateToolArguments(readTool!, { maxBytes: 0, path: "src/app/App.tsx" }).ok).toBe(false);
   });
 
+  it("normalizes primitive string arguments before validation", () => {
+    const readTool = createDefaultToolRegistry().get("files_read");
+    const rangeTool = createDefaultToolRegistry().get("files_read_range");
+    const replaceTool = createDefaultToolRegistry().get("files_exact_replace");
+
+    expect(readTool).toBeDefined();
+    expect(rangeTool).toBeDefined();
+    expect(replaceTool).toBeDefined();
+
+    const readValidation = validateToolArguments(readTool!, { maxBytes: "3000", offset: "820", path: "src/app/App.tsx" });
+    const rangeValidation = validateToolArguments(rangeTool!, { endLine: "20", path: "src/app/App.tsx", startLine: "10" });
+    const replaceValidation = validateToolArguments(replaceTool!, {
+      newText: "new",
+      oldText: "old",
+      path: "src/app/App.tsx",
+      replaceAll: "false",
+    });
+
+    expect(readValidation).toMatchObject({ ok: true, args: { maxBytes: 3000, offset: 820 } });
+    expect(rangeValidation).toMatchObject({ ok: true, args: { endLine: 20, startLine: 10 } });
+    expect(replaceValidation).toMatchObject({ ok: true, args: { replaceAll: false } });
+  });
+
   it("returns a clear error when arguments are a raw string", () => {
     const sumTool = createDefaultToolRegistry().get("bridge_sum")!;
 
@@ -193,6 +241,91 @@ describe("tool bridge validation", () => {
 
     expect(validation.ok).toBe(false);
     expect(validation.error).toContain("could not be parsed as JSON");
+  });
+});
+
+describe("tool bridge diagnostics", () => {
+  it("runs the in-memory tool smoke test", async () => {
+    const tool = createDefaultToolRegistry().get("tool_smoke_test");
+
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({}, context);
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("Tool smoke test passed");
+    expect(result.content).toContain("Full HTML read is Activity-only visible");
+    expect(result.content).toContain("Malformed write returns recovery error without mutation");
+    expect(result.content).toContain("Exact replace coerces string booleans");
+    expect(result.content).toContain("Git status and diff report cleanly");
+    expect(result.content).toContain("Payload guardrail identifies spike cause");
+  });
+});
+
+describe("tool result finalizer", () => {
+  it("keeps raw file content for Activity and provider evidence while forcing visible synthesis", () => {
+    const finalization = finalizeToolResult({
+      arguments: { path: "src/app/App.tsx" },
+      maxProviderChars: 12,
+      result: { content: "abcdefghijklmnopqrstuvwxyz", ok: true },
+      toolId: "files_read",
+    });
+
+    expect(finalization.activityContent).toBe("abcdefghijklmnopqrstuvwxyz");
+    expect(finalization.providerContent).toContain("truncated for provider context");
+    expect(finalization.visiblePolicy).toMatchObject({
+      mode: "synthesize",
+      resultKind: "file_content",
+      synthesizeAfterwards: true,
+    });
+    expect(finalization.visibleFallback).toContain("Read `src/app/App.tsx`.");
+  });
+
+  it("detects metadata-backed raw Activity recaps as unsafe visible chat content", () => {
+    const finalization = finalizeToolResult({
+      arguments: { path: "C:\\repo" },
+      result: {
+        content: [
+          "Workspace tree summary for C:\\repo",
+          "Scanned 2 directories and 6 files to depth 4.",
+          "repo/ (3 files)",
+        ].join("\n"),
+        ok: true,
+      },
+      toolId: "files_tree_summary",
+    });
+
+    expect(isVisibleToolResultLeak(finalization.activityContent, [{
+      id: "tool-tree",
+      input: JSON.stringify({ path: "C:\\repo" }),
+      label: "Workspace tree summary",
+      output: finalization.activityContent,
+      resultPolicy: finalization.visiblePolicy,
+      status: "complete",
+      toolId: "files_tree_summary",
+    }])).toBe(true);
+  });
+
+  it("allows raw output only for tools whose policy explicitly permits it", () => {
+    const finalization = finalizeToolResult({
+      arguments: { message: "hello" },
+      result: { content: "hello", ok: true },
+      toolId: "bridge_echo",
+    });
+
+    expect(finalization.visiblePolicy).toMatchObject({
+      mode: "allow_raw",
+      synthesizeAfterwards: false,
+    });
+    expect(isVisibleToolResultLeak("hello", [{
+      id: "tool-echo",
+      input: JSON.stringify({ message: "hello" }),
+      label: "Echo diagnostic",
+      output: "hello",
+      resultPolicy: finalization.visiblePolicy,
+      status: "complete",
+      toolId: "bridge_echo",
+    }])).toBe(false);
   });
 });
 
@@ -446,6 +579,7 @@ describe("tool bridge orchestrator", () => {
 
     expect(batch.requestedCount).toBe(2);
     expect(batch.executedCount).toBe(2);
+    expect(batch.handledCount).toBe(2);
     expect(batch.resultMessages.map((message) => message.result.content)).toEqual(["hi", "7"]);
   });
 
@@ -475,6 +609,65 @@ describe("tool bridge orchestrator", () => {
 
     expect(batch.toolCalls[0]?.status).toBe("error");
     expect(batch.resultMessages[0]?.result.error).toContain("Could not parse");
+  });
+
+  it("does not request approval for a malformed mutating tool call", async () => {
+    const approval = vi.fn(() => ({ approved: true }));
+    const batch = await executeToolBridgeCalls({
+      approval,
+      calls: [
+        {
+          arguments: {},
+          argumentsParseError: "Could not parse tool arguments as JSON: Bad control character in string literal",
+          id: "call-bad-write-json",
+          name: "files_write",
+          provider: "openai",
+        },
+      ],
+      context,
+    });
+
+    expect(approval).not.toHaveBeenCalled();
+    expect(batch.executedCount).toBe(0);
+    expect(batch.handledCount).toBe(1);
+    expect(batch.toolCalls[0]?.status).toBe("error");
+    expect(batch.resultMessages[0]?.result.error).toContain("No file was changed");
+  });
+
+  it("continues the tool loop after a malformed tool call result", async () => {
+    let sendCount = 0;
+    const orchestrator = new ToolBridgeOrchestrator({
+      context,
+      send: async ({ toolResultMessages }) => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                arguments: {},
+                argumentsParseError: "Could not parse tool arguments as JSON: Unterminated string",
+                id: "call-bad-write-json",
+                name: "files_write",
+                provider: "openai",
+              },
+            ],
+          };
+        }
+
+        return {
+          content: `Recovered from: ${toolResultMessages[0]?.result.error}`,
+        };
+      },
+    });
+
+    const result = await orchestrator.run();
+
+    expect(sendCount).toBe(2);
+    expect(result.resultMessages).toHaveLength(1);
+    expect(result.resultMessages[0]?.result.ok).toBe(false);
+    expect(result.content).toContain("Recovered from:");
+    expect(result.content).toContain("invalid JSON arguments");
   });
 
   it("stops repeated tool loops at the max loop count and keeps the last content", async () => {

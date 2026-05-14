@@ -103,6 +103,31 @@ describe("files_read", () => {
     expect(observed).toBe(999_999_999);
   });
 
+  it("passes an explicit byte offset through for chunked reads", async () => {
+    let observedMaxBytes = -1;
+    let observedOffset = -1;
+    const backend = makeBackend({
+      readTextFile: async (_path, maxBytes, offset) => {
+        observedMaxBytes = maxBytes ?? -1;
+        observedOffset = offset ?? -1;
+        return {
+          content: "chunk",
+          name: "x",
+          path: _path,
+          size: 4096,
+          truncated: true,
+        } satisfies ComputerReadFileResult;
+      },
+    });
+    const tool = createFilesReadTool(backend);
+    const result = await tool.execute({ maxBytes: 3000, offset: 820, path: "x.txt" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(observedMaxBytes).toBe(3000);
+    expect(observedOffset).toBe(820);
+    expect(result.data).toMatchObject({ offset: 820, truncated: true });
+  });
+
   it("returns a clean error when the backend throws", async () => {
     const backend = makeBackend({
       readTextFile: async () => {
@@ -113,7 +138,58 @@ describe("files_read", () => {
     const result = await tool.execute({ path: "image.png" }, makeContext());
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("File looks binary");
+    expect(result.error).toContain("File looks binary");
+    expect(result.error).toContain(`${ROOT}/image.png`);
+  });
+
+  it("recovers a module entry when a stale file path points at a sibling folder", async () => {
+    const requestedPath = `${ROOT}/src/toolBridge/adapters.ts`;
+    const recoveredPath = `${ROOT}/src/toolBridge/adapters/index.ts`;
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        if (path === `${ROOT}/src/toolBridge/adapters`) {
+          return {
+            entries: [
+              { extension: "ts", kind: "file", name: "index.ts", path: recoveredPath, size: 24 },
+              { extension: "ts", kind: "file", name: "responses.ts", path: `${ROOT}/src/toolBridge/adapters/responses.ts`, size: 48 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: `${ROOT}/src/toolBridge`,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("not a directory");
+      },
+      readTextFile: async (path) => {
+        if (path === recoveredPath) {
+          return {
+            content: "export const adapter = true;",
+            extension: "ts",
+            name: "index.ts",
+            path,
+            size: 28,
+            truncated: false,
+          } satisfies ComputerReadFileResult;
+        }
+
+        expect(path).toBe(requestedPath);
+        throw new Error("file not found");
+      },
+    });
+    const tool = createFilesReadTool(backend);
+    const result = await tool.execute({ path: "src/toolBridge/adapters.ts" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(`Requested \`${requestedPath}\` could not be read`);
+    expect(result.content).toContain(`Recovered module entry \`${recoveredPath}\`.`);
+    expect(result.content).toContain("export const adapter = true;");
+    expect(result.data).toMatchObject({
+      path: recoveredPath,
+      recoveredFrom: requestedPath,
+      recoveryNote: expect.stringContaining("Recovered module entry"),
+    });
   });
 
   it("flows through the orchestrator and surfaces validation errors", async () => {
@@ -329,7 +405,62 @@ describe("files_read_many", () => {
 
     expect(result.ok).toBe(true);
     expect(data.files.map((file) => file.ok)).toEqual([true, false]);
-    expect(data.files[1]?.error).toBe("file not found");
+    expect(data.files[1]?.error).toContain("file not found");
+  });
+
+  it("keeps per-file results when one batch read recovers a module entry", async () => {
+    const requestedPath = `${ROOT}/src/toolBridge/adapters.ts`;
+    const recoveredPath = `${ROOT}/src/toolBridge/adapters/index.ts`;
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        if (path === `${ROOT}/src/toolBridge/adapters`) {
+          return {
+            entries: [{ extension: "ts", kind: "file", name: "index.ts", path: recoveredPath, size: 24 }],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: `${ROOT}/src/toolBridge`,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("not a directory");
+      },
+      readTextFile: async (path) => {
+        if (path === recoveredPath) {
+          return {
+            content: "export * from './responses';",
+            extension: "ts",
+            name: "index.ts",
+            path,
+            size: 26,
+            truncated: false,
+          } satisfies ComputerReadFileResult;
+        }
+
+        if (path === `${ROOT}/src/ok.ts`) {
+          return {
+            content: "export const ok = true;",
+            extension: "ts",
+            name: "ok.ts",
+            path,
+            size: 23,
+            truncated: false,
+          } satisfies ComputerReadFileResult;
+        }
+
+        expect(path).toBe(requestedPath);
+        throw new Error("file not found");
+      },
+    });
+    const tool = createFilesReadManyTool(backend);
+    const result = await tool.execute({ paths: ["src/toolBridge/adapters.ts", "src/ok.ts"] }, makeContext());
+    const data = result.data as { files: Array<{ ok: boolean; path?: string; recoveredFrom?: string }> };
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(`\`${recoveredPath}\` (recovered from \`${requestedPath}\`)`);
+    expect(result.content).toContain("export * from './responses';");
+    expect(data.files[0]).toMatchObject({ ok: true, path: recoveredPath, recoveredFrom: requestedPath });
+    expect(data.files[1]).toMatchObject({ ok: true, path: `${ROOT}/src/ok.ts` });
   });
 });
 
@@ -349,7 +480,7 @@ describe("files_read_range", () => {
     const result = await tool.execute({ endLine: 3, path: "src/sample.ts", startLine: 2 }, makeContext());
 
     expect(result.ok).toBe(true);
-    expect(result.content).toContain(`Read ${ROOT}/src/sample.ts lines 2-3 of 4.`);
+    expect(result.content).toContain(`Read \`${ROOT}/src/sample.ts\` lines 2-3 of 4.`);
     expect(result.content).toContain("2: two\n3: three");
     expect(result.data).toMatchObject({
       endLine: 3,
@@ -376,6 +507,53 @@ describe("files_read_range", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("beyond the end");
+  });
+
+  it("recovers module entries before slicing an exact line range", async () => {
+    const requestedPath = `${ROOT}/src/toolBridge/adapters.ts`;
+    const recoveredPath = `${ROOT}/src/toolBridge/adapters/index.ts`;
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        if (path === `${ROOT}/src/toolBridge/adapters`) {
+          return {
+            entries: [{ extension: "ts", kind: "file", name: "index.ts", path: recoveredPath, size: 64 }],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: `${ROOT}/src/toolBridge`,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("not a directory");
+      },
+      readTextFile: async (path) => {
+        if (path === recoveredPath) {
+          return {
+            content: "export { anthropicAdapter } from './anthropic';\nexport { responsesAdapter } from './responses';\n",
+            extension: "ts",
+            name: "index.ts",
+            path,
+            size: 88,
+            truncated: false,
+          } satisfies ComputerReadFileResult;
+        }
+
+        expect(path).toBe(requestedPath);
+        throw new Error("file not found");
+      },
+    });
+    const tool = createFilesReadRangeTool(backend);
+    const result = await tool.execute({ endLine: 2, path: "src/toolBridge/adapters.ts", startLine: 2 }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(`Recovered module entry \`${recoveredPath}\`.`);
+    expect(result.content).toContain(`Read \`${recoveredPath}\` lines 2-2 of 2.`);
+    expect(result.content).toContain("2: export { responsesAdapter } from './responses';");
+    expect(result.data).toMatchObject({
+      path: recoveredPath,
+      recoveredFrom: requestedPath,
+      startLine: 2,
+    });
   });
 });
 
@@ -466,7 +644,7 @@ describe("files_search", () => {
 
     expect(result.ok).toBe(true);
     expect(readCalled).toBe(false);
-    expect(result.content).toContain(`${ROOT}/permissions.ts (path match)`);
+    expect(result.content).toContain(`\`${ROOT}/permissions.ts\` (path match)`);
     expect(result.content).not.toContain(`${ROOT}/registry.ts`);
   });
 

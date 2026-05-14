@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
-import { createCompletedToolFallbackSummary, looksLikeToolProtocolNarration, shouldSynthesizeEmptyFinalFromToolResults } from "./chatRuntime";
+import {
+  createCompletedToolFallbackSummary,
+  looksLikeInternalToolRecoveryAnswer,
+  looksLikeToolProtocolNarration,
+  shouldSynthesizeEmptyFinalFromToolResults,
+  withLocalComputerProgress,
+} from "./chatRuntime";
 
 describe("tool protocol leak guards", () => {
   it("detects unterminated XML-style tool call fragments", () => {
@@ -16,6 +22,63 @@ describe("tool protocol leak guards", () => {
     ].join("\n\n");
 
     expect(sanitizeLocalToolCallsForDisplay(content)).toBe("Let me read that file.");
+  });
+});
+
+describe("final answer recovery guards", () => {
+  it("does not reject normal final answers just because they mention tools or verification", () => {
+    const content = [
+      "Fixed. The read tool now recovers stale module paths such as `src/toolBridge/adapters.ts` to `src/toolBridge/adapters/index.ts`.",
+      "",
+      "Verified with `npm.cmd run test:tool-bridge`, `tsc --noEmit`, and the full app check.",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(false);
+  });
+
+  it("does not reject a normal explanation of the app finalization loop", () => {
+    const content = [
+      "The app was treating a valid visible answer as if it were internal tool-result recovery text.",
+      "That made it blank the assistant message and ask the provider to rewrite the answer again.",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(false);
+  });
+
+  it("still rejects explicit app fallback prose", () => {
+    expect(looksLikeInternalToolRecoveryAnswer("I completed the tool work. Here are the saved results:")).toBe(true);
+  });
+
+  it("rejects latest-completed-result fallback summaries so they can be continued", () => {
+    const content = [
+      "Latest completed result: Read workspace file",
+      "",
+      "Read C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src-tauri\\src\\app.rs successfully.",
+      "The full file content is saved in Activity and was not pasted into chat.",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+  });
+
+  it("rejects read fallback summaries even without the legacy latest-result prefix", () => {
+    const content = [
+      "Read C:\\Users\\Kobe Work\\Documents\\HelloWorld\\skyline-ridge.html successfully.",
+      "Content size: 18,029 characters across 189 lines.",
+      "The full file content is saved in Activity and was not pasted into chat.",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+  });
+
+  it("rejects raw workspace tree summaries so they can be synthesized", () => {
+    const content = [
+      "Workspace tree summary for C:\\Users\\Kobe Work\\Documents\\GilbertBusiness",
+      "Scanned 2 directories and 6 files to depth 4.",
+      "Top file types: jsx 2; css 1; html 1; js 1; json 1.",
+      "GilbertBusiness/ (3 files)",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
   });
 });
 
@@ -70,5 +133,85 @@ describe("empty final answer recovery", () => {
         status: "waiting_approval",
       },
     ])).toBe(false);
+  });
+
+  it("honors result finalizer metadata when deciding whether blank content needs synthesis", () => {
+    expect(shouldSynthesizeEmptyFinalFromToolResults("", [
+      {
+        id: "tool-smoke",
+        label: "Run tool smoke test",
+        output: "Tool smoke test passed.",
+        resultPolicy: {
+          mode: "safe_summary",
+          resultKind: "diagnostic",
+          synthesizeAfterwards: false,
+        },
+        status: "complete",
+        toolId: "tool_smoke_test",
+      },
+    ])).toBe(false);
+
+    expect(shouldSynthesizeEmptyFinalFromToolResults("", [
+      {
+        id: "tool-read",
+        label: "Read workspace file",
+        output: "full file body",
+        resultPolicy: {
+          mode: "synthesize",
+          resultKind: "file_content",
+          synthesizeAfterwards: true,
+        },
+        status: "complete",
+        toolId: "files_read",
+      },
+    ])).toBe(true);
+  });
+});
+
+describe("local progress rows", () => {
+  it("replaces legacy and current local-tool progress rows instead of stacking them", () => {
+    const progress = withLocalComputerProgress(
+      {
+        detail: "1 bridge tool ran",
+        id: "local-computer-tools",
+        label: "Tool activity",
+        status: "complete",
+      },
+      [
+        {
+          detail: "Stopped when the app reloaded.",
+          id: "local-tools-disabled",
+          label: "Local tools disabled",
+          status: "complete",
+        },
+        {
+          detail: "0 bridge tools ran",
+          id: "local-computer-tools",
+          label: "Tool activity",
+          status: "complete",
+        },
+        {
+          detail: "1 source",
+          id: "web-search",
+          label: "Search DuckDuckGo",
+          status: "complete",
+        },
+      ],
+    );
+
+    expect(progress).toEqual([
+      {
+        detail: "1 source",
+        id: "web-search",
+        label: "Search DuckDuckGo",
+        status: "complete",
+      },
+      {
+        detail: "1 bridge tool ran",
+        id: "local-computer-tools",
+        label: "Tool activity",
+        status: "complete",
+      },
+    ]);
   });
 });

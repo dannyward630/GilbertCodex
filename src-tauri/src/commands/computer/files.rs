@@ -10,7 +10,7 @@ use std::{
     collections::{hash_map::DefaultHasher, HashMap, VecDeque},
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::{
@@ -280,6 +280,41 @@ pub struct ComputerGitPushRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComputerGitPullRequest {
+    pub branch: Option<String>,
+    pub path: String,
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitStageRequest {
+    pub path: String,
+    pub paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitDiffRequest {
+    pub include_untracked: Option<bool>,
+    pub max_bytes: Option<usize>,
+    pub path: String,
+    pub paths: Option<Vec<String>>,
+    pub staged: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerGitDiffResult {
+    pub diff: String,
+    pub path: String,
+    pub repository_root: String,
+    pub status: ComputerGitStatus,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComputerGitWorktreeRequest {
     pub branch_name: Option<String>,
     pub directory_name: Option<String>,
@@ -374,6 +409,7 @@ pub struct ComputerSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct ComputerReadFileRequest {
     pub max_bytes: Option<usize>,
+    pub offset: Option<u64>,
     pub path: String,
 }
 
@@ -783,6 +819,36 @@ pub async fn computer_git_push(
         .map_err(|error| format!("The Git push worker stopped unexpectedly: {}", error))?
 }
 
+/// Pulls the current local Git branch with fast-forward only semantics.
+#[tauri::command]
+pub async fn computer_git_pull(
+    request: ComputerGitPullRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_pull_blocking(request))
+        .await
+        .map_err(|error| format!("The Git pull worker stopped unexpectedly: {}", error))?
+}
+
+/// Stages local Git changes for a workspace root.
+#[tauri::command]
+pub async fn computer_git_stage(
+    request: ComputerGitStageRequest,
+) -> Result<ComputerGitActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_stage_blocking(request))
+        .await
+        .map_err(|error| format!("The Git stage worker stopped unexpectedly: {}", error))?
+}
+
+/// Returns a full local Git diff for a workspace root.
+#[tauri::command]
+pub async fn computer_git_diff(
+    request: ComputerGitDiffRequest,
+) -> Result<ComputerGitDiffResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git_diff_blocking(request))
+        .await
+        .map_err(|error| format!("The Git diff worker stopped unexpectedly: {}", error))?
+}
+
 /// Creates a sibling Git worktree on a fresh branch for a forked conversation.
 #[tauri::command]
 pub async fn computer_git_create_worktree(
@@ -1053,6 +1119,125 @@ fn git_push_blocking(request: ComputerGitPushRequest) -> Result<ComputerGitActio
     })
 }
 
+fn git_pull_blocking(request: ComputerGitPullRequest) -> Result<ComputerGitActionResult, String> {
+    let repository_path = resolve_git_repository_path(&request.path)?;
+    let remote = request
+        .remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("origin")
+        .to_string();
+    validate_git_remote_name(&remote)?;
+
+    let branch = request
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if let Some(branch_name) = branch.as_deref() {
+        validate_git_branch_name(&repository_path, branch_name)?;
+    }
+
+    let output = if let Some(branch_name) = branch.as_deref() {
+        run_git(
+            &repository_path,
+            &["pull", "--ff-only", &remote, branch_name],
+        )?
+    } else {
+        run_git(&repository_path, &["pull", "--ff-only"])?
+    };
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: branch
+            .map(|branch_name| format!("Pulled {} from {}.", branch_name, remote))
+            .unwrap_or_else(|| "Pulled current branch.".to_string()),
+        output: optional_git_output(output),
+        status,
+    })
+}
+
+fn git_stage_blocking(request: ComputerGitStageRequest) -> Result<ComputerGitActionResult, String> {
+    let repository_path = resolve_git_repository_path(&request.path)?;
+    let pathspecs = normalize_git_pathspecs(&repository_path, request.paths.as_deref())?;
+    let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
+
+    args.extend(pathspecs.iter().cloned());
+    let output = run_git_owned(&repository_path, &args)?;
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: None,
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitActionResult {
+        message: if pathspecs.is_empty() {
+            "Staged all local changes.".to_string()
+        } else {
+            format!(
+                "Staged {} path{}.",
+                pathspecs.len(),
+                if pathspecs.len() == 1 { "" } else { "s" }
+            )
+        },
+        output: optional_git_output(output),
+        status,
+    })
+}
+
+fn git_diff_blocking(request: ComputerGitDiffRequest) -> Result<ComputerGitDiffResult, String> {
+    let repository_path = resolve_git_repository_path(&request.path)?;
+    let pathspecs = normalize_git_pathspecs(&repository_path, request.paths.as_deref())?;
+    let staged_only = request.staged.unwrap_or(false);
+    let include_untracked = request.include_untracked.unwrap_or(true);
+    let mut sections = Vec::new();
+
+    if staged_only {
+        let staged_diff = run_git_diff_command(&repository_path, true, &pathspecs)?;
+        if !staged_diff.trim().is_empty() {
+            sections.push(staged_diff);
+        }
+    } else {
+        let working_diff = run_git_diff_command(&repository_path, false, &pathspecs)?;
+        let staged_diff = run_git_diff_command(&repository_path, true, &pathspecs)?;
+
+        if !working_diff.trim().is_empty() {
+            sections.push(working_diff);
+        }
+
+        if !staged_diff.trim().is_empty() {
+            sections.push(staged_diff);
+        }
+    }
+
+    if include_untracked && !staged_only {
+        let untracked_diff = create_untracked_git_diff(&repository_path, &pathspecs)?;
+        if !untracked_diff.trim().is_empty() {
+            sections.push(untracked_diff);
+        }
+    }
+
+    let raw_diff = sections.join("\n");
+    let (diff, truncated) = limit_git_diff_output(raw_diff, request.max_bytes);
+    let status = get_git_status_blocking(ComputerGitStatusRequest {
+        include_diff_preview: Some(true),
+        path: path_to_string(&repository_path),
+    })?;
+
+    Ok(ComputerGitDiffResult {
+        diff,
+        path: path_to_string(&normalize_input_path(&request.path)),
+        repository_root: path_to_string(&repository_path),
+        status,
+        truncated,
+    })
+}
+
 fn git_create_worktree_blocking(
     request: ComputerGitWorktreeRequest,
 ) -> Result<ComputerGitWorktreeResult, String> {
@@ -1183,18 +1368,35 @@ fn computer_read_text_file_blocking(
     let mut file = File::open(&path)
         .map_err(|error| format!("Could not open {}: {}", path_to_string(&path), error))?;
     let mut buffer = Vec::new();
+    let offset = request.offset.unwrap_or(0);
+
+    if offset > metadata.len() {
+        return Err(format!(
+            "Requested offset {} is beyond the end of {} ({} bytes).",
+            offset,
+            path_to_string(&path),
+            metadata.len()
+        ));
+    }
+
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| format!("Could not seek {}: {}", path_to_string(&path), error))?;
+    }
+
+    let remaining_bytes = metadata.len().saturating_sub(offset);
     let truncated = if let Some(max_bytes) = request.max_bytes.filter(|value| *value > 0) {
         buffer.resize(max_bytes.saturating_add(1), 0);
         let bytes_read = file
             .read(&mut buffer)
             .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
-        let truncated = bytes_read > max_bytes || metadata.len() > max_bytes as u64;
+        let truncated = offset > 0 || bytes_read > max_bytes || remaining_bytes > max_bytes as u64;
         buffer.truncate(bytes_read.min(max_bytes));
         truncated
     } else {
         file.read_to_end(&mut buffer)
             .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
-        false
+        offset > 0
     };
 
     if buffer.contains(&0) {
@@ -2543,6 +2745,14 @@ fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
     )
 }
 
+fn run_git_owned(path: &Path, args: &[String]) -> Result<String, String> {
+    run_git_owned_with_timeout(
+        path,
+        args,
+        Duration::from_millis(GIT_DEFAULT_COMMAND_TIMEOUT_MS),
+    )
+}
+
 fn run_git_quick(path: &Path, args: &[&str]) -> Result<String, String> {
     run_git_with_timeout(
         path,
@@ -2552,6 +2762,50 @@ fn run_git_quick(path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_with_timeout(path: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run git: {}", error))?;
+
+    let started_at = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("Could not read git output: {}", error))?;
+                return parse_git_output(output);
+            }
+            Ok(None) if started_at.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "Git timed out after {}s while running: git {}",
+                    timeout.as_secs().max(1),
+                    args.join(" ")
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => return Err(format!("Could not poll git: {}", error)),
+        }
+    }
+}
+
+fn run_git_owned_with_timeout(
+    path: &Path,
+    args: &[String],
+    timeout: Duration,
+) -> Result<String, String> {
     let mut command = Command::new("git");
 
     #[cfg(windows)]
@@ -2645,6 +2899,169 @@ fn validate_git_remote_name(remote: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn normalize_git_pathspecs(
+    repository_path: &Path,
+    paths: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    let Some(paths) = paths else {
+        return Ok(Vec::new());
+    };
+    let mut pathspecs = Vec::new();
+
+    for raw_path in paths {
+        let trimmed = raw_path.trim();
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.chars().any(char::is_control) {
+            return Err("Git path filters cannot contain control characters.".to_string());
+        }
+
+        let candidate = Path::new(trimmed);
+        let pathspec = if candidate.is_absolute() {
+            let absolute_path = normalize_input_path(trimmed);
+            let relative_path = absolute_path.strip_prefix(repository_path).map_err(|_| {
+                format!(
+                    "{} is outside the Git repository {}.",
+                    path_to_string(&absolute_path),
+                    path_to_string(repository_path)
+                )
+            })?;
+
+            relative_path.to_string_lossy().replace('\\', "/")
+        } else {
+            trimmed.replace('\\', "/")
+        };
+        let cleaned = pathspec
+            .trim_start_matches("./")
+            .trim_matches('/')
+            .to_string();
+
+        if cleaned.is_empty() {
+            continue;
+        }
+
+        if cleaned == ".." || cleaned.starts_with("../") || cleaned.contains("/../") {
+            return Err("Git path filters must stay inside the repository.".to_string());
+        }
+
+        pathspecs.push(cleaned);
+    }
+
+    pathspecs.sort();
+    pathspecs.dedup();
+    Ok(pathspecs)
+}
+
+fn run_git_diff_command(
+    repository_path: &Path,
+    staged: bool,
+    pathspecs: &[String],
+) -> Result<String, String> {
+    let mut args = vec![
+        "diff".to_string(),
+        "--no-ext-diff".to_string(),
+        "--no-color".to_string(),
+        "--find-renames".to_string(),
+    ];
+
+    if staged {
+        args.push("--cached".to_string());
+    }
+
+    args.push("--".to_string());
+    args.extend(pathspecs.iter().cloned());
+
+    run_git_owned(repository_path, &args)
+}
+
+fn create_untracked_git_diff(
+    repository_path: &Path,
+    pathspecs: &[String],
+) -> Result<String, String> {
+    let mut args = vec![
+        "ls-files".to_string(),
+        "--others".to_string(),
+        "--exclude-standard".to_string(),
+        "-z".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(pathspecs.iter().cloned());
+    let output = run_git_owned(repository_path, &args)?;
+    let mut sections = Vec::new();
+
+    for path in output.split('\0').filter(|value| !value.trim().is_empty()) {
+        if let Some(diff) = create_untracked_git_full_diff(repository_path, path) {
+            sections.push(diff);
+        }
+    }
+
+    Ok(sections.join("\n"))
+}
+
+fn create_untracked_git_full_diff(repository_path: &Path, path: &str) -> Option<String> {
+    let absolute_path = repository_path.join(path);
+    let bytes = std::fs::read(&absolute_path).ok()?;
+
+    if bytes.iter().take(8192).any(|byte| *byte == 0) {
+        return Some(format!(
+            "diff --git a/{0} b/{0}\nnew file mode 100644\nBinary files /dev/null and b/{0} differ",
+            path
+        ));
+    }
+
+    let content = String::from_utf8(bytes).ok()?;
+    let line_count = if content.is_empty() {
+        0
+    } else {
+        content.lines().count().max(1)
+    };
+    let mut diff = format!(
+        "diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n",
+        path, line_count
+    );
+
+    for line in content.lines() {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+
+    if content.ends_with('\n') {
+        // `lines()` omits the trailing empty segment, which is correct for diff
+        // display. Keep the final newline already written by the last line.
+    } else if !content.is_empty() {
+        diff.push_str("\\ No newline at end of file\n");
+    }
+
+    Some(diff)
+}
+
+fn limit_git_diff_output(diff: String, max_bytes: Option<usize>) -> (String, bool) {
+    let Some(max_bytes) = max_bytes else {
+        return (diff, false);
+    };
+
+    if max_bytes == 0 || diff.len() <= max_bytes {
+        return (diff, false);
+    }
+
+    let mut end = max_bytes.min(diff.len());
+    while end > 0 && !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let marker = format!(
+        "\n[Git diff truncated after {} bytes by request.]",
+        max_bytes
+    );
+    let mut truncated = diff[..end].trim_end().to_string();
+    truncated.push_str(&marker);
+    (truncated, true)
 }
 
 fn create_unique_worktree_branch_name(

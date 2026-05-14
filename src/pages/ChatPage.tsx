@@ -137,6 +137,7 @@ export function ChatPage({
   const [gitReviewOpen, setGitReviewOpen] = useState(false);
   const rightRailHasActivity = useMemo(() => chatHasLiveRightRailActivity(chat), [chat]);
   const rightRailHasContent = useMemo(() => chatHasRightRailContent(chat), [chat]);
+  const handleOpenActivity = useCallback(() => setRightRailOpen(true), []);
   const queuedMessages = useMemo(() => getQueuedMessages(chat.messages), [chat.messages]);
   const emptyChat = chat.messages.length === 0;
   const conversationMainStyle = {
@@ -302,12 +303,6 @@ export function ChatPage({
   );
 
   useEffect(() => {
-    if (rightRailHasActivity) {
-      setRightRailOpen(true);
-    }
-  }, [chat.id, rightRailHasActivity]);
-
-  useEffect(() => {
     setGitReviewOpen(false);
   }, [chat.id]);
 
@@ -457,7 +452,7 @@ export function ChatPage({
                 chat={chat}
                 hasApiKey={hasApiKey}
                 onHeaderBlurChange={setHeaderBlurActive}
-                onOpenActivity={() => setRightRailOpen(true)}
+                onOpenActivity={rightRailHasContent ? handleOpenActivity : undefined}
                 onRequestPlanRevision={onRequestPlanRevision}
                 onRegenerateResponse={onRegenerateResponse}
                 onResolveToolApproval={onResolveToolApproval}

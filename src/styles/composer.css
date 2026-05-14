@@ -16,7 +16,8 @@
 }
 
 .composer-shell:has(.composer-popover),
-.composer-shell:has(.composer-submenu) {
+.composer-shell:has(.composer-submenu),
+.composer-shell:has(.composer-queue-menu) {
   z-index: 46;
 }
 
@@ -115,12 +116,6 @@
   outline: 0;
 }
 
-.composer-change-root .composer-popover-branch {
-  top: calc(100% + 8px);
-  bottom: auto;
-  left: 12px;
-}
-
 .composer-input-wrap {
   display: block;
   border-radius: 24px 24px 0 0;
@@ -128,8 +123,10 @@
 }
 
 .composer-queue-tray {
+  position: relative;
+  z-index: 9;
   display: grid;
-  overflow: hidden;
+  overflow: visible;
   border-bottom: 1px solid color-mix(in srgb, var(--composer-border) 72%, transparent);
   border-radius: 24px 24px 0 0;
   background:
@@ -250,7 +247,7 @@
 .composer-queue-menu {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
+  top: calc(100% + 6px);
   z-index: 35;
   min-width: 118px;
   padding: 6px;
@@ -1048,7 +1045,7 @@
 
 .project-toggle,
 .branch-toggle {
-  max-width: 210px;
+  max-width: 260px;
 }
 
 .context-window-chip {
@@ -1058,9 +1055,17 @@
 .project-toggle > span,
 .branch-toggle > span,
 .context-window-chip > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-toggle > svg,
+.local-toggle > svg,
+.branch-toggle > svg,
+.context-window-chip > svg {
+  flex: 0 0 auto;
 }
 
 .branch-toggle[data-git="false"] {
@@ -1238,7 +1243,6 @@
 
 .git-status-error strong,
 .git-status-error small,
-.git-status-header strong,
 .git-status-header small,
 .git-status-root {
   overflow: hidden;
@@ -1250,6 +1254,11 @@
 .git-status-header strong {
   font-size: 13px;
   font-weight: 780;
+}
+
+.git-status-header strong {
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .git-status-error small,
@@ -1376,6 +1385,88 @@
   color: var(--text-dim);
   font-size: 11.5px;
   font-weight: 680;
+}
+
+.git-status-actions {
+  display: grid;
+  gap: 7px;
+  padding-top: 1px;
+}
+
+.git-status-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 7px;
+}
+
+.git-status-action-row input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--popover-border) 82%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 44%, transparent);
+  font: inherit;
+  font-size: 11.5px;
+  outline: 0;
+}
+
+.git-status-action-row input:focus {
+  border-color: color-mix(in srgb, var(--blue) 48%, var(--popover-border) 52%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent);
+}
+
+.git-status-action-row button,
+.git-status-action-grid button {
+  display: inline-grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--popover-border) 82%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 38%, transparent);
+  font-size: 11.5px;
+  font-weight: 760;
+  text-align: left;
+}
+
+.git-status-action-row button:hover:not(:disabled),
+.git-status-action-row button:focus-visible:not(:disabled),
+.git-status-action-grid button:hover:not(:disabled),
+.git-status-action-grid button:focus-visible:not(:disabled) {
+  color: color-mix(in srgb, var(--blue) 68%, white 32%);
+  border-color: color-mix(in srgb, var(--blue) 34%, var(--popover-border) 66%);
+  background: color-mix(in srgb, var(--blue-soft) 34%, var(--surface-raised) 66%);
+  outline: 0;
+}
+
+.git-status-action-row button:disabled,
+.git-status-action-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.git-status-action-row button span,
+.git-status-action-grid button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-status-action-row button .lucide-loader-circle,
+.git-status-action-grid button .lucide-loader-circle {
+  animation: attachment-spin 900ms linear infinite;
+}
+
+.git-status-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .git-status-root {
@@ -1903,13 +1994,6 @@
     max-height: min(34vh, 200px);
     overflow: auto;
     border-radius: 16px;
-  }
-
-  .composer-change-root .composer-popover-branch {
-    top: calc(100% + 8px) !important;
-    right: 10px !important;
-    bottom: auto !important;
-    left: 10px !important;
   }
 
   .composer-popover-project,

@@ -454,14 +454,12 @@
   white-space: pre-wrap;
 }
 
-.activity-live-lines,
 .thinking-live-bars {
   display: grid;
   gap: 6px;
   width: 100%;
 }
 
-.activity-live-lines span,
 .thinking-live-bars span {
   height: 7px;
   border-radius: 999px;
@@ -470,13 +468,11 @@
   animation: thinking-bar 1180ms infinite ease-in-out;
 }
 
-.activity-live-lines span:nth-child(2),
 .thinking-live-bars span:nth-child(2) {
   width: 82%;
   animation-delay: 120ms;
 }
 
-.activity-live-lines span:nth-child(3),
 .thinking-live-bars span:nth-child(3) {
   width: 58%;
   animation-delay: 240ms;

@@ -1,10 +1,9 @@
 import type { ChatToolCall } from "../types/chat";
 import type { JsonValue, ToolCallRequest, ToolDefinition, ToolExecutionResult } from "./types";
+import { createToolResultContent, finalizeToolResult, limitToolResultContentForProvider } from "./resultFinalizer";
 
-/**
- * Prefix applied to every `ChatToolCall.id` we synthesize from a bridge call.
- * Exported so consumers downstream can correlate or strip it.
- */
+// Prefix applied to every ChatToolCall.id we synthesize from a bridge call.
+// Exported so downstream consumers can correlate or strip it.
 export const BRIDGE_TOOL_CALL_ID_PREFIX = "bridge-";
 
 export interface ToolResultContentFormatOptions {
@@ -17,74 +16,109 @@ export function formatToolResultContent(result: ToolExecutionResult, options: To
   return limitToolResultContentForProvider(content, options.maxChars);
 }
 
-function createToolResultContent(result: ToolExecutionResult) {
-  if (result.content.trim()) {
-    return result.content.trim();
-  }
-
-  if (result.error) {
-    return result.error;
-  }
-
-  if (result.data !== undefined) {
-    return safeStringify(result.data);
-  }
-
-  return result.ok ? "Tool completed." : "Tool did not complete.";
-}
-
-function limitToolResultContentForProvider(content: string, maxChars: number | null | undefined) {
-  if (maxChars === null || maxChars === undefined || !Number.isFinite(maxChars)) {
-    return content;
-  }
-
-  const limit = Math.floor(maxChars);
-
-  if (limit <= 0) {
-    return [
-      "[Tool output omitted from provider context because the model-visible tool-result budget was already used.]",
-      "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact content is still needed.",
-    ].join("\n");
-  }
-
-  if (content.length <= limit) {
-    return content;
-  }
-
-  const marker = [
-    "",
-    `[Tool output truncated for provider context after ${limit.toLocaleString("en-US")} characters.]`,
-    "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact omitted content is still needed.",
-  ].join("\n");
-  const sliceLength = Math.max(0, limit - marker.length);
-
-  return `${content.slice(0, sliceLength).trimEnd()}${marker}`;
-}
-
 export function createBridgeChatToolCall(
   call: ToolCallRequest,
   tool: ToolDefinition | undefined,
   result: ToolExecutionResult,
   status: ChatToolCall["status"],
 ): ChatToolCall {
+  const toolId = tool?.id ?? call.name;
+  const finalization = finalizeToolResult({
+    arguments: call.arguments,
+    label: tool?.title ?? call.name,
+    result,
+    toolId,
+  });
+
   return {
     detail: result.error || result.skippedReason || undefined,
+    fileChanges: extractFileChanges(result),
     id: `${BRIDGE_TOOL_CALL_ID_PREFIX}${call.id}`,
     input: safeStringify(call.arguments ?? {}),
     label: tool?.title ?? call.name,
     output: result.ok
-      ? formatToolResultContent(result)
-      : result.error ?? result.skippedReason ?? formatToolResultContent(result),
+      ? finalization.activityContent
+      : result.error ?? result.skippedReason ?? finalization.activityContent,
+    resultPolicy: finalization.visiblePolicy,
     status,
+    toolId,
   };
 }
 
-/**
- * JSON.stringify that swaps circular references with the string
- * "[Circular]" instead of throwing. Falls back to `String(value)` if
- * stringification still throws (e.g. unserializable BigInt with no
- * `toJSON`).
- */
+function extractFileChanges(result: ToolExecutionResult): ChatToolCall["fileChanges"] {
+  const data = result.data;
+
+  if (!data || typeof data !== "object" || Array.isArray(data) || !("fileChanges" in data)) {
+    return undefined;
+  }
+
+  const fileChanges = (data as { fileChanges?: unknown }).fileChanges;
+
+  if (!Array.isArray(fileChanges)) {
+    return undefined;
+  }
+
+  return fileChanges.flatMap((change) => {
+    if (!change || typeof change !== "object" || Array.isArray(change)) {
+      return [];
+    }
+
+    const record = change as Record<string, unknown>;
+    const path = typeof record.path === "string" ? record.path : "";
+    const additions = typeof record.additions === "number" ? record.additions : 0;
+    const deletions = typeof record.deletions === "number" ? record.deletions : 0;
+
+    if (!path) {
+      return [];
+    }
+
+    return [{
+      additions,
+      deletions,
+      diffPreview: normalizeDiffPreview(record.diffPreview),
+      diffTruncated: record.diffTruncated === true,
+      kind: normalizeFileChangeKind(record.kind),
+      path,
+    }];
+  });
+}
+
+function normalizeDiffPreview(value: unknown): NonNullable<ChatToolCall["fileChanges"]>[number]["diffPreview"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.flatMap((line) => {
+    if (!line || typeof line !== "object" || Array.isArray(line)) {
+      return [];
+    }
+
+    const record = line as Record<string, unknown>;
+    const content = typeof record.content === "string" ? record.content : "";
+    const kind = record.kind === "add" || record.kind === "context" || record.kind === "hunk" || record.kind === "meta" || record.kind === "remove"
+      ? record.kind
+      : undefined;
+
+    if (!kind) {
+      return [];
+    }
+
+    return [{
+      content,
+      kind,
+      newLine: typeof record.newLine === "number" ? record.newLine : undefined,
+      oldLine: typeof record.oldLine === "number" ? record.oldLine : undefined,
+    }];
+  });
+}
+
+function normalizeFileChangeKind(value: unknown): NonNullable<ChatToolCall["fileChanges"]>[number]["kind"] {
+  return value === "create" || value === "delete" || value === "move" || value === "update" ? value : undefined;
+}
+
+// JSON.stringify wrapper that replaces circular references with "[Circular]"
+// instead of throwing. Falls back to String(value) if stringification still
+// throws (e.g. unserializable BigInt with no `toJSON`).
 export function safeStringify(value: unknown): string {
   const seen = new WeakSet<object>();
 

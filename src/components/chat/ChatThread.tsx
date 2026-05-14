@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Globe2 } from "lucide-react";
+import { AssistantWorkTrace, createAssistantActivitySnapshot } from "./AssistantActivityIndicator";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageArtifacts, MessageAttachments } from "./MessageAttachments";
 import { MessageActions } from "./MessageActions";
@@ -41,7 +42,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   const shouldStickToBottomRef = useRef(true);
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
   const streamMarker = scrollAnchorMessage
-    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
     : `empty:${chat.messages.length}`;
 
   useEffect(() => {
@@ -152,8 +153,12 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
         const hasVisibleAttachment = Boolean(message.attachments?.length);
         const hasVisibleArtifact = Boolean(message.artifacts?.length);
         const showPlanReview = shouldShowPlanReviewCard(message);
+        const activitySnapshot = message.role === "assistant"
+          ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
+          : null;
+        const showAssistantWorkTrace = message.role === "assistant" && (hasVisibleResponseThinking || activitySnapshot || Boolean(message.isStreaming && !hasVisibleContent));
 
-        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleResponseThinking && !hasVisibleAttachment && !hasVisibleArtifact && !showPlanReview) {
+        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasVisibleArtifact && !showPlanReview && !showAssistantWorkTrace) {
           return null;
         }
 
@@ -168,13 +173,15 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
               <MessageAttachments attachments={message.attachments} />
               <MessageArtifacts artifacts={message.artifacts} />
               {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
-              {hasVisibleResponseThinking || showMessageSources ? (
-                <ResponseMetaRow
-                  sources={showMessageSources ? messageSources : []}
+              {showAssistantWorkTrace ? (
+                <AssistantWorkTrace
+                  activitySnapshot={activitySnapshot}
+                  responseStarted={hasVisibleContent}
                   thinkingContent={hasVisibleResponseThinking ? responseThinking : ""}
                   thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
                 />
               ) : null}
+              {showMessageSources ? <MessageSourcesRow sources={messageSources} /> : null}
               {showPlanReview ? (
                 <PlanReviewCard
                   content={displayMessage.content}
@@ -184,7 +191,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                   onRequestRevision={onRequestPlanRevision}
                   onResolvePlanApproval={onResolveToolApproval}
                 />
-              ) : displayMessage.content.trim() || message.isStreaming ? (
+              ) : displayMessage.content.trim() ? (
                 <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
               ) : null}
               <MessageActions
@@ -204,58 +211,37 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
   );
 }
 
-function ResponseMetaRow({ sources, thinkingContent, thinkingStreaming }: { sources: ChatSource[]; thinkingContent: string; thinkingStreaming?: boolean }) {
-  const [thinkingExpanded, setThinkingExpanded] = useState(true);
+function MessageSourcesRow({ sources }: { sources: ChatSource[] }) {
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
-  const hasThinking = thinkingContent.trim().length > 0;
   const visibleSources = getUniqueMessageSources(sources);
   const hasSources = visibleSources.length > 0;
   const hostPreview = getSourceHostPreview(visibleSources);
 
-  if (!hasThinking && !hasSources) {
+  if (!hasSources) {
     return null;
   }
 
   return (
-    <section className="response-meta" data-has-sources={hasSources} data-thinking-streaming={Boolean(thinkingStreaming)} aria-label="Response details">
+    <section className="response-meta" data-has-sources={hasSources} aria-label="Response details">
       <div className="response-meta-controls">
-        {hasThinking ? (
-          <button className="response-thinking-toggle" type="button" aria-expanded={thinkingExpanded} onClick={() => setThinkingExpanded((current) => !current)}>
-            <span className="response-thinking-label">
-              <span className="response-thinking-dot" aria-hidden="true" />
-              Thinking{thinkingStreaming ? "..." : ""}
-            </span>
-            <span className="response-thinking-action">
-              {thinkingExpanded ? "Collapse" : "Expand"}
-              {thinkingExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-            </span>
-          </button>
-        ) : null}
-        {hasSources ? (
-          <button className="message-sources-toggle" type="button" aria-expanded={sourcesExpanded} onClick={() => setSourcesExpanded((current) => !current)}>
-            <span className="message-sources-title">
-              <Globe2 size={15} aria-hidden="true" />
-              <strong>Sources</strong>
-              <small>{visibleSources.length}</small>
-            </span>
-            <span className="message-sources-preview" aria-hidden="true">
-              {hostPreview.map((host) => (
-                <span key={host}>{host}</span>
-              ))}
-            </span>
-            <span className="message-sources-action">
-              {sourcesExpanded ? "Hide" : "Show"}
-              {sourcesExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-            </span>
-          </button>
-        ) : null}
+        <button className="message-sources-toggle" type="button" aria-expanded={sourcesExpanded} onClick={() => setSourcesExpanded((current) => !current)}>
+          <span className="message-sources-title">
+            <Globe2 size={15} aria-hidden="true" />
+            <strong>Sources</strong>
+            <small>{visibleSources.length}</small>
+          </span>
+          <span className="message-sources-preview" aria-hidden="true">
+            {hostPreview.map((host) => (
+              <span key={host}>{host}</span>
+            ))}
+          </span>
+          <span className="message-sources-action">
+            {sourcesExpanded ? "Hide" : "Show"}
+            {sourcesExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+          </span>
+        </button>
       </div>
-      {hasThinking && thinkingExpanded ? (
-        <div className="response-thinking-body">
-          <MarkdownMessage content={thinkingContent} isStreaming={thinkingStreaming} />
-        </div>
-      ) : null}
-      {hasSources && sourcesExpanded ? (
+      {sourcesExpanded ? (
         <div className="message-sources-list">
           {visibleSources.map((source, index) => (
             <a className="message-source-link" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank">
@@ -544,6 +530,23 @@ function getScrollAnchorMessage(chat: ChatSummary) {
   }
 
   return chat.messages[chat.messages.length - 1];
+}
+
+function createMessageActivityMarker(message: ChatMessage) {
+  const progressMarker = (message.progress ?? [])
+    .map((item) => `${item.id ?? item.label}:${item.status}:${item.detail?.length ?? 0}`)
+    .join("|");
+  const toolMarker = (message.toolCalls ?? [])
+    .map((toolCall) => {
+      const fileMarker = (toolCall.fileChanges ?? [])
+        .map((change) => `${change.path}:${change.kind ?? "update"}:${change.additions}:${change.deletions}:${change.diffPreview?.length ?? 0}`)
+        .join(",");
+
+      return `${toolCall.id}:${toolCall.status}:${toolCall.input?.length ?? 0}:${toolCall.output?.length ?? 0}:${fileMarker}`;
+    })
+    .join("|");
+
+  return `${progressMarker}:${toolMarker}:${message.webSearch?.status ?? ""}:${message.thinking?.completedAt ?? ""}`;
 }
 
 function canRegenerateMessage(chat: ChatSummary, messageIndex: number) {

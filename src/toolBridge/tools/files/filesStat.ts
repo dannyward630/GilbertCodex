@@ -25,7 +25,7 @@ export function createFilesStatTool(backend: FilesBackend = defaultFilesBackend)
       try {
         const listing = await backend.listDirectory(resolution.path.resolved, 1);
         return {
-          content: `Directory ${listing.path}`,
+          content: `Directory \`${listing.path}\``,
           data: {
             kind: "directory",
             modifiedAt: null,
@@ -42,7 +42,7 @@ export function createFilesStatTool(backend: FilesBackend = defaultFilesBackend)
         try {
           const file = await backend.readTextFile(resolution.path.resolved, 1);
           return {
-            content: `File ${file.path} (${file.size} bytes)`,
+            content: `File \`${file.path}\` (${file.size} bytes)`,
             data: {
               extension: file.extension ?? null,
               kind: "file",

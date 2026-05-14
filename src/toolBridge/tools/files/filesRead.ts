@@ -1,6 +1,7 @@
 import type { JsonValue, ToolDefinition, ToolExecutionResult } from "../../types";
 import { PathResolutionError, tryResolveAllowedPath } from "../../paths";
 import { defaultFilesBackend, type FilesBackend } from "./backend";
+import { formatRecoveredContent, readErrorMessage, readTextFileWithModuleRecovery } from "./readUtils";
 
 export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend): ToolDefinition {
   return {
@@ -18,21 +19,26 @@ export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend)
       }
 
       const maxBytes = optionalPositiveInteger(args.maxBytes);
+      const offset = optionalNonNegativeInteger(args.offset);
 
       if (context.signal?.aborted) {
         return { content: "Tool bridge run aborted before files_read could call the backend.", ok: false };
       }
 
       try {
-        const file = await backend.readTextFile(resolution.path.resolved, maxBytes);
+        const read = await readTextFileWithModuleRecovery(backend, resolution.path.resolved, maxBytes, offset);
+        const file = read.file;
         return {
-          content: file.content,
+          content: formatRecoveredContent(read),
           data: {
             content: file.content,
             extension: file.extension ?? null,
             modifiedAt: file.modifiedAt ?? null,
             name: file.name,
+            offset: offset ?? 0,
             path: file.path,
+            recoveredFrom: read.recoveredFrom ?? null,
+            recoveryNote: read.recoveryNote ?? null,
             sha256: file.sha256 ?? null,
             size: file.size,
             truncated: file.truncated,
@@ -40,7 +46,7 @@ export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend)
           ok: true,
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Could not read file.";
+        const message = readErrorMessage(error, "Could not read file.");
         return {
           content: message,
           error: message,
@@ -56,6 +62,11 @@ export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend)
         maxBytes: {
           description: "Optional maximum bytes to read. Omit this to read the full text file.",
           minimum: 1,
+          type: "integer",
+        },
+        offset: {
+          description: "Optional zero-based byte offset to start reading from. Use files_read_range for line-based reads.",
+          minimum: 0,
           type: "integer",
         },
         path: {
@@ -79,6 +90,14 @@ function optionalPositiveInteger(value: unknown): number | undefined {
   }
   const truncated = Math.floor(value);
   return truncated > 0 ? truncated : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const truncated = Math.floor(value);
+  return truncated >= 0 ? truncated : undefined;
 }
 
 function resolutionToResult(error: PathResolutionError): ToolExecutionResult {

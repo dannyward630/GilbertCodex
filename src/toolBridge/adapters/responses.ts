@@ -1,5 +1,6 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
-import { formatToolResultContent } from "../results";
+import { finalizeToolResult } from "../resultFinalizer";
+import { decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyResponsesToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -48,9 +49,14 @@ function appendResponsesToolResultItems(
         type: "function_call",
       });
     }
-    const rawContent = formatToolResultContent(result.result);
-    const output = formatToolResultContent(result.result, { maxChars: remainingToolResultChars });
-    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, rawContent.length);
+    const finalization = finalizeToolResult({
+      arguments: result.arguments,
+      maxProviderChars: remainingToolResultChars,
+      result: result.result,
+      toolId: result.name,
+    });
+    const output = finalization.providerContent;
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, finalization.providerRawCharCount);
 
     input.push({
       call_id: result.callId,
@@ -60,12 +66,4 @@ function appendResponsesToolResultItems(
   }
 
   return input;
-}
-
-function normalizeRemainingChars(value: number | null | undefined) {
-  return value === null || value === undefined || !Number.isFinite(value) ? null : Math.max(Math.floor(value), 0);
-}
-
-function decrementRemainingChars(remaining: number | null, rawLength: number) {
-  return remaining === null ? null : Math.max(remaining - rawLength, 0);
 }
