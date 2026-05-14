@@ -37,7 +37,7 @@ Every pull request should include:
 - Commands that were run.
 - Manual checks for UI, desktop shell, or platform-sensitive changes.
 - Screenshots or recordings for visible UI changes.
-- Explicit notes for auth, terminal, file write, provider key, local-data, GitHub, or tool-execution changes.
+- Explicit notes for auth, terminal, file write, provider key, local-data, GitHub, web-search, or runtime-action changes.
 
 Normal pull requests target `develop`. Pull requests into `testing` should be promotion or QA fix pull requests. Pull requests into `main` should be release or hotfix pull requests.
 
@@ -45,8 +45,8 @@ Normal pull requests target `develop`. Pull requests into `testing` should be pr
 
 Use these lanes when triaging:
 
-- Product/UI: chat, composer, shell, settings, Toolbox, inspector, and visible workflow behavior.
-- Runtime/tools: provider clients, web search, Git/GitHub, local files, terminal, browser preview, and tool prompts.
+- Product/UI: chat, composer, shell, settings, inspector, and visible workflow behavior.
+- Runtime/actions: provider clients, web search, Git/GitHub integrations, local files, terminal, browser preview, and prompt guardrails.
 - Desktop host: Tauri commands, permissions, notifications, packaging, and native platform behavior.
 - Documentation: README, setup docs, integration guides, release notes, and contribution docs.
 - Security-sensitive: auth, local data, provider keys, filesystem writes, terminal execution, full-computer scope, and destructive actions.
@@ -67,7 +67,7 @@ Use GitHub's default labels first:
 Optional project labels to add later:
 
 - `area:chat`
-- `area:tools`
+- `area:runtime`
 - `area:desktop`
 - `area:github`
 - `area:docs`

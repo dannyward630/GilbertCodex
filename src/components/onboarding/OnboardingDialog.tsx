@@ -7,25 +7,19 @@ import {
   CheckCircle2,
   ChevronRight,
   FileSearch,
-  Github,
   Globe2,
   HardDrive,
   KeyRound,
-  MonitorUp,
-  Plug,
   Settings,
   ShieldCheck,
   Sparkles,
-  TerminalSquare,
-  Workflow,
-  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { DialogShell } from "../dialogs/AppDialog";
 
-type OnboardingAction = "close" | "settings" | "toolbox";
-type OnboardingPageId = "launch" | "workspace" | "toolbox" | "ship";
+type OnboardingAction = "close" | "settings";
+type OnboardingPageId = "launch" | "workspace" | "ship";
 
 interface OnboardingFeature {
   detail: string;
@@ -55,7 +49,6 @@ interface OnboardingDialogProps {
   onClose: () => void;
   onNeverShowAgain: () => void;
   onOpenSettings: () => void;
-  onOpenToolbox: () => void;
   open: boolean;
 }
 
@@ -66,7 +59,7 @@ const onboardingPages: OnboardingPage[] = [
     eyebrow: "First run",
     features: [
       { detail: "Open provider settings, confirm API/runtime state, and keep the selected model intentional.", icon: Settings, label: "Model", title: "Set the path" },
-      { detail: "Use planning or deep thinking when the task needs staged reasoning, broad inspection, or careful tool use.", icon: BrainCircuit, label: "Reasoning", title: "Choose depth" },
+      { detail: "Use planning or deep thinking when the task needs staged reasoning, broad inspection, or careful source review.", icon: BrainCircuit, label: "Reasoning", title: "Choose depth" },
       { detail: "Leave web search available for current facts, docs, dependency changes, and release checks.", icon: Globe2, label: "Fresh facts", title: "Search when needed" },
       { detail: "Ask for real work directly: inspect, change, test, rebuild, and summarize the result.", icon: Bot, label: "Agent", title: "Give it momentum" },
     ],
@@ -82,53 +75,32 @@ const onboardingPages: OnboardingPage[] = [
     title: "Turn an empty thread into a ready local agent.",
   },
   {
-    checklist: ["Attach a project folder", "Pick permission mode", "Let file search build context", "Preview app changes beside chat"],
-    description: "Gilbert Codex is strongest when it knows where the work lives. Give it a bounded workspace, then let file, terminal, Git, and browser-preview tools cooperate in one thread.",
+    checklist: ["Attach a project folder", "Review workspace context", "Use web when facts may be current", "Keep changes manual until tools are rebuilt"],
+    description: "Gilbert Codex is strongest when it knows where the work lives. For this reset build, workspace details are host-attached context while model-callable local tools stay disabled.",
     eyebrow: "Workspace",
     features: [
-      { detail: "Select a project folder so reads, edits, Git, tests, and terminal commands share the same boundary.", icon: HardDrive, label: "Roots", title: "Connect the project" },
-      { detail: "Index and inspect before changing files, especially when the app has several moving pieces.", icon: FileSearch, label: "Context", title: "Find the right files" },
-      { detail: "Run checks from the project path and keep output connected to the active conversation.", icon: TerminalSquare, label: "Commands", title: "Use the terminal" },
-      { detail: "Open local pages or docs in the browser rail when visual verification matters.", icon: MonitorUp, label: "Preview", title: "See the result" },
+      { detail: "Select a project folder so the app can attach bounded workspace metadata to the conversation.", icon: HardDrive, label: "Roots", title: "Connect the project" },
+      { detail: "Use the selected project as orientation only until the rebuilt tool runtime returns.", icon: FileSearch, label: "Context", title: "Stay grounded" },
+      { detail: "Keep web search available for current docs, releases, and source-backed facts.", icon: Globe2, label: "Web", title: "Use live sources" },
+      { detail: "Sensitive local actions are not model-callable in this reset build.", icon: ShieldCheck, label: "Reset", title: "No local tool calls" },
     ],
-    flow: ["Workspace", "Index", "Terminal", "Preview"],
+    flow: ["Workspace", "Context", "Web", "Chat"],
     icon: HardDrive,
     id: "workspace",
     primaryAction: "close",
     primaryLabel: "Start a Chat",
     prompt: "Use the selected workspace, read the relevant files first, then implement and verify the fix.",
-    stats: ["Bounded roots", "Local context", "Live preview"],
-    tabDetail: "Files, terminal, preview",
+    stats: ["Bounded roots", "Local context", "Web-ready"],
+    tabDetail: "Workspace context",
     tabLabel: "Workspace",
-    title: "Give every tool the same sense of place.",
-  },
-  {
-    checklist: ["Review enabled tool categories", "Connect GitHub in Settings", "Add remote MCP servers", "Use Workflows for repeatable runs"],
-    description: "Toolbox is the control center for current and upcoming capabilities. Keep the defaults on, turn off what you do not want, and connect external surfaces when they add real leverage.",
-    eyebrow: "Toolbox",
-    features: [
-      { detail: "Browse the live registry and decide what the agent may call during chat, thinking, and planning.", icon: Wrench, label: "Registry", title: "Shape available tools" },
-      { detail: "Use local Git for workspace changes and GitHub tools for remote repos, releases, PRs, and workflows.", icon: Github, label: "Source", title: "Bridge local and remote" },
-      { detail: "Register remote MCP servers when a service should become part of the agent's tool belt.", icon: Plug, label: "MCP", title: "Extend the surface" },
-      { detail: "Turn recurring or staged tasks into workflows instead of rebuilding the same process by hand.", icon: Workflow, label: "Runs", title: "Repeat the good path" },
-    ],
-    flow: ["Toolbox", "GitHub", "MCP", "Workflows"],
-    icon: Wrench,
-    id: "toolbox",
-    primaryAction: "toolbox",
-    primaryLabel: "Open Toolbox",
-    prompt: "Check which tools are enabled, then use the right ones automatically while you work.",
-    stats: ["Default-on tools", "GitHub-ready", "MCP-capable"],
-    tabDetail: "Tools and integrations",
-    tabLabel: "Tools",
-    title: "Make the agent powerful without making it mysterious.",
+    title: "Keep the workspace visible without exposing broken tools.",
   },
   {
     checklist: ["Use plans for broad changes", "Review sensitive actions", "Steer while streaming", "Ship with tests and Git evidence"],
     description: "The best sessions feel fast and trustworthy at the same time. Use review gates, visible activity, queued steering, and focused verification so the final answer has receipts.",
     eyebrow: "Ship safely",
     features: [
-      { detail: "Sensitive file, terminal, Git, GitHub, and destructive actions surface for review when the mode requires it.", icon: ShieldCheck, label: "Control", title: "Keep authority visible" },
+      { detail: "Sensitive local and remote actions are not model-callable in this reset build.", icon: ShieldCheck, label: "Control", title: "Keep authority visible" },
       { detail: "Planning and deep thinking help split broad requests into staged, checkable moves.", icon: BrainCircuit, label: "Depth", title: "Think before impact" },
       { detail: "Session approval and connected accounts keep repeated work smooth while preserving clear trust boundaries.", icon: KeyRound, label: "Access", title: "Approve once, work faster" },
       { detail: "End with tests, build checks, diffs, links, or release notes depending on what changed.", icon: CheckCircle2, label: "Evidence", title: "Finish with proof" },
@@ -136,17 +108,17 @@ const onboardingPages: OnboardingPage[] = [
     flow: ["Plan", "Act", "Review", "Verify"],
     icon: ShieldCheck,
     id: "ship",
-    primaryAction: "toolbox",
-    primaryLabel: "Open Toolbox",
+    primaryAction: "settings",
+    primaryLabel: "Open Settings",
     prompt: "Make the change, run the focused checks, and tell me exactly what passed or could not run.",
-    stats: ["Review gates", "Steerable runs", "Verified output"],
+    stats: ["Review gates", "Steerable runs", "Web evidence"],
     tabDetail: "Review and verification",
     tabLabel: "Ship",
     title: "Move quickly, but leave a clean trail.",
   },
 ];
 
-export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, onOpenToolbox, open }: OnboardingDialogProps) {
+export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, open }: OnboardingDialogProps) {
   const [activePageIndex, setActivePageIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const activePage = onboardingPages[activePageIndex];
@@ -170,11 +142,6 @@ export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, on
       return;
     }
 
-    if (action === "toolbox") {
-      onOpenToolbox();
-      return;
-    }
-
     onClose();
   }
 
@@ -188,7 +155,7 @@ export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, on
 
   return (
     <DialogShell
-      description="A guided launch map for models, workspaces, Toolbox, integrations, and review-first agent work."
+      description="A guided launch map for models, workspace context, web search, and review-first chat."
       icon={Sparkles}
       onClose={onClose}
       open={open}
@@ -254,7 +221,7 @@ export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, on
           <div className="onboarding-stage">
             <div className="onboarding-stage-copy">
               <span className="onboarding-pill">
-                Page {activePageIndex + 1} of {onboardingPages.length} · {activePage.eyebrow}
+                Page {activePageIndex + 1} of {onboardingPages.length} - {activePage.eyebrow}
               </span>
               <h3>{activePage.title}</h3>
               <p>{activePage.description}</p>
@@ -263,17 +230,12 @@ export function OnboardingDialog({ onClose, onNeverShowAgain, onOpenSettings, on
                   {activePage.primaryLabel}
                   <ChevronRight size={15} aria-hidden="true" />
                 </button>
-                {activePage.primaryAction !== "toolbox" ? (
-                  <button type="button" onClick={onOpenToolbox}>
-                    Toolbox
-                    <ChevronRight size={15} aria-hidden="true" />
-                  </button>
-                ) : (
+                {activePage.primaryAction !== "settings" ? (
                   <button type="button" onClick={onOpenSettings}>
                     Settings
                     <ChevronRight size={15} aria-hidden="true" />
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 

@@ -1633,7 +1633,7 @@ fn load_access_token(
     database
         .token
         .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Connect GitHub in Settings before using GitHub tools.".to_string())
+        .ok_or_else(|| "Connect GitHub in Settings before using GitHub integration.".to_string())
 }
 
 fn github_client() -> Result<reqwest::Client, String> {

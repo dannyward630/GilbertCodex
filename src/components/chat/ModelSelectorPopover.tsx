@@ -13,7 +13,6 @@ import {
   Layers3,
   Search,
   Sparkles,
-  Wrench,
   Zap,
 } from "lucide-react";
 import {
@@ -53,7 +52,7 @@ interface ModelSelectorEntry {
 
 type ProviderFilter = "all" | ModelProviderId;
 type CategoryFilter = "all" | ModelCatalogCategoryId;
-type ModelCapabilityFilter = "cloud" | "free" | "image" | "local" | "long-context" | "paid" | "thinking" | "tools";
+type ModelCapabilityFilter = "cloud" | "free" | "image" | "local" | "long-context" | "paid" | "structured" | "thinking";
 type ModelSortMode = "context-desc" | "default" | "price-asc" | "price-desc";
 
 interface ModelCapabilityBadge {
@@ -69,7 +68,7 @@ const MODEL_CAPABILITY_FILTERS: Array<{ id: ModelCapabilityFilter; label: string
   { id: "paid", label: "Paid", title: "Models that are not marked free" },
   { id: "image", label: "Image", title: "Models that mention image, vision, or multimodal input" },
   { id: "thinking", label: "Thinking", title: "Models/providers that support reasoning or thinking mode" },
-  { id: "tools", label: "Tools", title: "Models that mention tool or function calling support" },
+  { id: "structured", label: "Structured", title: "Models that mention structured output or JSON support" },
   { id: "long-context", label: "200K+ ctx", title: "Models with a context window of at least 200K tokens" },
 ];
 
@@ -712,8 +711,8 @@ function modelMatchesCapabilityFilter(entry: ModelSelectorEntry, filter: ModelCa
     return isThinkingModel(entry.option, entry.provider.id, text);
   }
 
-  if (filter === "tools") {
-    return isToolCallingModel(entry.option, text);
+  if (filter === "structured") {
+    return isStructuredOutputModel(entry.option, text);
   }
 
   return entry.contextWindow.tokens >= 200_000;
@@ -724,7 +723,7 @@ function createModelCapabilityBadges(entry: ModelSelectorEntry): ModelCapability
   const free = isFreeModel(entry.option, text);
   const thinking = isThinkingModel(entry.option, entry.provider.id, text);
   const image = isImageModel(entry.option, text);
-  const tools = isToolCallingModel(entry.option, text);
+  const structured = isStructuredOutputModel(entry.option, text);
   const local = isLocalProvider(entry.provider.id);
   const badges: ModelCapabilityBadge[] = [
     {
@@ -752,8 +751,8 @@ function createModelCapabilityBadges(entry: ModelSelectorEntry): ModelCapability
     badges.push({ label: "Image", title: "Mentions image, vision, or multimodal support", tone: "accent" });
   }
 
-  if (tools) {
-    badges.push({ label: "Tools", title: "Mentions tool or function calling support", tone: "accent" });
+  if (structured) {
+    badges.push({ label: "Structured", title: "Mentions structured output or JSON support", tone: "accent" });
   }
 
   for (const capability of entry.option.capabilities ?? []) {
@@ -792,8 +791,8 @@ function resolveModelCategory(option: ChatModelOption, providerId: ModelProvider
     return "free";
   }
 
-  if (isToolCallingModel(option, text)) {
-    return "tool-calling";
+  if (isStructuredOutputModel(option, text)) {
+    return "structured-output";
   }
 
   if (option.category) {
@@ -823,12 +822,12 @@ function resolveModelCategory(option: ChatModelOption, providerId: ModelProvider
   return "general";
 }
 
-function isToolCallingModel(option: ChatModelOption, text: string) {
+function isStructuredOutputModel(option: ChatModelOption, text: string) {
   const capabilityText = (option.capabilities ?? []).join(" ").toLowerCase();
 
   return (
-    /\btools?\b|tool[-\s]?calling|tool[-\s]?use|tool[-\s]?calls|tool_choice|function[-\s]?calling|function[-\s]?calls|code execution|browser automation/.test(capabilityText) ||
-    /\btools?\b|tool[-\s]?calling|tool[-\s]?use|tool[-\s]?calls|tool_choice|function[-\s]?calling|function[-\s]?calls|code execution|browser automation/.test(text)
+    /\bstructured\b|json|schema|response_format|code execution|provider[-\s]?managed|wolfram|site visits?/.test(capabilityText) ||
+    /\bstructured\b|json|schema|response_format|code execution|provider[-\s]?managed|wolfram|site visits?/.test(text)
   );
 }
 
@@ -872,8 +871,8 @@ function iconForCategory(category: ModelCatalogCategoryId) {
     return BadgeDollarSign;
   }
 
-  if (category === "tool-calling") {
-    return Wrench;
+  if (category === "structured-output") {
+    return Sparkles;
   }
 
   if (category === "coding") {

@@ -108,7 +108,7 @@ Do not copy or commit the client secret. Gilbert Codex does not need it for devi
 
 ## Step 4: Understand The Requested Scopes
 
-Gilbert currently requests a broad scope set so its GitHub tools can support source-control workflows, workflow files, packages, gists, organization metadata, repository hooks, security events, and repository-admin operations when the signed-in user is already allowed to do those things.
+Gilbert currently requests a broad scope set for future GitHub surfaces and repository administration features. GitHub model-callable tools are disabled in the reset build.
 
 Current requested scopes:
 
@@ -126,55 +126,11 @@ Important details:
 - `admin:repo_hook` and related hook scopes support webhook automation.
 - `delete_repo` is powerful and should only be authorized on accounts where repository deletion capability is acceptable.
 
-## Step 5: Use GitHub Tools In Chat
+## Step 5: Current Chat Status
 
-After connecting, ask Gilbert to use GitHub. Examples:
-
-```text
-List my repositories.
-```
-
-```text
-Read README.md from UrbanWafflezz/GilbertCodex on main.
-```
-
-```text
-Search UrbanWafflezz/GilbertCodex for github_create_pull_request.
-```
-
-```text
-Create a branch, update docs, and open a draft PR.
-```
-
-```text
-Trigger the release workflow for v0.3.0 and show me the latest runs.
-```
-
-Mutating operations such as commits, releases, workflow dispatches, and pull requests go through the app's tool approval path when permission mode requires review.
-
-## Supported GitHub Tool Surface
-
-- `github_status`: check connection state.
-- `github_list_repositories`: list accessible repositories.
-- `github_get_repository`: read repository metadata.
-- `github_list_branches`: list branch names and SHAs.
-- `github_list_tree`: list files from a branch tree.
-- `github_read_file`: read text files from a branch.
-- `github_search_code`: search code through GitHub's API.
-- `github_create_branch`: create a branch from an existing branch.
-- `github_commit_files`: commit one or more files through GitHub's API.
-- `github_create_pull_request`: open a draft or ready pull request.
-- `github_generate_release_notes`: generate release notes for a tag.
-- `github_create_release`: create draft or ready releases.
-- `github_list_releases`: list repository releases.
-- `github_list_workflows`: list GitHub Actions workflows.
-- `github_dispatch_workflow`: trigger workflow_dispatch workflows.
-- `github_list_workflow_runs`: inspect workflow runs.
+GitHub model-callable tools are not available in chat while the tool runtime is being rebuilt. Do not expect repository inventory, remote file reads, commits, releases, workflow dispatches, or pull requests to run from model output in this build.
 
 For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
-
-See the broader tool contract in:
-../CODING_TOOLS.md
 
 ## Repository Webhooks
 

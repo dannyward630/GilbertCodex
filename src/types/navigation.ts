@@ -1,4 +1,4 @@
-export type PrimaryRoute = "chat" | "toolbox" | "mcp" | "workflows" | "radar" | "settings";
+export type PrimaryRoute = "chat" | "radar" | "settings";
 
 export interface NavigationItem {
   id: PrimaryRoute;

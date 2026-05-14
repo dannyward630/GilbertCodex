@@ -44,7 +44,7 @@
     "licenseFile": "../LICENSE",
     "publisher": "Gilbert Codex Contributors",
     "shortDescription": "GUI-first local desktop agent workspace.",
-    "longDescription": "Gilbert Codex is a local-first desktop agent workspace for chat, coding tools, web search, source control, terminal sessions, browser preview, GitHub workflows, and Discord bridge setup.",
+    "longDescription": "Gilbert Codex is a local-first desktop chat workspace with multi-provider model streaming, planning mode, host-managed web search, project-scoped state, and Discord bridge setup.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

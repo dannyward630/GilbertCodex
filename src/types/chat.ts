@@ -235,5 +235,6 @@ export interface ChatSummary {
   pinned?: boolean;
   project: string;
   title: string;
+  toolRuntimeVersion?: number;
   updatedAt: string;
 }

@@ -12,7 +12,6 @@ import {
   PanelRight,
   Pencil,
   Pin,
-  TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
 import { IconButton } from "../common/IconButton";
@@ -209,21 +208,15 @@ export function ConversationHeader({
       </div>
       <div className="conversation-tools">
         <IconButton ariaLabel={pinned ? "Unpin chat" : "Pin chat"} icon={Pin} pressed={pinned} onClick={onTogglePin} />
-        <IconButton
-          ariaLabel={!terminalEnabled ? "Terminal disabled in Toolbox" : terminalOpen ? "Close terminal" : "Open terminal"}
-          disabled={!terminalEnabled}
-          icon={TerminalSquare}
-          pressed={terminalOpen}
-          onClick={onToggleTerminal}
-        />
-        <IconButton
-          ariaLabel={!browserPreviewEnabled ? "Browser Preview disabled in Toolbox" : browserPreviewOpen ? "Close browser preview" : "Open browser preview"}
-          className="conversation-tool-desktop-only"
-          disabled={!browserPreviewEnabled}
-          icon={Globe2}
-          pressed={browserPreviewOpen}
-          onClick={onToggleBrowserPreview}
-        />
+        {browserPreviewEnabled ? (
+          <IconButton
+            ariaLabel={browserPreviewOpen ? "Close browser preview" : "Open browser preview"}
+            className="conversation-tool-desktop-only"
+            icon={Globe2}
+            pressed={browserPreviewOpen}
+            onClick={onToggleBrowserPreview}
+          />
+        ) : null}
         <IconButton
           ariaLabel={!inspectorAvailable ? "No conversation details yet" : inspectorOpen ? "Collapse inspector" : "Open inspector"}
           className="conversation-tool-desktop-only"

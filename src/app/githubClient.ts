@@ -136,7 +136,8 @@ export interface GithubPollDeviceLoginRequest {
  * OAuth scopes requested by the desktop GitHub integration.
  *
  * GitHub still enforces repository, organization, SSO, and token policy checks,
- * but requesting the broad bundle up front keeps all source-control tools usable
+ * but requesting the broad bundle up front keeps all source-control integration
+ * actions usable
  * without forcing contributors through repeated reconnect flows.
  */
 export const GITHUB_FULL_ACCESS_OAUTH_SCOPES = [
@@ -162,7 +163,7 @@ export const GITHUB_FULL_ACCESS_OAUTH_SCOPES = [
 
 const DEFAULT_GITHUB_OAUTH_SCOPE = GITHUB_FULL_ACCESS_OAUTH_SCOPES.join(" ");
 
-/** Returns true when GitHub API tools can route through the Tauri command layer. */
+/** Returns true when GitHub API actions can route through the Tauri command layer. */
 export function githubDesktopAvailable() {
   return isTauriDesktopRuntime();
 }
@@ -359,13 +360,13 @@ export async function listGithubWorkflowRuns(request: GithubListWorkflowRunsRequ
   return invoke<GithubWorkflowRunListResponse>("github_list_workflow_runs", { request });
 }
 
-/** Formats search hits for model-visible tool output without leaking raw API JSON. */
+/** Formats search hits for model-visible output without leaking raw API JSON. */
 export function summarizeGithubCodeSearchItems(items: GithubCodeSearchItem[]) {
   return items.map((item, index) => `${index + 1}. ${item.repositoryFullName}:${item.path} (${item.sha.slice(0, 7)})\n${item.htmlUrl}`).join("\n");
 }
 
 function assertGithubDesktop() {
   if (!githubDesktopAvailable()) {
-    throw new Error("GitHub tools are available in the Tauri desktop app.");
+    throw new Error("GitHub integration is available in the Tauri desktop app.");
   }
 }

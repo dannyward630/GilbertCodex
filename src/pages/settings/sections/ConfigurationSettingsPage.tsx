@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, Code2, ExternalLink, FileCog, RotateCcw, Settings2, Wrench } from "lucide-react";
 import type { UserConfigInfo, WorkspaceDependencyDiagnostic } from "../../../app/tauriClient";
-import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../tools/computer/files";
+import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../localWorkspace/files";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { ProviderSettings } from "../../../types/settings";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";

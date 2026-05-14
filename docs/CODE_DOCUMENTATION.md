@@ -22,7 +22,7 @@ Before opening a pull request, check whether the touched code introduces or chan
 
 - A public TypeScript export.
 - A Tauri command, request shape, response shape, or persisted local-data format.
-- A model/tool contract, prompt-facing instruction, approval path, or permission boundary.
+- A model/runtime contract, prompt-facing instruction, approval path, or permission boundary.
 - A fallback path between Tauri desktop and browser preview runtimes.
 
 If yes, either document the contract in source or explain in the PR why the existing names and surrounding docs are enough.

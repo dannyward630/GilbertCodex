@@ -6,10 +6,6 @@ import pythonProjectSkill from "./instructions/languages/python/SKILL.md?raw";
 import planningMode from "./instructions/planning/SKILL.md?raw";
 import researchFacts from "./instructions/research/SKILL.md?raw";
 import codeReview from "./instructions/review/SKILL.md?raw";
-import fileCreationTools from "./instructions/tools/file-creation/SKILL.md?raw";
-import localComputerTools from "./instructions/tools/local-computer/SKILL.md?raw";
-import runtimeToolFormat from "./instructions/tools/runtime-tool-format.md?raw";
-import webSearchTool from "./instructions/tools/web-search/SKILL.md?raw";
 
 export type PromptChunkKind = "core" | "mode" | "skill" | "tool";
 
@@ -93,42 +89,6 @@ export const PROMPT_CATALOG: PromptChunk[] = [
     maxTokens: 260,
     priority: 60,
     title: "Code Review",
-  },
-  {
-    content: runtimeToolFormat,
-    id: "tool.runtime-format",
-    keywords: ["tool", "tool_call", "xml", "runtime tool", "tool result", "activity"],
-    kind: "tool",
-    maxTokens: 260,
-    priority: 85,
-    title: "Runtime Tool Format",
-  },
-  {
-    content: localComputerTools,
-    id: "tool.local-computer",
-    keywords: ["local", "filesystem", "workspace", "terminal", "shell", "read_file", "edit_file", "run_tests", "browser preview", "computer"],
-    kind: "tool",
-    maxTokens: 320,
-    priority: 78,
-    title: "Local Computer Tools",
-  },
-  {
-    content: webSearchTool,
-    id: "tool.web-search",
-    keywords: ["web_search", "duckduckgo", "brave", "web", "current facts", "official docs", "cite", "sources", "urls"],
-    kind: "tool",
-    maxTokens: 300,
-    priority: 76,
-    title: "Web Search Tool",
-  },
-  {
-    content: fileCreationTools,
-    id: "tool.file-creation",
-    keywords: ["create files", "file creation", "markdown", "react", "html", "pdf", "starter file", "artifact", "write file"],
-    kind: "tool",
-    maxTokens: 260,
-    priority: 62,
-    title: "File Creation Tools",
   },
   {
     content: nodeProjectSkill,

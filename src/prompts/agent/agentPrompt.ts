@@ -6,7 +6,7 @@ import {
   type SelectedPromptChunk,
 } from "./promptRetrieval";
 import { createRuntimeToolPrompt } from "./runtimeToolPrompt";
-import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "../../tools/workspaceContext";
+import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "../../localWorkspace/workspaceContext";
 import { formatBackgroundTerminalSessionsForPrompt } from "../../lib/terminalSessions";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";

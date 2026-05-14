@@ -1,5 +1,5 @@
 import { RotateCcw, Settings2, Sparkles, Wrench } from "lucide-react";
-import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../tools/computer/files";
+import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../localWorkspace/files";
 import type { AppInfo } from "../../../types/app";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { ProviderSettings } from "../../../types/settings";

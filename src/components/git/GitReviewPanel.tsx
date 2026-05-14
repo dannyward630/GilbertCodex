@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, ChevronDown, FileCode2, GitBranch, LoaderCircle, RefreshCw, ShieldAlert, TestTube2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatGitChangedFileStatus, formatGitChangedFiles, getGitStatusIssue, gitChangedFileStatusTone } from "../../lib/gitStatusUi";
-import { commitComputerGitChanges, createComputerGitBranch, getComputerGitStatus, initComputerGitRepository, pushComputerGitBranch } from "../../tools/computer/files";
+import { commitComputerGitChanges, createComputerGitBranch, getComputerGitStatus, initComputerGitRepository, pushComputerGitBranch } from "../../localWorkspace/files";
 import type { ComputerGitChangedFile, ComputerGitDiffLine, ComputerGitStatus } from "../../types/localWorkspace";
 
 const GIT_REVIEW_REFRESH_INTERVAL_MS = 10_000;

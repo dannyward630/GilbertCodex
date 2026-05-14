@@ -147,7 +147,7 @@ function ActivityCard({ message, now, onClose, onResolveToolApproval, onSubmitPl
   const duration = formatThinkingDuration(startedAt, completedAt, now);
   const toolCalls = message.toolCalls ?? [];
   const hasToolCalls = toolCalls.length > 0;
-  const activityName = hasPendingApproval ? "Approval needed" : hasToolCalls ? "Tool calls" : isPlanning ? "Planning" : isWebSearch ? "Web search" : "Working";
+  const activityName = hasPendingApproval ? "Approval needed" : hasToolCalls ? "Activity" : isPlanning ? "Planning" : isWebSearch ? "Web search" : "Working";
   const statusLabel = hasPendingApproval ? "Waiting for your decision" : hasToolCalls ? getToolActivityStatusLabel(toolCalls) : isActivityLive ? "Working" : isPlanning ? `Planned for ${duration}` : isWebSearch ? `Searched web in ${duration}` : `Finished in ${duration}`;
   const detailLabel = hasToolCalls ? getToolActivityDetailLabel(toolCalls) : getActivityDetailLabel(message, isActivityLive, isWritingResponse, isPlanning);
   const inputRequests = getPlanningInputRequests(message);
@@ -328,10 +328,10 @@ function ToolCallList({ toolCalls }: { toolCalls: ChatToolCall[] }) {
   }
 
   return (
-    <section className="activity-tool-ledger" aria-label="Tool calls">
+    <section className="activity-tool-ledger" aria-label="Activity records">
       <div className="activity-tool-ledger-header">
         <span>
-          <strong>Tool calls</strong>
+          <strong>Activity</strong>
         </span>
       </div>
       <div className="activity-tool-ledger-list">
@@ -652,13 +652,13 @@ function getActivityDetailLabel(message: ChatMessage, isActivityLive: boolean, i
       }
 
       const toolCalls = message.toolCalls ?? [];
-      const hasResearchTools = toolCalls.length > 0;
+      const hasResearchActivity = toolCalls.length > 0;
 
-      if (hasResearchTools && !message.content.trim()) {
-        return `Researching codebase (${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"})`;
+      if (hasResearchActivity && !message.content.trim()) {
+        return `Researching codebase (${toolCalls.length} activity item${toolCalls.length === 1 ? "" : "s"})`;
       }
 
-      return hasResearchTools ? "Drafting plan from research" : "Building the plan";
+      return hasResearchActivity ? "Drafting plan from research" : "Building the plan";
     }
 
     return "Plan ready";
@@ -1144,14 +1144,14 @@ function getToolActivityStatusLabel(toolCalls: ChatToolCall[]) {
   }
 
   if (runningCount > 0) {
-    return runningCount === 1 ? "Running tool" : "Running tools";
+    return runningCount === 1 ? "Running action" : "Running actions";
   }
 
   if (errorCount + skippedCount > 0) {
     return "Needs attention";
   }
 
-  return "Tools complete";
+  return "Activity complete";
 }
 
 function getToolActivityDetailLabel(toolCalls: ChatToolCall[]) {
@@ -1161,7 +1161,7 @@ function getToolActivityDetailLabel(toolCalls: ChatToolCall[]) {
   const toolCall = activeTool ?? approvalTool ?? latestTool;
 
   if (!toolCall) {
-    return "No tool calls yet.";
+    return "No activity yet.";
   }
 
   const summary = formatToolCallSummary(toolCall, formatTerminalToolDetail(toolCall));

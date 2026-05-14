@@ -51,7 +51,7 @@ export interface ModelProviderDefinition {
 export type ModelCatalogCategoryId =
   | "recommended"
   | "free"
-  | "tool-calling"
+  | "structured-output"
   | "coding"
   | "reasoning"
   | "fast"
@@ -93,9 +93,9 @@ export const MODEL_CATALOG_CATEGORIES: ModelCatalogCategory[] = [
     label: "Free models",
   },
   {
-    description: "Models with function calling, tool use, structured actions, or agent tool orchestration.",
-    id: "tool-calling",
-    label: "Tool calling",
+    description: "Models with strong structured output, JSON, and instruction-following behavior.",
+    id: "structured-output",
+    label: "Structured output",
   },
   {
     description: "Best fits for code editing, repository work, and software agents.",
@@ -113,7 +113,7 @@ export const MODEL_CATALOG_CATEGORIES: ModelCatalogCategory[] = [
     label: "Fast & low cost",
   },
   {
-    description: "Large context windows for long repos, documents, and tool traces.",
+    description: "Large context windows for long repos, documents, and prior activity traces.",
     id: "long-context",
     label: "Long context",
   },
@@ -423,42 +423,42 @@ function getModelProviderLabel(provider: ModelProviderId) {
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
   modelOption("openrouter", "openrouter-free-auto", "Auto Route Free", DEFAULT_CHAT_MODEL, "Speed-biased free routing across reliable OpenRouter free coding and reasoning models.", 262_144, {
-    capabilities: ["Free", "Tools", "Reasoning"],
+    capabilities: ["Free", "Structured", "Reasoning"],
     category: "recommended",
     pricing: freeOpenRouterPricing(),
     useCase: "Default cost-free path for everyday coding, chat, and local-agent loops.",
   }),
   modelOption("openrouter", "openrouter-auto", "OpenRouter Auto", OPENROUTER_AUTO_MODEL, "OpenRouter Auto Router selects the best model for each prompt from a curated high-quality pool.", 2_000_000, {
-    capabilities: ["Auto routing", "Tools", "Variable price"],
+    capabilities: ["Auto routing", "Structured", "Variable price"],
     category: "recommended",
     pricing: routedPricing("No Auto Router surcharge. You pay the standard rate for whichever model OpenRouter selects."),
     useCase: "Use when the prompt mix is unpredictable and the router should trade off quality, task type, and cost.",
   }),
-  modelOption("openrouter", "cobuddy-free", "CoBuddy", COBUDDY_CHAT_MODEL, "Free Baidu coding model on OpenRouter with native tool support.", 131_072, {
-    capabilities: ["Free", "Coding", "Tools"],
+  modelOption("openrouter", "cobuddy-free", "CoBuddy", COBUDDY_CHAT_MODEL, "Free Baidu coding model on OpenRouter with structured output support.", 131_072, {
+    capabilities: ["Free", "Coding", "Structured"],
     category: "coding",
     pricing: freeOpenRouterPricing(),
-    useCase: "Fast code generation and agent workflows when budget matters more than maximum depth.",
+    useCase: "Fast code generation and guided workflows when budget matters more than maximum depth.",
   }),
-  modelOption("openrouter", "laguna-xs-free", "Laguna XS.2", LAGUNA_XS_CHAT_MODEL, "Free compact Poolside coding-agent model with tool calling and reasoning support.", 131_072, {
+  modelOption("openrouter", "laguna-xs-free", "Laguna XS.2", LAGUNA_XS_CHAT_MODEL, "Free compact Poolside coding model with structured output and reasoning support.", 131_072, {
     capabilities: ["Free", "Coding", "Fast"],
     category: "fast",
     pricing: freeOpenRouterPricing(),
     useCase: "Quick code edits, short explanations, and low-latency agent turns.",
   }),
-  modelOption("openrouter", "ring-free", "Ring 2.6 1T", RING_CHAT_MODEL, "Free 1T-scale thinking model built for real-world agent workflows.", 262_144, {
-    capabilities: ["Free", "Reasoning", "Tools"],
+  modelOption("openrouter", "ring-free", "Ring 2.6 1T", RING_CHAT_MODEL, "Free 1T-scale thinking model built for real-world planning workflows.", 262_144, {
+    capabilities: ["Free", "Reasoning", "Structured"],
     category: "reasoning",
     pricing: freeOpenRouterPricing(),
-    useCase: "Harder free reasoning tasks, tool-heavy flows, and cost-free planning.",
+    useCase: "Harder free reasoning tasks, structured outputs, and cost-free planning.",
   }),
-  modelOption("openrouter", "laguna-free", "Laguna M.1", LAGUNA_CHAT_MODEL, "Free Poolside flagship coding-agent route with reasoning and tool calling.", 131_072, {
-    capabilities: ["Free", "Coding", "Tools"],
+  modelOption("openrouter", "laguna-free", "Laguna M.1", LAGUNA_CHAT_MODEL, "Free Poolside flagship coding route with reasoning and structured output.", 131_072, {
+    capabilities: ["Free", "Coding", "Structured"],
     category: "coding",
     pricing: freeOpenRouterPricing(),
     useCase: "Complex codebase work where a free Poolside coding model is preferred.",
   }),
-  modelOption("openrouter", "owl-alpha", "Owl Alpha", OWL_ALPHA_MODEL, "Free OpenRouter alpha foundation model for agentic workloads, tools, and long-context tasks.", 1_048_756, {
+  modelOption("openrouter", "owl-alpha", "Owl Alpha", OWL_ALPHA_MODEL, "Free OpenRouter alpha foundation model for planning, coding, and long-context tasks.", 1_048_756, {
     capabilities: ["Free", "Agentic", "Long context"],
     category: "long-context",
     pricing: freeOpenRouterPricing(),
@@ -477,7 +477,7 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "Image-aware or media-aware reasoning through OpenRouter's free route.",
   }),
   modelOption("openrouter", "openrouter-gpt-latest", "OpenAI GPT Latest", "~openai/gpt-latest", "OpenRouter router that always redirects to the latest OpenAI GPT family model.", 1_050_000, {
-    capabilities: ["Latest", "Reasoning", "Tools"],
+    capabilities: ["Latest", "Reasoning", "Structured"],
     category: "reasoning",
     pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 30 }),
     useCase: "Premium OpenAI-family reasoning, coding, and professional work through OpenRouter.",
@@ -495,31 +495,31 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "Large multimodal context, document analysis, and long repo review through OpenRouter.",
   }),
   modelOption("openrouter", "openrouter-grok-43", "Grok 4.3", "x-ai/grok-4.3", "xAI Grok 4.3 reasoning model via OpenRouter with text and image input.", 1_000_000, {
-    capabilities: ["Reasoning", "Tools", "Vision"],
+    capabilities: ["Reasoning", "Structured", "Vision"],
     category: "reasoning",
     pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.2, inputPerMillionTokens: 1.25, outputPerMillionTokens: 2.5 }),
-    useCase: "Agentic workflows, instruction following, and factual long-context work through OpenRouter.",
+    useCase: "Guided workflows, instruction following, and factual long-context work through OpenRouter.",
   }),
   modelOption("openrouter", "openrouter-deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek/deepseek-v4-pro", "DeepSeek V4 Pro through OpenRouter.", 1_000_000, {
-    capabilities: ["Coding", "Reasoning", "Tools"],
+    capabilities: ["Coding", "Reasoning", "Structured"],
     category: "coding",
     pricing: providerPricing("openrouter", { cachedInputPerMillionTokens: 0.003625, inputPerMillionTokens: 0.435, note: "Current DeepSeek promotional rate through 2026-05-31; OpenRouter live metadata may override this.", outputPerMillionTokens: 0.87 }),
-    useCase: "High-value coding, long-context analysis, and agentic workflows at aggressive token pricing.",
+    useCase: "High-value coding, long-context analysis, and guided workflows at aggressive token pricing.",
   }),
   modelOption("openai", "openai-gpt-55", "GPT-5.5", "gpt-5.5", "OpenAI frontier model for complex coding and professional work.", 1_050_000, {
-    capabilities: ["Reasoning", "Coding", "Tools"],
+    capabilities: ["Reasoning", "Coding", "Structured"],
     category: "reasoning",
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 30 }),
     useCase: "Best fit when answer quality on complex professional work matters more than cost.",
   }),
   modelOption("openai", "openai-gpt-54", "GPT-5.4", "gpt-5.4", "More affordable OpenAI model for coding and professional work.", 400_000, {
-    capabilities: ["Coding", "Reasoning", "Tools"],
+    capabilities: ["Coding", "Reasoning", "Structured"],
     category: "recommended",
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.25, inputPerMillionTokens: 2.5, outputPerMillionTokens: 15 }),
-    useCase: "Default direct OpenAI choice for coding, tool use, and reliable professional work.",
+    useCase: "Default direct OpenAI choice for coding, structured output, and reliable professional work.",
   }),
   modelOption("openai", "openai-gpt-54-mini", "GPT-5.4 Mini", "gpt-5.4-mini", "OpenAI mini model for coding, computer use, and subagents.", 400_000, {
-    capabilities: ["Fast", "Coding", "Tools"],
+    capabilities: ["Fast", "Coding", "Structured"],
     category: "fast",
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.075, inputPerMillionTokens: 0.75, outputPerMillionTokens: 4.5 }),
     useCase: "Subagents, focused implementation work, and lower-cost coding passes.",
@@ -573,10 +573,10 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "High-volume summarization, classification, extraction, and fast user-facing help.",
   }),
   modelOption("xai", "xai-grok-43", "Grok 4.3", "grok-4.3", "xAI reasoning model for agentic workflows and instruction-following tasks.", 1_000_000, {
-    capabilities: ["Reasoning", "Tools", "Vision"],
+    capabilities: ["Reasoning", "Structured", "Vision"],
     category: "recommended",
     pricing: providerPricing("xai", { cachedInputPerMillionTokens: 0.2, inputPerMillionTokens: 1.25, outputPerMillionTokens: 2.5 }),
-    useCase: "Agentic workflows, tool use, factual analysis, and long-context chat.",
+    useCase: "Guided workflows, structured output, factual analysis, and long-context chat.",
   }),
   modelOption("xai", "xai-grok-41-fast-reasoning", "Grok 4.1 Fast Reasoning", "grok-4-1-fast-reasoning", "xAI cost-efficient long-context reasoning model.", 2_000_000, {
     capabilities: ["Fast", "Reasoning", "Long context"],
@@ -585,16 +585,16 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "Long-context reasoning with lower latency and lower cost than flagship Grok.",
   }),
   modelOption("xai", "xai-grok-41-fast", "Grok 4.1 Fast", "grok-4-1-fast-non-reasoning", "xAI cost-efficient long-context Grok model without reasoning overhead.", 2_000_000, {
-    capabilities: ["Fast", "Long context", "Tools"],
+    capabilities: ["Fast", "Long context", "Structured"],
     category: "fast",
     pricing: providerPricing("xai", { cachedInputPerMillionTokens: 0.05, inputPerMillionTokens: 0.2, outputPerMillionTokens: 0.5 }),
     useCase: "Fast long-context chat, extraction, and high-throughput non-reasoning work.",
   }),
-  modelOption("groq", "groq-gpt-oss-120b", "GPT-OSS 120B", "openai/gpt-oss-120b", "Groq-hosted GPT-OSS 120B for high-capability agentic use, tools, browser search, code execution, and reasoning.", 131_072, {
-    capabilities: ["Fast", "Reasoning", "Tools"],
+  modelOption("groq", "groq-gpt-oss-120b", "GPT-OSS 120B", "openai/gpt-oss-120b", "Groq-hosted GPT-OSS 120B for high-capability reasoning, browser search, code understanding, and structured output.", 131_072, {
+    capabilities: ["Fast", "Reasoning", "Structured"],
     category: "coding",
     pricing: providerPricing("groq", { cachedInputPerMillionTokens: 0.075, inputPerMillionTokens: 0.15, outputPerMillionTokens: 0.6 }),
-    useCase: "Very fast coding agents, research workflows, math, and tool-heavy tasks.",
+    useCase: "Very fast coding, research workflows, math, and structured tasks.",
   }),
   modelOption("groq", "groq-gpt-oss-20b", "GPT-OSS 20B", "openai/gpt-oss-20b", "Smaller Groq-hosted GPT-OSS route for very fast reasoning-capable work.", 131_072, {
     capabilities: ["Very fast", "Reasoning"],
@@ -602,14 +602,14 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     pricing: providerPricing("groq", { inputPerMillionTokens: 0.075, outputPerMillionTokens: 0.3 }),
     useCase: "Fast drafts, classification, short coding tasks, and inexpensive reasoning turns.",
   }),
-  modelOption("groq", "groq-compound", "Groq Compound", "groq/compound", "Groq system that selectively uses built-in tools such as web search, code execution, website visits, browser automation, and Wolfram Alpha.", 131_072, {
-    capabilities: ["Tools", "Web", "Code execution"],
+  modelOption("groq", "groq-compound", "Groq Compound", "groq/compound", "Groq system with provider-managed web search, code execution, site visits, and Wolfram Alpha.", 131_072, {
+    capabilities: ["Provider-managed", "Web", "Code execution"],
     category: "coding",
-    pricing: routedPricing("Final price depends on underlying model usage plus built-in tool charges.", "groq"),
-    useCase: "Queries that need Groq-managed web, code, and tool orchestration.",
+    pricing: routedPricing("Final price depends on underlying model usage plus provider-managed action charges.", "groq"),
+    useCase: "Queries that need Groq-managed web, code, and provider-side orchestration.",
   }),
   modelOption("groq", "groq-llama-33-70b", "Llama 3.3 70B", "llama-3.3-70b-versatile", "Groq-hosted Meta Llama 3.3 70B for multilingual NLP, code generation, and math.", 131_072, {
-    capabilities: ["Fast", "Tools", "JSON"],
+    capabilities: ["Fast", "Structured", "JSON"],
     category: "general",
     pricing: providerPricing("groq", { inputPerMillionTokens: 0.59, outputPerMillionTokens: 0.79 }),
     useCase: "Real-time general chat, support bots, multilingual work, coding, and math.",
@@ -621,25 +621,25 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "Agentic coding, structured outputs, document Q&A, and complex instruction following.",
   }),
   modelOption("mistral", "mistral-large-3", "Mistral Large 3", "mistral-large-2512", "Mistral state-of-the-art open-weight general-purpose multimodal model.", 256_000, {
-    capabilities: ["Open weight", "Vision", "Tools"],
+    capabilities: ["Open weight", "Vision", "Structured"],
     category: "general",
     pricing: providerPricing("mistral", { inputPerMillionTokens: 0.5, outputPerMillionTokens: 1.5 }),
-    useCase: "General multimodal work, tool use, structured outputs, and open-weight deployments.",
+    useCase: "General multimodal work, structured outputs, and open-weight deployments.",
   }),
   modelOption("mistral", "mistral-devstral-2", "Devstral 2", "devstral-2512", "Mistral frontier code-agent model for software engineering tasks.", 256_000, {
-    capabilities: ["Coding", "Agents", "Tools"],
+    capabilities: ["Coding", "Agents", "Structured"],
     category: "coding",
     pricing: providerPricing("mistral", { inputPerMillionTokens: 0.4, outputPerMillionTokens: 2 }),
     useCase: "Codebase exploration, multi-file editing, and software-engineering agents.",
   }),
-  modelOption("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro", "DeepSeek's strongest V4 model with thinking and non-thinking modes, JSON output, and tool calls.", 1_000_000, {
-    capabilities: ["Coding", "Reasoning", "Tools"],
+  modelOption("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro", "DeepSeek's strongest V4 model with thinking and non-thinking modes plus JSON output.", 1_000_000, {
+    capabilities: ["Coding", "Reasoning", "Structured"],
     category: "coding",
     pricing: providerPricing("deepseek", { cachedInputPerMillionTokens: 0.003625, inputPerMillionTokens: 0.435, note: "Current DeepSeek promotional rate through 2026-05-31; regular listed input/output rates are higher.", outputPerMillionTokens: 0.87 }),
-    useCase: "Hard coding, long-context analysis, agent workflows, and high-value reasoning.",
+    useCase: "Hard coding, long-context analysis, guided workflows, and high-value reasoning.",
   }),
-  modelOption("deepseek", "deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash", "DeepSeek fast V4 model with thinking and non-thinking modes, JSON output, and tool calls.", 1_000_000, {
-    capabilities: ["Fast", "Coding", "Tools"],
+  modelOption("deepseek", "deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash", "DeepSeek fast V4 model with thinking and non-thinking modes plus JSON output.", 1_000_000, {
+    capabilities: ["Fast", "Coding", "Structured"],
     category: "fast",
     pricing: providerPricing("deepseek", { cachedInputPerMillionTokens: 0.0028, inputPerMillionTokens: 0.14, outputPerMillionTokens: 0.28 }),
     useCase: "Low-cost chat, routine coding, summarization, extraction, and high-volume agent work.",

@@ -1,7 +1,7 @@
 import { createPlanningAnswersMessage } from "../services/planningClient";
 import { formatWebSearchProviderLabel } from "../services/webSearchClient";
-import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../tools/computer/localToolExecutor";
-import type { LocalComputerToolExecutionPolicy } from "../tools/computer/localToolExecutor";
+import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../localWorkspace/localToolRuntimeDisabled";
+import type { LocalComputerToolExecutionPolicy } from "../localWorkspace/localToolRuntimeDisabled";
 import type {
   ChatMessage,
   ChatPlanning,
@@ -12,10 +12,17 @@ import type {
   ChatToolCall,
   ChatWebSearch,
 } from "../types/chat";
-export {
-  createRecoverableLocalEditRetryInstruction,
-  isRecoverableLocalEditFailure,
-} from "./toolRecovery";
+export function isRecoverableLocalEditFailure(..._args: unknown[]) {
+  return false;
+}
+
+export function createRecoverableLocalEditRetryInstruction(prompt: string, ..._args: unknown[]) {
+  return [
+    "LOCAL TOOLS DISABLED",
+    `Original user request: ${prompt}`,
+    "Model-callable local edit tools have been removed from this build. Continue with a normal answer from the available conversation, workspace, and web context without emitting tool-call syntax.",
+  ].join("\n\n");
+}
 
 /** Browser/provider abort detection shared by streaming, planning, and tool loops. */
 export function isAbortError(error: unknown) {
@@ -65,40 +72,12 @@ export function looksLikeOnlyToolPrelude(content: string) {
 
 /** Detects prose promises that should have been real tool calls. */
 export function looksLikeUnexecutedToolActionPromise(content: string) {
-  const normalized = content.trim().toLowerCase();
-
-  if (!normalized || normalized.length > 1_800) {
-    return false;
-  }
-
-  return (
-    /\b(?:i'll|i will|i am going to|i'm going to|let me|let's|so i'll|now i'll|now i will|i need to|we need to)\b[\s\S]{0,220}\b(?:create|write|edit|patch|update|generate|scaffold|add)\b[\s\S]{0,180}\b(?:files?|app\.jsx|app\.tsx|styles?\.css|main\.jsx|main\.tsx|index\.html|package\.json|vite|react|component|ui|animation|theme|dark\/light|dark mode|light mode)\b/.test(normalized) ||
-    /\b(?:create|write|edit|patch|update|generate|scaffold|add)\b[\s\S]{0,180}\b(?:app\.jsx|app\.tsx|styles?\.css|main\.jsx|main\.tsx|index\.html|package\.json|vite|react|component|ui|animation|theme|dark\/light|dark mode|light mode)\b[\s\S]{0,180}\b(?:now|next|let me|i'll|i will|i need to|we need to)\b/.test(normalized) ||
-    /\b(?:i'll|i will|i am going to|i'm going to|let me|so i'll|now i'll)\b[\s\S]{0,180}\b(?:open|launch|pull up|navigate|show|preview)\b[\s\S]{0,140}\b(?:browser|preview|localhost|local host|dev server|site|page|url)\b/.test(normalized) ||
-    /\b(?:dev server|localhost|local host)\b[\s\S]{0,140}\b(?:already running|running from|background terminal|terminal session)\b[\s\S]{0,180}\b(?:open|browser|preview)\b/.test(normalized) ||
-    /\b(?:let's|we need to|we should|we'll|we will|i'll|i will|i need to|now i'll|now i will)\b[\s\S]{0,220}\b(?:use|call|run|retry|try|emit)\b[\s\S]{0,120}\b(?:create_files|write_file|edit_file|view_code|read_file|open_browser_preview|tool_call)\b/.test(normalized) ||
-    /\b(?:let me|i'll|i will|we'll|we will|now i'll|now i will)\b[\s\S]{0,180}\b(?:write|apply|batch)\b[\s\S]{0,140}\b(?:file changes|independent writes|writes|files?)\b/.test(normalized) ||
-    /\b(?:the problem|problem:|failed|wasn't|was not|did not|never)\b[\s\S]{0,260}\b(?:edit|replace|wire|change|open|preview|button|handler)\b[\s\S]{0,260}\b(?:let's|we need to|we should|we'll|we will|i'll|i will)\b[\s\S]{0,180}\b(?:edit_file|open_browser_preview|tool_call|make the replacement|make this replacement|open the browser)\b/.test(normalized)
-  );
+  return false;
 }
 
-/** Detects visible explanations of the hidden tool protocol instead of real tool use. */
+/** Detects visible explanations of the hidden action protocol instead of real runtime evidence. */
 export function looksLikeToolProtocolNarration(content: string) {
-  const normalized = content.trim().toLowerCase();
-
-  if (!normalized || normalized.length > 6_000) {
-    return false;
-  }
-
-  const mentionsToolProtocol =
-    /\b(?:tool_call|arg_key|arg_value|xml style|xml-style|tool block|tool format|formatted tool|tool call)\b/.test(normalized);
-  const narratesConstruction =
-    /\b(?:craft|format|produce|emit|write|construct|create|output|use)\b[\s\S]{0,180}\b(?:tool_call|tool call|arg_key|arg_value|xml)\b/.test(normalized) ||
-    /\b(?:expected format|correctly formatted|formatted correctly|the spec says|the app(?:'s)? expected format|we follow that|we'll produce|we will produce)\b[\s\S]{0,220}\b(?:tool_call|tool call|arg_key|arg_value|xml)\b/.test(normalized);
-  const exposesExecutionDebate =
-    /\b(?:we can|we could|should we|better to|alternatively|actually)\b[\s\S]{0,260}\b(?:run_terminal|read_file|write_file|open_browser_preview|create_vite_project|tool call|tool_call|batching|concurrent|one after another|separate messages)\b/.test(normalized);
-
-  return mentionsToolProtocol && (narratesConstruction || exposesExecutionDebate);
+  return false;
 }
 
 export function isToolResultFallbackAnswer(content: string) {
@@ -179,7 +158,7 @@ export function createFabricatedToolActivityRecoveryInstruction(prompt: string, 
       ? "The previous visible answer exposed internal activity text instead of answering from the app's real tool-call records."
       : "The previous visible answer claimed tool calls, file edits, terminal output, or progress records, but the app has no real tool-call records for that claim.",
     "Do not repeat or summarize fake activity. Never paste [CONVERSATION CONTEXT SURFACE], TOOL CALLS, PROGRESS, command output, or edit/run status lines as if they were real work.",
-    "If the user's request requires tools, emit valid compact tool_call blocks now so the app can execute them and create real activity records. If no tool is needed, answer from available evidence without claiming any tool ran.",
+    "Model-callable local tools are disabled in this build. Answer from available evidence without claiming any local tool ran.",
     excerpt ? `Rejected fake activity excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
@@ -189,15 +168,10 @@ export function createToolActionPromiseRecoveryInstruction(prompt: string, promi
   const excerpt = promisedContent.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "TOOL ACTION REQUIRED",
+    "LOCAL TOOLS DISABLED",
     `Original user request: ${prompt}`,
-    "The previous visible answer promised to open, preview, navigate, inspect, or otherwise use a tool, but no executable tool call was emitted.",
-    "Do not repeat the promise. Emit the real tool_call now.",
-    "For file creation requests, call create_files for multi-file batches or write_file for one file. If the project is a new Vite React app, call create_vite_project.",
-    "After creating or editing files, re-read the changed files or list the created folder, then run the relevant verification command.",
-    "For browser preview requests, call open_browser_preview. If a background dev server is already tracked, open_browser_preview may be called without a URL so the app can reuse that session; otherwise pass the exact url, bare localhost address, or query.",
-    "For source-edit requests, call view_code/read_file if the current target text is uncertain, then call edit_file/inline_edit with exact current text or a line-range edit. Do not end with 'Let's use edit_file' as prose.",
-    "Only answer in prose if the tool is disabled or blocked, and then say that blocker plainly.",
+    "The previous visible answer promised a local tool action, but model-callable local tools have been removed from this build.",
+    "Do not repeat the promise or emit tool-call syntax. Answer normally from available evidence and state plainly when the requested action cannot be performed by the model in this build.",
     excerpt ? `Rejected promise excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
@@ -209,9 +183,9 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
   return [
     "TOOL PROTOCOL NARRATION REJECTED",
     `Original user request: ${prompt}`,
-    "The previous visible response discussed how to format, batch, or emit tool calls instead of using the app tools.",
-    "Do not explain the hidden tool protocol, do not mention XML, arg_key, arg_value, batching mechanics, cwd choices, shell choices, timeout choices, or step-by-step tool formatting.",
-    "If a tool is needed, call it now by emitting only the compact tool_call block with complete arguments and no surrounding prose. Provider-native tool calling is intentionally disabled until native tool_result round-tripping exists.",
+    "The previous visible response discussed tool-call protocol even though model-callable local tools are disabled.",
+    "Do not explain hidden tool protocol, batching mechanics, cwd choices, shell choices, timeout choices, or step-by-step tool formatting.",
+    "Do not emit tool calls.",
     "If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected protocol narration excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -219,33 +193,17 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
 
 /** Detects local build/edit/project requests that should not be answered without fresh tools. */
 export function needsFreshLocalToolEvidence(prompt: string, hasWorkspaceRoots: boolean) {
-  if (!hasWorkspaceRoots) {
-    return false;
-  }
-
-  const normalized = prompt.toLowerCase();
-  const asksForLocalAction =
-    /\b(?:add|build|change|create|debug|edit|fix|generate|implement|install|launch|make|modify|patch|preview|read|rebuild|repair|run|scaffold|set\s*up|setup|start|test|update|verify|write)\b/i.test(normalized);
-  const mentionsLocalTarget =
-    /\b(?:app|build|code|component|css|dev\s*server|file|folder|package\.json|project|react|src|terminal|typecheck|vite|workspace)\b/i.test(normalized) ||
-    /(?:[a-z]:\\|\/src\/|\\src\\|\.\w{1,8}\b)/i.test(prompt);
-
-  return asksForLocalAction && mentionsLocalTarget;
+  return false;
 }
 
 export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string) {
   const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "FRESH LOCAL TOOL EVIDENCE REQUIRED",
+    "LOCAL TOOLS DISABLED",
     `Original user request: ${prompt}`,
-    "The previous response answered a local coding/project task without using executable local tools. That is not reliable enough.",
-    "Do not rely on workspace context, index snippets, project memory, or prior chat memory as proof that the filesystem is correct.",
-    "Use the available tools now. For existing work: search/list if needed, read_file or view_code the exact files before editing, perform one precise edit/write/create action, then re-read changed files and run the relevant verification command.",
-    "For a new Vite React app, use create_vite_project first. If the user already selected/opened the target project folder, omit project_path so files are created directly in that folder. Then run npm install, npm run build, and npm run dev with cwd set to the returned project path.",
-    "Simple scaffold stop rule: if the request is only to create/install/build/run a Hello World or starter Vite React app, do not redesign, restyle, or keep editing after scaffold, install, build, and dev-server startup have succeeded. Finalize from that evidence.",
-    "If the selected workspace folder is empty, that is the target project. Scaffold there; do not inspect or retry the parent directory.",
-    "If no workspace or path is available, ask for the folder instead of pretending work was done.",
+    "Model-callable local tools have been removed from this build.",
+    "Do not claim filesystem changes, command output, or verification unless that evidence is already present in the conversation. Ask for the missing context or explain the limitation plainly.",
     excerpt ? `Unsupported answer excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
@@ -259,19 +217,7 @@ export interface SimpleLocalTaskCompletion {
 }
 
 export function isSimpleLocalScaffoldRequest(prompt: string) {
-  const normalized = prompt.replace(/\s+/g, " ").trim().toLowerCase();
-
-  if (!normalized) {
-    return false;
-  }
-
-  const asksForScaffold = /\b(?:build|create|generate|make|scaffold|set\s*up|setup)\b/.test(normalized);
-  const mentionsReact = /\breact\b/.test(normalized);
-  const mentionsViteOrStarter = /\b(?:vite|vight|fight)\b/.test(normalized) || /\b(?:hello\s*world|starter|basic|simple|first\s+task)\b/.test(normalized);
-  const asksForRunEvidence = /\b(?:install|dependencies?|npm\s+install|build|run|start|serve|dev\s*server|launch)\b/.test(normalized);
-  const asksForDesignWork = /\b(?:animate|animation|beautiful|dashboard|database|full[-\s]?stack|game|high\s+quality|landing\s+page|perfect|polish|premium|production|redesign|responsive|stunning|tailwind|theme|three\.?js)\b/.test(normalized);
-
-  return asksForScaffold && mentionsReact && mentionsViteOrStarter && asksForRunEvidence && !asksForDesignWork;
+  return false;
 }
 
 export function detectSimpleLocalTaskCompletion(prompt: string, toolCalls: ChatToolCall[] = []): SimpleLocalTaskCompletion | null {
@@ -380,14 +326,14 @@ export function createLocalToolFinalInstruction(prompt: string) {
   return [
     "FINAL ANSWER REQUIRED FROM LOCAL TOOL RESULTS",
     `Original user request: ${prompt}`,
-    "Use the agent tool results already provided as the evidence for your answer.",
+    "Use the conversation, attached workspace context, and web context already provided as the evidence for your answer.",
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
-    "If more evidence is truly required, emit concrete tool calls now. Otherwise write the final answer now.",
+    "If more evidence is truly required, ask for it. Otherwise write the final answer now.",
     "Do not describe the tool loop, provider behavior, saved evidence, continuation state, recovery state, or why an answer was missing.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Cite web sources with Markdown links when the tool results include URLs.",
-    "Do not output raw tool_call XML or JSON as prose.",
+    "Do not output hidden tool protocol text as prose.",
   ].join("\n\n");
 }
 
@@ -397,11 +343,11 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     "FINAL ANSWER REQUIRED FROM CURRENT TOOL RESULTS",
     `Original user request: ${prompt}`,
     detail,
-    "Use the tool results already provided as evidence and write the best final answer now.",
+    "Use the evidence already provided and write the best final answer now.",
     "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
-    "Do not emit more tool_call XML or JSON. Do not promise to keep inspecting unless the next step is impossible without user input.",
+    "Do not emit hidden tool protocol text. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
 }
 
@@ -411,7 +357,7 @@ export function createFinalAnswerRecoveryInstruction(prompt: string, detail: str
     "FINAL ANSWER REQUIRED",
     `Original user request: ${prompt}`,
     detail,
-    "Use the conversation context, web context, local workspace context, and completed tool evidence already provided above.",
+    "Use the conversation context, web context, and local workspace context already provided above.",
     "Write only the user-facing answer now.",
     "Do not mention background work, Activity, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
     "Do not paste raw TOOL blocks or adaptation recommendations.",
@@ -425,8 +371,8 @@ export function createMalformedToolCallRecoveryInstruction(prompt: string) {
   return [
     "CONTINUE AFTER UNREADABLE TOOL REQUEST",
     `Original user request: ${prompt}`,
-    "The previous assistant response looked like it was trying to call a tool, but the app could not parse an executable tool request from it.",
-    "Continue the same response now. Either write a normal final answer from the existing evidence, or emit one valid compact tool_call block with complete arguments.",
+    "The previous assistant response looked like it was trying to call a tool, but model-callable local tools are disabled.",
+    "Continue the same response now with a normal final answer from the existing evidence.",
     "Do not leave the visible answer blank.",
   ].join("\n\n");
 }
@@ -443,7 +389,7 @@ export function createInterruptedResponseContinuationInstruction(prompt: string,
     visibleContent ? "The previous partial visible response is included as assistant context. Do not repeat it unless needed for coherence." : "The previous response was interrupted before visible answer text was saved.",
     toolCallCount > 0 ? `Saved tool/activity results available: ${toolCallCount}. Treat them as already completed evidence.` : "",
     message.webSearch?.enabled ? "Saved web-search state is included above. If it failed, say that briefly and continue with non-current claims only when appropriate." : "",
-    "If the next step requires another available tool, request it. Otherwise finish the answer now.",
+    "If the next step requires unavailable local tools, say that plainly. Otherwise finish the answer now.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -499,7 +445,7 @@ export function createActiveLocalToolCalls(content: string, passIndex: number, e
   ];
 }
 
-/** Uses hidden provider reasoning as tool-request input when Anthropic-style thinking contains XML calls. */
+/** Uses hidden provider reasoning as tool-request input when thinking contains strict envelopes. */
 export function createAssistantToolRequestContent(content: string, reasoning?: string, executionPolicy?: LocalComputerToolExecutionPolicy) {
   return createLocalComputerToolRequestContent(content, reasoning, executionPolicy);
 }

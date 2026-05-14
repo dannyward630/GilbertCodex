@@ -5,7 +5,7 @@ description: Use for current information, official docs, third-party APIs, libra
 
 # Research And Current Facts
 
-Use live research when facts may have changed or when the user asks to research, verify, look up, cite, or use official documentation.
+Use attached live web-search context when facts may have changed or when the user asks to research, verify, look up, cite, or use official documentation. Web search is host-managed in this build; do not emit tool-call syntax.
 
 Research with discipline:
 - Prefer primary sources: official docs, standards, source repositories, release notes, or original papers.
@@ -14,4 +14,4 @@ Research with discipline:
 - Separate sourced facts from inference.
 - Cite URLs in the final answer when web results support the response.
 
-Deep research means broader evidence gathering with a finite budget, not endless tool use. Gather enough source-backed context to act, then synthesize.
+Deep research means broader source-backed synthesis from the attached evidence, not endless source chasing. If more sources are required and none were attached, say what should be searched next.

@@ -8,7 +8,7 @@ Last updated: May 13, 2026.
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer and the v0.3.0 modular tool-runtime update. |
+| Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
 | macOS | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for macOS, but the desktop app still needs someone on macOS to run, package, and finish any native issues. |
 | Linux | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for Linux, but the desktop app still needs someone on Linux to run, package, and finish any native issues. |
 
@@ -19,11 +19,9 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 - Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
 - Tauri bundle targets are configured broadly so host-platform packages can be produced by each OS.
-- The desktop terminal supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
-- Local tool command inference chooses platform-appropriate package manager, Gradle, TypeScript, and custom-tool commands.
-- The v0.3.0 tool executor is split into platform-neutral parser, registry, policy, terminal, workspace, file-mutation, Git, GitHub, MCP, browser, weather, and web-search modules.
-- The workflow layer is source-portable TypeScript and uses `xstate`, but native terminal, browser preview, file picker, and packaging behavior still need OS-specific verification.
-- Custom reusable tools can use `.ps1`, `.cmd`, or `.sh` scripts depending on the selected shell.
+- The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux, but it is no longer exposed as a model-callable tool.
+- Model-callable local tools are disabled in the reset build. Web search remains host-managed; the next tool runtime should be rebuilt with platform boundaries documented before it is re-enabled.
+- Native terminal, browser preview, file picker, and packaging behavior still need OS-specific verification.
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
 - Browser automation uses a platform-appropriate user agent.
 - Setup docs now use cross-platform `npm` commands, with a Windows `npm.cmd` note where useful.

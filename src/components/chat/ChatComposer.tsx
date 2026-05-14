@@ -11,10 +11,8 @@ import {
 import {
   AlertTriangle,
   ArrowUp,
-  Boxes,
   Check,
   ChevronDown,
-  ChevronRight,
   CloudOff,
   CornerDownRight,
   FileUp,
@@ -73,7 +71,7 @@ import {
   mergeFullComputerRoots,
   pickComputerFolder,
   writeComputerTextFile,
-} from "../../tools/computer/files";
+} from "../../localWorkspace/files";
 import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
 import type { ComputerDrive, ComputerFileIndexProgress, ComputerFileIndexSummary, ComputerGitStatus, LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ProjectSummary } from "../../types/project";
@@ -1101,24 +1099,6 @@ export function ChatComposer({
                 <div className="composer-menu-separator" />
                 <div className="composer-menu-panel">
                   <ThinkingModeControls settings={thinking} onChange={onThinkingChange} variant="panel" />
-                </div>
-                <div className="composer-menu-nested">
-                  <button className="composer-menu-item" type="button" role="menuitem" aria-haspopup="menu">
-                    <Boxes size={18} aria-hidden="true" />
-                    <span>Tools</span>
-                    <ChevronRight size={17} aria-hidden="true" />
-                  </button>
-                  <div className="composer-submenu" role="menu" aria-label="Tool menu">
-                    <button type="button" role="menuitem" disabled>
-                      Browser
-                    </button>
-                    <button type="button" role="menuitem" disabled>
-                      GitHub
-                    </button>
-                    <button type="button" role="menuitem" disabled>
-                      Terminal
-                    </button>
-                  </div>
                 </div>
               </div>
             ) : null}

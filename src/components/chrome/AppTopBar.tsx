@@ -129,11 +129,7 @@ export function AppTopBar({
       ],
       view: [
         { label: "Show sidebar", shortcut: "Ctrl+B", checked: sidebarOpen, onSelect: onToggleSidebar },
-        { label: "Terminal", shortcut: "Ctrl+`", checked: terminalOpen, onSelect: onToggleTerminal },
         { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onSelect: () => onRouteChange("chat") },
-        { label: "Toolbox", checked: activeRoute === "toolbox", onSelect: () => onRouteChange("toolbox") },
-        { label: "MCP", checked: activeRoute === "mcp", onSelect: () => onRouteChange("mcp") },
-        { label: "Workflows", checked: activeRoute === "workflows", onSelect: () => onRouteChange("workflows") },
         { label: "Radar", checked: activeRoute === "radar", onSelect: () => onRouteChange("radar") },
         { label: "Settings", checked: activeRoute === "settings", onSelect: () => onRouteChange("settings") },
         { label: "System theme", checked: appearanceMode === "system", separatorBefore: true, onSelect: () => onAppearanceModeChange("system") },
@@ -201,9 +197,6 @@ export function AppTopBar({
       } else if (key === "b") {
         event.preventDefault();
         onToggleSidebar();
-      } else if (key === "`") {
-        event.preventDefault();
-        onToggleTerminal();
       } else if (key === ",") {
         event.preventDefault();
         onRouteChange("settings");

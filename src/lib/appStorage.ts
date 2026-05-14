@@ -22,7 +22,6 @@ import {
 } from "./models";
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
-import { DEFAULT_MCP_SETTINGS, normalizeMcpSettings } from "../types/mcp";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import { cleanupLegacyDeviceStorage, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
 import type {
@@ -113,7 +112,6 @@ export const defaultProviderSettings: ProviderSettings = {
   apiKeys: {},
   baseUrls: getDefaultProviderBaseUrls(),
   maxTokens: DEFAULT_LOCAL_MAX_TOKENS,
-  mcp: DEFAULT_MCP_SETTINGS,
   model: DEFAULT_CHAT_MODEL,
   openRouterApiKey: "",
   provider: DEFAULT_PROVIDER_ID,
@@ -198,7 +196,8 @@ export function loadChats(): ChatSummary[] {
   }
 
   return storedChats.map((chat) => {
-    const messages = Array.isArray(chat.messages) ? chat.messages.map(normalizeChatMessage) : [];
+    const normalizedMessages = Array.isArray(chat.messages) ? chat.messages.map(normalizeChatMessage) : [];
+    const messages = normalizedMessages;
     const project = normalizeProjectName(chat.project);
     const isLegacyDiscordChat = project.toLowerCase() === "discord" && messages.some((message) => message.source?.kind === "discord");
     const firstUserMessage = messages.find((message) => message.role === "user");
@@ -208,6 +207,7 @@ export function loadChats(): ChatSummary[] {
       messages,
       project: isLegacyDiscordChat ? DEFAULT_PROJECT : project,
       title: isLegacyDiscordChat && firstUserMessage ? titleFromMessage(firstUserMessage.content) : chat.title || "New chat",
+      toolRuntimeVersion: 0,
       updatedAt: chat.updatedAt || new Date().toISOString(),
     };
   });
@@ -271,7 +271,6 @@ export function loadProviderSettings(): ProviderSettings {
     apiKeys,
     baseUrls,
     maxTokens: normalizeMaxTokens(storedSettings?.maxTokens, defaultProviderSettings.maxTokens),
-    mcp: normalizeMcpSettings(storedSettings?.mcp),
     model,
     openRouterApiKey: apiKeys.openrouter ?? "",
     provider,
@@ -301,7 +300,6 @@ export function saveProviderSettings(settings: ProviderSettings) {
     ...settings,
     apiKeys,
     baseUrls,
-    mcp: normalizeMcpSettings(settings.mcp),
     openRouterApiKey: apiKeys.openrouter ?? "",
     providerModels,
     thinking: normalizeThinkingSettings(settings.thinking),

@@ -7,16 +7,16 @@ Gilbert Codex uses a modular prompt stack instead of one large always-on system 
 - Keep stable core instructions short and cache-friendly.
 - Load detailed skills only when the request needs them.
 - Use a local vector index for prompt chunk retrieval.
-- Keep runtime tool rules accurate to the user's enabled Toolbox settings.
+- Keep reset-state runtime rules accurate while local model-callable actions are offline.
 - Preserve enough instruction strength for coding work without spending unnecessary tokens on unrelated prompt text.
 
 ## Runtime Flow
 
 1. `buildAgentSystemPrompt` receives provider settings and the messages about to be sent.
-2. `createAgentPromptRetrievalContext` builds a retrieval query from the latest user request, recent messages, mode, enabled tools, thinking state, and whether web/local tool results are present.
+2. `createAgentPromptRetrievalContext` builds a retrieval query from the latest user request, recent messages, mode, web-search state, thinking state, and whether prior activity evidence is present.
 3. `selectPromptChunks` embeds that query and ranks prompt chunks from the catalog.
-4. Mandatory core instructions are always included. Tool, coding, research, planning, review, and frontend chunks are selected only when relevant or forced by active context.
-5. `createRuntimeToolPrompt` adds precise tool rules for the current Toolbox state.
+4. Mandatory core instructions are always included. Coding, research, planning, review, and frontend chunks are selected only when relevant or forced by active context.
+5. `createRuntimeToolPrompt` adds the reset-state runtime guardrails and web-search guidance.
 6. The provider clients send the composed prompt as the system prompt or Responses API `instructions`.
 
 ## Folder Map
@@ -32,7 +32,7 @@ Gilbert Codex uses a modular prompt stack instead of one large always-on system 
 - `src/prompts/agent/promptRetrieval.ts`
   Query construction, scoring, forced chunk selection, and token budgeting.
 - `src/prompts/agent/runtimeToolPrompt.ts`
-  Dynamic runtime tool policy based on enabled Toolbox capabilities.
+  Reset-state runtime guidance. Web search is host-managed; local model-callable actions stay disabled.
 - `src/prompts/agent/agentPrompt.ts`
   Final prompt assembly and total prompt budget enforcement.
 
@@ -51,4 +51,4 @@ The core prompt is always first. This keeps stable instructions at the top of th
 1. Add a new `SKILL.md` under `src/prompts/agent/instructions`.
 2. Register it in `promptCatalog.ts` with strong trigger keywords, a priority, and a max token budget.
 3. Add a forced-selection rule in `promptRetrieval.ts` only if the skill must load for a reliable runtime condition.
-4. Keep runtime-specific tool syntax in `runtimeToolPrompt.ts` rather than duplicating it inside every skill.
+4. Keep runtime-specific reset guidance in `runtimeToolPrompt.ts` rather than duplicating it inside every skill.

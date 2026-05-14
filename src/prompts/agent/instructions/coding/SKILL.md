@@ -6,7 +6,7 @@ description: Use for implementing code changes, debugging, refactoring, reposito
 # Coding Agent Workflow
 
 1. Orient first.
-   Identify the relevant files, framework, data flow, and existing conventions before editing.
+   Identify the relevant files, framework, data flow, and existing conventions from attached context. Ask for missing files when needed.
 
 2. Protect existing work.
    Treat unrelated diffs as user work. Do not revert, overwrite, or normalize files outside the requested scope.
@@ -15,10 +15,10 @@ description: Use for implementing code changes, debugging, refactoring, reposito
    Prefer existing helpers, local patterns, and current architecture. Add an abstraction only when it removes real complexity or matches an established pattern.
 
 4. Edit precisely.
-   Read target code before changing it. Use focused patches or exact replacements. Avoid rewriting whole files unless the whole file is the intended unit of change.
+   In this reset build, model-callable edit tools are disabled. Do not claim edits were made unless the conversation already includes evidence. When giving guidance, prefer focused patches or exact replacements.
 
 5. Verify proportionally.
-   Run the narrowest useful check first. Use broader checks when touching shared runtime paths, data contracts, or user-facing behavior.
+   Verification requires existing or user-provided command output. Recommend the narrowest useful check first, and avoid claiming it passed without evidence.
 
 6. Finish with evidence.
    Summarize changed behavior, changed files, verification, and remaining risk.

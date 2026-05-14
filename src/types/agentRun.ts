@@ -42,6 +42,16 @@ export interface AgentApproval {
   toolCallId?: string;
 }
 
+export interface AgentRunRequest {
+  approvalPolicy: "inherit";
+  chatId: string;
+  goal: string;
+  messageId: string;
+  mode: "execute" | "plan";
+  source: "auto" | "legacy_resume" | "manual";
+  workspace: LocalWorkspaceSettings;
+}
+
 export interface AgentRunStep {
   approvalId?: string;
   completedAt?: string;
@@ -53,7 +63,22 @@ export interface AgentRunStep {
   startedAt: string;
   status: AgentRunStepStatus;
   toolCallId?: string;
-  type: "approval" | "browser" | "model" | "planning" | "subagent" | "tool" | "verification";
+  type:
+    | "approval"
+    | "browser"
+    | "create"
+    | "edit"
+    | "error"
+    | "git"
+    | "model"
+    | "planning"
+    | "read"
+    | "search"
+    | "subagent"
+    | "synthesis"
+    | "terminal"
+    | "tool"
+    | "verification";
 }
 
 export interface AgentRunEvent {

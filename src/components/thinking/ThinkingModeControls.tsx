@@ -14,7 +14,7 @@ const effortOptions: Array<{ detail: string; label: string; value: ReasoningEffo
   { detail: "Fast passes", label: "Low", value: "low" },
   { detail: "Adaptive", label: "Medium", value: "medium" },
   { detail: "Deep work", label: "High", value: "high" },
-  { detail: "Broad tool use", label: "Deep Research", value: "xhigh" },
+  { detail: "Broad research", label: "Deep Research", value: "xhigh" },
 ];
 
 function formatThinkingChipLabel(settings: ThinkingSettings) {
@@ -121,7 +121,7 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
           <Gauge size={14} aria-hidden="true" />
           Depth
         </span>
-        <small>{settings.enabled ? "Adaptive tools" : "Paused"}</small>
+        <small>{settings.enabled ? "Adaptive depth" : "Paused"}</small>
       </div>
 
       <div className="thinking-effort-grid" role="radiogroup" aria-label="Reasoning effort">

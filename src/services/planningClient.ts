@@ -1,4 +1,4 @@
-import { sanitizeLocalToolCallsForDisplay } from "../tools/computer/localToolExecutor";
+import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
 import type { ChatMessage, ChatPlanningInputAnswer, ChatPlanningInputRequest, ChatPlanningQuestion, ChatPlanningQuestionOption, ChatProgressItem } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
 import { streamProviderMessage, sendProviderMessage, type ProviderUsage } from "./modelProviderClient";
@@ -13,7 +13,7 @@ interface PlanningRunOptions {
   onUpdate: (snapshot: PlanningSnapshot) => void;
   onProviderRequest?: (request: PlanningProviderRequest) => void;
   onProviderUsage?: (request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
-  /** Plain-text observations gathered by a prior tool-grounded research pass. */
+  /** Plain-text observations gathered from host-attached workspace or web context. */
   researchFindings?: string;
   signal?: AbortSignal;
   settings: ProviderSettings;
@@ -160,9 +160,9 @@ export function createPlanningProgress(phase: PlanningPhase): ChatProgressItem[]
     {
       detail:
         phase === "researching"
-          ? "Reading the codebase with read-only tools"
+          ? "Reviewing attached workspace context"
           : phase === "drafting" || phase === "complete"
-            ? "Codebase facts gathered"
+            ? "Context gathered"
             : "Waiting",
       id: "plan-research",
       label: "Research codebase",
@@ -253,8 +253,8 @@ function createFinalAnswerSystemPrompt(basePrompt: string) {
   return [
     basePrompt,
     "Plan mode is active. Write a single, complete user-facing plan in one response. Do not split this into passes or stages.",
-    "TOOL CALLS ARE DISABLED. Do NOT emit <tool_call> XML or fenced tool_call/json blocks. Any tool-call markup is malformed for this turn.",
-    "A prior research pass already inspected the codebase with the agent's read-only tools. Reference the actual file paths, symbols, functions, and snippets shown in RESEARCH FINDINGS. Do not invent files or functions that were not in the research.",
+    "TOOL CALLS ARE DISABLED. Do NOT emit native tool calls, strict tool envelopes, or raw protocol JSON. Any tool-call markup is malformed for this turn.",
+    "If research findings were attached, treat them as host-provided context. Reference only the file paths, symbols, functions, snippets, and sources shown there. Do not invent files or functions that were not provided.",
     "If the user is asking for a bug fix, name each bug, the file and approximate line, and the exact change. If the user is asking for a feature, name the files to create or edit and the structure.",
     "Format the plan as Markdown with these sections, in order:",
     "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change.\n## Risks and edge cases\nBullet list.\n## Verification\nHow to confirm it works (tests, manual checks, commands).",
@@ -285,8 +285,8 @@ function createFinalAnswerMessages(messages: ChatMessage[], researchFindings: st
       [
         "Write the complete plan now in a single Markdown response.",
         researchFindings
-          ? "Use the RESEARCH FINDINGS above as the verified state of the codebase."
-          : "No tool-grounded research findings were available. Build the best plan you can from the conversation and workspace context already in the messages.",
+          ? "Use the RESEARCH FINDINGS above as the attached context for the plan."
+          : "No host-provided research findings were available. Build the best plan you can from the conversation and workspace context already in the messages.",
         "Use the section headings: ## Goal, ## Files to change, ## Step-by-step plan, ## Risks and edge cases, ## Verification.",
       ].join("\n\n"),
     ),
@@ -328,7 +328,7 @@ function createResearchFindingsMessage(findings: string): ChatMessage {
     "user",
     [
       "RESEARCH FINDINGS",
-      "A read-only research pass already ran the agent's file inspection tools. Treat the observations below as the verified state of the codebase. Build the plan from these specific paths, symbols, and snippets. Do not request more tool calls; the planning turn cannot execute them.",
+      "Host-provided context is attached below. Build the plan from these specific paths, symbols, snippets, and sources. Do not request local tool calls; the planning turn cannot execute them.",
       findings,
     ].join("\n\n"),
   );

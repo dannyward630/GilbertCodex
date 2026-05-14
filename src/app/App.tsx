@@ -7,10 +7,7 @@ import { OnboardingDialog } from "../components/onboarding/OnboardingDialog";
 import { ChatPage } from "../pages/ChatPage";
 import { SettingsPage } from "../pages/settings/SettingsPage";
 import type { SettingsSectionId } from "../pages/settings/types";
-import { McpPage } from "../pages/McpPage";
-import { ToolboxPage } from "../pages/ToolboxPage";
 import { WeatherRadarPage } from "../pages/WeatherRadarPage";
-import { WorkflowsPage } from "../pages/WorkflowsPage";
 import {
   loadActiveChatId,
   loadAppearanceMode,
@@ -66,7 +63,7 @@ import {
 import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
 import { applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
-import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../tools/computer/files";
+import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../localWorkspace/files";
 import {
   createLocalComputerProgress,
   createApprovalSessionDecisionKey,
@@ -78,7 +75,9 @@ import {
   type LocalComputerToolExecutionPolicy,
   type LocalSubagentResult,
   type LocalSubagentTask,
-} from "../tools/computer/localToolExecutor";
+  routePrimitiveEvidenceBatchToWorkflow,
+  serializeToolCallEnvelope,
+} from "../localWorkspace/localToolRuntimeDisabled";
 import {
   createActiveLocalToolCalls,
   createAssistantToolRequestContent,
@@ -117,10 +116,19 @@ import {
   withWebSearchProgress,
 } from "./chatRuntime";
 import { mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortProjectsByUpdatedAt } from "./projectState";
-import { refreshWorkspaceContext } from "../tools/workspaceContext";
+import { refreshWorkspaceContext } from "../localWorkspace/workspaceContext";
 import { createChatSourcesFromWebResults, createWebSearchContextMessage, formatWebSearchProviderLabel, MAX_WEB_SEARCH_RESULTS, searchWebWithProvider } from "../services/webSearchClient";
 import { requestAndRememberWeatherLocation } from "../services/weatherLocation";
-import { routePrimitiveEvidenceBatchToWorkflow } from "../tools/workflows";
+import {
+  createAgentPrimitiveToolContent,
+  createAgentRunRequest,
+  createAgentRunWorkflowToolContent,
+  createAgentRuntimeDecisionInstruction,
+  parseAgentRuntimeDecision,
+  shouldStartAppAgentRun,
+  summarizeAgentRuntimeDecision,
+  type AgentRuntimeDecision,
+} from "../agentRuntime/codingAgent";
 import {
   getAppInfo,
   getDefaultTerminalWorkingDirectory,
@@ -132,11 +140,9 @@ import {
   stopDiscordBridge,
   type DiscordInteractionEvent,
 } from "./tauriClient";
-import { getGithubState } from "./githubClient";
 import { listAgentRuns, saveAgentRun } from "./agentRunClient";
 import { getAuthState, logoutLocalAccount } from "./authClient";
 import { openChatWindow } from "./windowClient";
-import { analyzeGithubPrompt, createGithubRoutingContext } from "../prompts/agent/githubToolPrompt";
 import {
   createNeedsAttentionNotification,
   createNeedsInputNotification,
@@ -218,6 +224,7 @@ interface AssistantToolResponse {
   pendingToolCallContent?: string;
   progress?: ChatProgressItem;
   reasoning?: string;
+  sources?: ChatSource[];
   toolCalls?: ChatToolCall[];
   waitingForApproval?: boolean;
 }
@@ -323,14 +330,13 @@ function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSe
       [
         "DISCORD REMOTE REQUEST CONTEXT",
         "The latest user message came from Discord through Gilbert's signed bridge. Treat it like a normal Gilbert Codex app request.",
-        "Do not avoid tools because the request originated in Discord. Use the enabled web_search, GitHub, terminal, local file, code edit, browser preview, and other runtime tools when they materially help.",
+        "Model-callable local tools have been removed from this build. Do not ask for GitHub, terminal, local file, code edit, browser preview, MCP, workflow, or weather actions.",
         workspaceSettings.enabled
-          ? "Local workspace access is enabled for this chat's project, so local computer tools may use that selected workspace according to the current permission mode."
-          : "No local workspace is enabled for this chat's project; use web/GitHub/provider context where available and ask for workspace access only when local files are required.",
+          ? "Local workspace metadata may be attached as host-provided context, but it is not a model-callable file tool."
+          : "No local folder is selected for this request.",
         webSearchEnabled
           ? `Live ${providerLabel} context is being attached for this request. Use it as current evidence and cite URLs when making web-supported claims.`
-          : "If current, latest, date-sensitive, or source-backed facts are needed and web_search is enabled, call web_search instead of answering from memory.",
-        "For mutating or sensitive actions, follow Gilbert's existing approval gates. If approval is required, explain that it must be completed in the app.",
+          : "If current, latest, date-sensitive, or source-backed facts are needed, say that web search was not attached for this turn instead of inventing a tool call.",
       ].join("\n"),
     ),
   ];
@@ -1763,11 +1769,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function handleAddAutomation() {
-    setActiveRoute("workflows");
     setSearchOpen(false);
     setNoticeDialog({
-      description: "Open the Manual monitor brief workflow to turn this chat into a repeatable check. The recurring scheduler is still tracked on the Workflows capability map.",
-      title: "Automation workflow opened",
+      description: "Workflow automation was removed with the tool runtime cleanup. Web search remains available from chat.",
+      title: "Workflows removed",
     });
   }
 
@@ -2965,56 +2970,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     );
   }
 
-  async function createSourceControlContextMessages(prompt: string) {
-    if (!toolSettings.sourceControl) {
-      return [];
-    }
-
-    const analysis = analyzeGithubPrompt(prompt);
-
-    if (!analysis.isGithubRelated || analysis.localGitIntent) {
-      return [];
-    }
-
-    try {
-      const state = await getGithubState();
-      const account = state.connected ? state.user?.login ?? "connected account" : "not connected";
-      const scopes = state.scopes.length > 0 ? state.scopes.join(", ") : "not reported";
-
-      return [
-        createMessage(
-          "user",
-          createGithubRoutingContext({
-            connected: state.connected,
-            connectedAccount: account,
-            prompt,
-            scopes,
-          }),
-        ),
-      ];
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "Could not read GitHub connection state.";
-
-      return [
-        createMessage(
-          "user",
-          [
-            "GITHUB SOURCE CONTROL ROUTING",
-            `Tool note: ${detail}`,
-            "The latest user request appears to be about remote GitHub source control. Prefer github_* tools over local computer file tools for repository discovery and remote repo inspection.",
-            "If a repository is named, inspect that repository directly instead of answering with a full repository inventory.",
-          ].join("\n"),
-        ),
-      ];
-    }
+  async function createSourceControlContextMessages(_prompt: string) {
+    return [];
   }
 
-  function shouldSkipLocalContextForGithub(prompt: string) {
-    if (!toolSettings.sourceControl) {
-      return false;
-    }
-
-    return analyzeGithubPrompt(prompt).shouldSkipLocalWorkspaceContext;
+  function shouldSkipLocalContextForGithub(_prompt: string) {
+    return false;
   }
 
   async function createLocalWorkspaceContextMessages(workspaceSettings: LocalWorkspaceSettings, prompt: string, projectName: string) {
@@ -3120,8 +3081,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     return {
       ...basePolicy,
-      maxToolCallOutputChars: minNullableCharCap(basePolicy.maxToolCallOutputChars, Math.max(modelVisibleResultChars, 96_000)),
-      maxToolResultsChars: minNullableCharCap(basePolicy.maxToolResultsChars, modelVisibleResultChars),
+      maxToolCallOutputChars: minNullableCharCap(basePolicy.maxToolCallOutputChars ?? null, Math.max(modelVisibleResultChars, 96_000)),
+      maxToolResultsChars: minNullableCharCap(basePolicy.maxToolResultsChars ?? null, modelVisibleResultChars),
     };
   }
 
@@ -3317,11 +3278,16 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         codeEdit: false,
         codeGeneration: false,
         codeView: false,
+        colorTools: false,
+        desktopComputer: false,
         fileCreation: false,
         fileSafety: false,
         fileBrowser: false,
         fileSearch: false,
+        mcpServers: false,
         pdfTools: false,
+        permissions: false,
+        planning: false,
         reactNativeTools: false,
         sourceControl: false,
         sqlTools: false,
@@ -3330,6 +3296,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         typescriptTools: false,
         webSearch: false,
         weatherTools: false,
+        workflowAutomation: false,
       },
     });
 
@@ -3402,6 +3369,392 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   function shouldIncludeVisualWebResults(webSearchSettings: WebSearchSettings, workspaceSettings: LocalWorkspaceSettings, mode: ChatMessage["mode"] | undefined, discordReply: boolean) {
     return webSearchSettings.provider === "brave" && webSearchSettings.brave.showImageResults && mode !== "plan" && !workspaceSettings.enabled && !discordReply;
+  }
+
+  function createAppAgentToolCall(messageId: string, status: ChatToolCall["status"], detail: string, output?: string, fileChanges?: ChatToolCall["fileChanges"]): ChatToolCall {
+    return {
+      detail,
+      fileChanges,
+      id: `app-agent-run-${messageId}`,
+      label: "Agent run",
+      output,
+      status,
+    };
+  }
+
+  function appendAgentRuntimeStep(runId: string | undefined, type: AgentRun["steps"][number]["type"], label: string, detail?: string) {
+    updateAgentRun(runId, (run, now) => ({
+      ...run,
+      steps: [
+        ...run.steps.map((step) =>
+          step.status === "running"
+            ? {
+                ...step,
+                completedAt: step.completedAt ?? now,
+                status: "completed" as const,
+              }
+            : step,
+        ),
+        {
+          detail,
+          id: createId("agent-step"),
+          label,
+          startedAt: now,
+          status: "running",
+          type,
+        },
+      ],
+      updatedAt: now,
+    }));
+  }
+
+  function completeLatestAgentRuntimeStep(runId: string | undefined, status: AgentRun["steps"][number]["status"], detail?: string) {
+    updateAgentRun(runId, (run, now) => ({
+      ...run,
+      steps: run.steps.map((step, index) =>
+        index === run.steps.length - 1 && step.status === "running"
+          ? {
+              ...step,
+              completedAt: now,
+              detail: detail ?? step.detail,
+              status,
+            }
+          : step,
+      ),
+      updatedAt: now,
+    }));
+  }
+
+  function mapAgentDecisionToStepType(decision: AgentRuntimeDecision): AgentRun["steps"][number]["type"] {
+    if (decision.action === "read") return "read";
+    if (decision.action === "edit") return "edit";
+    if (decision.action === "create") return "create";
+    if (decision.action === "terminal" || decision.action === "verify") return "terminal";
+    if (decision.action === "git") return "git";
+    return "synthesis";
+  }
+
+  async function runAppOwnedCodingAgent({
+    chatId,
+    controller,
+    messageId,
+    messagesForProvider,
+    onExternalUpdate,
+    prompt,
+    requestId,
+    runId,
+    workspaceSettings,
+  }: {
+    chatId: string;
+    controller: AbortController;
+    messageId: string;
+    messagesForProvider: ChatMessage[];
+    onExternalUpdate?: (update: DiscordStreamUpdate) => void;
+    prompt: string;
+    requestId: number;
+    runId?: string;
+    workspaceSettings: LocalWorkspaceSettings;
+  }): Promise<AssistantToolResponse> {
+    const request = createAgentRunRequest({
+      chatId,
+      goal: prompt,
+      messageId,
+      mode: "execute",
+      source: "auto",
+      workspace: workspaceSettings,
+    });
+    const baseToolExecutionPolicy = STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY;
+    const toolExecutionPolicy = createContextBoundLocalToolExecutionPolicy(baseToolExecutionPolicy);
+    const runtimeWebSearchMaxResults = getRuntimeWebSearchMaxResults(providerSettings);
+    const runtimeWebSearchSettings: WebSearchSettings = {
+      ...providerSettings.webSearch,
+      maxResults: runtimeWebSearchMaxResults,
+    };
+    const agentToolCall = (status: ChatToolCall["status"], detail: string, output?: string, fileChanges?: ChatToolCall["fileChanges"]) =>
+      createAppAgentToolCall(messageId, status, detail, output, fileChanges);
+    const allArtifacts: ChatArtifact[] = [];
+    const allSources: ChatSource[] = [];
+    let visibleToolCall = agentToolCall("active", "Starting app-owned coding agent");
+    let runtimeMessages = [...messagesForProvider];
+    let localProgress = createLocalComputerProgress("active", "Starting app-owned coding agent");
+    let executedCount = 0;
+
+    updateGeneratedMessage(chatId, messageId, (message) => ({
+      ...message,
+      content: "",
+      progress: withLocalComputerProgress(localProgress, message.progress),
+      toolCalls: [visibleToolCall],
+    }));
+    onExternalUpdate?.({
+      progress: localProgress,
+      status: "Starting app-owned coding agent...",
+      toolCall: visibleToolCall,
+    });
+
+    const executeInternalToolStep = async (toolContent: string, label: string, type: AgentRun["steps"][number]["type"]) => {
+      if (!toolContent.trim()) {
+        throw new Error(`${label} did not produce an executable internal action.`);
+      }
+
+      appendAgentRuntimeStep(runId, type, label);
+      localProgress = createLocalComputerProgress("active", label);
+      visibleToolCall = agentToolCall("active", label);
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        content: "",
+        progress: withLocalComputerProgress(localProgress, message.progress),
+        toolCalls: [visibleToolCall],
+      }));
+      onExternalUpdate?.({
+        progress: localProgress,
+        status: `${label}...`,
+        toolCall: visibleToolCall,
+      });
+
+      const toolRun = await runLocalComputerToolCalls({
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings),
+        assistantContent: toolContent,
+        executionPolicy: toolExecutionPolicy,
+        onRunSubagents: (tasks) => runParallelSubagents(tasks, runtimeMessages, prompt, controller.signal),
+        settings: workspaceSettings,
+        signal: controller.signal,
+        toolSettings,
+        userPrompt: prompt,
+        webSearchSettings: runtimeWebSearchSettings,
+        webSearchMaxResults: runtimeWebSearchMaxResults,
+      });
+
+      if (toolRun.browserPreviewUrl && toolSettings.browserPreview) {
+        setBrowserPreviewTarget((currentTarget) => ({
+          id: (currentTarget?.id ?? 0) + 1,
+          url: toolRun.browserPreviewUrl!,
+        }));
+      }
+
+      allArtifacts.push(...(toolRun.artifacts ?? []));
+      allSources.push(...toolRun.sources);
+      executedCount += toolRun.executedCount;
+      attachLiveTerminalSession(toolRun.toolCalls);
+      const fileChanges = toolRun.toolCalls.flatMap((toolCall) => toolCall.fileChanges ?? []);
+      const stepStatus: AgentRun["steps"][number]["status"] = toolRun.waitingForApproval ? "waiting_for_approval" : toolRun.toolCalls.some((toolCall) => toolCall.status === "error") ? "failed" : "completed";
+      completeLatestAgentRuntimeStep(runId, stepStatus, toolRun.progress.detail);
+      runtimeMessages = [
+        ...runtimeMessages,
+        createMessage(
+          "user",
+          [
+            "APP AGENT INTERNAL OBSERVATION",
+            "Gilbert executed an app-owned internal action. Use this as real evidence. Do not expose internal tool syntax.",
+            toolRun.contextMessage,
+          ].join("\n\n"),
+        ),
+      ];
+
+      visibleToolCall = agentToolCall(
+        toolRun.waitingForApproval ? "waiting_approval" : stepStatus === "failed" ? "error" : "complete",
+        label,
+        limitFallbackToolOutput(toolRun.contextMessage),
+        fileChanges.length > 0 ? fileChanges : undefined,
+      );
+      localProgress = toolRun.waitingForApproval
+        ? toolRun.progress
+        : createLocalComputerProgress(stepStatus === "failed" ? "complete" : "active", toolRun.waitingForApproval ? "Waiting for approval" : `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`);
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...message,
+        artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
+        content: "",
+        progress: withLocalComputerProgress(localProgress, message.progress),
+        sources: toolRun.sources.length > 0 ? mergeChatSources(message.sources, toolRun.sources) : message.sources,
+        toolCalls: [visibleToolCall],
+      }));
+
+      if (toolRun.waitingForApproval) {
+        return {
+          waiting: true as const,
+          response: {
+            approvalRequests: toolRun.approvalRequests.map((approval) => ({
+              ...approval,
+              messageId,
+              resumeToolCallContent: toolContent,
+            })),
+            artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+            content: "",
+            pendingToolCallContent: toolContent,
+            progress: toolRun.progress,
+            sources: allSources,
+            toolCalls: [visibleToolCall],
+            waitingForApproval: true,
+          } satisfies AssistantToolResponse,
+        };
+      }
+
+      return { waiting: false as const };
+    };
+    const sanitizeAppAgentFinalContent = (content: string) => {
+      const sanitized = sanitizeLocalToolCallsForDisplay(content, toolExecutionPolicy).trim();
+
+      if (
+        !sanitized ||
+        looksLikeOnlyToolPrelude(sanitized) ||
+        looksLikeInternalToolRecoveryAnswer(sanitized) ||
+        looksLikeToolProtocolNarration(sanitized) ||
+        looksLikeUnexecutedToolActionPromise(sanitized)
+      ) {
+        return "";
+      }
+
+      return sanitized;
+    };
+
+    const initialWorkflow = await executeInternalToolStep(createAgentRunWorkflowToolContent(request), "Gathering workspace evidence", "search");
+    if (initialWorkflow.waiting) {
+      return initialWorkflow.response;
+    }
+
+    const seenDecisionSignatures = new Set<string>();
+    const maxDecisionPasses = 5;
+
+    for (let loopIndex = 0; loopIndex < maxDecisionPasses; loopIndex += 1) {
+      if (isRequestInactive(requestId, controller)) {
+        return {
+          content: "",
+          progress: localProgress,
+          toolCalls: [visibleToolCall],
+        };
+      }
+
+      appendAgentRuntimeStep(runId, "synthesis", "Choose next agent action");
+      const decisionInstruction = createMessage("user", createAgentRuntimeDecisionInstruction({ goal: prompt, loopIndex }));
+      const decisionSettings = {
+        ...createFinalOnlyProviderSettings(prompt),
+        maxTokens: Math.max(createFinalOnlyProviderSettings(prompt).maxTokens, 4096),
+        temperature: Math.min(providerSettings.temperature, 0.2),
+      };
+      const decisionMessages = compactProviderMessages([...runtimeMessages, decisionInstruction], decisionSettings).messages;
+
+      recordProviderContextUsage(chatId, decisionMessages, decisionSettings, { stream: false });
+      const decisionResponse = await sendProviderMessage(decisionSettings, decisionMessages, {
+        signal: controller.signal,
+      });
+      recordProviderActualUsage(chatId, decisionMessages, decisionSettings, decisionResponse.usage, { stream: false });
+      completeLatestAgentRuntimeStep(runId, "completed");
+
+      const decision = parseAgentRuntimeDecision(decisionResponse.content);
+
+      if (!decision) {
+        if (hasLocalComputerToolCalls(decisionResponse.content, toolExecutionPolicy)) {
+          const recoveredStep = await executeInternalToolStep(decisionResponse.content, "Running recovered model action", "tool");
+          if (recoveredStep.waiting) {
+            return recoveredStep.response;
+          }
+          continue;
+        }
+
+        const sanitizedInvalidDecision = sanitizeAppAgentFinalContent(decisionResponse.content);
+        runtimeMessages = [
+          ...runtimeMessages,
+          createMessage(
+            "user",
+            [
+              "The previous action decision was invalid JSON and no executable internal action was found.",
+              sanitizedInvalidDecision ? `Non-tool text from that invalid response:\n${sanitizedInvalidDecision.slice(0, 1200)}` : "",
+              "Return one valid JSON action now, or use action=answer if enough evidence exists.",
+            ].filter(Boolean).join("\n\n"),
+          ),
+        ];
+        continue;
+      }
+
+      const decisionSignature = JSON.stringify({
+        action: decision.action,
+        command: decision.command,
+        cwd: decision.cwd,
+        edits: decision.edits,
+        files: decision.files,
+        paths: decision.paths,
+        tool: decision.tool,
+      });
+
+      if (seenDecisionSignatures.has(decisionSignature)) {
+        return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: "I stopped the agent run because the same internal action repeated. The gathered evidence is in Activity; try a narrower request or adjust the target file/path.",
+          progress: createLocalComputerProgress("complete", "Repeated internal action stopped"),
+          sources: allSources,
+          toolCalls: [agentToolCall("error", "Repeated internal action stopped", visibleToolCall.output, visibleToolCall.fileChanges)],
+        };
+      }
+
+      seenDecisionSignatures.add(decisionSignature);
+
+      if (decision.action === "answer") {
+        const finalProgress = createLocalComputerProgress("complete", `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`);
+        const finalToolCall = agentToolCall("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges);
+        const finalContent = sanitizeAppAgentFinalContent(decision.answer ?? "");
+        return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: finalContent || "The app-owned agent run completed.",
+          progress: finalProgress,
+          sources: allSources,
+          toolCalls: [finalToolCall],
+        };
+      }
+
+      const primitiveContent = createAgentPrimitiveToolContent(decision);
+      const stepResult = await executeInternalToolStep(primitiveContent, summarizeAgentRuntimeDecision(decision), mapAgentDecisionToStepType(decision));
+      if (stepResult.waiting) {
+        return stepResult.response;
+      }
+    }
+
+    const fallbackSettings = createFinalOnlyProviderSettings(prompt);
+    const fallbackMessages = compactProviderMessages([
+      ...runtimeMessages,
+      createMessage(
+        "user",
+        [
+          "The app-owned agent runtime reached its decision-pass limit.",
+          "Write the best final user-facing answer from the gathered evidence. Do not request more tools or mention internal protocol.",
+        ].join("\n"),
+      ),
+    ], fallbackSettings).messages;
+    const fallbackResponse = await sendProviderMessage(fallbackSettings, fallbackMessages, {
+      signal: controller.signal,
+    });
+    let fallbackContent = sanitizeAppAgentFinalContent(fallbackResponse.content);
+
+    if (!fallbackContent && hasLocalComputerToolCalls(fallbackResponse.content, toolExecutionPolicy)) {
+      const recoveredStep = await executeInternalToolStep(fallbackResponse.content, "Running recovered final action", "tool");
+      if (recoveredStep.waiting) {
+        return recoveredStep.response;
+      }
+
+      const recoverySynthesisSettings = createFinalOnlyProviderSettings(prompt);
+      const recoverySynthesisMessages = compactProviderMessages([
+        ...runtimeMessages,
+        createMessage(
+          "user",
+          [
+            "A previous final response emitted an internal tool action. Gilbert executed it internally.",
+            "Now write the final user-facing answer from the gathered evidence.",
+            "Do not emit tool calls, function-call syntax, provider-native tool JSON, strict envelopes, or protocol discussion.",
+          ].join("\n"),
+        ),
+      ], recoverySynthesisSettings).messages;
+      const recoverySynthesisResponse = await sendProviderMessage(recoverySynthesisSettings, recoverySynthesisMessages, {
+        signal: controller.signal,
+      });
+      fallbackContent = sanitizeAppAgentFinalContent(recoverySynthesisResponse.content);
+    }
+
+    return {
+      artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+      content: fallbackContent || "The app-owned agent run reached its step limit before producing a clean final answer. The gathered evidence is in Activity.",
+      progress: createLocalComputerProgress("complete", `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`),
+      reasoning: fallbackResponse.reasoning,
+      sources: allSources,
+      toolCalls: [agentToolCall("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges)],
+    };
   }
 
   async function streamAssistantWithLocalTools({
@@ -3500,25 +3853,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     function createSimpleScaffoldToolPlanContent() {
-      return [
-        "<tool_call>",
-        "create_vite_project",
-        "</tool_call>",
-        "<tool_call>",
-        "run_terminal",
-        "<arg_key>command</arg_key><arg_value>npm install</arg_value>",
-        "<arg_key>timeout</arg_key><arg_value>300</arg_value>",
-        "</tool_call>",
-        "<tool_call>",
-        "run_terminal",
-        "<arg_key>command</arg_key><arg_value>npm run build</arg_value>",
-        "<arg_key>timeout</arg_key><arg_value>300</arg_value>",
-        "</tool_call>",
-        "<tool_call>",
-        "run_terminal",
-        "<arg_key>command</arg_key><arg_value>npm run dev</arg_value>",
-        "</tool_call>",
-      ].join("\n");
+      return "";
     }
 
     async function recoverEmptySimpleScaffold(reasoning?: string): Promise<typeof finalResponse | null> {
@@ -3546,10 +3881,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: recoveryToolContent,
         executionPolicy: toolExecutionPolicy,
-        mcpContext: {
-          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
-          settings: providerSettings.mcp,
-        },
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
         onToolCallUpdate: (_callNumber, toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], recoveryPassIndex);
@@ -3758,10 +4089,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: resumeToolCallContent,
         executionPolicy: toolExecutionPolicy,
-        mcpContext: {
-          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
-          settings: providerSettings.mcp,
-        },
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
         previousToolCalls,
         onToolCallUpdate: (_callNumber, toolCall) => {
@@ -4130,10 +4457,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
         assistantContent: assistantToolRequestContent,
         executionPolicy: toolExecutionPolicy,
-        mcpContext: {
-          onSettingsChange: (mcp) => setProviderSettings((settings) => ({ ...settings, mcp })),
-          settings: providerSettings.mcp,
-        },
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal),
         onToolCallUpdate: (_callNumber, toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
@@ -4582,7 +4905,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   function createNoExecutedToolFinalInstruction(contextMessage: string, retryBudgetExhausted = false) {
     const hasError = /\bTOOL\s+\d+\s+\[error\]:/i.test(contextMessage);
-    const hasEditFailure = /\b(?:edit_file|inline_edit)\b/i.test(contextMessage);
+    const hasEditFailure = /\bedit_file\b/i.test(contextMessage);
 
     return [
       retryBudgetExhausted
@@ -5147,7 +5470,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     if (!toolSettings.provider) {
-      await sendDiscordReply(replyTarget, "Gilbert's Model Provider tool is off. Turn it back on in Toolbox before using Discord chat.");
+      await sendDiscordReply(replyTarget, "Gilbert's model provider is off. Turn it back on in Settings before using Discord chat.");
       return;
     }
 
@@ -5393,10 +5716,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     if (!toolSettings.provider) {
       setNoticeDialog({
-        description: "Turn Model Provider back on in Toolbox before sending a chat request.",
+        description: "Turn Model Provider back on in Settings before sending a chat request.",
         title: "Model Provider is off",
       });
-      await sendDiscordReply(options.discordReply, "Gilbert's Model Provider tool is off. Turn it back on in Toolbox before using Discord chat.");
+      await sendDiscordReply(options.discordReply, "Gilbert's model provider is off. Turn it back on in Settings before using Discord chat.");
       return;
     }
 
@@ -5642,10 +5965,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           [
             "RESEARCH PHASE FOR PLAN MODE",
             `Original user request: ${content}`,
-            "Use the agent's READ-ONLY tools right now to gather the exact context the plan will need. Acceptable tools: read_file, list_directory, search_files, view_code, recall_context, build_index, web_search (only if the user explicitly asked about current external information).",
-            "Do NOT use any tool that writes, edits, deletes, runs terminal commands, runs tests, commits, pushes, applies search-replace, edits files, creates files, or otherwise mutates the workspace or remote services.",
-            "Run multiple read tool calls when useful. Inspect the entry points, the files the user mentioned, the components or functions named in the request, and the surrounding code that the change will touch.",
-            "When you have enough grounded facts to build a real plan, STOP calling tools and write a Markdown summary titled 'Research observations'. List the specific files, paths, functions, components, and snippets you saw. Quote 1-3 line code excerpts when they pin down a bug or constraint. Note any gaps or assumptions.",
+            "Model-callable local tools are disabled. Use only attached workspace context, project memory, conversation context, and host-managed web context.",
+            "Do NOT emit tool calls, function-call JSON, terminal commands as actions, Git/GitHub/MCP/workflow calls, file reads, edits, deletes, tests, browser automation, or weather actions.",
+            "Write a Markdown summary titled 'Research observations'. List the specific files, paths, functions, components, snippets, sources, and assumptions that are already present in the attached context.",
             "Do not write the plan itself this turn. The plan is produced in a later turn from these observations.",
           ].join("\n\n"),
         );
@@ -5695,12 +6017,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           );
           setAgentRunWaiting(
             agentRun.id,
-            "Tool approval required during plan research",
-            "A research tool needs approval before the plan can be built.",
+            "Approval required during plan research",
+            "A prior local-tool approval is still pending from saved chat state.",
             researchResponse.approvalRequests ?? [],
             researchResponse.pendingToolCallContent,
           );
-          notifyRunNeedsAttention("A tool action is waiting for your approval during plan research.");
+          notifyRunNeedsAttention("An approval is waiting during plan research.");
           touchProject(currentChat.project);
           return;
         }
@@ -5814,16 +6136,52 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
         return;
       } else {
-        const assistantResponse = await streamAssistantWithLocalTools({
-          chatId: currentChat.id,
-          controller,
-          messageId: assistantMessage.id,
-          messagesForProvider,
-          onExternalUpdate: discordStreamer?.update,
+        const useAppAgentRuntime = shouldStartAppAgentRun({
+          mode: "chat",
           prompt: content,
-          requestId,
-          workspaceSettings,
+          toolSettings,
+          workspace: workspaceSettings,
         });
+
+        if (useAppAgentRuntime) {
+          updateAgentRun(agentRun.id, (run, eventAt) => ({
+            ...run,
+            events: [
+              ...run.events,
+              {
+                at: eventAt,
+                detail: "Gilbert will run workspace actions through the app-owned agent runtime instead of model-facing primitive tools.",
+                id: createId("agent-event"),
+                label: "App-owned agent runtime selected",
+                type: "status",
+              },
+            ],
+            updatedAt: eventAt,
+          }));
+        }
+
+        const assistantResponse = useAppAgentRuntime
+          ? await runAppOwnedCodingAgent({
+              chatId: currentChat.id,
+              controller,
+              messageId: assistantMessage.id,
+              messagesForProvider,
+              onExternalUpdate: discordStreamer?.update,
+              prompt: content,
+              requestId,
+              runId: agentRun.id,
+              workspaceSettings,
+            })
+          : await streamAssistantWithLocalTools({
+              chatId: currentChat.id,
+              controller,
+              messageId: assistantMessage.id,
+              messagesForProvider,
+              onExternalUpdate: discordStreamer?.update,
+              prompt: content,
+              requestId,
+              workspaceSettings,
+            });
 
         if (isRequestInactive(requestId, controller)) {
           return;
@@ -5848,6 +6206,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                             isStreaming: false,
                             progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
                             reasoning: assistantResponse.reasoning,
+                            sources: assistantResponse.sources && assistantResponse.sources.length > 0 ? mergeChatSources(message.sources, assistantResponse.sources) : message.sources,
                             toolCalls: assistantResponse.toolCalls ?? message.toolCalls,
                             thinking: message.thinking
                               ? {
@@ -5889,13 +6248,14 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: assistantResponse.content,
           isStreaming: false,
           reasoning: assistantResponse.reasoning,
+          sources: assistantResponse.sources && assistantResponse.sources.length > 0 ? mergeChatSources(assistantMessage.sources, assistantResponse.sources) : assistantMessage.sources,
           toolCalls: assistantResponse.toolCalls,
         };
         setAgentRunCompleted(agentRun.id, completedAssistantMessage);
         notifyRunComplete(completedAssistantMessage);
         if (discordStreamer) {
           await discordStreamer.finish(assistantResponse.content, {
-            sources: webContext.sources,
+            sources: mergeChatSources(webContext.sources, assistantResponse.sources ?? []),
           });
         } else {
           await sendDiscordReply(options.discordReply, assistantResponse.content);
@@ -5955,7 +6315,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   async function handleResolveToolApproval(messageId: string, approvalId: string, decision: AgentApprovalDecision) {
     if (!toolSettings.provider) {
       setNoticeDialog({
-        description: "Turn Model Provider back on in Toolbox before resuming an agent run.",
+        description: "Turn Model Provider back on in Settings before resuming an agent run.",
         title: "Model Provider is off",
       });
       return;
@@ -6276,7 +6636,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   async function handleSubmitPlanningInput(messageId: string, answers: ChatPlanningInputAnswer[]) {
     if (!toolSettings.provider) {
       setNoticeDialog({
-        description: "Turn Model Provider back on in Toolbox before continuing a planning run.",
+        description: "Turn Model Provider back on in Settings before continuing a planning run.",
         title: "Model Provider is off",
       });
       return;
@@ -6572,7 +6932,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     if (!toolSettings.provider) {
       setNoticeDialog({
-        description: "Turn Model Provider back on in Toolbox before revising a plan.",
+        description: "Turn Model Provider back on in Settings before revising a plan.",
         title: "Model Provider is off",
       });
       return;
@@ -6859,7 +7219,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   async function handleRegenerateResponse(messageId: string) {
     if (!toolSettings.provider) {
       setNoticeDialog({
-        description: "Turn Model Provider back on in Toolbox before regenerating a response.",
+        description: "Turn Model Provider back on in Settings before regenerating a response.",
         title: "Model Provider is off",
       });
       return;
@@ -7273,49 +7633,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function renderUtilityPage() {
-    if (activeRoute === "toolbox") {
-      return (
-        <ToolboxPage
-          settings={toolSettings}
-          onSettingsChange={handleToolSettingsChange}
-          workspaceRoot={localWorkspace.roots[0] ?? ""}
-          workspaceRoots={localWorkspace.roots}
-        />
-      );
-    }
-
-    if (activeRoute === "mcp") {
-      return (
-        <McpPage
-          mcp={providerSettings.mcp}
-          mcpToolboxEnabled={toolSettings.mcpServers}
-          provider={providerSettings.provider}
-          thinkingEnabled={providerSettings.thinking.enabled}
-          onMcpChange={(mcp) => setProviderSettings((settings) => ({ ...settings, mcp }))}
-        />
-      );
-    }
-
-    if (activeRoute === "workflows") {
-      return (
-        <WorkflowsPage
-          agentRuns={agentRuns}
-          chats={chats}
-          localWorkspace={localWorkspace}
-          toolSettings={toolSettings}
-          webSearchSettings={providerSettings.webSearch}
-          onOpenChat={(chatId) => {
-            setActiveChatId(chatId);
-            setActiveRoute("chat");
-          }}
-          onStartWorkflow={(input) => {
-            setActiveRoute("chat");
-            void handleSendMessage(input);
-          }}
-        />
-      );
-    }
-
     if (activeRoute === "radar") {
       return (
         <WeatherRadarPage
@@ -7437,11 +7754,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setOnboardingOpen(false);
   }
 
-  function handleOpenOnboardingToolbox() {
-    setActiveRoute("toolbox");
-    setOnboardingOpen(false);
-  }
-
   const pendingDeleteChat = pendingDeleteChatId ? chats.find((chat) => chat.id === pendingDeleteChatId) : undefined;
   const pendingRenameChat = renameChatId ? chats.find((chat) => chat.id === renameChatId) : undefined;
   const pendingDeleteProject = pendingDeleteProjectName ? projects.find((project) => project.name.toLowerCase() === pendingDeleteProjectName.toLowerCase()) : undefined;
@@ -7504,7 +7816,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onClose={handleSkipOnboarding}
         onNeverShowAgain={handleNeverShowOnboarding}
         onOpenSettings={handleOpenOnboardingSettings}
-        onOpenToolbox={handleOpenOnboardingToolbox}
       />
 
       <BulkDeleteChatsDialog

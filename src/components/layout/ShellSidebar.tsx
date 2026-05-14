@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock3, Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, PlugZap, Radar, Search, Settings, Trash2, UserRound, Wrench } from "lucide-react";
+import { Clock3, Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, PlugZap, Radar, Search, Settings, Trash2, UserRound } from "lucide-react";
 import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
@@ -214,18 +214,6 @@ export function ShellSidebar({
         <button className="sidebar-action" type="button" onClick={onOpenBulkDeleteChats}>
           <Trash2 size={17} aria-hidden="true" />
           <span>Delete chats</span>
-        </button>
-        <button className="sidebar-action" data-active={activeRoute === "toolbox"} type="button" onClick={() => onRouteChange("toolbox")}>
-          <Wrench size={17} aria-hidden="true" />
-          <span>Toolbox</span>
-        </button>
-        <button className="sidebar-action" data-active={activeRoute === "mcp"} type="button" onClick={() => onRouteChange("mcp")}>
-          <PlugZap size={17} aria-hidden="true" />
-          <span>MCP</span>
-        </button>
-        <button className="sidebar-action" data-active={activeRoute === "workflows"} type="button" onClick={() => onRouteChange("workflows")}>
-          <Clock3 size={17} aria-hidden="true" />
-          <span>Workflows</span>
         </button>
         <button className="sidebar-action" data-active={activeRoute === "radar"} type="button" onClick={() => onRouteChange("radar")}>
           <Radar size={17} aria-hidden="true" />

@@ -40,7 +40,7 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 - Route-level views belong in `src/pages`.
 - Reusable UI belongs in `src/components`, grouped by product area.
 - Provider, planning, usage, and search clients belong in `src/services`.
-- Browser and local-computer execution helpers belong in `src/tools`.
+- Model-callable local tools are disabled in this reset build; new tool-runtime work should add fresh implementation docs before reintroducing execution helpers.
 - Shared contracts belong in `src/types`.
 - Rust commands belong in `src-tauri/src/commands`.
 - Rust host scaffolding belongs in `src-tauri/src/core`.

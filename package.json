@@ -23,10 +23,6 @@
   "scripts": {
     "dev": "vite --host localhost --port 1420",
     "typecheck": "tsc --noEmit",
-    "test:local-runtime": "node --experimental-strip-types --import ./scripts/register-ts-extension-loader.mjs --test scripts/local-tool-runtime.test.ts",
-    "test:workflow-layer": "node --experimental-strip-types --import ./scripts/register-ts-extension-loader.mjs --test scripts/workflow-layer.test.ts",
-    "test:tool-recovery": "node --experimental-strip-types --import ./scripts/register-ts-extension-loader.mjs --test scripts/tool-recovery-routing.test.ts",
-    "test:provider-roundtrip": "node --experimental-strip-types --import ./scripts/register-ts-extension-loader.mjs --test scripts/provider-tool-roundtrip.test.ts",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host localhost --port 4173",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
@@ -48,14 +44,12 @@
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "color-name-list": "^14.36.0",
     "lucide-react": "^0.468.0",
     "mapbox-gl": "^3.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "xstate": "^5.31.1"
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

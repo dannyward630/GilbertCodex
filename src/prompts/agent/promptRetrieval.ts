@@ -3,7 +3,7 @@ import { PROMPT_CATALOG, createPromptChunkSearchText, type PromptChunk } from ".
 import { cosineSimilarity, createPromptEmbedding, createPromptTermSet, type PromptEmbedding } from "./promptEmbedding";
 import { isDeepResearchThinking } from "../../types/settings";
 import { normalizeToolRegistrySettings } from "../../types/tools";
-import { getDetectedProjectTypes } from "../../tools/workspaceContext";
+import { getDetectedProjectTypes } from "../../localWorkspace/workspaceContext";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
 
@@ -52,8 +52,8 @@ export function createAgentPromptRetrievalContext(settings: ProviderSettings, me
     mode === "planning" ? "planning architecture tradeoffs requirements" : "chat implementation answer",
     isDeepResearchThinking(settings.thinking) ? "deep research current facts official docs source backed" : "",
     tools.thinking ? "thinking enabled" : "",
-    enabledToolNames.length > 0 ? `enabled tools ${enabledToolNames.join(" ")}` : "no runtime tools",
-    hasLocalComputerContext ? "local computer tool results filesystem code workspace" : "",
+    enabledToolNames.length > 0 ? `host capabilities ${enabledToolNames.join(" ")}` : "no runtime tools",
+    hasLocalComputerContext ? "host workspace context filesystem code workspace" : "",
     hasWebContext ? "web search results source citations current facts" : "",
     recentMessages.map((message) => `${message.role}: ${message.content.slice(0, 900)}`).join("\n"),
   ]
@@ -95,7 +95,7 @@ export function selectPromptChunks(context: AgentPromptRetrievalContext): Select
         return false;
       }
 
-      // High-priority chunks (project recipes, runtime tooling) skip the
+      // High-priority chunks (project recipes and core behaviors) skip the
       // similarity floor — they carry load-bearing instructions and should
       // surface whenever the chunk is allowed by toggles, even on short or
       // generic prompts.
@@ -179,24 +179,7 @@ function scoreKeywordOverlap(chunk: PromptChunk, queryTerms: Set<string>) {
 }
 
 function getForcedChunkIds(context: AgentPromptRetrievalContext) {
-  const tools = normalizeToolRegistrySettings(context.settings.tools);
   const forced = new Set<string>();
-
-  if (context.enabledToolNames.length > 0) {
-    forced.add("tool.runtime-format");
-  }
-
-  if (hasAnyLocalTool(context.settings) || context.hasLocalComputerContext) {
-    forced.add("tool.local-computer");
-  }
-
-  if (tools.webSearch || context.hasWebContext) {
-    forced.add("tool.web-search");
-  }
-
-  if (tools.fileCreation && isFileCreationLike(context.query)) {
-    forced.add("tool.file-creation");
-  }
 
   if (context.mode === "planning") {
     forced.add("mode.planning");
@@ -206,7 +189,7 @@ function getForcedChunkIds(context: AgentPromptRetrievalContext) {
     forced.add("skill.research-current-facts");
   }
 
-  if (isCodingLike(context.latestUserPrompt) || hasAnyLocalTool(context.settings)) {
+  if (isCodingLike(context.latestUserPrompt)) {
     forced.add("skill.coding-agent-workflow");
   }
 
@@ -224,10 +207,6 @@ function getForcedChunkIds(context: AgentPromptRetrievalContext) {
   return forced;
 }
 
-function isFileCreationLike(query: string) {
-  return /\b(create|write|file|markdown|react|html|pdf|artifact|folder|app|project|scaffold|init|setup|generate|build me|new|todo|crud|cli|server|api)\b/i.test(query);
-}
-
 function isNodeLike(prompt: string) {
   return /\b(node|nodejs|node\.js|npm|pnpm|yarn|bun|package\.json|express|next\.?js|vite|react|tauri|expo|react native|typescript|tsx|jsx|monorepo)\b/i.test(prompt);
 }
@@ -237,24 +216,6 @@ function isPythonLike(prompt: string) {
 }
 
 function isChunkAllowed(chunk: PromptChunk, context: AgentPromptRetrievalContext) {
-  const tools = normalizeToolRegistrySettings(context.settings.tools);
-
-  if (chunk.id === "tool.runtime-format") {
-    return context.enabledToolNames.length > 0;
-  }
-
-  if (chunk.id === "tool.local-computer") {
-    return hasAnyLocalTool(context.settings) || context.hasLocalComputerContext;
-  }
-
-  if (chunk.id === "tool.web-search") {
-    return tools.webSearch || context.hasWebContext;
-  }
-
-  if (chunk.id === "tool.file-creation") {
-    return tools.fileCreation;
-  }
-
   return true;
 }
 
@@ -291,47 +252,12 @@ function getEnabledToolNames(settings: ProviderSettings) {
   const tools = normalizeToolRegistrySettings(settings.tools);
 
   return [
-    tools.webSearch ? "web_search" : "",
-    tools.weatherTools ? "weather" : "",
-    tools.fileSearch ? "recall_context" : "",
-    tools.fileSearch ? "search_files" : "",
-    tools.codeView ? "view_code" : "",
-    tools.codeView ? "read_file" : "",
-    tools.fileBrowser ? "list_directory" : "",
-    tools.fileBrowser ? "build_index" : "",
-    tools.codeEdit ? "edit_file" : "",
-    tools.codeEdit ? "write_file" : "",
-    tools.fileCreation ? "create_files" : "",
-    tools.fileCreation ? "create_vite_project" : "",
-    tools.fileSafety ? "delete_file" : "",
-    tools.testingTools ? "run_tests" : "",
-    tools.typescriptTools ? "typescript_check" : "",
-    tools.terminal ? "run_terminal" : "",
-    tools.browserPreview ? "open_browser_preview" : "",
+    tools.webSearch ? "host_web_search_context" : "",
   ].filter(Boolean);
 }
 
 function hasAnyLocalTool(settings: ProviderSettings) {
-  const tools = normalizeToolRegistrySettings(settings.tools);
-
-  return (
-    tools.fileBrowser ||
-    tools.fileSearch ||
-    tools.codeView ||
-    tools.codeEdit ||
-    tools.fileCreation ||
-    tools.fileSafety ||
-    tools.pdfTools ||
-    tools.colorTools ||
-    tools.testingTools ||
-    tools.typescriptTools ||
-    tools.sqlTools ||
-    tools.reactNativeTools ||
-    tools.codeGeneration ||
-    tools.terminal ||
-    tools.browserPreview ||
-    tools.weatherTools
-  );
+  return false;
 }
 
 function isResearchLike(prompt: string, settings: ProviderSettings) {
@@ -343,7 +269,7 @@ function isCodingLike(prompt: string) {
 }
 
 function hasLocalComputerContextMessage(message: ChatMessage) {
-  return message.content.includes("LOCAL COMPUTER FILE TOOL") || message.content.includes("LOCAL COMPUTER TOOL RESULTS") || message.content.includes("AGENT TOOL RESULTS");
+  return message.content.includes("LOCAL WORKSPACE CONTEXT") || message.content.includes("HOST WORKSPACE CONTEXT");
 }
 
 function hasWebContextMessage(message: ChatMessage) {

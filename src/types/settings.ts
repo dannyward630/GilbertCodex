@@ -1,5 +1,4 @@
 import type { ToolRegistrySettings } from "./tools";
-import type { McpSettings } from "./mcp";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type AppearanceMode = "system" | "dark" | "light";
@@ -150,7 +149,6 @@ export interface ProviderSettings {
   baseUrls: ProviderSecretMap;
   maxTokens: number;
   model: string;
-  mcp: McpSettings;
   openRouterApiKey: string;
   provider: ModelProviderId;
   providerModels: ProviderSecretMap;
