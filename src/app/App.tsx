@@ -83,6 +83,7 @@ import {
 import {
   createActiveLocalToolCalls,
   createAssistantToolRequestContent,
+  createCompletedToolFallbackSummary,
   createFabricatedToolActivityRecoveryInstruction,
   createFinalAnswerRecoveryInstruction,
   createInterruptedResponseContinuationInstruction,
@@ -111,6 +112,7 @@ import {
   looksLikeToolProtocolNarration,
   looksLikeUnexecutedToolActionPromise,
   needsFreshLocalToolEvidence,
+  shouldSynthesizeEmptyFinalFromToolResults,
   markPlanningInputAnswered,
   mergeChatSources,
   stampLocalToolCallIds,
@@ -3046,7 +3048,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
   }
 
-  function compactProviderMessages(messages: ChatMessage[], settingsOverride?: ProviderSettings, options: { target?: number; threshold?: number } = {}) {
+  function compactProviderMessages(messages: ChatMessage[], settingsOverride?: ProviderSettings, options: { target?: number; threshold?: number; toolBridge?: ProviderToolBridgeOptions } = {}) {
     const effectiveSettings = createToolAwareProviderSettings(settingsOverride);
     const requestedThreshold = options.threshold ?? AUTO_COMPACT_CONTEXT_THRESHOLD;
     const providerCompactionBaseline = options.threshold === undefined ? getProviderCompactionBaseline(requestedThreshold) : null;
@@ -3067,6 +3069,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           messages: candidateMessages,
           settings: effectiveSettings,
           source: contextWindow.source,
+          toolBridge: options.toolBridge,
         }),
     });
 
@@ -3978,7 +3981,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return null;
     }
 
-    async function synthesizeAnswerFromSavedToolResults(synthesisMessages: ChatMessage[], detail: string, fallbackReasoning?: string): Promise<typeof finalResponse | null> {
+    async function synthesizeAnswerFromSavedToolResults(
+      synthesisMessages: ChatMessage[],
+      detail: string,
+      fallbackReasoning?: string,
+      synthesisToolBridge?: ProviderToolBridgeOptions,
+    ): Promise<typeof finalResponse | null> {
       if (isRequestInactive(requestId, controller)) {
         return null;
       }
@@ -4026,7 +4034,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         const synthesisInstruction = allToolCalls.length > 0
           ? createLocalToolBudgetFinalInstruction(prompt, synthesisDetail)
           : createFinalAnswerRecoveryInstruction(prompt, synthesisDetail);
-        const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings);
+        const synthesisCompaction = compactProviderMessages([...synthesisMessages, createMessage("user", synthesisInstruction)], synthesisSettings, {
+          toolBridge: synthesisToolBridge,
+        });
 
         if (synthesisCompaction.contextCompaction) {
           const compactionProgress = createContextCompactionProgress(synthesisCompaction);
@@ -4038,11 +4048,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         }
 
         try {
-          recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings, { stream: false });
+          recordProviderContextUsage(chatId, synthesisCompaction.messages, synthesisSettings, { stream: false, toolBridge: synthesisToolBridge });
           const response = await sendProviderMessage(synthesisSettings, synthesisCompaction.messages, {
             signal: controller.signal,
+            toolBridge: synthesisToolBridge,
           });
-          recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage, { stream: false });
+          recordProviderActualUsage(chatId, synthesisCompaction.messages, synthesisSettings, response.usage, { stream: false, toolBridge: synthesisToolBridge });
 
           if (isRequestInactive(requestId, controller)) {
             return null;
@@ -4071,6 +4082,17 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       return null;
+    }
+
+    function createBridgeSynthesisToolBridgeOptions(): ProviderToolBridgeOptions | undefined {
+      return bridgeToolResultMessages.length > 0
+        ? {
+            maxToolResultContentChars: getModelVisibleToolResultCharBudget(contextWindow.tokens),
+            toolChoice: "none",
+            toolResultMessages: bridgeToolResultMessages,
+            tools: [],
+          }
+        : undefined;
     }
 
     if (resumeToolCallContent) {
@@ -4194,7 +4216,23 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             maxTokens: Math.max(runtimeSettings.maxTokens, minPassTokens),
           }
         : runtimeSettings;
-      const passCompaction = compactProviderMessages(messages, passSettings);
+      const bridgeContext: ToolExecutionContext = {
+        model: passSettings.model,
+        permissionMode: workspaceSettings.permissionMode,
+        provider: passSettings.provider,
+        signal: controller.signal,
+        workspaceRoots: workspaceSettings.roots,
+      };
+      const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext);
+      const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
+        ? {
+            maxToolResultContentChars: getModelVisibleToolResultCharBudget(contextWindow.tokens),
+            toolChoice: toolBudgetReached ? "none" as const : "auto" as const,
+            toolResultMessages: bridgeToolResultMessages,
+            tools: bridgeTools,
+          }
+        : undefined;
+      const passCompaction = compactProviderMessages(messages, passSettings, { toolBridge: bridgeOptions });
       if (passCompaction.compacted) {
         const compactionProgress = createContextCompactionProgress(passCompaction);
 
@@ -4209,21 +4247,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
       messages = passCompaction.compacted && localProgress ? appendAutoCompactionContinuation(passCompaction.messages, prompt, totalExecutedToolCalls) : passCompaction.messages;
       let assistantResponse: Awaited<ReturnType<typeof streamProviderMessageWithRetry>>;
-      const bridgeContext: ToolExecutionContext = {
-        model: passSettings.model,
-        permissionMode: workspaceSettings.permissionMode,
-        provider: passSettings.provider,
-        signal: controller.signal,
-        workspaceRoots: workspaceSettings.roots,
-      };
-      const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext);
-      const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
-        ? {
-            toolChoice: toolBudgetReached ? "none" as const : "auto" as const,
-            toolResultMessages: bridgeToolResultMessages,
-            tools: bridgeTools,
-          }
-        : undefined;
 
       try {
         assistantResponse = await streamProviderMessageWithRetry(
@@ -4283,6 +4306,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
           messages,
           "The streaming final response failed after the app gathered tool results.",
+          undefined,
+          createBridgeSynthesisToolBridgeOptions(),
         );
 
         if (synthesizedResponse) {
@@ -4382,6 +4407,27 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         return {
           ...finalResponse,
           progress: localProgress,
+        };
+      }
+
+      if (!assistantHasLocalToolCalls && shouldSynthesizeEmptyFinalFromToolResults(finalResponse.content, allToolCalls)) {
+        const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
+          messages,
+          "The provider returned no visible final answer after completed tool results. Use the attached tool result messages and write the requested answer now.",
+          assistantResponse.reasoning,
+          createBridgeSynthesisToolBridgeOptions(),
+        );
+
+        if (synthesizedResponse) {
+          return synthesizedResponse;
+        }
+
+        return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
+          progress: localProgress,
+          reasoning: assistantResponse.reasoning,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
 
@@ -4792,7 +4838,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     const rawLatestOutput = latestToolCall.output ? latestToolCall.output : latestToolCall.detail ? latestToolCall.detail : "";
     const fallbackOutput = latestToolCall.status === "complete"
-      ? limitFallbackToolOutput(rawLatestOutput)
+      ? summarizeCompletedToolFallback(latestToolCall, rawLatestOutput)
       : summarizeUnsuccessfulToolSection(rawLatestOutput);
 
     if (latestToolCall.status === "complete") {
@@ -4810,15 +4856,56 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   }
 
+  function summarizeCompletedToolFallback(toolCall: ChatToolCall, output: string) {
+    const trimmed = output.trim();
+
+    if (!trimmed) {
+      return "The tool completed, but the model did not produce a final response. Open Activity for the saved run details.";
+    }
+
+    if (shouldKeepToolOutputOutOfChat(toolCall, trimmed)) {
+      const structuredSummary = createCompletedToolFallbackSummary(toolCall, trimmed);
+
+      if (structuredSummary) {
+        return structuredSummary;
+      }
+
+      return [
+        "The tool completed, but the model did not produce a final response.",
+        `I kept the raw ${toolCall.label.toLowerCase()} output out of the chat because it is too large or file-content-like.`,
+        "Open Activity for the exact result, or retry the request so the model can synthesize from the saved tool results.",
+      ].join("\n");
+    }
+
+    return limitFallbackToolOutput(trimmed);
+  }
+
+  function shouldKeepToolOutputOutOfChat(toolCall: ChatToolCall, output: string) {
+    if (/read (workspace )?file/i.test(toolCall.label)) {
+      return true;
+    }
+
+    return output.length > 4_000 || countTextLines(output) > 120;
+  }
+
+  function countTextLines(value: string) {
+    if (!value) {
+      return 0;
+    }
+
+    const newlineCount = value.match(/\n/g)?.length ?? 0;
+    return value.endsWith("\n") ? newlineCount : newlineCount + 1;
+  }
+
   function limitFallbackToolOutput(output: string) {
     const trimmed = output.trim();
-    const maxChars = Math.min(getModelVisibleToolResultCharBudget(contextWindow.tokens), 24_000);
+    const maxChars = Math.min(getModelVisibleToolResultCharBudget(contextWindow.tokens), 4_000);
 
     if (trimmed.length <= maxChars) {
       return trimmed;
     }
 
-    return `${trimmed.slice(0, maxChars)}\n\n[Fallback output truncated to stay within the model context window. Open Activity or rerun the tool for a narrower path/range for exact omitted output.]`;
+    return `${trimmed.slice(0, maxChars)}\n\n[Fallback output truncated for chat readability. Open Activity for the exact omitted output.]`;
   }
 
   function createGitToolFallbackAnswer(toolCalls: ChatToolCall[], originalPrompt: string) {
@@ -5160,6 +5247,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const retryCompaction = compactProviderMessages(messages, retrySettings, {
         target: 0.5,
         threshold: 0,
+        toolBridge: options.toolBridge,
       });
       const compactedMessages = retryCompaction.messages;
 

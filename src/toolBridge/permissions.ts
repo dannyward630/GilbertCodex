@@ -67,9 +67,16 @@ export function resolveToolPermission(
   }
 
   if (permissionMode === "default") {
+    if ((tool.permission === "read-only" || tool.risk === "read") && !isHardGated) {
+      return {
+        allowed: true,
+        requiresApproval: false,
+      };
+    }
+
     return {
       allowed: false,
-      reason: "Default permissions allow only diagnostic/read-only bridge tools without approval.",
+      reason: "Default permissions require approval for mutating, terminal, external, network, credential, publish, or destructive tools.",
       requiresApproval: true,
     };
   }

@@ -17,9 +17,14 @@ export {
 } from "./paths";
 export { BRIDGE_TOOL_CALL_ID_PREFIX, formatToolResultContent, safeStringify } from "./results";
 export {
+  createFilesCountLinesTool,
   createFilesListTool,
   createFilesReadTool,
+  createFilesReadManyTool,
+  createFilesReadRangeTool,
+  createFilesSearchTool,
   createFilesStatTool,
+  createFilesTreeSummaryTool,
   createFilesTools,
   defaultFilesBackend,
   type FilesBackend,

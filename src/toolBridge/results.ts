@@ -7,7 +7,17 @@ import type { JsonValue, ToolCallRequest, ToolDefinition, ToolExecutionResult } 
  */
 export const BRIDGE_TOOL_CALL_ID_PREFIX = "bridge-";
 
-export function formatToolResultContent(result: ToolExecutionResult) {
+export interface ToolResultContentFormatOptions {
+  maxChars?: number | null;
+}
+
+export function formatToolResultContent(result: ToolExecutionResult, options: ToolResultContentFormatOptions = {}) {
+  const content = createToolResultContent(result);
+
+  return limitToolResultContentForProvider(content, options.maxChars);
+}
+
+function createToolResultContent(result: ToolExecutionResult) {
   if (result.content.trim()) {
     return result.content.trim();
   }
@@ -21,6 +31,34 @@ export function formatToolResultContent(result: ToolExecutionResult) {
   }
 
   return result.ok ? "Tool completed." : "Tool did not complete.";
+}
+
+function limitToolResultContentForProvider(content: string, maxChars: number | null | undefined) {
+  if (maxChars === null || maxChars === undefined || !Number.isFinite(maxChars)) {
+    return content;
+  }
+
+  const limit = Math.floor(maxChars);
+
+  if (limit <= 0) {
+    return [
+      "[Tool output omitted from provider context because the model-visible tool-result budget was already used.]",
+      "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact content is still needed.",
+    ].join("\n");
+  }
+
+  if (content.length <= limit) {
+    return content;
+  }
+
+  const marker = [
+    "",
+    `[Tool output truncated for provider context after ${limit.toLocaleString("en-US")} characters.]`,
+    "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact omitted content is still needed.",
+  ].join("\n");
+  const sliceLength = Math.max(0, limit - marker.length);
+
+  return `${content.slice(0, sliceLength).trimEnd()}${marker}`;
 }
 
 export function createBridgeChatToolCall(

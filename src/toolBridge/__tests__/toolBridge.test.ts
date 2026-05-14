@@ -56,6 +56,39 @@ describe("tool bridge permissions and registry", () => {
     expect(registry.listForContext(context, "anthropic-messages").some((tool) => tool.id === "anthropic_only")).toBe(true);
   });
 
+  it("registers search, batch read, range read, and tree summary file tools in the default bridge registry", () => {
+    const registry = createDefaultToolRegistry();
+    const visibleReadTools = registry
+      .listForContext(context, "openai-compatible")
+      .filter((tool) => tool.executorMetadata?.family === "files")
+      .map((tool) => tool.id);
+
+    expect(registry.get("files_search")).toBeDefined();
+    expect(registry.get("files_read_many")).toBeDefined();
+    expect(registry.get("files_read_range")).toBeDefined();
+    expect(registry.get("files_tree_summary")).toBeDefined();
+    expect(visibleReadTools).toContain("files_search");
+    expect(visibleReadTools).toContain("files_read_many");
+    expect(visibleReadTools).toContain("files_read_range");
+    expect(visibleReadTools).toContain("files_tree_summary");
+  });
+
+  it("resolves common file tool aliases without advertising duplicate tools", () => {
+    const registry = createDefaultToolRegistry();
+    const advertisedToolIds = registry.listForContext(context, "openai-compatible").map((tool) => tool.id);
+
+    expect(registry.get("read")?.id).toBe("files_read");
+    expect(registry.get("read_range")?.id).toBe("files_read_range");
+    expect(registry.get("grep")?.id).toBe("files_search");
+    expect(registry.get("ls")?.id).toBe("files_list");
+    expect(registry.get("tree")?.id).toBe("files_tree_summary");
+    expect(advertisedToolIds).toContain("files_read");
+    expect(advertisedToolIds).toContain("files_search");
+    expect(advertisedToolIds).toContain("files_tree_summary");
+    expect(advertisedToolIds).not.toContain("read");
+    expect(advertisedToolIds).not.toContain("grep");
+  });
+
   it("denies future mutating tools in default permissions", async () => {
     const mutatingTool: ToolDefinition = {
       description: "Future mutating tool.",
@@ -125,6 +158,34 @@ describe("tool bridge validation", () => {
     expect(validateToolArguments(sumTool!, { values: ["nope"] }).ok).toBe(false);
   });
 
+  it("does not require unsafe-eval to validate tool arguments", () => {
+    const originalFunction = globalThis.Function;
+    const sumTool = createDefaultToolRegistry().get("bridge_sum");
+
+    try {
+      globalThis.Function = (() => {
+        throw new Error("CSP blocked unsafe-eval");
+      }) as unknown as FunctionConstructor;
+
+      expect(sumTool).toBeDefined();
+      expect(validateToolArguments(sumTool!, { values: [1, 2, 3] }).ok).toBe(true);
+      expect(validateToolArguments(sumTool!, { values: ["nope"] }).ok).toBe(false);
+    } finally {
+      globalThis.Function = originalFunction;
+    }
+  });
+
+  it("rejects missing, extra, and out-of-range tool arguments", () => {
+    const echoTool = createDefaultToolRegistry().get("bridge_echo");
+    const readTool = createDefaultToolRegistry().get("files_read");
+
+    expect(echoTool).toBeDefined();
+    expect(readTool).toBeDefined();
+    expect(validateToolArguments(echoTool!, {}).ok).toBe(false);
+    expect(validateToolArguments(echoTool!, { message: "ok", extra: true }).ok).toBe(false);
+    expect(validateToolArguments(readTool!, { maxBytes: 0, path: "src/app/App.tsx" }).ok).toBe(false);
+  });
+
   it("returns a clear error when arguments are a raw string", () => {
     const sumTool = createDefaultToolRegistry().get("bridge_sum")!;
 
@@ -177,6 +238,35 @@ describe("tool bridge adapters", () => {
     );
 
     expect((body.messages as Array<{ role: string }>).map((message) => message.role)).toEqual(["user", "tool"]);
+  });
+
+  it("caps model-visible tool result content without changing Activity output", () => {
+    const body = applyToolBridgeToProviderRequest(
+      { messages: [{ content: "hello", role: "user" }], model: "test" },
+      "openai-compatible",
+      {
+        maxToolResultContentChars: 12,
+        toolResultMessages: [
+          {
+            arguments: { path: "src/app/App.tsx" },
+            callId: "call-read",
+            name: "files_read",
+            result: { content: "abcdefghijklmnopqrstuvwxyz", ok: true },
+          },
+          {
+            arguments: { path: "src/toolBridge/index.ts" },
+            callId: "call-read-2",
+            name: "files_read",
+            result: { content: "0123456789", ok: true },
+          },
+        ],
+      },
+    );
+    const toolMessages = (body.messages as Array<{ content: string; role: string }>).filter((message) => message.role === "tool");
+
+    expect(toolMessages[0]?.content).toContain("truncated for provider context");
+    expect(toolMessages[0]?.content).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(toolMessages[1]?.content).toContain("omitted from provider context");
   });
 
   it("propagates an explicit none tool_choice for OpenAI-compatible providers", () => {

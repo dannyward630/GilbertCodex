@@ -83,6 +83,11 @@ export interface ProviderToolBridgeOptions {
    * well-formed (assistant→tool) pair.
    */
   resultsHistoryAlreadyContainsAssistantTurns?: boolean;
+  /**
+   * Maximum aggregate characters of completed tool output to place back into
+   * the next provider request. Activity keeps the full raw output separately.
+   */
+  maxToolResultContentChars?: number | null;
   toolChoice?: ToolBridgeToolChoice;
   toolResultMessages?: ToolResultMessage[];
   tools?: ToolDefinition[];

@@ -7,8 +7,11 @@ const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
 };
 export const AUTO_COMPACT_CONTEXT_THRESHOLD = 0.8;
 export const AUTO_COMPACT_CONTEXT_TARGET = 0.55;
-const MAX_TOOL_CONTEXT_SURFACE_OUTPUT_CHARS = 8_000_000;
-const MAX_TOOL_CONTEXT_SURFACE_INPUT_CHARS = 24_000;
+// Activity stores full tool input/output. This provider context surface is only
+// continuity for later turns, so it must stay bounded or whole-repo reads get
+// replayed into every provider request.
+const MAX_TOOL_CONTEXT_SURFACE_OUTPUT_CHARS = 32_000;
+const MAX_TOOL_CONTEXT_SURFACE_INPUT_CHARS = 12_000;
 
 export interface ContextWindowUsage {
   availableTokens: number;

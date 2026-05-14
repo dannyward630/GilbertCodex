@@ -16,6 +16,7 @@ export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, o
 
   if (options.toolResultMessages?.length) {
     body.messages = appendOpenAiCompatibleToolResultMessages(body.messages, options.toolResultMessages, {
+      maxToolResultContentChars: options.maxToolResultContentChars,
       skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
     });
   }
@@ -37,9 +38,10 @@ export function createOpenAiCompatibleToolSchema(tool: ToolDefinition) {
 function appendOpenAiCompatibleToolResultMessages(
   currentMessages: unknown,
   results: ToolResultMessage[],
-  options: { skipAssistantTurn: boolean },
+  options: { maxToolResultContentChars?: number | null; skipAssistantTurn: boolean },
 ) {
   const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
+  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
 
   for (const result of results) {
     if (!options.skipAssistantTurn) {
@@ -58,12 +60,24 @@ function appendOpenAiCompatibleToolResultMessages(
         ],
       });
     }
+    const rawContent = formatToolResultContent(result.result);
+    const content = formatToolResultContent(result.result, { maxChars: remainingToolResultChars });
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, rawContent.length);
+
     messages.push({
-      content: formatToolResultContent(result.result),
+      content,
       role: "tool",
       tool_call_id: result.callId,
     });
   }
 
   return messages;
+}
+
+function normalizeRemainingChars(value: number | null | undefined) {
+  return value === null || value === undefined || !Number.isFinite(value) ? null : Math.max(Math.floor(value), 0);
+}
+
+function decrementRemainingChars(remaining: number | null, rawLength: number) {
+  return remaining === null ? null : Math.max(remaining - rawLength, 0);
 }

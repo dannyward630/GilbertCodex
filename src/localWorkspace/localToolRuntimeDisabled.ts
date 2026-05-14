@@ -111,7 +111,7 @@ function stripToolProtocol(content: string) {
   }
 
   return content
-    .replace(/<<<TOOL_CALL>>>[\s\S]*?<<<END_TOOL_CALL>>>/g, "")
-    .replace(/<tool_call\b[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<<<TOOL_CALL>>>[\s\S]*?(?:<<<END_TOOL_CALL>>>|$)/g, "")
+    .replace(/<tool_call\b[\s\S]*?(?:<\/tool_call>|$)/gi, "")
     .trim();
 }

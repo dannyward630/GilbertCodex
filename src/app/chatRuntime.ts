@@ -77,7 +77,19 @@ export function looksLikeUnexecutedToolActionPromise(content: string) {
 
 /** Detects visible explanations of the hidden action protocol instead of real runtime evidence. */
 export function looksLikeToolProtocolNarration(content: string) {
-  return false;
+  const trimmed = content.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  return (
+    /<<<\s*(?:END_)?TOOL_CALL\s*>>>/i.test(trimmed) ||
+    /<\s*\/?\s*tool_call\b/i.test(trimmed) ||
+    /<\s*\/?\s*arg_(?:key|value)\b/i.test(trimmed) ||
+    /\barg_(?:key|value)\b[\s\S]{0,120}\b(?:path|command|cwd|old_text|new_text|files_read|edit_file|run_terminal)\b/i.test(trimmed) ||
+    /\b(?:xml-style|xml style|compact)\s+tool_call\b/i.test(trimmed)
+  );
 }
 
 export function isToolResultFallbackAnswer(content: string) {
@@ -189,6 +201,127 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
     "If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected protocol narration excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
+}
+
+export function createCompletedToolFallbackSummary(toolCall: ChatToolCall, output: string) {
+  const label = toolCall.label.toLowerCase();
+
+  if (/list.*(?:directory|workspace)|(?:directory|workspace).*list/i.test(label)) {
+    return createDirectoryListingFallbackSummary(output, toolCall.input);
+  }
+
+  if (/read.*(?:file|workspace)|(?:file|workspace).*read/i.test(label)) {
+    return createReadFileFallbackSummary(output, toolCall.input);
+  }
+
+  return null;
+}
+
+function createDirectoryListingFallbackSummary(output: string, input?: string) {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const header = lines[0] ?? "";
+  const headerMatch = header.match(/^(?:Recursive directory tree|Directory)\s+(.+?)\s+\(([\d,]+)\s+entries\):$/i);
+  const rootPath = headerMatch?.[1] ?? parseToolInputPath(input);
+  const declaredEntries = headerMatch?.[2] ? Number.parseInt(headerMatch[2].replace(/,/g, ""), 10) : undefined;
+  const entryLines = lines.filter((line) => /^\[(?:dir|file)\]\s+/.test(line));
+
+  if (entryLines.length === 0 && !declaredEntries) {
+    return null;
+  }
+
+  let directoryCount = 0;
+  let fileCount = 0;
+  const extensionCounts = new Map<string, number>();
+  const topLevelDirectories = new Set<string>();
+
+  for (const line of entryLines) {
+    const isDirectory = line.startsWith("[dir]");
+    const entryPath = line.replace(/^\[(?:dir|file)\]\s+/, "");
+
+    if (isDirectory) {
+      directoryCount += 1;
+      const topDirectory = getTopLevelEntryName(entryPath, rootPath);
+      if (topDirectory) {
+        topLevelDirectories.add(topDirectory);
+      }
+      continue;
+    }
+
+    fileCount += 1;
+    const extension = getFileExtension(entryPath);
+    extensionCounts.set(extension, (extensionCounts.get(extension) ?? 0) + 1);
+  }
+
+  const entryCount = declaredEntries ?? entryLines.length;
+  const extensionSummary = [...extensionCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 10)
+    .map(([extension, count]) => `${extension} ${formatFallbackNumber(count)}`)
+    .join("; ");
+  const directorySummary = [...topLevelDirectories].slice(0, 12).join(", ");
+
+  return [
+    `Listed ${formatFallbackNumber(entryCount)} director${entryCount === 1 ? "y entry" : "y entries"}${rootPath ? ` in ${rootPath}` : ""}.`,
+    `Directories: ${formatFallbackNumber(directoryCount)}. Files: ${formatFallbackNumber(fileCount)}.`,
+    extensionSummary ? `Top file types: ${extensionSummary}.` : "",
+    directorySummary ? `Top-level folders seen: ${directorySummary}.` : "",
+    /limited/i.test(output) ? "The listing was limited by the tool result." : "",
+    "The full listing is saved in Activity and was not pasted into chat.",
+  ].filter(Boolean).join("\n");
+}
+
+function createReadFileFallbackSummary(output: string, input?: string) {
+  const path = parseToolInputPath(input);
+  const lineCount = countFallbackLines(output);
+
+  return [
+    `Read ${path ? path : "the requested file"} successfully.`,
+    `Content size: ${formatFallbackNumber(output.length)} characters across ${formatFallbackNumber(lineCount)} line${lineCount === 1 ? "" : "s"}.`,
+    "The full file content is saved in Activity and was not pasted into chat.",
+  ].join("\n");
+}
+
+function parseToolInputPath(input?: string) {
+  if (!input) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(input) as { path?: unknown };
+    return typeof parsed.path === "string" ? parsed.path : "";
+  } catch {
+    return "";
+  }
+}
+
+function getTopLevelEntryName(path: string, rootPath: string) {
+  const relativePath = rootPath && normalizePathForCompare(path).startsWith(normalizePathForCompare(rootPath))
+    ? path.slice(rootPath.length).replace(/^[\\/]+/, "")
+    : path;
+  return relativePath.split(/[\\/]+/).filter(Boolean)[0] ?? "";
+}
+
+function normalizePathForCompare(path: string) {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function getFileExtension(path: string) {
+  const name = path.split(/[\\/]+/).pop() ?? "";
+  const index = name.lastIndexOf(".");
+  return index >= 0 && index < name.length - 1 ? `.${name.slice(index + 1).toLowerCase()}` : "(no extension)";
+}
+
+function countFallbackLines(content: string) {
+  if (!content) {
+    return 0;
+  }
+
+  const newlineCount = content.match(/\n/g)?.length ?? 0;
+  return content.endsWith("\n") ? newlineCount : newlineCount + 1;
+}
+
+function formatFallbackNumber(value: number) {
+  return new Intl.NumberFormat("en-US").format(value);
 }
 
 /** Detects local build/edit/project requests that should not be answered without fresh tools. */
@@ -410,6 +543,11 @@ export function isInterruptedAssistantMessage(message: ChatMessage) {
   }
 
   return message.content.includes("I reached the agent tool budget for this run");
+}
+
+/** Detects the "tools completed, provider gave no visible answer" case. */
+export function shouldSynthesizeEmptyFinalFromToolResults(content: string, toolCalls: ChatToolCall[] = []) {
+  return !content.trim() && toolCalls.some((toolCall) => toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped");
 }
 
 /** Stamps stable display IDs onto tool activity generated during one execution pass. */

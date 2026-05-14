@@ -1,47 +1,62 @@
 import type { JsonValue, ToolDefinition, ToolExecutionResult } from "../../types";
 import { PathResolutionError, tryResolveAllowedPath } from "../../paths";
 import { defaultFilesBackend, type FilesBackend } from "./backend";
+import { DEFAULT_EXCLUDED_DIRECTORIES } from "./filesTraversal";
 
-const DEFAULT_LIMIT = 100;
-const HARD_CAP_LIMIT = 500;
+type ListedEntry = {
+  extension?: string | null;
+  kind: string;
+  modifiedAt?: number | null;
+  name: string;
+  path: string;
+  size?: number | null;
+};
 
 export function createFilesListTool(backend: FilesBackend = defaultFilesBackend): ToolDefinition {
   return {
     description:
       "List the immediate entries of a directory inside the configured workspace " +
       "roots. Returns directories before files; each entry includes name, kind, " +
-      "absolute path, and (for files) size and modifiedAt. Limit defaults to 100; " +
-      "use a higher limit only when you actually need it. The result's `limited` " +
-      "field tells you whether the listing was capped.",
+      "absolute path, and (for files) size and modifiedAt. By default this returns " +
+      "every readable entry without a bridge-imposed cap. Set recursive=true to " +
+      "walk the folder tree while skipping generated/cache directories such as " +
+      "node_modules, dist, target, and .git unless includeGenerated=true. Pass " +
+      "limit only when the user asks for a bounded listing.",
     execute: async (args, context) => {
       const resolution = tryResolveAllowedPath(context, args.path);
       if (!resolution.ok) {
         return resolutionToResult(resolution.error);
       }
 
-      const limit = clampLimit(args.limit);
+      const limit = optionalPositiveInteger(args.limit);
+      const recursive = args.recursive === true;
+      const includeGenerated = args.includeGenerated === true;
+      const excludeDirectories = new Set(toStringArray(args.excludeDirectories).map((value) => value.toLowerCase()));
 
       if (context.signal?.aborted) {
         return { content: "Tool bridge run aborted before files_list could call the backend.", ok: false };
       }
 
       try {
-        const listing = await backend.listDirectory(resolution.path.resolved, limit);
+        const listing = recursive
+          ? await listDirectoryTree(backend, resolution.path.resolved, {
+              excludeDirectories,
+              includeGenerated,
+              limit,
+              signal: context.signal,
+            })
+          : await listDirectory(backend, resolution.path.resolved, limit);
         return {
-          content: formatListingPreview(listing.path, listing.entries, listing.limited),
+          content: formatListingPreview(listing.path, listing.entries, listing.limited, recursive, listing.skippedDirectories),
           data: {
-            entries: listing.entries.map((entry) => ({
-              extension: entry.extension ?? null,
-              kind: entry.kind,
-              modifiedAt: entry.modifiedAt ?? null,
-              name: entry.name,
-              path: entry.path,
-              size: entry.size ?? null,
-            })),
+            entries: listing.entries,
+            includeGenerated,
             inaccessibleEntries: listing.inaccessibleEntries,
             limited: listing.limited,
             parentPath: listing.parentPath ?? null,
             path: listing.path,
+            recursive,
+            skippedDirectories: listing.skippedDirectories,
           } as JsonValue,
           ok: true,
         };
@@ -59,9 +74,17 @@ export function createFilesListTool(backend: FilesBackend = defaultFilesBackend)
     inputSchema: {
       additionalProperties: false,
       properties: {
+        excludeDirectories: {
+          description: "Directory names to skip while recursive=true, in addition to default generated/cache folders.",
+          items: { type: "string" },
+          type: "array",
+        },
+        includeGenerated: {
+          description: "When true, recursive listings include generated/cache directories such as node_modules, dist, target, and .git. Defaults to false.",
+          type: "boolean",
+        },
         limit: {
-          description: `Maximum entries to return. Defaults to ${DEFAULT_LIMIT}. Hard cap ${HARD_CAP_LIMIT}.`,
-          maximum: HARD_CAP_LIMIT,
+          description: "Optional maximum entries to return. Omit this to return every readable entry.",
           minimum: 1,
           type: "integer",
         },
@@ -69,6 +92,10 @@ export function createFilesListTool(backend: FilesBackend = defaultFilesBackend)
           description: "Absolute directory path or path relative to the first workspace root.",
           minLength: 1,
           type: "string",
+        },
+        recursive: {
+          description: "When true, walk all descendant folders instead of listing only the immediate directory.",
+          type: "boolean",
         },
       },
       required: ["path"],
@@ -80,32 +107,139 @@ export function createFilesListTool(backend: FilesBackend = defaultFilesBackend)
   };
 }
 
-function clampLimit(value: unknown): number {
+async function listDirectory(backend: FilesBackend, path: string, limit: number | undefined) {
+  const listing = await backend.listDirectory(path, limit);
+  return {
+    entries: listing.entries.map(normalizeEntry),
+    inaccessibleEntries: listing.inaccessibleEntries,
+    limited: listing.limited,
+    parentPath: listing.parentPath,
+    path: listing.path,
+    skippedDirectories: 0,
+  };
+}
+
+async function listDirectoryTree(
+  backend: FilesBackend,
+  rootPath: string,
+  options: {
+    excludeDirectories: Set<string>;
+    includeGenerated: boolean;
+    limit: number | undefined;
+    signal: AbortSignal | undefined;
+  },
+) {
+  const entries: ListedEntry[] = [];
+  const queue = [rootPath];
+  const excludedDirectories = new Set([
+    ...(options.includeGenerated ? [] : DEFAULT_EXCLUDED_DIRECTORIES),
+    ...options.excludeDirectories,
+  ]);
+  let inaccessibleEntries = 0;
+  let limited = false;
+  let skippedDirectories = 0;
+
+  while (queue.length > 0) {
+    if (options.signal?.aborted) {
+      break;
+    }
+
+    const currentPath = queue.shift()!;
+    let listing;
+
+    try {
+      listing = await backend.listDirectory(currentPath);
+    } catch {
+      inaccessibleEntries += 1;
+      continue;
+    }
+
+    inaccessibleEntries += listing.inaccessibleEntries;
+    limited ||= listing.limited;
+
+    for (const entry of listing.entries) {
+      if (options.limit !== undefined && entries.length >= options.limit) {
+        limited = true;
+        break;
+      }
+
+      if (entry.kind === "directory") {
+        if (excludedDirectories.has(entry.name.toLowerCase())) {
+          skippedDirectories += 1;
+        } else {
+          entries.push(normalizeEntry(entry));
+          queue.push(entry.path);
+        }
+        continue;
+      }
+
+      entries.push(normalizeEntry(entry));
+    }
+
+    if (options.limit !== undefined && entries.length >= options.limit) {
+      break;
+    }
+  }
+
+  return {
+    entries,
+    inaccessibleEntries,
+    limited,
+    parentPath: undefined,
+    path: rootPath,
+    skippedDirectories,
+  };
+}
+
+function normalizeEntry(entry: {
+  extension?: string;
+  kind: string;
+  modifiedAt?: number;
+  name: string;
+  path: string;
+  size?: number;
+}): ListedEntry {
+  return {
+    extension: entry.extension ?? null,
+    kind: entry.kind,
+    modifiedAt: entry.modifiedAt ?? null,
+    name: entry.name,
+    path: entry.path,
+    size: entry.size ?? null,
+  };
+}
+
+function optionalPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_LIMIT;
+    return undefined;
   }
   const truncated = Math.floor(value);
-  if (truncated < 1) {
-    return DEFAULT_LIMIT;
-  }
-  return Math.min(truncated, HARD_CAP_LIMIT);
+  return truncated > 0 ? truncated : undefined;
+}
+
+function toStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function formatListingPreview(
   path: string,
-  entries: Array<{ kind: string; name: string }>,
+  entries: Array<{ kind: string; name: string; path?: string }>,
   limited: boolean,
+  recursive: boolean,
+  skippedDirectories: number,
 ): string {
   if (entries.length === 0) {
-    return `Directory ${path} is empty${limited ? " (listing was limited)" : ""}.`;
+    return [
+      `Directory ${path} is empty${limited ? " (listing was limited)" : ""}.`,
+      skippedDirectories > 0 ? `Skipped ${skippedDirectories} generated/cache director${skippedDirectories === 1 ? "y" : "ies"} by default. Pass includeGenerated=true only when those folders are explicitly needed.` : "",
+    ].filter(Boolean).join("\n");
   }
-  const previewLines = entries.slice(0, 20).map((entry) => `${entry.kind === "directory" ? "[dir]" : "[file]"} ${entry.name}`);
-  const omitted = entries.length - previewLines.length;
+  const previewLines = entries.map((entry) => `${entry.kind === "directory" ? "[dir]" : "[file]"} ${entry.path ?? entry.name}`);
   return [
-    `Directory ${path}:`,
+    `${recursive ? "Recursive directory tree" : "Directory"} ${path} (${entries.length} entries):`,
     ...previewLines,
-    omitted > 0 ? `... and ${omitted} more entries.` : "",
-    limited ? "Listing was limited; raise `limit` if you need more entries." : "",
+    skippedDirectories > 0 ? `Skipped ${skippedDirectories} generated/cache director${skippedDirectories === 1 ? "y" : "ies"} by default. Pass includeGenerated=true only when those folders are explicitly needed.` : "",
+    limited ? "Listing was limited by an explicit limit or backend interruption; omit `limit` if you need every entry." : "",
   ]
     .filter(Boolean)
     .join("\n");

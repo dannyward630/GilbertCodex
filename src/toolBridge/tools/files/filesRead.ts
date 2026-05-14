@@ -2,25 +2,22 @@ import type { JsonValue, ToolDefinition, ToolExecutionResult } from "../../types
 import { PathResolutionError, tryResolveAllowedPath } from "../../paths";
 import { defaultFilesBackend, type FilesBackend } from "./backend";
 
-const DEFAULT_MAX_BYTES = 65_536;
-const HARD_CAP_MAX_BYTES = 1_048_576;
-
 export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend): ToolDefinition {
   return {
     description:
       "Read a UTF-8 text file from inside the configured workspace roots. " +
       "Use this before claiming to know a file's contents; do not guess. The file " +
-      "must be a text file; binary files are rejected. Returns at most maxBytes " +
-      "bytes of content; if the file is larger, `truncated: true` is set so you " +
-      "know to ask for the next chunk or a different file. Paths can be absolute " +
-      "or relative to the first workspace root.",
+      "must be a text file; binary files are rejected. By default this reads the " +
+      "entire file without a bridge-imposed size cap. Pass maxBytes only when the " +
+      "user asks for a bounded preview or chunk. Paths can be absolute or relative " +
+      "to the first workspace root.",
     execute: async (args, context) => {
       const resolution = tryResolveAllowedPath(context, args.path);
       if (!resolution.ok) {
         return resolutionToResult(resolution.error);
       }
 
-      const maxBytes = clampMaxBytes(args.maxBytes);
+      const maxBytes = optionalPositiveInteger(args.maxBytes);
 
       if (context.signal?.aborted) {
         return { content: "Tool bridge run aborted before files_read could call the backend.", ok: false };
@@ -57,8 +54,7 @@ export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend)
       additionalProperties: false,
       properties: {
         maxBytes: {
-          description: `Maximum bytes to read. Defaults to ${DEFAULT_MAX_BYTES}. Hard cap ${HARD_CAP_MAX_BYTES}.`,
-          maximum: HARD_CAP_MAX_BYTES,
+          description: "Optional maximum bytes to read. Omit this to read the full text file.",
           minimum: 1,
           type: "integer",
         },
@@ -77,15 +73,12 @@ export function createFilesReadTool(backend: FilesBackend = defaultFilesBackend)
   };
 }
 
-function clampMaxBytes(value: unknown): number {
+function optionalPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_MAX_BYTES;
+    return undefined;
   }
   const truncated = Math.floor(value);
-  if (truncated < 1) {
-    return DEFAULT_MAX_BYTES;
-  }
-  return Math.min(truncated, HARD_CAP_MAX_BYTES);
+  return truncated > 0 ? truncated : undefined;
 }
 
 function resolutionToResult(error: PathResolutionError): ToolExecutionResult {

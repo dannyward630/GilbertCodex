@@ -10,6 +10,39 @@ import { webTools } from "./tools/web";
 
 export type ToolRegistryListOptions = FilterToolsForPermissionOptions;
 
+const TOOL_ID_ALIASES: Record<string, string> = {
+  batch_read: "files_read_many",
+  count_lines: "files_count_lines",
+  dir: "files_list",
+  file_read: "files_read",
+  file_stat: "files_stat",
+  files_grep: "files_search",
+  "files.list": "files_list",
+  "files.read": "files_read",
+  "files.read_many": "files_read_many",
+  "files.read_range": "files_read_range",
+  "files.search": "files_search",
+  "files.stat": "files_stat",
+  "files.tree": "files_tree_summary",
+  grep: "files_search",
+  line_count: "files_count_lines",
+  list: "files_list",
+  list_dir: "files_list",
+  list_directory: "files_list",
+  ls: "files_list",
+  read: "files_read",
+  read_file: "files_read",
+  read_range: "files_read_range",
+  read_files: "files_read_many",
+  read_many: "files_read_many",
+  read_range_file: "files_read_range",
+  search: "files_search",
+  search_files: "files_search",
+  stat: "files_stat",
+  tree: "files_tree_summary",
+  tree_summary: "files_tree_summary",
+};
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
 
@@ -18,7 +51,7 @@ export class ToolRegistry {
   }
 
   get(id: string) {
-    return this.tools.get(id);
+    return this.tools.get(this.resolveId(id));
   }
 
   list() {
@@ -41,6 +74,11 @@ export class ToolRegistry {
     }
 
     this.tools.set(tool.id, tool);
+  }
+
+  resolveId(id: string) {
+    const normalizedId = id.trim();
+    return TOOL_ID_ALIASES[normalizedId.toLowerCase()] ?? normalizedId;
   }
 }
 

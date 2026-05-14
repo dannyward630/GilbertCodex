@@ -5,6 +5,7 @@ import { terminalShellLabel } from "../../lib/terminalShells";
 import { formatThinkingDuration } from "../../lib/thinkingActivity";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { formatReasoningEffort } from "../../types/settings";
+import { getStructuredToolActivity, type ToolActivityChip } from "./toolActivity";
 import type { AgentApproval, AgentApprovalDecision } from "../../types/agentRun";
 import type {
   ChatArtifactKind,
@@ -372,11 +373,6 @@ function ToolCallList({ toolCalls }: { toolCalls: ChatToolCall[] }) {
   );
 }
 
-interface ToolCallChip {
-  label: string;
-  tone?: "bad" | "good" | "info" | "muted";
-}
-
 function ToolCallDetails({ toolCall }: { toolCall: ChatToolCall }) {
   const hasDetails = Boolean(toolCall.fileChanges?.length || toolCall.input || toolCall.output || (isTerminalToolCall(toolCall) && toolCall.status === "active"));
 
@@ -462,15 +458,18 @@ function ToolCallTextBlock({ content, label, live = false }: { content: string; 
 
 function formatToolCallSummary(toolCall: ChatToolCall, terminalDetail: string) {
   const fileChangeSummary = formatFileChangeSummary(toolCall.fileChanges);
+  const structuredActivity = getStructuredToolActivity(toolCall);
   const outcomeDetail = toolCall.status === "error" || toolCall.status === "skipped" || toolCall.status === "waiting_approval"
     ? cleanInlineText(toolCall.output ?? "")
     : "";
+  const outputSummary = toolCall.status === "complete" ? structuredActivity.outputSummary ?? "" : "";
 
-  return limitInlineText([toolCall.detail, terminalDetail, fileChangeSummary, outcomeDetail].filter(Boolean).join(" | "), 180);
+  return limitInlineText([toolCall.detail, ...structuredActivity.summaryParts, terminalDetail, fileChangeSummary, outcomeDetail || outputSummary].filter(Boolean).join(" | "), 180);
 }
 
-function getToolCallChips(toolCall: ChatToolCall, index: number, terminalDetail: string): ToolCallChip[] {
-  const chips: ToolCallChip[] = [{ label: `#${index + 1}` }];
+function getToolCallChips(toolCall: ChatToolCall, index: number, terminalDetail: string): ToolActivityChip[] {
+  const structuredActivity = getStructuredToolActivity(toolCall);
+  const chips: ToolActivityChip[] = [{ label: `#${index + 1}` }];
   const hasInput = Boolean(toolCall.input);
   const hasOutput = Boolean(toolCall.output);
   const fileChanges = toolCall.fileChanges ?? [];
@@ -486,6 +485,8 @@ function getToolCallChips(toolCall: ChatToolCall, index: number, terminalDetail:
   } else {
     chips.push({ label: "skipped" });
   }
+
+  chips.push(...structuredActivity.chips);
 
   if (terminalDetail) {
     chips.push({ label: "terminal", tone: "info" });

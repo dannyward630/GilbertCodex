@@ -5,7 +5,17 @@ import type {
 } from "../../types/localWorkspace";
 import { executeToolBridgeCalls } from "../orchestrator";
 import { ToolRegistry } from "../registry";
-import { createFilesListTool, createFilesReadTool, createFilesStatTool, type FilesBackend } from "../tools/files";
+import {
+  createFilesCountLinesTool,
+  createFilesListTool,
+  createFilesReadManyTool,
+  createFilesReadRangeTool,
+  createFilesReadTool,
+  createFilesSearchTool,
+  createFilesStatTool,
+  createFilesTreeSummaryTool,
+  type FilesBackend,
+} from "../tools/files";
 import type { ToolExecutionContext } from "../types";
 
 const ROOT = "/workspace/project";
@@ -36,7 +46,7 @@ describe("files_read", () => {
     const backend = makeBackend({
       readTextFile: async (path, maxBytes) => {
         expect(path).toBe(`${ROOT}/README.md`);
-        expect(maxBytes).toBe(65_536);
+        expect(maxBytes).toBeUndefined();
         return {
           content: "# Hello",
           extension: "md",
@@ -73,7 +83,7 @@ describe("files_read", () => {
     expect(result.error).toContain("outside the configured workspace roots");
   });
 
-  it("clamps maxBytes to the hard cap", async () => {
+  it("passes an explicit maxBytes through without a bridge cap", async () => {
     let observed = -1;
     const backend = makeBackend({
       readTextFile: async (_path, maxBytes) => {
@@ -90,7 +100,7 @@ describe("files_read", () => {
     const tool = createFilesReadTool(backend);
 
     await tool.execute({ maxBytes: 999_999_999, path: "x.txt" }, makeContext());
-    expect(observed).toBe(1_048_576);
+    expect(observed).toBe(999_999_999);
   });
 
   it("returns a clean error when the backend throws", async () => {
@@ -125,7 +135,7 @@ describe("files_list", () => {
     const backend = makeBackend({
       listDirectory: async (path, limit) => {
         expect(path).toBe(`${ROOT}/src`);
-        expect(limit).toBe(100);
+        expect(limit).toBeUndefined();
         return {
           entries: [
             { kind: "directory", name: "lib", path: `${path}/lib` },
@@ -148,6 +158,108 @@ describe("files_list", () => {
     expect(result.content).toContain("Directory");
   });
 
+  it("recursively lists a full folder tree when requested", async () => {
+    const visited: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path, limit) => {
+        expect(limit).toBeUndefined();
+        visited.push(path);
+
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "src", path: `${ROOT}/src` },
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 10 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/src`) {
+          return {
+            entries: [
+              { extension: "ts", kind: "file", name: "index.ts", path: `${path}/index.ts`, size: 42 },
+              { kind: "directory", name: "nested", path: `${path}/nested` },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: ROOT,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/node_modules`) {
+          throw new Error("generated folder should be skipped");
+        }
+
+        return {
+          entries: [{ extension: "tsx", kind: "file", name: "App.tsx", path: `${path}/App.tsx`, size: 84 }],
+          inaccessibleEntries: 0,
+          limited: false,
+          parentPath: `${ROOT}/src`,
+          path,
+        } satisfies ComputerDirectoryListing;
+      },
+    });
+    const tool = createFilesListTool(backend);
+    const result = await tool.execute({ path: ROOT, recursive: true }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(visited).toEqual([ROOT, `${ROOT}/src`, `${ROOT}/src/nested`]);
+    expect(result.content).toContain(`${ROOT}/src/nested/App.tsx`);
+    expect(result.content).not.toContain("node_modules");
+    expect(result.content).toContain("Skipped 1 generated/cache directory");
+    expect(result.data).toMatchObject({
+      includeGenerated: false,
+      limited: false,
+      recursive: true,
+      skippedDirectories: 1,
+    });
+  });
+
+  it("can opt into generated directories for recursive listings", async () => {
+    const visited: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        visited.push(path);
+
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 10 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        return {
+          entries: [{ extension: "js", kind: "file", name: "package.js", path: `${path}/package.js`, size: 84 }],
+          inaccessibleEntries: 0,
+          limited: false,
+          parentPath: ROOT,
+          path,
+        } satisfies ComputerDirectoryListing;
+      },
+    });
+    const tool = createFilesListTool(backend);
+    const result = await tool.execute({ includeGenerated: true, path: ROOT, recursive: true }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(visited).toEqual([ROOT, `${ROOT}/node_modules`]);
+    expect(result.content).toContain(`${ROOT}/node_modules/package.js`);
+    expect(result.data).toMatchObject({
+      includeGenerated: true,
+      recursive: true,
+      skippedDirectories: 0,
+    });
+  });
+
   it("rejects an external path before calling the backend", async () => {
     let called = false;
     const backend = makeBackend({
@@ -161,6 +273,409 @@ describe("files_list", () => {
 
     expect(result.ok).toBe(false);
     expect(called).toBe(false);
+  });
+});
+
+describe("files_read_many", () => {
+  it("reads multiple files in order with full content by default", async () => {
+    const observedMaxBytes: Array<number | undefined> = [];
+    const backend = makeBackend({
+      readTextFile: async (path, maxBytes) => {
+        observedMaxBytes.push(maxBytes);
+        return {
+          content: path.endsWith("a.ts") ? "export const a = 1;" : "export const b = 2;",
+          extension: "ts",
+          name: path.split("/").pop() ?? "file",
+          path,
+          size: path.length,
+          truncated: false,
+        } satisfies ComputerReadFileResult;
+      },
+    });
+    const tool = createFilesReadManyTool(backend);
+    const result = await tool.execute({ paths: ["src/a.ts", "src/b.ts"] }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(observedMaxBytes).toEqual([undefined, undefined]);
+    expect(result.content).toContain(`${ROOT}/src/a.ts`);
+    expect(result.content).toContain("export const a = 1;");
+    expect(result.content).toContain(`${ROOT}/src/b.ts`);
+    expect(result.content).toContain("export const b = 2;");
+    expect(result.data).toMatchObject({
+      failureCount: 0,
+      requestedCount: 2,
+      successCount: 2,
+    });
+  });
+
+  it("returns structured per-file failures without aborting the whole batch", async () => {
+    const backend = makeBackend({
+      readTextFile: async (path) => {
+        if (path.endsWith("missing.ts")) {
+          throw new Error("file not found");
+        }
+        return {
+          content: "ok",
+          name: "ok.ts",
+          path,
+          size: 2,
+          truncated: false,
+        } satisfies ComputerReadFileResult;
+      },
+    });
+    const tool = createFilesReadManyTool(backend);
+    const result = await tool.execute({ paths: ["src/ok.ts", "src/missing.ts"] }, makeContext());
+    const data = result.data as { files: Array<{ error?: string; ok: boolean; requestedPath: string }> };
+
+    expect(result.ok).toBe(true);
+    expect(data.files.map((file) => file.ok)).toEqual([true, false]);
+    expect(data.files[1]?.error).toBe("file not found");
+  });
+});
+
+describe("files_read_range", () => {
+  it("reads an exact 1-based line range with line numbers by default", async () => {
+    const backend = makeBackend({
+      readTextFile: async (path) => ({
+        content: "one\ntwo\nthree\nfour\n",
+        extension: "ts",
+        name: "sample.ts",
+        path,
+        size: 19,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesReadRangeTool(backend);
+    const result = await tool.execute({ endLine: 3, path: "src/sample.ts", startLine: 2 }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(`Read ${ROOT}/src/sample.ts lines 2-3 of 4.`);
+    expect(result.content).toContain("2: two\n3: three");
+    expect(result.data).toMatchObject({
+      endLine: 3,
+      includeLineNumbers: true,
+      lineCount: 2,
+      path: `${ROOT}/src/sample.ts`,
+      startLine: 2,
+      totalLines: 4,
+    });
+  });
+
+  it("returns a clean error when the requested range starts past EOF", async () => {
+    const backend = makeBackend({
+      readTextFile: async (path) => ({
+        content: "one\n",
+        name: "sample.ts",
+        path,
+        size: 4,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesReadRangeTool(backend);
+    const result = await tool.execute({ endLine: 12, path: "src/sample.ts", startLine: 10 }, makeContext());
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("beyond the end");
+  });
+});
+
+describe("files_search", () => {
+  it("finds content matches across text files and skips generated folders by default", async () => {
+    const visited: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        visited.push(path);
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "src", path: `${ROOT}/src` },
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { extension: "md", kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 30 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/src`) {
+          return {
+            entries: [
+              { extension: "ts", kind: "file", name: "tools.ts", path: `${path}/tools.ts`, size: 100 },
+              { extension: "png", kind: "file", name: "logo.png", path: `${path}/logo.png`, size: 1000 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: ROOT,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("generated folder should be skipped");
+      },
+      readTextFile: async (path) => ({
+        content: path.endsWith("tools.ts")
+          ? "export function createToolRegistry() {}\nconst needle = true;\n"
+          : "# Project\nNo match here\n",
+        extension: path.endsWith(".ts") ? "ts" : "md",
+        name: path.split("/").pop() ?? "file",
+        path,
+        size: 20,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesSearchTool(backend);
+    const result = await tool.execute({ path: ROOT, query: "needle" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(visited).toEqual([ROOT, `${ROOT}/src`]);
+    expect(result.content).toContain(`${ROOT}/src/tools.ts`);
+    expect(result.content).toContain("L2: const needle = true;");
+    expect(result.data).toMatchObject({
+      filesRead: 2,
+      filesScanned: 3,
+      skippedDirectories: 1,
+    });
+  });
+
+  it("finds path matches without reading file contents when includeContent is false", async () => {
+    let readCalled = false;
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [
+          { extension: "ts", kind: "file", name: "permissions.ts", path: `${path}/permissions.ts`, size: 10 },
+          { extension: "ts", kind: "file", name: "registry.ts", path: `${path}/registry.ts`, size: 10 },
+        ],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => {
+        readCalled = true;
+        return {
+          content: "",
+          name: "unexpected",
+          path,
+          size: 0,
+          truncated: false,
+        } satisfies ComputerReadFileResult;
+      },
+    });
+    const tool = createFilesSearchTool(backend);
+    const result = await tool.execute({ includeContent: false, path: ROOT, query: "permissions" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(readCalled).toBe(false);
+    expect(result.content).toContain(`${ROOT}/permissions.ts (path match)`);
+    expect(result.content).not.toContain(`${ROOT}/registry.ts`);
+  });
+
+  it("includes requested context lines around content matches", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [{ extension: "ts", kind: "file", name: "context.ts", path: `${path}/context.ts`, size: 80 }],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => ({
+        content: "alpha\nbefore\nconst needle = true;\nafter\nomega\n",
+        extension: "ts",
+        name: "context.ts",
+        path,
+        size: 46,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesSearchTool(backend);
+    const result = await tool.execute({ contextLines: 1, path: ROOT, query: "needle" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("L2: before");
+    expect(result.content).toContain("L3: const needle = true;");
+    expect(result.content).toContain("L4: after");
+    expect(result.data).toMatchObject({
+      filesRead: 1,
+      filesScanned: 1,
+      totalContentMatches: 1,
+    });
+  });
+
+  it("filters candidate files by glob before reading content", async () => {
+    const readPaths: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [
+          { extension: "tsx", kind: "file", name: "App.tsx", path: `${path}/App.tsx`, size: 80 },
+          { extension: "ts", kind: "file", name: "index.ts", path: `${path}/index.ts`, size: 80 },
+        ],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => {
+        readPaths.push(path);
+        return {
+          content: "needle\n",
+          extension: path.endsWith(".tsx") ? "tsx" : "ts",
+          name: path.split("/").pop() ?? "file",
+          path,
+          size: 7,
+          truncated: false,
+        };
+      },
+    });
+    const tool = createFilesSearchTool(backend);
+    const result = await tool.execute({ glob: "**/*.tsx", path: ROOT, query: "needle" }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(readPaths).toEqual([`${ROOT}/App.tsx`]);
+    expect(result.content).toContain("Filtered 1 file by glob.");
+    expect(result.content).toContain(`${ROOT}/App.tsx`);
+    expect(result.content).not.toContain(`${ROOT}/index.ts`);
+    expect(result.data).toMatchObject({
+      filteredByGlob: 1,
+      filesScanned: 1,
+    });
+  });
+
+  it("ranks path and name matches before lower-signal content-only matches", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [
+          { extension: "ts", kind: "file", name: "permissions.ts", path: `${path}/src/toolBridge/permissions.ts`, size: 80 },
+          { extension: "md", kind: "file", name: "notes.md", path: `${path}/docs/notes.md`, size: 80 },
+        ],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => ({
+        content: path.endsWith("notes.md")
+          ? "permissions permissions permissions permissions permissions\n"
+          : "export const allowed = true;\n",
+        extension: path.endsWith(".ts") ? "ts" : "md",
+        name: path.split("/").pop() ?? "file",
+        path,
+        size: 40,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesSearchTool(backend);
+    const result = await tool.execute({ path: ROOT, query: "permissions" }, makeContext());
+    const data = result.data as { matches: Array<{ path: string }> };
+
+    expect(result.ok).toBe(true);
+    expect(data.matches.map((match) => match.path)).toEqual([
+      `${ROOT}/src/toolBridge/permissions.ts`,
+      `${ROOT}/docs/notes.md`,
+    ]);
+  });
+});
+
+describe("files_tree_summary", () => {
+  it("summarizes a source tree while skipping generated folders by default", async () => {
+    const visited: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        visited.push(path);
+
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "src", path: `${ROOT}/src` },
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { extension: "md", kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 20 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/src`) {
+          return {
+            entries: [
+              { kind: "directory", name: "components", path: `${path}/components` },
+              { extension: "ts", kind: "file", name: "index.ts", path: `${path}/index.ts`, size: 20 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: ROOT,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/src/components`) {
+          return {
+            entries: [{ extension: "tsx", kind: "file", name: "Button.tsx", path: `${path}/Button.tsx`, size: 20 }],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: `${ROOT}/src`,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("generated folder should be skipped");
+      },
+    });
+    const tool = createFilesTreeSummaryTool(backend);
+    const result = await tool.execute({ path: ROOT }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(visited).toEqual([ROOT, `${ROOT}/src`, `${ROOT}/src/components`]);
+    expect(result.content).toContain("Workspace tree summary");
+    expect(result.content).toContain("Skipped 1 generated/cache directory");
+    expect(result.content).toContain("Top file types: md 1; ts 1; tsx 1.");
+    expect(result.content).toContain("src/");
+    expect(result.content).toContain("components/");
+    expect(result.content).not.toContain("node_modules/");
+    expect(result.data).toMatchObject({
+      directoryCount: 3,
+      fileCount: 3,
+      includeGenerated: false,
+      skippedDirectories: 1,
+    });
+  });
+
+  it("can opt into generated folders when explicitly requested", async () => {
+    const visited: string[] = [];
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        visited.push(path);
+
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { extension: "md", kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 20 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        return {
+          entries: [{ extension: "js", kind: "file", name: "package.js", path: `${path}/package.js`, size: 20 }],
+          inaccessibleEntries: 0,
+          limited: false,
+          parentPath: ROOT,
+          path,
+        } satisfies ComputerDirectoryListing;
+      },
+    });
+    const tool = createFilesTreeSummaryTool(backend);
+    const result = await tool.execute({ includeGenerated: true, path: ROOT }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(visited).toEqual([ROOT, `${ROOT}/node_modules`]);
+    expect(result.content).toContain("node_modules/");
+    expect(result.data).toMatchObject({
+      directoryCount: 2,
+      includeGenerated: true,
+      skippedDirectories: 0,
+    });
   });
 });
 
@@ -225,12 +740,103 @@ describe("files_stat", () => {
   });
 });
 
-describe("files family permission gating", () => {
-  it("denies execution in default permission mode without an approval callback", async () => {
-    const tool = createFilesReadTool(makeBackend({
-      readTextFile: async () => {
-        throw new Error("should not be called");
+describe("files_count_lines", () => {
+  it("counts source lines recursively without returning file contents", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        if (path === ROOT) {
+          return {
+            entries: [
+              { kind: "directory", name: "src", path: `${ROOT}/src` },
+              { kind: "directory", name: "node_modules", path: `${ROOT}/node_modules` },
+              { extension: "md", kind: "file", name: "README.md", path: `${ROOT}/README.md`, size: 20 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        if (path === `${ROOT}/src`) {
+          return {
+            entries: [
+              { extension: "ts", kind: "file", name: "index.ts", path: `${path}/index.ts`, size: 30 },
+              { extension: "tsx", kind: "file", name: "App.tsx", path: `${path}/App.tsx`, size: 20 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: ROOT,
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("unexpected directory");
       },
+      readTextFile: async (path) => {
+        const content = path.endsWith("index.ts")
+          ? "const a = 1;\n\nexport { a };\n"
+          : "export function App() {\n  return null;\n}";
+        return {
+          content,
+          extension: path.endsWith("index.ts") ? "ts" : "tsx",
+          name: path.split("/").pop() ?? "file",
+          path,
+          size: content.length,
+          truncated: false,
+        } satisfies ComputerReadFileResult;
+      },
+    });
+    const tool = createFilesCountLinesTool(backend);
+    const result = await tool.execute({ path: ROOT }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("Counted 6 lines across 2 source files");
+    expect(result.content).not.toContain("export function App");
+    expect(result.data).toMatchObject({
+      files: 2,
+      lines: 6,
+      skippedDirectories: 1,
+    });
+  });
+
+  it("can exclude blank lines from the count", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [{ extension: "ts", kind: "file", name: "index.ts", path: `${path}/index.ts`, size: 20 }],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => ({
+        content: "one\n\nthree\n",
+        extension: "ts",
+        name: "index.ts",
+        path,
+        size: 11,
+        truncated: false,
+      }),
+    });
+    const tool = createFilesCountLinesTool(backend);
+    const result = await tool.execute({ includeBlankLines: false, path: ROOT }, makeContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      blankLines: 1,
+      lines: 2,
+    });
+  });
+});
+
+describe("files family permission gating", () => {
+  it("allows read-only execution in default permission mode", async () => {
+    const tool = createFilesReadTool(makeBackend({
+      readTextFile: async (path) => ({
+        content: "ok",
+        name: "README.md",
+        path,
+        size: 2,
+        truncated: false,
+      }),
     }));
     const registry = new ToolRegistry([tool]);
 
@@ -240,8 +846,61 @@ describe("files family permission gating", () => {
       registry,
     });
 
-    expect(batch.toolCalls[0]?.status).toBe("skipped");
-    expect(batch.resultMessages[0]?.result.skippedReason).toContain("Default permissions");
+    expect(batch.toolCalls[0]?.status).toBe("complete");
+    expect(batch.resultMessages[0]?.result.content).toBe("ok");
+  });
+
+  it("executes common read aliases through the canonical file tool", async () => {
+    const tool = createFilesReadTool(makeBackend({
+      readTextFile: async (path) => ({
+        content: "alias ok",
+        name: "PROGRESS.md",
+        path,
+        size: 8,
+        truncated: false,
+      }),
+    }));
+    const registry = new ToolRegistry([tool]);
+
+    const batch = await executeToolBridgeCalls({
+      calls: [{ arguments: { path: "PROGRESS.md" }, id: "call-read", name: "read", provider: "openai" }],
+      context: makeContext({ permissionMode: "default" }),
+      registry,
+    });
+
+    expect(batch.toolCalls[0]?.status).toBe("complete");
+    expect(batch.toolCalls[0]?.label).toBe("Read workspace file");
+    expect(batch.resultMessages[0]?.result.content).toBe("alias ok");
+  });
+
+  it("executes grep aliases through the canonical search tool", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => ({
+        entries: [{ extension: "md", kind: "file", name: "PROGRESS.md", path: `${path}/PROGRESS.md`, size: 40 }],
+        inaccessibleEntries: 0,
+        limited: false,
+        path,
+      }),
+      readTextFile: async (path) => ({
+        content: "Search needle\n",
+        extension: "md",
+        name: "PROGRESS.md",
+        path,
+        size: 14,
+        truncated: false,
+      }),
+    });
+    const registry = new ToolRegistry([createFilesSearchTool(backend)]);
+
+    const batch = await executeToolBridgeCalls({
+      calls: [{ arguments: { path: ROOT, query: "needle" }, id: "call-grep", name: "grep", provider: "openai" }],
+      context: makeContext({ permissionMode: "default" }),
+      registry,
+    });
+
+    expect(batch.toolCalls[0]?.status).toBe("complete");
+    expect(batch.toolCalls[0]?.label).toBe("Search workspace files");
+    expect(batch.resultMessages[0]?.result.content).toContain("Found 1 matching file");
   });
 
   it("auto-allows read-only execution in auto-review mode", async () => {
