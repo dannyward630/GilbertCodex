@@ -5,10 +5,7 @@ interface FenceMatch {
   length: number;
 }
 
-/**
- * Normalizes common malformed pipe-table delimiter rows before React Markdown
- * renders them, while leaving fenced code blocks untouched.
- */
+// Normalizes malformed pipe-table delimiter rows while leaving fenced code blocks untouched.
 export function normalizeMarkdownForDisplay(content: string) {
   if (!content.includes("|")) {
     return content;

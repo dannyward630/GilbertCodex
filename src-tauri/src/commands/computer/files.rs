@@ -1,7 +1,4 @@
-//! Local computer filesystem commands.
-//!
-//! This module backs the desktop workspace picker, file index, Git status,
-//! text reads/writes, and delete operations used by the model tool runtime.
+//! Local computer filesystem commands for workspace picking, indexing, Git status, and guarded file mutations.
 
 use crate::core::fs_utils::path_to_string;
 use serde::{Deserialize, Serialize};
@@ -421,14 +418,9 @@ pub struct ComputerWriteFileRequest {
     pub overwrite: Option<bool>,
     pub path: String,
     pub roots: Vec<String>,
-    /// Lowercase hex SHA-256 of the file as it was last observed by the
-    /// caller. When provided, the write is refused if the current on-disk
-    /// content does not match — this prevents the agent from clobbering a
-    /// concurrent user edit.
+    /// Lowercase hex SHA-256 of the last observed file; mismatches reject writes to protect user edits.
     pub expected_sha256: Option<String>,
-    /// When true, force a specific line-ending family. Otherwise the writer
-    /// detects the majority EOL from the existing file (CRLF/LF) and falls
-    /// back to the platform default for new files. Accepts "crlf" or "lf".
+    /// Optional line-ending family; otherwise the writer preserves detected EOL or uses the platform default.
     pub force_eol: Option<String>,
 }
 
@@ -456,8 +448,7 @@ pub struct ComputerReadFileResult {
     pub modified_at: Option<u64>,
     pub name: String,
     pub path: String,
-    /// Lowercase hex SHA-256 of the fully loaded file bytes. Omitted for
-    /// truncated reads so callers never treat a partial digest as a file guard.
+    /// Lowercase hex SHA-256 of fully loaded bytes; omitted for truncated reads.
     pub sha256: Option<String>,
     pub size: u64,
     pub truncated: bool,
@@ -470,9 +461,7 @@ pub struct ComputerWriteFileResult {
     pub created: bool,
     pub modified_at: Option<u64>,
     pub path: String,
-    /// Lowercase hex SHA-256 of the bytes that were actually written. Callers
-    /// can pass this back as `expected_sha256` on a follow-up write to detect
-    /// out-of-band edits.
+    /// Lowercase hex SHA-256 of bytes actually written for later `expected_sha256` guards.
     pub sha256: Option<String>,
     /// Line-ending family applied to the written bytes ("crlf" or "lf").
     pub eol: Option<String>,
@@ -529,8 +518,7 @@ fn pick_folder_blocking(start_path: Option<String>) -> Result<Option<String>, St
     Ok(dialog.pick_folder().map(path_to_string))
 }
 
-/// Lists a single directory. A caller-supplied limit is explicit; by default
-/// the model sees every readable entry in that directory.
+/// Lists a directory with an explicit limit only when the caller supplies one.
 #[tauri::command]
 pub async fn computer_list_directory(
     request: ComputerDirectoryRequest,
@@ -588,9 +576,7 @@ fn computer_list_directory_blocking(
     })
 }
 
-/// Builds a searchable file index and emits progress events. max_files and
-/// max_depth are explicit caller constraints; omitted values scan exhaustively
-/// while still honoring ignore and secret-file rules.
+/// Builds a searchable file index with caller limits, ignore rules, and secret-file safeguards.
 #[tauri::command]
 pub async fn computer_build_file_index(
     app: tauri::AppHandle,
@@ -1342,9 +1328,7 @@ pub fn computer_search_file_index(
     Ok(results)
 }
 
-/// Reads one text file. A byte limit is honored only when the caller asks for
-/// one; the default path returns the entire text file so long files are not
-/// silently clipped.
+/// Reads one text file and honors byte limits only when the caller explicitly asks for them.
 #[tauri::command]
 pub async fn computer_read_text_file(
     request: ComputerReadFileRequest,
@@ -1441,8 +1425,7 @@ fn use_legacy_write() -> bool {
     )
 }
 
-/// Detects the majority line-ending family in a byte sample. Returns `None`
-/// when no newlines are present (caller falls back to the platform default).
+/// Detects the majority line-ending family in a byte sample.
 fn detect_eol_majority(bytes: &[u8]) -> Option<&'static str> {
     let sample_end = bytes.len().min(ATOMIC_EOL_SAMPLE_BYTES);
     let sample = &bytes[..sample_end];
@@ -1482,8 +1465,7 @@ fn has_utf8_bom(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0xEF, 0xBB, 0xBF])
 }
 
-/// Normalises every line ending in `content` to `target_eol`. Existing CRLFs
-/// are collapsed first so we never emit `\r\r\n` after up-conversion.
+/// Normalises every line ending in `content` to `target_eol`.
 fn normalize_eol(content: &str, target_eol: &str) -> String {
     if content.is_empty() {
         return String::new();
@@ -1552,10 +1534,7 @@ fn is_windows_sharing_error(_error: &std::io::Error) -> bool {
     false
 }
 
-/// Writes `bytes` to `path` atomically. Strategy: create a sibling temp file
-/// in the same directory, fsync the contents, then rename over the target.
-/// On Windows the rename retries with backoff on sharing/lock errors so a
-/// transient handle (IDE, Vite watcher, antivirus) cannot corrupt the file.
+/// Writes bytes atomically with a sibling temp file, fsync, rename, and Windows lock retries.
 fn atomic_write_with_retry(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
@@ -1577,9 +1556,7 @@ fn atomic_write_with_retry(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp_name = format!(".{}.{}.{}.{}.tmp", file_name, pid, nanos, counter);
     let tmp_path = parent.join(&tmp_name);
 
-    // Write + flush + sync the temp file. fsync is best-effort; an error here
-    // is non-fatal because the rename will still fail loudly if the temp
-    // file is unreadable.
+    // Fsync is best-effort; an unreadable temp file still fails loudly on rename.
     {
         let mut tmp = OpenOptions::new()
             .create_new(true)
@@ -1666,8 +1643,7 @@ pub fn computer_write_text_file(
             }
         }
 
-        // We may already have the bytes from the SHA check above; if not,
-        // sample the head of the file just to detect EOL/BOM cheaply.
+        // Reuse SHA-check bytes when available; otherwise sample only the head for EOL/BOM detection.
         if existing_bytes.is_empty() {
             if let Ok(mut file) = File::open(&path) {
                 let mut sample = vec![0u8; ATOMIC_EOL_SAMPLE_BYTES];
@@ -3032,8 +3008,7 @@ fn create_untracked_git_full_diff(repository_path: &Path, path: &str) -> Option<
     }
 
     if content.ends_with('\n') {
-        // `lines()` omits the trailing empty segment, which is correct for diff
-        // display. Keep the final newline already written by the last line.
+        // `lines()` omits the trailing empty segment, which is correct for diff display.
     } else if !content.is_empty() {
         diff.push_str("\\ No newline at end of file\n");
     }

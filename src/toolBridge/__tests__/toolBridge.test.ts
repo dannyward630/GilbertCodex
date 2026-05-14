@@ -9,6 +9,7 @@ import {
   parseOpenAiCompatibleToolCalls,
   parseResponsesToolCalls,
   parseToolCallArgumentsDetailed,
+  parseVisibleTextToolCalls,
 } from "../parsers";
 import type {
   ToolApprovalCallback,
@@ -93,6 +94,17 @@ describe("tool bridge permissions and registry", () => {
     expect(registry.get("git.commit")?.id).toBe("git_commit");
     expect(registry.get("github_list_repositories")).toBeDefined();
     expect(registry.get("github.read_file")?.id).toBe("github_read_file");
+  });
+
+  it("registers the web search bridge tool and common web aliases", () => {
+    const registry = createDefaultToolRegistry();
+    const advertisedToolIds = registry.listForContext(context, "openai-compatible").map((tool) => tool.id);
+
+    expect(registry.get("web_search")).toBeDefined();
+    expect(registry.get("web")?.id).toBe("web_search");
+    expect(registry.get("brave_search")?.id).toBe("web_search");
+    expect(registry.get("duckduckgo.search")?.id).toBe("web_search");
+    expect(advertisedToolIds).toContain("web_search");
   });
 
   it("resolves common file tool aliases without advertising duplicate tools", () => {
@@ -254,7 +266,7 @@ describe("tool bridge diagnostics", () => {
 
     expect(result.ok).toBe(true);
     expect(result.content).toContain("Tool smoke test passed");
-    expect(result.content).toContain("Full HTML read is Activity-only visible");
+    expect(result.content).toContain("Full HTML read stays out of visible chat");
     expect(result.content).toContain("Malformed write returns recovery error without mutation");
     expect(result.content).toContain("Exact replace coerces string booleans");
     expect(result.content).toContain("Git status and diff report cleanly");
@@ -263,7 +275,7 @@ describe("tool bridge diagnostics", () => {
 });
 
 describe("tool result finalizer", () => {
-  it("keeps raw file content for Activity and provider evidence while forcing visible synthesis", () => {
+  it("keeps raw file content for tool records and provider evidence while forcing visible synthesis", () => {
     const finalization = finalizeToolResult({
       arguments: { path: "src/app/App.tsx" },
       maxProviderChars: 12,
@@ -271,8 +283,9 @@ describe("tool result finalizer", () => {
       toolId: "files_read",
     });
 
-    expect(finalization.activityContent).toBe("abcdefghijklmnopqrstuvwxyz");
-    expect(finalization.providerContent).toContain("truncated for provider context");
+    expect(finalization.toolRecordContent).toBe("abcdefghijklmnopqrstuvwxyz");
+    expect(finalization.providerContent).toContain("Provider-visible tool output excerpt ended");
+    expect(finalization.providerContent).not.toContain("truncated for provider context");
     expect(finalization.visiblePolicy).toMatchObject({
       mode: "synthesize",
       resultKind: "file_content",
@@ -281,7 +294,31 @@ describe("tool result finalizer", () => {
     expect(finalization.visibleFallback).toContain("Read `src/app/App.tsx`.");
   });
 
-  it("detects metadata-backed raw Activity recaps as unsafe visible chat content", () => {
+  it("treats failed file reads as recoverable synthesis evidence", () => {
+    const finalization = finalizeToolResult({
+      arguments: { path: "src/App.tsx" },
+      label: "Read workspace file",
+      result: {
+        content: "",
+        error: [
+          "Could not read C:\\repo\\src\\App.tsx.",
+          "A directory named app exists. Try files_read on one of: C:\\repo\\src\\app\\App.tsx",
+        ].join(" "),
+        ok: false,
+      },
+      toolId: "files_read",
+    });
+
+    expect(finalization.visiblePolicy).toMatchObject({
+      mode: "safe_summary",
+      resultKind: "file_content",
+      synthesizeAfterwards: true,
+    });
+    expect(finalization.visibleFallback).toContain("Read workspace file");
+    expect(finalization.visibleFallback).toContain("Try files_read on one of");
+  });
+
+  it("detects metadata-backed raw tool recaps as unsafe visible chat content", () => {
     const finalization = finalizeToolResult({
       arguments: { path: "C:\\repo" },
       result: {
@@ -295,11 +332,11 @@ describe("tool result finalizer", () => {
       toolId: "files_tree_summary",
     });
 
-    expect(isVisibleToolResultLeak(finalization.activityContent, [{
+    expect(isVisibleToolResultLeak(finalization.toolRecordContent, [{
       id: "tool-tree",
       input: JSON.stringify({ path: "C:\\repo" }),
       label: "Workspace tree summary",
-      output: finalization.activityContent,
+      output: finalization.toolRecordContent,
       resultPolicy: finalization.visiblePolicy,
       status: "complete",
       toolId: "files_tree_summary",
@@ -373,7 +410,7 @@ describe("tool bridge adapters", () => {
     expect((body.messages as Array<{ role: string }>).map((message) => message.role)).toEqual(["user", "tool"]);
   });
 
-  it("caps model-visible tool result content without changing Activity output", () => {
+  it("caps model-visible tool result content without changing stored tool output", () => {
     const body = applyToolBridgeToProviderRequest(
       { messages: [{ content: "hello", role: "user" }], model: "test" },
       "openai-compatible",
@@ -397,9 +434,61 @@ describe("tool bridge adapters", () => {
     );
     const toolMessages = (body.messages as Array<{ content: string; role: string }>).filter((message) => message.role === "tool");
 
-    expect(toolMessages[0]?.content).toContain("truncated for provider context");
+    expect(toolMessages[0]?.content).toContain("Provider-visible tool output excerpt ended");
     expect(toolMessages[0]?.content).not.toContain("abcdefghijklmnopqrstuvwxyz");
-    expect(toolMessages[1]?.content).toContain("omitted from provider context");
+    expect(toolMessages[1]?.content).toContain("Provider-visible tool output excerpt omitted");
+    expect(toolMessages.join("\n")).not.toContain("truncated for provider context");
+  });
+
+  it("does not cap bridge tool results when no explicit provider limit is supplied", () => {
+    const content = "abcdefghijklmnopqrstuvwxyz".repeat(200);
+    const body = applyToolBridgeToProviderRequest(
+      { messages: [{ content: "hello", role: "user" }], model: "test" },
+      "openai-compatible",
+      {
+        toolResultDelivery: "inline-user-message",
+        toolResultMessages: [
+          {
+            arguments: { path: "src/app/App.tsx" },
+            callId: "call-read",
+            name: "files_read",
+            result: { content, ok: true },
+          },
+        ],
+      },
+    );
+    const messages = body.messages as Array<{ content: string; role: string }>;
+
+    expect(messages[1]?.content).toContain(content);
+    expect(messages[1]?.content).not.toContain("Provider-visible tool output excerpt ended");
+    expect(messages[1]?.content).not.toContain("truncated for provider context");
+  });
+
+  it("can inline tool results as plain user context for synthesis compatibility", () => {
+    const body = applyToolBridgeToProviderRequest(
+      { messages: [{ content: "hello", role: "user" }], model: "test" },
+      "openai-compatible",
+      {
+        maxToolResultContentChars: 80,
+        toolChoice: "none",
+        toolResultDelivery: "inline-user-message",
+        toolResultMessages: [
+          {
+            arguments: { path: "src/styles/variables.scss" },
+            callId: "call-read",
+            name: "files_read",
+            result: { content: "$color: red;", ok: true },
+          },
+        ],
+      },
+    );
+    const messages = body.messages as Array<{ content: string; role: string; tool_call_id?: string }>;
+
+    expect(body.tool_choice).toBeUndefined();
+    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
+    expect(messages[1]?.content).toContain("TOOL RESULT EVIDENCE");
+    expect(messages[1]?.content).toContain("files_read");
+    expect(messages[1]?.tool_call_id).toBeUndefined();
   });
 
   it("propagates an explicit none tool_choice for OpenAI-compatible providers", () => {
@@ -513,6 +602,32 @@ describe("tool bridge parsers", () => {
 
     expect(first[0]?.id).toBe("bridge_echo-fallback-1");
     expect(second[0]?.id).toBe("bridge_echo-fallback-2");
+  });
+
+  it("recovers provider-native tool_calls JSON printed as visible text", () => {
+    const content = String.raw`I'll continue examining more parts of this codebase.
+
+{ "tool_calls": [ { "id": "chatcmpl-tool-new1", "function": "files_read", "parameters": { "path": "C:\Users\Kobe Work\Documents\GilbertCodex\src\localWorkspace\files.ts" } }, { "id": "chatcmpl-tool-new2", "function": "files_read", "parameters": { "path": "C:\Users\Kobe Work\Documents\GilbertCodex\src\services\modelProviderClient.ts" } } ] }`;
+    const calls = parseVisibleTextToolCalls(content, "openrouter");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      arguments: { path: String.raw`C:\Users\Kobe Work\Documents\GilbertCodex\src\localWorkspace\files.ts` },
+      id: "chatcmpl-tool-new1",
+      name: "files_read",
+    });
+    expect(calls[1]?.arguments).toMatchObject({ path: String.raw`C:\Users\Kobe Work\Documents\GilbertCodex\src\services\modelProviderClient.ts` });
+  });
+
+  it("recovers OpenAI-style function tool_calls JSON printed as visible text", () => {
+    const content = String.raw`{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"files_read","arguments":"{\"path\":\"src/app/App.tsx\"}"}}]}`;
+    const calls = parseVisibleTextToolCalls(content, "openrouter");
+
+    expect(calls[0]).toMatchObject({
+      arguments: { path: "src/app/App.tsx" },
+      id: "call-1",
+      name: "files_read",
+    });
   });
 });
 

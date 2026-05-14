@@ -1,4 +1,4 @@
-/** Toolbox categories that can be enabled or disabled by the user. */
+/** Tool settings categories that can be enabled or disabled by the user. */
 export type ToolRegistryId =
   | "browserPreview"
   | "codeEdit"
@@ -28,9 +28,9 @@ export type ToolRegistryId =
 
 export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
 
-/** New installs keep only the model provider, planning/thinking UI, and host-managed web search enabled. */
+/** New installs keep the core provider, planning/thinking UI, web search, terminal, and preview tools enabled. */
 export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
-  browserPreview: false,
+  browserPreview: true,
   codeEdit: false,
   codeGeneration: false,
   codeView: false,
@@ -48,7 +48,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   reactNativeTools: false,
   sourceControl: false,
   sqlTools: false,
-  terminal: false,
+  terminal: true,
   thinking: true,
   testingTools: false,
   typescriptTools: false,
@@ -57,14 +57,23 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   workflowAutomation: false,
 };
 
-/** Merges persisted settings while force-disabling removed model-callable tools. */
+const ACTIVE_TOOL_REGISTRY_IDS = new Set<ToolRegistryId>([
+  "browserPreview",
+  "planning",
+  "provider",
+  "terminal",
+  "thinking",
+  "webSearch",
+]);
+
+/** Merges persisted settings while force-disabling tool groups that do not have a rebuilt bridge/runtime surface yet. */
 export function normalizeToolRegistrySettings(value: unknown): ToolRegistrySettings {
   const storedSettings = typeof value === "object" && value ? (value as Partial<ToolRegistrySettings>) : {};
 
   return Object.fromEntries(
     (Object.keys(DEFAULT_TOOL_REGISTRY_SETTINGS) as ToolRegistryId[]).map((toolId) => [
       toolId,
-      toolId === "provider" || toolId === "planning" || toolId === "thinking" || toolId === "webSearch"
+      ACTIVE_TOOL_REGISTRY_IDS.has(toolId)
         ? (typeof storedSettings[toolId] === "boolean" ? storedSettings[toolId] : DEFAULT_TOOL_REGISTRY_SETTINGS[toolId])
         : false,
     ]),

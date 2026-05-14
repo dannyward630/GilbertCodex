@@ -258,6 +258,7 @@ export function loadProviderSettings(): ProviderSettings {
   const baseUrls = normalizeProviderBaseUrls(storedSettings?.baseUrls);
   const providerModels = normalizeProviderModels(storedSettings?.providerModels);
   const legacyOpenRouterApiKey = typeof storedSettings?.openRouterApiKey === "string" ? storedSettings.openRouterApiKey : "";
+  const tools = normalizeToolRegistrySettings(storedTools ?? storedSettings?.tools);
 
   if (!apiKeys.openrouter && legacyOpenRouterApiKey) {
     apiKeys.openrouter = legacyOpenRouterApiKey;
@@ -280,7 +281,11 @@ export function loadProviderSettings(): ProviderSettings {
     temperature: normalizeTemperature(storedSettings?.temperature, defaultProviderSettings.temperature),
     topK: normalizeTopK(storedSettings?.topK, defaultProviderSettings.topK),
     topP: normalizeTopP(storedSettings?.topP, defaultProviderSettings.topP),
-    tools: normalizeToolRegistrySettings(storedTools ?? storedSettings?.tools),
+    tools: {
+      ...tools,
+      browserPreview: true,
+      terminal: true,
+    },
     userInstructions: normalizeText(storedSettings?.userInstructions, defaultProviderSettings.userInstructions),
     webSearch: normalizeWebSearchSettings(storedSettings?.webSearch),
     workspaceDependencies: normalizeWorkspaceDependencySettings(storedSettings?.workspaceDependencies),
@@ -883,7 +888,7 @@ function normalizeProgressItems(value: unknown): ChatProgressItem[] | undefined 
       {
         detail: progressItem.status === "active" ? "Stopped when the app reloaded." : progressItem.detail,
         id,
-        label: id === "local-computer-tools" && progressItem.label === "Local tools disabled" ? "Tool activity" : progressItem.label,
+        label: id === "local-computer-tools" ? "Tool progress" : progressItem.label,
         status: progressItem.status === "pending" ? "pending" : "complete",
       } satisfies ChatProgressItem,
     ];
@@ -948,8 +953,10 @@ function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
         input: typeof toolCall.input === "string" ? toolCall.input : undefined,
         label: toolCall.label,
         output: toolCall.status === "active" ? "This tool run was interrupted before it returned a result." : toolCall.output,
+        resultPolicy: normalizeToolResultPolicy(toolCall.resultPolicy),
         status: toolCall.status === "active" ? "error" : normalizeToolCallStatus(toolCall.status),
         terminal: normalizeToolCallTerminal(toolCall.terminal),
+        toolId: normalizeOptionalText(toolCall.toolId),
       } satisfies ChatToolCall,
     ];
   });
@@ -1017,6 +1024,36 @@ function normalizeToolCallDiffPreview(value: unknown): NonNullable<NonNullable<C
   return lines.length > 0 ? lines.slice(0, 120) : undefined;
 }
 
+function normalizeToolResultPolicy(value: unknown): ChatToolCall["resultPolicy"] {
+  if (typeof value !== "object" || !value) {
+    return undefined;
+  }
+
+  const policy = value as Partial<NonNullable<ChatToolCall["resultPolicy"]>>;
+  const mode = normalizeToolResultVisibleMode(policy.mode);
+  const resultKind = normalizeToolResultKind(policy.resultKind);
+
+  if (!mode || !resultKind) {
+    return undefined;
+  }
+
+  return {
+    mode,
+    resultKind,
+    synthesizeAfterwards: Boolean(policy.synthesizeAfterwards),
+  };
+}
+
+function normalizeToolResultVisibleMode(value: unknown): NonNullable<ChatToolCall["resultPolicy"]>["mode"] | undefined {
+  return value === "allow_raw" || value === "safe_summary" || value === "synthesize" ? value : undefined;
+}
+
+function normalizeToolResultKind(value: unknown): NonNullable<ChatToolCall["resultPolicy"]>["resultKind"] | undefined {
+  return value === "diagnostic" || value === "edit" || value === "file_content" || value === "git" || value === "search" || value === "summary" || value === "terminal" || value === "unknown"
+    ? value
+    : undefined;
+}
+
 function normalizeToolCallTerminal(value: unknown): ChatToolCall["terminal"] {
   if (typeof value !== "object" || !value) {
     return undefined;
@@ -1030,6 +1067,7 @@ function normalizeToolCallTerminal(value: unknown): ChatToolCall["terminal"] {
     exitCode: typeof terminal.exitCode === "number" || terminal.exitCode === null ? terminal.exitCode : undefined,
     live: typeof terminal.live === "boolean" ? terminal.live : undefined,
     outputTruncated: typeof terminal.outputTruncated === "boolean" ? terminal.outputTruncated : undefined,
+    sessionId: typeof terminal.sessionId === "string" ? terminal.sessionId : undefined,
     shell,
     timedOut: typeof terminal.timedOut === "boolean" ? terminal.timedOut : undefined,
     workingDirectory: typeof terminal.workingDirectory === "string" ? terminal.workingDirectory : undefined,

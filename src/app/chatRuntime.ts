@@ -21,7 +21,7 @@ export function createRecoverableLocalEditRetryInstruction(prompt: string, ..._a
   return [
     "LOCAL TOOLS DISABLED",
     `Original user request: ${prompt}`,
-    "Model-callable local edit tools have been removed from this build. Continue with a normal answer from the available conversation, workspace, and web context without emitting tool-call syntax.",
+    "The previous edit attempt did not produce a real app tool-call record. Continue with a normal answer from the available conversation, workspace, and web context without emitting visible tool-call syntax.",
   ].join("\n\n");
 }
 
@@ -62,12 +62,19 @@ export function createPlanningAnswerMessages(requests: ChatPlanningInputRequest[
 /** Detects filler text that should not become the assistant's final visible answer. */
 export function looksLikeOnlyToolPrelude(content: string) {
   const normalized = content.trim().toLowerCase();
+  const toolPreludePattern =
+    /\b(let me|let's|we need to|we should|we'll|we will|i need to|i'll|i will|now i need to)\b[\s\S]{0,220}\b(read|pull|inspect|check|look|analyze|analyse|explore|trace|review|search|grep|find|scan|load|use|try|retry|switch|create|scaffold|generate|edit|patch|write|fix|apply|open|launch|navigate|preview)\b/;
 
   return (
-    (normalized.length < 260 &&
-      /\b(let me|let's|we need to|we should|we'll|we will|i need to|i'll|i will|now i need to)\b/.test(normalized) &&
-      /\b(read|inspect|check|look|analyze|analyse|explore|use|try|retry|switch|create|scaffold|generate|edit|patch|write|fix|apply|open|launch|navigate|preview)\b/.test(normalized)) ||
+    (normalized.length < 1200 && toolPreludePattern.test(normalized) && !looksLikeSubstantiveAnswer(normalized)) ||
     looksLikeUnexecutedToolActionPromise(content)
+  );
+}
+
+function looksLikeSubstantiveAnswer(normalized: string) {
+  return (
+    /\b(?:i found|the issue is|root cause|fixed|changed|updated|implemented|verified|tests? passed|build passed|what changed|summary|findings?|next step)\b/.test(normalized) ||
+    /(?:^|\n)\s*(?:[-*]|\d+\.)\s+\S/.test(normalized)
   );
 }
 
@@ -89,24 +96,78 @@ export function looksLikeToolProtocolNarration(content: string) {
     /<\s*\/?\s*tool_call\b/i.test(trimmed) ||
     /<\s*\/?\s*arg_(?:key|value)\b/i.test(trimmed) ||
     /\barg_(?:key|value)\b[\s\S]{0,120}\b(?:path|command|cwd|old_text|new_text|files_read|edit_file|run_terminal)\b/i.test(trimmed) ||
+    looksLikeProviderToolCallJson(trimmed) ||
     /\b(?:xml-style|xml style|compact)\s+tool_call\b/i.test(trimmed)
   );
 }
 
-export function isToolResultFallbackAnswer(content: string) {
-  const normalized = content.toLowerCase();
+function looksLikeProviderToolCallJson(trimmed: string) {
+  if (!/"tool_calls"\s*:\s*\[/i.test(trimmed)) {
+    return false;
+  }
 
   return (
+    /"function"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+"/i.test(trimmed) ||
+    /"function"\s*:\s*\{[\s\S]{0,700}"name"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+"/i.test(trimmed) ||
+    /"parameters"\s*:\s*\{[\s\S]{0,700}"(?:path|cwd|command|query|url|oldText|newText)"\s*:/i.test(trimmed)
+  );
+}
+
+export function isToolResultFallbackAnswer(content: string) {
+  const trimmed = content.trim();
+  const normalized = content.toLowerCase();
+  const looksLikeRawBridgeError =
+    trimmed.length <= 1_000 &&
+    (
+      /^arguments\.[\w.]+\s+(?:must be\s+[a-z]+(?:\s+[a-z]+){0,4}|is not allowed|required|invalid)\.?$/i.test(trimmed) ||
+      /^no bridge tool is registered as\s+[\w.-]+\.?$/i.test(trimmed) ||
+      /^tool\s+[\w.-]+\s+received\s+(?:invalid json arguments|arguments that could not be parsed as json)\b/i.test(trimmed)
+    );
+  const looksLikeRawReadFailure =
+    /^i could not complete that action:\s+could not read\b/i.test(trimmed) ||
+    /^could not read\b[\s\S]{0,500}\b(?:cannot find the file specified|cannot find the path specified|no such file or directory|os error [23])\b/i.test(trimmed);
+  const looksLikeToolFailureFallback =
+    /^read workspace file did not complete cleanly\b/i.test(trimmed) ||
+    /^[\w\s]+did not complete cleanly\.\s*(?:status:\s*)?(?:error|skipped)?[\s\S]{0,500}\b(?:invalid argument shape|arguments\.[\w.]+\s+(?:must be|is not allowed|required|invalid)|tool call used an invalid)\b/i.test(trimmed);
+
+  return (
+    looksLikeRawBridgeError ||
+    looksLikeRawReadFailure ||
+    looksLikeToolFailureFallback ||
     content.includes("## Answer From Completed Tool Results") ||
     content.includes("## Tool Run Needs Continuation") ||
     normalized.includes("final write-up did not come back cleanly") ||
+    normalized.includes("could not produce a clean final answer") ||
+    normalized.includes("could not complete that action cleanly") ||
+    normalized.includes("model finished without producing a final answer") ||
     normalized.includes("finished the background work for this request") ||
     normalized.includes("use continue response") ||
-    normalized.includes("saved activity") ||
-    normalized.includes("saved in activity") ||
+    normalized.includes("use the saved tool result to answer the request") ||
+    normalized.includes("use the saved result to answer the request") ||
+    normalized.includes("use the saved git result to answer") ||
+    normalized.includes("use the matching paths and line references from the saved result") ||
+    normalized.includes("i hit a recoverable tool error before the final answer finished") ||
+    normalized.includes("i gathered the tool result, but the final answer did not finish cleanly") ||
+    normalized.includes("the tool result included suggested file paths") ||
+    normalized.includes("the next pass should continue from the attached tool result") ||
+    content.includes("RECOVERABLE TOOL ERROR") ||
+    normalized.includes("not a final chat answer") ||
+    normalized.includes("tool evidence for the next synthesis pass") ||
+    content.includes("TOOL RESULT EVIDENCE") ||
+    /\btool:\s*files_[\w-]+\b[\s\S]{0,160}\bcall id:\s*/i.test(content) ||
+    normalized.includes("i kept the full file body out of this message") ||
+    normalized.includes("the completed read is available to the current run") ||
+    normalized.includes("the full listing was kept with the tool result") ||
     normalized.includes("full file content is saved") ||
     normalized.includes("full listing is saved") ||
     normalized.includes("full result is saved") ||
+    normalized.includes("full file content was kept with the tool result") ||
+    normalized.includes("full listing was kept with the tool result") ||
+    normalized.includes("full result is kept with the tool record") ||
+    normalized.includes("provider-visible tool output excerpt ended") ||
+    normalized.includes("provider-visible tool output excerpt omitted") ||
+    normalized.includes("replay excerpt ended for provider context recovery") ||
+    normalized.includes("do not claim the tool or file read itself was truncated") ||
     normalized.includes("workspace tree summary for") ||
     /\bscanned\s+[\d,]+\s+director(?:y|ies)\s+and\s+[\d,]+\s+files?\s+to\s+depth\b/i.test(content) ||
     content.includes("Latest completed result:") ||
@@ -121,19 +182,21 @@ export function looksLikeInternalToolRecoveryAnswer(content: string) {
   const normalized = content.trim().toLowerCase();
 
   return (
+    looksLikeOnlyToolPrelude(content) ||
+    looksLikeToolProtocolNarration(content) ||
     isToolResultFallbackAnswer(content) ||
     normalized.includes("use continue response to keep this same run moving") ||
     normalized.includes("instead of leaving the chat blank") ||
     normalized.includes("that tool action was skipped or blocked") ||
-    normalized.includes("check activity for the exact tool result") ||
+    normalized.includes("check the tool result") ||
     normalized.includes("adaptation recommendation") ||
     /\btool\s+\d+\s+\[(?:error|failed|skipped|waiting[_ -]?approval)\]:/i.test(normalized) ||
     /(?:^|\n)\s*(?:#{1,3}\s*)?(?:original request|what ran|evidence)\b[\s\S]{0,240}\b(executed|completed|tool call)\b/.test(normalized)
   );
 }
 
-/** Detects model-written imitations of app activity records. Real activity must live on message.toolCalls. */
-export function looksLikeFabricatedToolActivity(content: string, toolCalls: ChatToolCall[] = []) {
+/** Detects model-written imitations of app tool records. Real work must live on message.toolCalls. */
+export function looksLikeFabricatedToolProgress(content: string, toolCalls: ChatToolCall[] = []) {
   const trimmed = content.trim();
 
   if (!trimmed) {
@@ -164,19 +227,19 @@ export function looksLikeFabricatedToolActivity(content: string, toolCalls: Chat
   );
 }
 
-export function createFabricatedToolActivityRecoveryInstruction(prompt: string, fabricatedContent: string, toolCalls: ChatToolCall[] = []) {
+export function createFabricatedToolProgressRecoveryInstruction(prompt: string, fabricatedContent: string, toolCalls: ChatToolCall[] = []) {
   const hasRealToolRecords = toolCalls.length > 0;
   const excerpt = fabricatedContent.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "TOOL ACTIVITY INTEGRITY CHECK",
+    "TOOL RECORD INTEGRITY CHECK",
     `Original user request: ${prompt}`,
     hasRealToolRecords
-      ? "The previous visible answer exposed internal activity text instead of answering from the app's real tool-call records."
+      ? "The previous visible answer exposed internal tool-progress text instead of answering from the app's real tool-call records."
       : "The previous visible answer claimed tool calls, file edits, terminal output, or progress records, but the app has no real tool-call records for that claim.",
-    "Do not repeat or summarize fake activity. Never paste [CONVERSATION CONTEXT SURFACE], TOOL CALLS, PROGRESS, command output, or edit/run status lines as if they were real work.",
-    "Model-callable local tools are disabled in this build. Answer from available evidence without claiming any local tool ran.",
-    excerpt ? `Rejected fake activity excerpt: ${excerpt}` : "",
+    "Do not repeat or summarize fake tool progress. Never paste [CONVERSATION CONTEXT SURFACE], TOOL CALLS, PROGRESS, command output, or edit/run status lines as if they were real work.",
+    "Do not claim any local tool ran unless a real app tool-call record is already present.",
+    excerpt ? `Rejected fake tool-progress excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -185,10 +248,10 @@ export function createToolActionPromiseRecoveryInstruction(prompt: string, promi
   const excerpt = promisedContent.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "LOCAL TOOLS DISABLED",
+    "LOCAL TOOL PROMISE REJECTED",
     `Original user request: ${prompt}`,
-    "The previous visible answer promised a local tool action, but model-callable local tools have been removed from this build.",
-    "Do not repeat the promise or emit tool-call syntax. Answer normally from available evidence and state plainly when the requested action cannot be performed by the model in this build.",
+    "The previous visible answer promised a local tool action without a real app tool-call record.",
+    "Do not repeat the promise or emit text-only tool syntax. Answer normally from available evidence, or let the provider request an app-exposed tool call when one is attached to the request.",
     excerpt ? `Rejected promise excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
@@ -200,16 +263,16 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
   return [
     "TOOL PROTOCOL NARRATION REJECTED",
     `Original user request: ${prompt}`,
-    "The previous visible response discussed tool-call protocol even though model-callable local tools are disabled.",
-    "Do not explain hidden tool protocol, batching mechanics, cwd choices, shell choices, timeout choices, or step-by-step tool formatting.",
-    "Do not emit tool calls.",
-    "If no tool is needed, answer normally in user-facing Markdown.",
+    "The previous visible response exposed hidden tool-call protocol or provider-native tool JSON instead of doing useful work.",
+    "Do not explain hidden tool protocol, batching mechanics, cwd choices, shell choices, timeout choices, provider-native JSON, or step-by-step tool formatting.",
+    "Do not emit visible tool-call syntax or JSON envelopes.",
+    "If the same action is still needed and the app exposes that tool, request it through the real provider tool-call channel now. If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected protocol narration excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
 
 export function createCompletedToolFallbackSummary(toolCall: ChatToolCall, output: string) {
-  if (toolCall.resultPolicy && toolCall.resultPolicy.mode !== "allow_raw") {
+  if (toolCall.resultPolicy && toolCall.resultPolicy.mode !== "allow_raw" && !toolCall.resultPolicy.synthesizeAfterwards) {
     return createVisibleFallbackFromToolCall({
       ...toolCall,
       output,
@@ -278,7 +341,7 @@ function createDirectoryListingFallbackSummary(output: string, input?: string) {
     extensionSummary ? `Top file types: ${extensionSummary}.` : "",
     directorySummary ? `Top-level folders seen: ${directorySummary}.` : "",
     /limited/i.test(output) ? "The listing was limited by the tool result." : "",
-    "The full listing is saved in Activity and was not pasted into chat.",
+    "The full listing was kept with the tool result and was not pasted into chat.",
   ].filter(Boolean).join("\n");
 }
 
@@ -289,7 +352,7 @@ function createReadFileFallbackSummary(output: string, input?: string) {
   return [
     `I read ${path ? `\`${path}\`` : "the requested file"} successfully.`,
     `It is ${formatFallbackNumber(output.length)} characters across ${formatFallbackNumber(lineCount)} line${lineCount === 1 ? "" : "s"}.`,
-    "I kept the full file body out of this message so the chat stays readable, but the completed read is available to the current run.",
+    "The full file body was kept out of the visible chat so the response stays readable.",
   ].join("\n");
 }
 
@@ -345,9 +408,9 @@ export function createFreshLocalToolEvidenceInstruction(prompt: string, unsuppor
   const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "LOCAL TOOLS DISABLED",
+    "UNSUPPORTED TOOL CLAIM",
     `Original user request: ${prompt}`,
-    "Model-callable local tools have been removed from this build.",
+    "No real app tool-call record supports the previous claim.",
     "Do not claim filesystem changes, command output, or verification unless that evidence is already present in the conversation. Ask for the missing context or explain the limitation plainly.",
     excerpt ? `Unsupported answer excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -504,7 +567,7 @@ export function createFinalAnswerRecoveryInstruction(prompt: string, detail: str
     detail,
     "Use the conversation context, web context, and local workspace context already provided above.",
     "Write only the user-facing answer now.",
-    "Do not mention background work, Activity, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
+    "Do not mention background work, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
     "Do not paste raw TOOL blocks or adaptation recommendations.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "If the available context is insufficient, say exactly what is missing in one short sentence, then give the best answer possible from the available evidence.",
@@ -516,13 +579,13 @@ export function createMalformedToolCallRecoveryInstruction(prompt: string) {
   return [
     "CONTINUE AFTER UNREADABLE TOOL REQUEST",
     `Original user request: ${prompt}`,
-    "The previous assistant response looked like it was trying to call a tool, but model-callable local tools are disabled.",
+    "The previous assistant response looked like text-only tool syntax rather than an app-exposed tool call.",
     "Continue the same response now with a normal final answer from the existing evidence.",
     "Do not leave the visible answer blank.",
   ].join("\n\n");
 }
 
-/** Preserves completed activity and visible text when the user steers an in-flight answer. */
+/** Preserves completed tool records and visible text when the user steers an in-flight answer. */
 export function createInterruptedResponseContinuationInstruction(prompt: string, message: ChatMessage) {
   const toolCallCount = message.toolCalls?.length ?? 0;
   const visibleContent = message.content.trim();
@@ -532,7 +595,7 @@ export function createInterruptedResponseContinuationInstruction(prompt: string,
     `Original user request: ${prompt}`,
     "Continue from the exact saved state above instead of restarting the task.",
     visibleContent ? "The previous partial visible response is included as assistant context. Do not repeat it unless needed for coherence." : "The previous response was interrupted before visible answer text was saved.",
-    toolCallCount > 0 ? `Saved tool/activity results available: ${toolCallCount}. Treat them as already completed evidence.` : "",
+    toolCallCount > 0 ? `Saved tool results available: ${toolCallCount}. Treat them as already completed evidence.` : "",
     message.webSearch?.enabled ? "Saved web-search state is included above. If it failed, say that briefly and continue with non-current claims only when appropriate." : "",
     "If the next step requires unavailable local tools, say that plainly. Otherwise finish the answer now.",
   ]
@@ -547,6 +610,14 @@ export function isInterruptedAssistantMessage(message: ChatMessage) {
   }
 
   if (isToolResultFallbackAnswer(message.content)) {
+    return true;
+  }
+
+  if (looksLikeOnlyToolPrelude(message.content)) {
+    return true;
+  }
+
+  if (looksLikeToolProtocolNarration(message.content)) {
     return true;
   }
 
@@ -572,7 +643,7 @@ export function shouldSynthesizeEmptyFinalFromToolResults(content: string, toolC
   });
 }
 
-/** Stamps stable display IDs onto tool activity generated during one execution pass. */
+/** Stamps stable display IDs onto tool records generated during one execution pass. */
 export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: number) {
   return toolCalls.map((toolCall, index) => ({
     ...toolCall,
@@ -580,7 +651,7 @@ export function stampLocalToolCallIds(toolCalls: ChatToolCall[], passIndex: numb
   }));
 }
 
-/** Creates optimistic tool activity cards from tool markup before execution completes. */
+/** Creates optimistic tool-call records from tool markup before execution completes. */
 export function createActiveLocalToolCalls(content: string, passIndex: number, executionPolicy?: LocalComputerToolExecutionPolicy): ChatToolCall[] {
   if (!hasLocalComputerToolCalls(content, executionPolicy)) {
     return [];

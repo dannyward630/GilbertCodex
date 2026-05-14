@@ -1739,7 +1739,6 @@
   gap: 8px;
 }
 
-.plan-review-activity,
 .plan-review-collapse {
   display: inline-flex;
   align-items: center;
@@ -1764,16 +1763,10 @@
   justify-content: center;
 }
 
-.plan-review-activity:hover,
 .plan-review-collapse:hover {
   color: var(--text);
   background: var(--hover);
   border-color: color-mix(in srgb, var(--line) 70%, transparent);
-}
-
-.plan-review-activity-label {
-  font-size: 12px;
-  letter-spacing: 0.01em;
 }
 
 .plan-review-body {

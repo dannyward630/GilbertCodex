@@ -9,9 +9,9 @@ import {
   Laptop,
   MessageCirclePlus,
   MoreHorizontal,
-  PanelRight,
   Pencil,
   Pin,
+  SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
 import { IconButton } from "../common/IconButton";
@@ -20,8 +20,6 @@ import { useDismissableLayer } from "../../lib/useDismissableLayer";
 interface ConversationHeaderProps {
   browserPreviewOpen: boolean;
   browserPreviewEnabled: boolean;
-  inspectorAvailable: boolean;
-  inspectorOpen: boolean;
   onAddAutomation: () => void;
   onArchive: () => void;
   onCopyDeeplink: () => void;
@@ -34,7 +32,6 @@ interface ConversationHeaderProps {
   onOpenSideChat: () => void;
   onRename: () => void;
   onToggleBrowserPreview: () => void;
-  onToggleInspector: () => void;
   onTogglePin: () => void;
   onToggleTerminal: () => void;
   pinned: boolean;
@@ -55,8 +52,6 @@ interface ConversationMenuItem {
 export function ConversationHeader({
   browserPreviewOpen,
   browserPreviewEnabled,
-  inspectorAvailable,
-  inspectorOpen,
   onAddAutomation,
   onArchive,
   onCopyDeeplink,
@@ -69,7 +64,6 @@ export function ConversationHeader({
   onOpenSideChat,
   onRename,
   onToggleBrowserPreview,
-  onToggleInspector,
   onTogglePin,
   onToggleTerminal,
   pinned,
@@ -217,14 +211,15 @@ export function ConversationHeader({
             onClick={onToggleBrowserPreview}
           />
         ) : null}
-        <IconButton
-          ariaLabel={!inspectorAvailable ? "No conversation details yet" : inspectorOpen ? "Collapse inspector" : "Open inspector"}
-          className="conversation-tool-desktop-only"
-          disabled={!inspectorAvailable}
-          icon={PanelRight}
-          pressed={inspectorOpen}
-          onClick={onToggleInspector}
-        />
+        {terminalEnabled ? (
+          <IconButton
+            ariaLabel={terminalOpen ? "Close terminal" : "Open terminal"}
+            className="conversation-tool-desktop-only"
+            icon={SquareTerminal}
+            pressed={terminalOpen}
+            onClick={onToggleTerminal}
+          />
+        ) : null}
       </div>
     </header>
   );

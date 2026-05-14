@@ -138,8 +138,7 @@ async function runDetection(settings: LocalWorkspaceSettings, signature: string)
     };
     lastInputSignature = signature;
   } catch {
-    // Detection failures should never break prompt assembly. Leave any
-    // previous snapshot in place; the next refresh will try again.
+    // Detection failures must not break prompt assembly; the next refresh will retry.
   }
 }
 
@@ -230,8 +229,7 @@ async function detectNodeLikeProject(
       }
     }
   } catch {
-    // The directory listing already confirmed package.json exists; if read or
-    // JSON parse fails we still report the detected type with safe defaults.
+      // If package.json read or parse fails, keep the detected type with safe defaults.
   }
 
   return {
@@ -273,7 +271,7 @@ async function detectPythonProject(root: string, fileNames: Set<string>): Promis
         packageName = nameMatch[1];
       }
     } catch {
-      // Same fallback policy as Node — keep detected type.
+      // Same fallback policy as Node: keep the detected type.
     }
   }
 
@@ -316,7 +314,7 @@ export function formatWorkspaceContextForPrompt(snapshot: WorkspaceContextSnapsh
   if (snapshot.roots.length === 0) {
     return [
       "# Workspace Context",
-      "No workspace root is currently enabled. Local model-callable tools are disabled; web search can still attach live sources when enabled.",
+      "No workspace root is currently enabled. Workspace-scoped tools need a selected root; web search can still attach live sources when enabled.",
     ].join("\n");
   }
 
@@ -373,7 +371,7 @@ export function formatWorkspaceContextForPrompt(snapshot: WorkspaceContextSnapsh
     lines.push(`Git at ${git.root}: ${parts.join(", ")}.`);
   }
 
-  lines.push("This context is host-attached metadata only. Do not imply that model-callable local tools are available.");
+  lines.push("This context is host-attached metadata only. Use provider-attached tools for real reads, edits, commands, Git, or browser actions.");
 
   return lines.join("\n");
 }

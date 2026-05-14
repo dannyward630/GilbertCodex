@@ -538,11 +538,7 @@ function invokeComputerCommand<T>(command: string, args: Record<string, unknown>
 export interface WriteComputerTextFileOptions {
   createParentDirs?: boolean;
   overwrite?: boolean;
-  /**
-   * Lowercase hex SHA-256 of the file as it was last observed. When provided,
-   * the Rust backend refuses to write if the on-disk content no longer
-   * matches — guards against clobbering concurrent user edits.
-   */
+  // Lowercase hex SHA-256 of the last observed file; Rust rejects writes when it no longer matches.
   expectedSha256?: string;
   /** Force a specific line-ending family. Defaults to majority-of-existing. */
   forceEol?: "crlf" | "lf";
@@ -641,15 +637,7 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
   return [];
 }
 
-/**
- * Builds the compact model-visible workspace context from roots, Git status,
- * project memories, directory listings, and existing index hits.
- *
- * This function must stay advisory. It should never scan or read a whole
- * project just to start a provider request. Model-callable local tools are
- * disabled in this reset build, so omitted details should be requested from
- * the user instead of via tool protocols.
- */
+// Builds compact advisory workspace context without scanning entire trees or implying real tool work occurred.
 export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings) {
   if (!settings.enabled) {
     return "";
@@ -667,7 +655,7 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
       settings,
       roots,
       undefined,
-      "Full computer access is enabled lazily, but model-callable local tools are disabled in this build. Gilbert will not index or load whole drive roots into context.",
+      "Full computer access is enabled lazily. Gilbert will not index or load whole drive roots into context; use app-exposed bridge tools only when precise evidence is required.",
       toolSettings,
     );
   }
@@ -729,11 +717,7 @@ export function localWorkspaceScopeLabel(scope: LocalWorkspaceScope) {
   return "Current folder";
 }
 
-/**
- * Full-computer scope expands permissions to host drive roots, but the active
- * project/folder roots stay first so host context stays anchored
- * still start where the user was working.
- */
+// Full-computer scope adds host drive roots while keeping the active project roots first.
 export function mergeFullComputerRoots(preferredRoots: string[], drives: ComputerDrive[]) {
   return uniquePaths([...preferredRoots.filter((root) => !isSystemRootPath(root)), ...drives.map((drive) => drive.path)]);
 }
@@ -1165,7 +1149,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
 
   return [
     "LOCAL WORKSPACE CONTEXT",
-    "This is bounded, host-attached project context. It is not a model-callable local tool surface.",
+    "This is bounded, host-attached project context. It is not proof that a provider tool read, edited, tested, or executed anything.",
     `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed recursively with cycle protection.`,
     "Automatic workspace context may include root metadata, shallow listings, bounded project memory, and existing index hits. Treat it as helpful context, not proof of current file contents.",
     "Do not claim to have edited, read, listed, searched, tested, committed, or run terminal commands from this context alone. Ask the user for explicit evidence or use normal chat/web search where appropriate.",
@@ -1214,7 +1198,7 @@ function formatGitStatuses(statuses: ComputerGitStatus[]) {
         changedFiles,
       ].filter(Boolean).join("\n");
     }),
-    "Use this Git state when answering branch, local status, uncommitted-change, next-commit, next-push, or changed-file questions for the selected project. If the user asks for all details, ask for the full Git status/diff because model-callable Git tools are disabled.",
+    "Use this Git state when answering branch, local status, uncommitted-change, next-commit, next-push, or changed-file questions for the selected project. If the user asks for all details, use an app-exposed Git/file tool when available or ask for the exact status/diff.",
   ].join("\n");
 }
 
@@ -1538,7 +1522,7 @@ function formatSearchResults(results: ComputerSearchResult[], indexReady: boolea
     return [
       "HYBRID FILE SEARCH RESULTS",
       "The file index was not preloaded for this request, so Gilbert did not search or read the folder automatically.",
-      "Model-callable local tools are disabled in this build, so ask the user for exact project context when needed.",
+      "Use app-exposed bridge tools when exact project context is needed and available; otherwise ask the user for the missing context.",
     ].join("\n");
   }
 

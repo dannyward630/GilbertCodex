@@ -74,7 +74,7 @@ function makeBackend(files: Record<string, { content: string; sha256?: string }>
 }
 
 describe("editing bridge tools", () => {
-  it("applies an exact replacement and returns Activity file-change metadata", async () => {
+  it("applies an exact replacement and returns file-change metadata", async () => {
     const path = `${ROOT}/src/app.ts`;
     const backend = makeBackend({ [path]: { content: "const value = 1;\n" } });
     const tool = createFilesExactReplaceTool(backend);

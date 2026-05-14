@@ -180,9 +180,7 @@ async function buildTreeSummary(
         });
       }
     } else if (displayedChildren.length > 0) {
-      // Children trimmed by maxChildrenPerDirectory (omittedHere) are already
-      // counted in omittedChildDirectories above. Only add the directories
-      // that would have been recursed into if maxDepth allowed it.
+      // Count only directories that maxDepth would have recursed into.
       omittedChildDirectories += displayedChildren.length;
     }
   }
@@ -210,8 +208,7 @@ async function buildTreeSummary(
 
 function formatTreeSummary(summary: Awaited<ReturnType<typeof buildTreeSummary>>) {
   const lines = [
-    // Wrap the path in backticks so markdown renderers don't strip Windows
-    // backslashes that precede punctuation.
+    // Wrap the path in backticks so markdown preserves Windows backslashes.
     `Workspace tree summary for \`${summary.path}\``,
     `Scanned ${formatNumber(summary.directoryCount)} director${summary.directoryCount === 1 ? "y" : "ies"} and ${formatNumber(summary.fileCount)} file${summary.fileCount === 1 ? "" : "s"} to depth ${summary.maxDepth}.`,
     summary.skippedDirectories > 0 ? `Skipped ${formatNumber(summary.skippedDirectories)} generated/cache director${summary.skippedDirectories === 1 ? "y" : "ies"} by default.` : "",

@@ -1,6 +1,6 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
 import { finalizeToolResult } from "../resultFinalizer";
-import { decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -8,18 +8,24 @@ export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, o
   if (tools.length > 0) {
     body.tools = tools.map(createOpenAiCompatibleToolSchema);
     body.tool_choice = options.toolChoice ?? "auto";
-  } else if (options.toolChoice === "none") {
-    // Propagate the explicit disable signal so callers can suppress additional
-    // tool calls mid-conversation.
+  } else if (options.toolChoice === "none" && options.toolResultDelivery !== "inline-user-message") {
+    // Propagate explicit disable so callers can suppress additional tool calls mid-conversation.
     body.tool_choice = "none";
+    delete body.tools;
+  } else if (options.toolResultDelivery === "inline-user-message") {
+    delete body.tool_choice;
     delete body.tools;
   }
 
   if (options.toolResultMessages?.length) {
-    body.messages = appendOpenAiCompatibleToolResultMessages(body.messages, options.toolResultMessages, {
-      maxToolResultContentChars: options.maxToolResultContentChars,
-      skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
-    });
+    body.messages = options.toolResultDelivery === "inline-user-message"
+      ? appendInlineUserToolResultMessages(body.messages, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+        })
+      : appendOpenAiCompatibleToolResultMessages(body.messages, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+          skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
+        });
   }
 
   return body;
@@ -74,6 +80,26 @@ function appendOpenAiCompatibleToolResultMessages(
       content,
       role: "tool",
       tool_call_id: result.callId,
+    });
+  }
+
+  return messages;
+}
+
+function appendInlineUserToolResultMessages(
+  currentMessages: unknown,
+  results: ToolResultMessage[],
+  options: { maxToolResultContentChars?: number | null },
+) {
+  const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
+  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
+
+  for (const result of results) {
+    const inlineResult = createInlineToolResultMessage(result, remainingToolResultChars);
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, inlineResult.providerRawCharCount);
+    messages.push({
+      content: inlineResult.content,
+      role: "user",
     });
   }
 

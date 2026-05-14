@@ -8,9 +8,7 @@ export interface ParseToolArgumentsResult {
   value: unknown;
 }
 
-// Back-compat: returns the parsed value if `value` is a JSON string, or the
-// raw `value` if parsing fails. Prefer parseToolCallArgumentsDetailed inside
-// the tool bridge so the parse error can be surfaced explicitly.
+// Back-compat parser that returns raw input on JSON failure; bridge code should use the detailed variant.
 export function parseToolCallArguments(value: unknown) {
   const result = parseToolCallArgumentsDetailed(value);
   return result.value;
@@ -49,9 +47,7 @@ export function createToolCallRequest(
 
   const trimmedName = name.trim();
   const parsed = parseToolCallArgumentsDetailed(args);
-  // Trim provider-supplied ids so downstream comparisons (dedupe, telemetry,
-  // result-message correlation) never see equivalent ids that differ only in
-  // surrounding whitespace.
+  // Trim provider IDs so dedupe, telemetry, and result-message correlation ignore surrounding whitespace.
   const trimmedId = typeof id === "string" ? id.trim() : "";
   const resolvedId = trimmedId ? trimmedId : nextFallbackToolCallId(trimmedName);
 
@@ -70,9 +66,7 @@ export function createToolCallRequest(
   return request;
 }
 
-// Monotonic, collision-free fallback id for tool calls whose provider failed
-// to supply one. Deterministic within a process; tests can reset it via
-// __resetToolCallIdCounterForTests.
+// Monotonic fallback ID for provider tool calls that arrive without IDs.
 function nextFallbackToolCallId(name: string): string {
   toolCallIdCounter += 1;
   return `${name}-fallback-${toolCallIdCounter}`;

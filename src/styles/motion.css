@@ -588,7 +588,6 @@
   .composer-change-strip,
   .composer-attachments,
   .composer-status,
-  .thinking-live-detail,
   .planning-input-card,
   .planning-input-summary {
     animation: gil-pop-in 260ms var(--motion-ease-soft) both;
@@ -784,10 +783,6 @@
 
   .message-block[data-role="assistant"][data-streaming="true"] .message-content {
     animation: gil-fade-in 180ms var(--motion-ease) both;
-  }
-
-  .thinking-disclosure[data-live="true"] .thinking-compact-summary {
-    animation: gil-soft-pulse 1.8s var(--motion-ease) infinite;
   }
 
   .thinking-popover-orb,

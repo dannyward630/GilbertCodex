@@ -128,8 +128,7 @@ body *::after {
   border-color: color-mix(in srgb, var(--popover-border) 82%, transparent);
 }
 
-.send-button:not(:disabled):focus-visible,
-.thinking-disclosure[data-live="true"] .thinking-compact-summary {
+.send-button:not(:disabled):focus-visible {
   animation: none !important;
 }
 

@@ -18,7 +18,7 @@ I built an open-source desktop coding agent with Tauri, React, and Rust. Looking
 Hey everyone, I have been building **Gilbert Codex**, an open-source desktop workspace for coding with AI agents.
 
 Repo: https://github.com/UrbanWafflezz/GilbertCodex  
-Windows alpha release: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.0
+Windows alpha release: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.5
 
 The short version: it is a local-first desktop app built with **Tauri 2, React, TypeScript, and Rust**. The goal is to give agent coding work a focused GUI instead of scattering everything across a browser tab, terminal window, notes, and Git client.
 
@@ -27,10 +27,11 @@ What is already in the alpha:
 - chat workspace with local projects, pinned chats, markdown, attachments, and local persistence
 - model routing for OpenRouter, OpenAI, Anthropic, Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek
 - thinking controls, planning mode, regeneration, stop, and visible activity/progress state
+- rebuilt provider tool bridge with file, editing, terminal, browser preview, Git, GitHub, web, and MCP-facing surfaces
 - local Git tools for status, diff, stage, commit, push, pull, branches, and review-style prompts
 - GitHub tools for repo/file reads, code search, branches, releases, pull requests, and workflow runs
 - DuckDuckGo-backed web search with source cards
-- terminal sessions, browser preview, local file tools, tool toggles, and settings
+- terminal sessions, browser preview, local file tools, review gates, and settings
 - SQL-backed local app state for auth, chats, projects, settings, integrations, preview state, and agent runs
 
 What I need help with right now:
@@ -57,9 +58,9 @@ Thanks for taking a look.
 I have been building **Gilbert Codex**, an MIT-licensed desktop coding agent workspace built with Tauri 2, React, TypeScript, and Rust.
 
 Repo: https://github.com/UrbanWafflezz/GilbertCodex  
-Windows alpha: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.0
+Windows alpha: https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.5
 
-It has a chat workspace, local projects, multi-provider model routing, planning/thinking controls, DuckDuckGo source cards, local Git/GitHub tools, terminal sessions, browser preview, tool toggles, and SQL-backed local state.
+It has a chat workspace, local projects, multi-provider model routing, planning/thinking controls, DuckDuckGo source cards, a rebuilt provider tool bridge, local Git/GitHub tools, terminal sessions, browser preview, review gates, and SQL-backed local state.
 
 I am looking for testers and contributors, especially for Windows installer feedback, real coding-task bugs, macOS/Linux source testing, Rust/Tauri review, and docs/setup polish. It is early alpha and unsigned on Windows, so expect rough edges.
 
@@ -103,7 +104,7 @@ Use the real UI screenshots first. They look more trustworthy than a generic pro
    Caption: Live activity rail with tool calls, reasoning state, artifacts, and sources.
 
 3. `images/03-toolbox-tool-toggles.png`  
-   Caption: Toolbox for enabling/disabling tool groups.
+   Caption: Tool and configuration settings for provider, workspace, and review behavior.
 
 4. `images/04-local-settings-providers.png`  
    Caption: Local settings for providers, model/runtime behavior, integrations, and permissions.

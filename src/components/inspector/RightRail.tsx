@@ -23,17 +23,16 @@ interface RailItem {
 
 interface RightRailProps {
   chat: ChatSummary;
-  hasActivity?: boolean;
   onClose?: () => void;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onSubmitPlanningInput?: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
 }
 
-export function RightRail({ chat, hasActivity = false, onClose, onResolveToolApproval, onSubmitPlanningInput }: RightRailProps) {
+export function RightRail({ chat, onClose, onResolveToolApproval, onSubmitPlanningInput }: RightRailProps) {
   const { artifactItems, reviewMessage } = useMemo(() => getRightRailContent(chat), [chat]);
 
   return (
-    <aside className="right-rail" data-active={hasActivity} data-mode={reviewMessage ? "review" : "inspector"} aria-label="Conversation details">
+    <aside className="right-rail" data-mode={reviewMessage ? "review" : "inspector"} aria-label="Conversation details">
       {reviewMessage ? (
         <ReviewRailCard
           message={reviewMessage}
@@ -53,8 +52,8 @@ export function chatHasRightRailContent(chat: ChatSummary) {
   return Boolean(reviewMessage || artifactItems.length > 0);
 }
 
-export function chatHasLiveRightRailActivity(chat: ChatSummary) {
-  return chat.messages.some((message) => message.role === "assistant" && hasInteractiveActivity(message));
+export function chatHasPendingRightRailAction(chat: ChatSummary) {
+  return chat.messages.some((message) => message.role === "assistant" && hasPendingReviewAction(message));
 }
 
 interface ReviewRailCardProps {
@@ -128,7 +127,7 @@ function ApprovalPanel({
             </span>
             <b>{approval.risk}</b>
           </div>
-          {approval.preview ? <pre>{limitActivityText(approval.preview, 1600)}</pre> : null}
+          {approval.preview ? <pre>{limitPreviewText(approval.preview, 1600)}</pre> : null}
           <div className="approval-actions">
             <button type="button" onClick={() => onResolve(approval.id, { status: "approved" })}>
               <Check size={14} aria-hidden="true" />
@@ -374,10 +373,10 @@ function getRightRailContent(chat: ChatSummary) {
 }
 
 function getLatestReviewMessage(chat: ChatSummary) {
-  return [...chat.messages].reverse().find((message) => message.role === "assistant" && hasInteractiveActivity(message));
+  return [...chat.messages].reverse().find((message) => message.role === "assistant" && hasPendingReviewAction(message));
 }
 
-function hasInteractiveActivity(message: ChatMessage) {
+function hasPendingReviewAction(message: ChatMessage) {
   return Boolean(
     message.approvals?.some((approval) => approval.status === "pending") ||
       getPlanningInputRequests(message).some((request) => !request.answeredAt),
@@ -408,7 +407,7 @@ function cleanInlineText(value: string) {
     .trim();
 }
 
-function limitActivityText(value: string, maxChars: number) {
+function limitPreviewText(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }

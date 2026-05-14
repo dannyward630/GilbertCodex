@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatHasLiveRightRailActivity, chatHasRightRailContent } from "./RightRail";
+import { chatHasPendingRightRailAction, chatHasRightRailContent } from "./RightRail";
 import type { ChatMessage, ChatSummary } from "../../types/chat";
 
 function chatWith(message: ChatMessage): ChatSummary {
@@ -22,8 +22,8 @@ function assistantMessage(overrides: Partial<ChatMessage>): ChatMessage {
   };
 }
 
-describe("right rail activity visibility", () => {
-  it("keeps normal tool activity out of the side rail", () => {
+describe("right rail visibility", () => {
+  it("keeps normal tool progress out of the side rail", () => {
     const chat = chatWith(assistantMessage({
       progress: [
         {
@@ -35,7 +35,7 @@ describe("right rail activity visibility", () => {
         {
           detail: "0 bridge tools ran",
           id: "local-computer-tools",
-          label: "Tool activity",
+          label: "Tool progress",
           status: "complete",
         },
       ],
@@ -52,7 +52,7 @@ describe("right rail activity visibility", () => {
     }));
 
     expect(chatHasRightRailContent(chat)).toBe(false);
-    expect(chatHasLiveRightRailActivity(chat)).toBe(false);
+    expect(chatHasPendingRightRailAction(chat)).toBe(false);
   });
 
   it("does not show the rail for a provider payload guardrail alone", () => {
@@ -68,7 +68,7 @@ describe("right rail activity visibility", () => {
     }));
 
     expect(chatHasRightRailContent(chat)).toBe(false);
-    expect(chatHasLiveRightRailActivity(chat)).toBe(false);
+    expect(chatHasPendingRightRailAction(chat)).toBe(false);
   });
 
   it("keeps actionable approvals visible", () => {
@@ -88,13 +88,13 @@ describe("right rail activity visibility", () => {
         {
           detail: "1 bridge tool ran",
           id: "local-computer-tools",
-          label: "Tool activity",
+          label: "Tool progress",
           status: "complete",
         },
       ],
     }));
 
     expect(chatHasRightRailContent(chat)).toBe(true);
-    expect(chatHasLiveRightRailActivity(chat)).toBe(true);
+    expect(chatHasPendingRightRailAction(chat)).toBe(true);
   });
 });

@@ -165,7 +165,7 @@ function formatBatchReadContent(results: BatchReadResult[]) {
     sections.push([
       `--- \`${result.path ?? result.requestedPath}\`${result.recoveredFrom ? ` (recovered from \`${result.recoveredFrom}\`)` : ""}`,
       result.recoveryNote,
-      result.truncated ? `[TRUNCATED after requested maxBytes]\n${result.content ?? ""}` : result.content ?? "",
+      result.truncated ? `[Requested maxBytes/offset chunk only]\n${result.content ?? ""}` : result.content ?? "",
     ].filter((line): line is string => typeof line === "string" && line.length > 0).join("\n"));
   }
 

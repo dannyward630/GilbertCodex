@@ -190,15 +190,6 @@
   color: var(--text-muted);
 }
 
-.thinking-disclosure-summary {
-  color: var(--text);
-  border-color: var(--popover-border);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 88%, transparent), var(--surface-raised)),
-    var(--surface-raised);
-}
-
-.thinking-trace-item,
 .thinking-popover-header,
 .thinking-effort-grid button,
 .thinking-trace-toggle,

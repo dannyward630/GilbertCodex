@@ -19,9 +19,7 @@ export { createFilesSearchTool } from "./filesSearch";
 export { createFilesStatTool } from "./filesStat";
 export { createFilesTreeSummaryTool } from "./filesTreeSummary";
 
-// Factory for the read-only files family. Pass a `backend` to inject a mock
-// filesystem (used in tests) or to wrap the production backend with caching,
-// logging, or audit hooks.
+// Factory for read-only file tools with injectable backend support for tests and hardening.
 export function createFilesTools(backend: FilesBackend = defaultFilesBackend): ToolDefinition[] {
   return [
     createFilesReadTool(backend),

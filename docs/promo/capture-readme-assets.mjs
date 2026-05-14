@@ -87,8 +87,8 @@ function createSeedState() {
               detail: "Release checklist for public alpha",
               id: "artifact-release",
               kind: "file",
-              title: "docs/releases/v0.3.0.md",
-              url: "docs/releases/v0.3.0.md",
+              title: "docs/releases/v0.3.5.md",
+              url: "docs/releases/v0.3.5.md",
             },
           ],
           sources: [
@@ -115,14 +115,14 @@ function createSeedState() {
               detail: "Read project docs and release notes",
               id: "tool-read-docs",
               label: "read_files",
-              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.3.0.md",
+              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.3.5.md",
               status: "complete",
             },
             {
               detail: "Checked source tree and ignored generated output",
               id: "tool-health",
               label: "codebase_health_scan",
-              output: "Source is grouped by app, components, services, tools, types, and Rust commands.",
+              output: "Source is grouped by app, components, services, toolBridge, types, and Rust commands.",
               status: "complete",
             },
           ],
@@ -147,7 +147,7 @@ function createSeedState() {
           isStreaming: true,
           progress: [
             { id: "progress-plan", label: "Plan README media section", status: "complete" },
-            { id: "progress-capture", label: "Capture app screenshots", status: "active", detail: "Overview, activity, toolbox, and settings" },
+            { id: "progress-capture", label: "Capture app screenshots", status: "active", detail: "Overview, activity, tool bridge, and settings" },
             { id: "progress-write", label: "Write README copy", status: "pending" },
           ],
           reasoning:
@@ -285,6 +285,7 @@ try {
         fileCreation: true,
         fileBrowser: true,
         fileSearch: true,
+        mcpServers: true,
         pdfTools: true,
         permissions: true,
         planning: true,
@@ -296,7 +297,6 @@ try {
         thinking: true,
         testingTools: true,
         typescriptTools: true,
-        vectorTools: true,
         webSearch: true,
         workflowAutomation: true,
       };
@@ -332,12 +332,13 @@ try {
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-overview.png");
 
-  await page.getByText("Toolbox", { exact: true }).click();
-  await page.waitForSelector(".utility-page");
+  await page.getByText("Settings", { exact: true }).click();
+  await page.waitForSelector(".settings-page");
+  await page.getByText("Configuration", { exact: true }).click();
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-toolbox.png");
 
-  await page.getByText("Settings", { exact: true }).click();
+  await page.getByText("General", { exact: true }).click();
   await page.waitForSelector(".settings-page");
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-settings.png");

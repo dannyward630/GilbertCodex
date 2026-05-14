@@ -1,6 +1,6 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
 import { finalizeToolResult } from "../resultFinalizer";
-import { decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyAnthropicToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -14,17 +14,20 @@ export function applyAnthropicToolBridge(body: Record<string, unknown>, options:
       body.tool_choice = { type: "auto" };
     }
   } else if (options.toolChoice === "none") {
-    // Anthropic does not support a "none" tool_choice when there are no tools
-    // attached; the absence of `tools` is itself the disable signal.
+    // Anthropic treats absent tools as the disable signal when no tools are attached.
     delete body.tools;
     delete body.tool_choice;
   }
 
   if (options.toolResultMessages?.length) {
-    body.messages = appendAnthropicToolResultMessages(body.messages, options.toolResultMessages, {
-      maxToolResultContentChars: options.maxToolResultContentChars,
-      skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
-    });
+    body.messages = options.toolResultDelivery === "inline-user-message"
+      ? appendInlineUserToolResultMessages(body.messages, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+        })
+      : appendAnthropicToolResultMessages(body.messages, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+          skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
+        });
   }
 
   return body;
@@ -78,6 +81,26 @@ function appendAnthropicToolResultMessages(
           type: "tool_result",
         },
       ],
+      role: "user",
+    });
+  }
+
+  return messages;
+}
+
+function appendInlineUserToolResultMessages(
+  currentMessages: unknown,
+  results: ToolResultMessage[],
+  options: { maxToolResultContentChars?: number | null },
+) {
+  const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
+  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
+
+  for (const result of results) {
+    const inlineResult = createInlineToolResultMessage(result, remainingToolResultChars);
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, inlineResult.providerRawCharCount);
+    messages.push({
+      content: inlineResult.content,
       role: "user",
     });
   }

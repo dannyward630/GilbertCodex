@@ -49,7 +49,7 @@ export function createLocalComputerProgress(status: ChatProgressItem["status"], 
   return {
     detail,
     id: "local-computer-tools",
-    label: "Tool activity",
+    label: "Tool progress",
     status,
   };
 }
@@ -95,7 +95,7 @@ export async function runLocalComputerToolCalls(_options: {
   return {
     approvalRequests: [],
     artifacts: [],
-    contextMessage: "Local model-callable tools have been removed from this build. Web search is still handled by the host when enabled.",
+    contextMessage: "Legacy text-emitted local tool protocols are disabled. Rebuilt app tools run through the provider tool bridge when attached to the request.",
     executedCount: 0,
     progress: createLocalComputerProgress("complete", "No local tools ran"),
     requestedCount: 0,

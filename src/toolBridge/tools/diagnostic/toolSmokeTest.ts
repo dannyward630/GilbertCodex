@@ -41,7 +41,7 @@ export function createToolSmokeTestTool(): ToolDefinition {
       };
       const checks: ToolSmokeCheck[] = [];
 
-      await runCheck(checks, "read_full_html", "Full HTML read is Activity-only visible", async () => {
+      await runCheck(checks, "read_full_html", "Full HTML read stays out of visible chat", async () => {
         const args = { path: "site/index.html" };
         const result = await createFilesReadTool(filesBackend).execute(args, smokeContext);
         assertOkResult(result);
@@ -689,14 +689,14 @@ function assertToolResultNeedsSynthesis(
     id: `smoke-${toolId}`,
     input: JSON.stringify(args),
     label,
-    output: finalization.activityContent,
+    output: finalization.toolRecordContent,
     resultPolicy: finalization.visiblePolicy,
     status,
     toolId,
   };
 
   assertCondition(finalization.visiblePolicy.synthesizeAfterwards === true, `${toolId} did not request post-tool synthesis.`);
-  assertCondition(isVisibleToolResultLeak(finalization.activityContent, [toolCall]), `${toolId} raw Activity content was not detected as unsafe visible chat content.`);
+  assertCondition(isVisibleToolResultLeak(finalization.toolRecordContent, [toolCall]), `${toolId} raw tool-record content was not detected as unsafe visible chat content.`);
 }
 
 function createSmokeMessage(role: ChatMessage["role"], content: string): ChatMessage {

@@ -59,7 +59,7 @@ The installer artwork uses a split light/dark visual treatment so the setup flow
 
 Before publishing an installer:
 
-1. Bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the release version.
+1. Bump `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` to the release version.
 2. Run `npm.cmd run check`.
 3. Run `npm.cmd run audit:prod`.
 4. Run `npm.cmd run app:release`, or run the GitHub `Release` workflow for the tagged version.

@@ -5,9 +5,7 @@ import type { WebSearchSettings } from "../types/settings";
 export interface WebToolExecutionResult {
   content: string;
   sources: ChatSource[];
-  // True when the search itself failed (network error, provider error). False
-  // when the search ran but returned zero results — that's a successful call
-  // with empty data, not an error.
+  // True only for search failures; zero results is a successful empty result.
   isError?: boolean;
   errorCode?: string;
 }

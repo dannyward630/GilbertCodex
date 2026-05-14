@@ -142,6 +142,37 @@ describe("files_read", () => {
     expect(result.error).toContain(`${ROOT}/image.png`);
   });
 
+  it("suggests files_search when a guessed file path is missing without a nearby match", async () => {
+    const backend = makeBackend({
+      listDirectory: async (path) => {
+        if (path === ROOT) {
+          return {
+            entries: [
+              { extension: "ts", kind: "file", name: "vite.config.ts", path: `${ROOT}/vite.config.ts`, size: 100 },
+              { extension: "json", kind: "file", name: "package.json", path: `${ROOT}/package.json`, size: 200 },
+            ],
+            inaccessibleEntries: 0,
+            limited: false,
+            parentPath: "",
+            path,
+          } satisfies ComputerDirectoryListing;
+        }
+
+        throw new Error("The system cannot find the path specified. (os error 3)");
+      },
+      readTextFile: async () => {
+        throw new Error("The system cannot find the file specified. (os error 2)");
+      },
+    });
+    const tool = createFilesReadTool(backend);
+    const result = await tool.execute({ path: "tailwind.config.ts" }, makeContext());
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Try files_search with query `tailwind.config`");
+    expect(result.error).toContain("includePath=true");
+    expect(result.error).toContain("includeContent=false");
+  });
+
   it("recovers a module entry when a stale file path points at a sibling folder", async () => {
     const requestedPath = `${ROOT}/src/toolBridge/adapters.ts`;
     const recoveredPath = `${ROOT}/src/toolBridge/adapters/index.ts`;

@@ -2,7 +2,7 @@ const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const MAX_ACTIVITY_THINKING_NOTES = 9;
 const MAX_ACTIVITY_THINKING_NOTE_CHARS = 280;
-const TRIMMED_ACTIVITY_REASONING_PREFIX = "Earlier thinking was summarized for Activity.";
+const TRIMMED_ACTIVITY_REASONING_PREFIX = "Earlier thinking was summarized.";
 
 export function splitThinkingContent(content?: string) {
   const normalizedContent = content?.trim();

@@ -95,10 +95,7 @@ export function selectPromptChunks(context: AgentPromptRetrievalContext): Select
         return false;
       }
 
-      // High-priority chunks (project recipes and core behaviors) skip the
-      // similarity floor — they carry load-bearing instructions and should
-      // surface whenever the chunk is allowed by toggles, even on short or
-      // generic prompts.
+      // High-priority chunks skip the similarity floor because they carry load-bearing instructions.
       if (entry.chunk.priority >= HIGH_PRIORITY_FLOOR_EXEMPTION) {
         return true;
       }
@@ -252,12 +249,15 @@ function getEnabledToolNames(settings: ProviderSettings) {
   const tools = normalizeToolRegistrySettings(settings.tools);
 
   return [
+    tools.browserPreview ? "browser_preview_open" : "",
+    tools.terminal ? "terminal_run" : "",
     tools.webSearch ? "host_web_search_context" : "",
   ].filter(Boolean);
 }
 
 function hasAnyLocalTool(settings: ProviderSettings) {
-  return false;
+  const tools = normalizeToolRegistrySettings(settings.tools);
+  return tools.browserPreview || tools.terminal;
 }
 
 function isResearchLike(prompt: string, settings: ProviderSettings) {

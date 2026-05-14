@@ -63,7 +63,7 @@ import {
 import { generateChatTitle } from "../services/chatTitleClient";
 import { fetchProviderModelContextLengths, isProviderEmptyResponseError, sendProviderMessage, streamProviderMessage } from "../services/modelProviderClient";
 import { annotateProviderPayloadSpike, applyProviderUsageToContextEstimate, estimateModelProviderPayloadUsage } from "../services/modelProviderUsage";
-import { createBridgeChatToolCall, createDefaultToolRegistry, executeToolBridgeCalls, isVisibleToolResultLeak, resolveToolPermission, validateToolArguments } from "../toolBridge";
+import { createBridgeChatToolCall, createDefaultToolRegistry, executeToolBridgeCalls, isVisibleToolResultLeak, parseVisibleTextToolCalls, resolveToolPermission, validateToolArguments } from "../toolBridge";
 import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolResultMessage } from "../toolBridge";
 import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../localWorkspace/files";
 import {
@@ -84,7 +84,7 @@ import {
   createActiveLocalToolCalls,
   createAssistantToolRequestContent,
   createCompletedToolFallbackSummary,
-  createFabricatedToolActivityRecoveryInstruction,
+  createFabricatedToolProgressRecoveryInstruction,
   createFinalAnswerRecoveryInstruction,
   createInterruptedResponseContinuationInstruction,
   createLocalToolBudgetFinalInstruction,
@@ -106,7 +106,7 @@ import {
   isAbortError,
   isInterruptedAssistantMessage,
   isToolResultFallbackAnswer,
-  looksLikeFabricatedToolActivity,
+  looksLikeFabricatedToolProgress,
   looksLikeInternalToolRecoveryAnswer,
   looksLikeOnlyToolPrelude,
   looksLikeToolProtocolNarration,
@@ -262,8 +262,12 @@ const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
   "Writing final answer from local tool results...",
 ]);
 const CURRENT_INFORMATION_PROMPT_PATTERN =
-  /\b(latest|current|currently|today|tonight|tomorrow|yesterday|now|right now|recent|newest|up[-\s]?to[-\s]?date|news|release|released|changelog|version|pricing|price|schedule|docs?|official|standard|api|model|verify|source|cite|look up|lookup|web|search)\b/i;
-const RESEARCH_PROMPT_PATTERN = /\b(research|investigate|audit|compare|verify|source|cite|latest|current|docs?|official|standard|api|model|release|changelog)\b/i;
+  /\b(latest|current|currently|today|tonight|tomorrow|yesterday|now|right now|recent|newest|up[-\s]?to[-\s]?date|news|release|released|changelog|version|pricing|price|schedule)\b/i;
+const EXPLICIT_WEB_PROMPT_PATTERN =
+  /\b(web search|search the web|search online|browse(?: the)? web|look up|lookup|online sources?|internet|brave search|duckduckgo|google|cite sources?|with sources|official docs?|official documentation|developer docs?|api docs?|documentation for|docs for|read (?:the )?docs|verify online)\b/i;
+const LOCAL_PROJECT_PROMPT_PATTERN =
+  /\b(our app|this app|the app|codebase|repo|repository|project|workspace|local files?|source code|component|screen|page|route|build|implement|fix|debug|refactor|test|compile|run|tauri|react|typescript|vite|npm|rust|cargo|android|gradle)\b/i;
+const RESEARCH_PROMPT_PATTERN = /\b(research|investigate|audit|compare|verify|cite|latest|current|official|release|changelog)\b/i;
 const SIMPLE_THINKING_PROMPT_MAX_WORDS = 18;
 const SIMPLE_THINKING_PROMPT_PATTERN = /\b(?:answer|change|clean up|explain|fix typo|format|quick|rename|remove|rewrite|show|summarize|tell|translate|update)\b/i;
 const COMPLEX_THINKING_PROMPT_PATTERN = /\b(?:all|architecture|audit|build|debug|deep|end[-\s]?to[-\s]?end|entire|every|investigate|migrate|plan|publish|refactor|release|research|review|security|test|verify)\b/i;
@@ -299,7 +303,7 @@ function createApprovalWorkspaceSessionKey(settings: LocalWorkspaceSettings) {
   });
 }
 
-function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, settings: ProviderSettings, isDiscordRequest: boolean) {
+function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, settings: ProviderSettings, isDiscordRequest: boolean, workspaceSettings?: LocalWorkspaceSettings) {
   if (isWeatherDataPrompt(prompt) && normalizeToolRegistrySettings(settings.tools).weatherTools) {
     return false;
   }
@@ -312,7 +316,14 @@ function shouldAttachWebSearchContext(input: ChatSendInput, prompt: string, sett
     return false;
   }
 
-  if (CURRENT_INFORMATION_PROMPT_PATTERN.test(prompt)) {
+  const explicitlyNeedsWeb = EXPLICIT_WEB_PROMPT_PATTERN.test(prompt);
+  const localProjectRequest = Boolean(workspaceSettings?.enabled) && LOCAL_PROJECT_PROMPT_PATTERN.test(prompt);
+
+  if (localProjectRequest && !explicitlyNeedsWeb) {
+    return false;
+  }
+
+  if (explicitlyNeedsWeb || CURRENT_INFORMATION_PROMPT_PATTERN.test(prompt)) {
     return true;
   }
 
@@ -336,9 +347,9 @@ function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSe
       [
         "DISCORD REMOTE REQUEST CONTEXT",
         "The latest user message came from Discord through Gilbert's signed bridge. Treat it like a normal Gilbert Codex app request.",
-        "Model-callable local tools have been removed from this build. Do not ask for GitHub, terminal, local file, code edit, browser preview, MCP, workflow, or weather actions.",
+        "Use only app-exposed provider tools that are attached to this request. Do not invent visible terminal, Git, file, browser preview, MCP, workflow, or weather actions.",
         workspaceSettings.enabled
-          ? "Local workspace metadata may be attached as host-provided context, but it is not a model-callable file tool."
+          ? "Local workspace metadata may be attached as host-provided context; use actual tool results when precise file, Git, terminal, or preview evidence is required."
           : "No local folder is selected for this request.",
         webSearchEnabled
           ? `Live ${providerLabel} context is being attached for this request. Use it as current evidence and cite URLs when making web-supported claims.`
@@ -440,6 +451,7 @@ function isUserExternalHref(href: string) {
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authBootstrapped, setAuthBootstrapped] = useState(false);
   const [authHasAccounts, setAuthHasAccounts] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -501,6 +513,7 @@ export function App() {
       } finally {
         if (mounted) {
           setAuthLoading(false);
+          setAuthBootstrapped(true);
         }
       }
     }
@@ -523,7 +536,11 @@ export function App() {
     setAuthHasAccounts(true);
   }
 
-  if (authLoading || !authSession) {
+  if (!authBootstrapped) {
+    return <AppStartupScreen />;
+  }
+
+  if (!authSession) {
     return (
       <AuthPage
         hasAccounts={authHasAccounts}
@@ -548,6 +565,19 @@ export function App() {
   }
 
   return <WorkspaceApp key={authSession.user.id} authSession={authSession} onLogout={handleLogout} />;
+}
+
+function AppStartupScreen() {
+  return (
+    <div className="app-startup-root" role="status" aria-live="polite">
+      <div className="app-startup-lockup">
+        <span className="app-startup-mark" aria-hidden="true">
+          <img src="/gilbert-codex-logo.svg" alt="" draggable={false} />
+        </span>
+        <span>Opening Gilbert Codex</span>
+      </div>
+    </div>
+  );
 }
 
 interface WorkspaceAppProps {
@@ -3512,6 +3542,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     let runtimeMessages = [...messagesForProvider];
     let localProgress = createLocalComputerProgress("active", "Starting app-owned coding agent");
     let executedCount = 0;
+    let allToolCalls: ChatToolCall[] = [];
+
+    const createFinalAppAgentToolCalls = (status: ChatToolCall["status"], detail: string, output?: string, fileChanges?: ChatToolCall["fileChanges"]) => {
+      const finalToolCall = agentToolCall(status, detail, output, allToolCalls.length > 0 ? undefined : fileChanges);
+
+      return allToolCalls.length > 0 ? [...allToolCalls, finalToolCall] : [finalToolCall];
+    };
 
     updateGeneratedMessage(chatId, messageId, (message) => ({
       ...message,
@@ -3539,7 +3576,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         ...message,
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),
-        toolCalls: [visibleToolCall],
+        toolCalls: [...allToolCalls, visibleToolCall],
       }));
       onExternalUpdate?.({
         progress: localProgress,
@@ -3565,7 +3602,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             ...message,
             content: "",
             progress: withLocalComputerProgress(localProgress, message.progress),
-            toolCalls: [visibleToolCall, ...liveInternalToolCalls],
+            toolCalls: [...allToolCalls, visibleToolCall, ...liveInternalToolCalls],
           }));
           onExternalUpdate?.({
             progress: localProgress,
@@ -3594,7 +3631,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const completedInternalToolCalls = stampLocalToolCallIds(toolRun.toolCalls, internalPassIndex);
       attachLiveTerminalSession(completedInternalToolCalls);
       const fileChanges = completedInternalToolCalls.flatMap((toolCall) => toolCall.fileChanges ?? []);
-      const visibleToolCalls = completedInternalToolCalls.length > 0 ? [visibleToolCall, ...completedInternalToolCalls] : [visibleToolCall];
       const stepStatus: AgentRun["steps"][number]["status"] = toolRun.waitingForApproval ? "waiting_for_approval" : toolRun.toolCalls.some((toolCall) => toolCall.status === "error") ? "failed" : "completed";
       completeLatestAgentRuntimeStep(runId, stepStatus, toolRun.progress.detail);
       runtimeMessages = [
@@ -3615,6 +3651,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         limitFallbackToolOutput(toolRun.contextMessage),
         fileChanges.length > 0 ? fileChanges : undefined,
       );
+      allToolCalls = [...allToolCalls, ...completedInternalToolCalls];
+      const visibleToolCalls = allToolCalls.length > 0 ? [...allToolCalls, visibleToolCall] : [visibleToolCall];
       localProgress = toolRun.waitingForApproval
         ? toolRun.progress
         : createLocalComputerProgress(stepStatus === "failed" ? "complete" : "active", toolRun.waitingForApproval ? "Waiting for approval" : `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`);
@@ -3678,7 +3716,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         return {
           content: "",
           progress: localProgress,
-          toolCalls: [visibleToolCall],
+          toolCalls: createFinalAppAgentToolCalls("error", visibleToolCall.detail ?? "Agent run interrupted", visibleToolCall.output, visibleToolCall.fileChanges),
         };
       }
 
@@ -3737,10 +3775,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       if (seenDecisionSignatures.has(decisionSignature)) {
         return {
           artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-          content: "I stopped the agent run because the same internal action repeated. The gathered evidence is in Activity; try a narrower request or adjust the target file/path.",
+          content: "I stopped the agent run because the same internal action repeated. Try a narrower request or adjust the target file/path.",
           progress: createLocalComputerProgress("complete", "Repeated internal action stopped"),
           sources: allSources,
-          toolCalls: [agentToolCall("error", "Repeated internal action stopped", visibleToolCall.output, visibleToolCall.fileChanges)],
+          toolCalls: createFinalAppAgentToolCalls("error", "Repeated internal action stopped", visibleToolCall.output, visibleToolCall.fileChanges),
         };
       }
 
@@ -3748,14 +3786,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       if (decision.action === "answer") {
         const finalProgress = createLocalComputerProgress("complete", `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`);
-        const finalToolCall = agentToolCall("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges);
         const finalContent = sanitizeAppAgentFinalContent(decision.answer ?? "");
         return {
           artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
           content: finalContent || "The app-owned agent run completed.",
           progress: finalProgress,
           sources: allSources,
-          toolCalls: [finalToolCall],
+          toolCalls: createFinalAppAgentToolCalls("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges),
         };
       }
 
@@ -3808,11 +3845,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     return {
       artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-      content: fallbackContent || "The app-owned agent run reached its step limit before producing a clean final answer. The gathered evidence is in Activity.",
+      content: fallbackContent || "The app-owned agent run reached its step limit before producing a clean final answer.",
       progress: createLocalComputerProgress("complete", `${executedCount} internal action${executedCount === 1 ? "" : "s"} ran`),
       reasoning: fallbackResponse.reasoning,
       sources: allSources,
-      toolCalls: [agentToolCall("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges)],
+      toolCalls: createFinalAppAgentToolCalls("complete", "Agent run complete", visibleToolCall.output, visibleToolCall.fileChanges),
     };
   }
 
@@ -3851,10 +3888,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     let totalExecutedToolCalls = 0;
     let allArtifacts: ChatArtifact[] = [];
+    let allSources: ChatSource[] = [];
     let allToolCalls: ChatToolCall[] = [];
     let finalizationRetries = 0;
     let freshLocalToolEvidenceRetries = 0;
     let malformedToolRecoveryRetries = 0;
+    let recoverableBridgeToolRetries = 0;
     let recoverableEditRetries = 0;
     let emptyScaffoldRecoveryUsed = false;
 
@@ -3893,6 +3932,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         content,
         progress: completedProgress,
         reasoning,
+        sources: allSources.length > 0 ? allSources : undefined,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       };
       updateGeneratedMessage(chatId, messageId, (message) => ({
@@ -3901,6 +3941,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         artifacts: allArtifacts.length > 0 ? mergeChatArtifacts(message.artifacts, allArtifacts) : message.artifacts,
         content,
         progress: withLocalComputerProgress(completedProgress, message.progress),
+        sources: allSources.length > 0 ? mergeChatSources(message.sources, allSources) : message.sources,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
       }));
       onExternalUpdate?.({
@@ -3982,10 +4023,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       totalExecutedToolCalls += toolRun.executedCount;
       const completedToolCalls = stampLocalToolCallIds(toolRun.toolCalls, recoveryPassIndex);
       allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
+      allSources = mergeChatSources(allSources, toolRun.sources);
       allToolCalls = [...allToolCalls, ...completedToolCalls];
       attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", `${totalExecutedToolCalls} ran`);
       finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
+      finalResponse.sources = allSources.length > 0 ? allSources : undefined;
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
         ...approval,
@@ -4118,7 +4161,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             !content ||
             looksLikeOnlyToolPrelude(content) ||
             looksLikeInternalToolRecoveryAnswer(content) ||
-            looksLikeFabricatedToolActivity(content, allToolCalls) ||
+            looksLikeFabricatedToolProgress(content, allToolCalls) ||
             isVisibleToolResultLeak(content, allToolCalls)
           ) {
             continue;
@@ -4129,6 +4172,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
             progress: localProgress,
             reasoning: response.reasoning ?? fallbackReasoning,
+            sources: allSources.length > 0 ? allSources : undefined,
             toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
           };
         } catch (error) {
@@ -4144,33 +4188,163 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     function createBridgeSynthesisToolBridgeOptions(): ProviderToolBridgeOptions | undefined {
-      return bridgeToolResultMessages.length > 0
+      const synthesisToolResultMessages = getSynthesisToolResultMessages();
+      return synthesisToolResultMessages.length > 0
         ? {
-            maxToolResultContentChars: getModelVisibleToolResultCharBudget(contextWindow.tokens),
+            maxToolResultContentChars: null,
             toolChoice: "none",
-            toolResultMessages: bridgeToolResultMessages,
+            toolResultDelivery: "inline-user-message",
+            toolResultMessages: synthesisToolResultMessages,
             tools: [],
           }
         : undefined;
     }
 
+    function getSynthesisToolResultMessages() {
+      const successfulMessages = bridgeToolResultMessages.filter((message) => message.result.ok);
+
+      return successfulMessages.length > 0 ? successfulMessages : bridgeToolResultMessages;
+    }
+
     function createBridgeToolContinuationInstruction(run: ToolBridgeExecutionBatch) {
       const handledCount = getBridgeHandledCount(run);
       const failedCount = Math.max(0, handledCount - run.executedCount);
+      const recoverableFailureGuidance = createBridgeRunRecoverableFailureGuidance(run);
       return [
         "BRIDGE TOOL RESULTS AVAILABLE",
         `Original user request: ${prompt}`,
         `The app just handled ${handledCount} bridge tool call${handledCount === 1 ? "" : "s"}: ${run.executedCount} succeeded, ${failedCount} failed or was skipped.`,
         "Use the attached tool result messages as current evidence.",
         failedCount > 0 ? "If a tool failed because the arguments were invalid JSON or failed validation, retry the operation with corrected valid JSON instead of stopping on the raw error." : "",
+        recoverableFailureGuidance,
         "If more work is needed, emit the next needed tool call now.",
         "If the request is done, write the normal final answer now.",
-        "Do not answer with a raw tool result, Activity recap, Latest completed result, recovery note, or continuation note.",
+        "Do not answer with a raw tool result, tool recap, Latest completed result, recovery note, or continuation note.",
       ].filter(Boolean).join("\n\n");
+    }
+
+    function createBridgeRunRecoverableFailureGuidance(run: ToolBridgeExecutionBatch) {
+      const failedOutputs = run.steps
+        .filter((step) => !step.result.ok)
+        .map((step) => step.result.content || step.result.error || step.result.skippedReason || "")
+        .filter(Boolean);
+
+      if (failedOutputs.some((output) => /try\s+files_read\s+on\s+one\s+of:/i.test(output) || /a directory named .+ exists/i.test(output))) {
+        return [
+          "A failed file read included candidate paths.",
+          "Do not stop on that error. Pick the closest suggested file path and retry files_read/files_read_range now.",
+        ].join("\n");
+      }
+
+      if (failedOutputs.some((output) => /try\s+files_search\s+with\s+query/i.test(output) || isMissingFileReadError(output))) {
+        return [
+          "A failed file read did not have a direct path match.",
+          "Do not stop on that error. Use files_search to locate the file by name before answering that it is missing.",
+        ].join("\n");
+      }
+
+      if (failedOutputs.some((output) => /\b(arguments?|maxBytes|offset|replaceAll)\b[\s\S]{0,120}\b(?:must be|is not allowed|invalid|required)\b/i.test(output))) {
+        return "A tool argument shape failed validation. Retry the same intent with corrected argument types and only schema-supported keys.";
+      }
+
+      return "";
     }
 
     function getBridgeHandledCount(run: ToolBridgeExecutionBatch) {
       return run.handledCount || run.resultMessages.length || run.requestedCount;
+    }
+
+    function applyBridgeRunSideEffects(run: ToolBridgeExecutionBatch, toolCalls: ChatToolCall[]) {
+      attachLiveTerminalSession(toolCalls);
+
+      const sources = findBridgeRunSources(run);
+      if (sources.length > 0) {
+        allSources = mergeChatSources(allSources, sources);
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          sources: mergeChatSources(message.sources, sources),
+        }));
+      }
+
+      const previewUrl = findBridgeRunBrowserPreviewUrl(run);
+      if (!previewUrl || !toolSettings.browserPreview) {
+        return;
+      }
+
+      setBrowserPreviewTarget((currentTarget) => ({
+        id: (currentTarget?.id ?? 0) + 1,
+        url: previewUrl,
+      }));
+    }
+
+    function findBridgeRunBrowserPreviewUrl(run: ToolBridgeExecutionBatch) {
+      for (const step of [...run.steps].reverse()) {
+        const data = step.result.data;
+
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          continue;
+        }
+
+        const record = data as Record<string, unknown>;
+        const candidate = typeof record.browserPreviewUrl === "string"
+          ? record.browserPreviewUrl
+          : typeof record.url === "string"
+            ? record.url
+            : undefined;
+
+        if (candidate) {
+          return candidate;
+        }
+      }
+
+      return undefined;
+    }
+
+    function findBridgeRunSources(run: ToolBridgeExecutionBatch) {
+      const sources = run.steps.flatMap((step) => {
+        const data = step.result.data;
+
+        if (!data || typeof data !== "object" || Array.isArray(data) || !("sources" in data)) {
+          return [];
+        }
+
+        const rawSources = (data as { sources?: unknown }).sources;
+        if (!Array.isArray(rawSources)) {
+          return [];
+        }
+
+        return rawSources.flatMap((source, index) => normalizeBridgeSource(source, index));
+      });
+
+      return mergeChatSources(undefined, sources);
+    }
+
+    function normalizeBridgeSource(source: unknown, index: number): ChatSource[] {
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        return [];
+      }
+
+      const record = source as Record<string, unknown>;
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      const url = typeof record.url === "string" ? record.url.trim() : "";
+
+      if (!title || !url) {
+        return [];
+      }
+
+      return [{
+        detail: typeof record.detail === "string" ? record.detail : undefined,
+        id: typeof record.id === "string" ? record.id : `bridge-web-source-${index + 1}`,
+        imageUrl: typeof record.imageUrl === "string" ? record.imageUrl : undefined,
+        sourceType: normalizeBridgeSourceType(record.sourceType),
+        thumbnailUrl: typeof record.thumbnailUrl === "string" ? record.thumbnailUrl : undefined,
+        title,
+        url,
+      }];
+    }
+
+    function normalizeBridgeSourceType(value: unknown): ChatSource["sourceType"] {
+      return value === "answer" || value === "image" || value === "news" || value === "place" || value === "video" || value === "web" ? value : undefined;
     }
 
     function formatBridgeToolRunProgress(run: ToolBridgeExecutionBatch, noun: string) {
@@ -4230,23 +4404,30 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     function createBridgeApprovalShell(call: ToolCallRequest, tool: ToolDefinition, preview?: string): AgentApproval {
       const args = typeof call.arguments === "object" && call.arguments !== null && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : undefined;
+      const command = formatBridgeApprovalCommand(args);
       const path = formatBridgeApprovalPath(args);
+      const kind = bridgeApprovalKind(tool);
 
       return {
         args,
+        command,
         createdAt: new Date().toISOString(),
-        detail: path ? `${tool.title} wants to change ${path}.` : `${tool.title} wants to change files in the selected workspace.`,
+        detail: formatBridgeApprovalDetail(tool, command, path),
         id: createId("approval"),
-        kind: bridgeApprovalKind(tool.id),
+        kind,
         path,
         preview,
         resumeToolCallContent: serializeBridgeToolApprovalResume([call]),
-        risk: "medium",
+        risk: bridgeApprovalRisk(tool),
         status: "pending",
         title: tool.title,
         tool: tool.id,
         toolCallId: call.id,
       };
+    }
+
+    function formatBridgeApprovalCommand(args: Record<string, unknown> | undefined) {
+      return typeof args?.command === "string" && args.command.trim() ? args.command.trim() : undefined;
     }
 
     function formatBridgeApprovalPath(args: Record<string, unknown> | undefined) {
@@ -4258,10 +4439,52 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         return `${args.fromPath} -> ${args.toPath}`;
       }
 
-      return typeof args.path === "string" && args.path.trim() ? args.path.trim() : undefined;
+      if (typeof args.path === "string" && args.path.trim()) {
+        return args.path.trim();
+      }
+
+      if (typeof args.cwd === "string" && args.cwd.trim()) {
+        return args.cwd.trim();
+      }
+
+      if (typeof args.workingDirectory === "string" && args.workingDirectory.trim()) {
+        return args.workingDirectory.trim();
+      }
+
+      if (typeof args.url === "string" && args.url.trim()) {
+        return args.url.trim();
+      }
+
+      return undefined;
     }
 
-    function bridgeApprovalKind(toolId: string): AgentApproval["kind"] {
+    function formatBridgeApprovalDetail(tool: ToolDefinition, command: string | undefined, path: string | undefined) {
+      if (tool.executorMetadata?.family === "terminal" || tool.id === "terminal_run") {
+        return [
+          `${tool.title} wants to run a local command.`,
+          command ? `Command: ${command}` : "",
+          path ? `cwd: ${path}` : "",
+        ].filter(Boolean).join("\n");
+      }
+
+      if (tool.executorMetadata?.family === "browser") {
+        return path ? `${tool.title} wants to open ${path}.` : `${tool.title} wants to open the in-app browser preview.`;
+      }
+
+      return path ? `${tool.title} wants to change ${path}.` : `${tool.title} needs approval before it runs.`;
+    }
+
+    function bridgeApprovalKind(tool: ToolDefinition): AgentApproval["kind"] {
+      const toolId = tool.id;
+
+      if (tool.executorMetadata?.family === "terminal" || toolId === "terminal_run") {
+        return "terminal";
+      }
+
+      if (tool.executorMetadata?.family === "browser") {
+        return "browser";
+      }
+
       if (toolId === "files_write") {
         return "write";
       }
@@ -4278,6 +4501,18 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       return "custom_tool";
+    }
+
+    function bridgeApprovalRisk(tool: ToolDefinition): AgentApproval["risk"] {
+      if (tool.risk === "terminal" || tool.risk === "destructive" || tool.risk === "credential" || tool.risk === "publish") {
+        return "high";
+      }
+
+      if (tool.risk === "read" || tool.permission === "read-only") {
+        return "low";
+      }
+
+      return "medium";
     }
 
     async function createBridgeApprovalPreview(tool: ToolDefinition, call: ToolCallRequest, bridgeContext: ToolExecutionContext) {
@@ -4335,7 +4570,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         waitingToolCalls.push(createBridgeChatToolCall(
           call,
           tool,
-          { content: preview || permission.reason || "Approval required before this file edit can run.", ok: true },
+          { content: preview || permission.reason || "Approval required before this tool action can run.", ok: true },
           "waiting_approval",
         ));
       }
@@ -4352,27 +4587,29 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const submittedDecision = Object.values(approvalDecisions ?? {})[0];
 
       if (submittedDecision?.status === "denied") {
-        const deniedProgress = createLocalComputerProgress("complete", "Approved file action was denied");
+        const deniedProgress = createLocalComputerProgress("complete", "Approved tool action was denied");
         const deniedToolCalls = stampLocalToolCallIds(
           approvedBridgeResume.calls.map((call) =>
-            createBridgeChatToolCall(call, bridgeRegistry.get(call.name), { content: "Approval denied. No file changes were applied.", ok: false, skippedReason: "Approval denied." }, "skipped"),
+            createBridgeChatToolCall(call, bridgeRegistry.get(call.name), { content: "Approval denied. No tool action ran.", ok: false, skippedReason: "Approval denied." }, "skipped"),
           ),
           passIndex,
         );
 
         return {
-          content: "Approval denied. No file changes were applied.",
+          content: "Approval denied. No tool action ran.",
           progress: deniedProgress,
           toolCalls: deniedToolCalls,
         };
       }
 
-      const activeProgress = createLocalComputerProgress("active", "Running approved file action");
+      const activeProgress = createLocalComputerProgress("active", "Running approved tool action");
       const resumeBridgeContext: ToolExecutionContext = {
         model: baseRuntimeSettings.model,
         permissionMode: workspaceSettings.permissionMode,
         provider: baseRuntimeSettings.provider,
         signal: controller.signal,
+        webSearchMaxResults: runtimeWebSearchMaxResults,
+        webSearchSettings: runtimeWebSearchSettings,
         workspaceRoots: workspaceSettings.roots,
       };
       let liveToolCalls: ChatToolCall[] = [];
@@ -4396,6 +4633,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }
 
           liveToolCalls = upsertToolCall(liveToolCalls, stampedToolCall);
+          attachLiveTerminalSession([stampedToolCall]);
           updateGeneratedMessage(chatId, messageId, (message) => ({
             ...message,
             content: "",
@@ -4409,7 +4647,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
       bridgeToolResultMessages.push(...bridgeRun.resultMessages);
       allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
-      localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "approved file tool"));
+      applyBridgeRunSideEffects(bridgeRun, completedBridgeToolCalls);
+      localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "approved tool"));
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
         ...message,
@@ -4421,7 +4660,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       messages = [
         ...messages,
         createMessage("user", [
-          "APPROVED FILE TOOL RESULT",
+          "APPROVED TOOL RESULT",
           "Use the attached tool result messages as the source of truth.",
           "If the approved action failed because the tool arguments were invalid JSON or failed validation, retry with corrected valid JSON instead of stopping on the raw error.",
           "If no more work is needed, finish the user's request normally.",
@@ -4492,10 +4731,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       totalExecutedToolCalls += toolRun.executedCount;
       allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
+      allSources = mergeChatSources(allSources, toolRun.sources);
       allToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
       attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", `${totalExecutedToolCalls} ran`);
       finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
+      finalResponse.sources = allSources.length > 0 ? allSources : undefined;
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
         ...approval,
@@ -4557,15 +4798,18 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         permissionMode: workspaceSettings.permissionMode,
         provider: passSettings.provider,
         signal: controller.signal,
+        webSearchMaxResults: runtimeWebSearchMaxResults,
+        webSearchSettings: runtimeWebSearchSettings,
         workspaceRoots: workspaceSettings.roots,
       };
       const bridgeTools = toolBudgetReached ? [] : bridgeRegistry.listForContext(bridgeContext, undefined, {
         includePendingApproval: true,
-      });
+      }).filter((tool) => tool.executorMetadata?.family !== "web" || toolSettings.webSearch);
       const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
         ? {
-            maxToolResultContentChars: getModelVisibleToolResultCharBudget(contextWindow.tokens),
+            maxToolResultContentChars: null,
             toolChoice: toolBudgetReached ? "none" as const : "auto" as const,
+            toolResultDelivery: bridgeToolResultMessages.length > 0 ? "inline-user-message" as const : undefined,
             toolResultMessages: bridgeToolResultMessages,
             tools: bridgeTools,
           }
@@ -4608,10 +4852,10 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             const streamingLocalProgress = hasStreamingLocalToolCalls
               ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingToolCalls))
               : promisedToolAction
-                ? createLocalComputerProgress("active", "Preparing file changes")
+                ? createLocalComputerProgress("active", "Preparing tool action")
                 : localProgress;
             const sanitizedContent = hasStreamingLocalToolCalls ? "" : sanitizeLocalToolCallsForDisplay(snapshot.content, toolExecutionPolicy);
-            const visibleContent = promisedToolAction || looksLikeFabricatedToolActivity(sanitizedContent, allToolCalls) || looksLikeToolProtocolNarration(sanitizedContent) ? "" : sanitizedContent;
+            const visibleContent = promisedToolAction || looksLikeFabricatedToolProgress(sanitizedContent, allToolCalls) || looksLikeToolProtocolNarration(sanitizedContent) ? "" : sanitizedContent;
             const visibleReasoning = hasStreamingLocalToolCalls && snapshot.reasoning
               ? sanitizeLocalToolCallsForDisplay(snapshot.reasoning, toolExecutionPolicy)
               : snapshot.reasoning;
@@ -4627,7 +4871,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             onExternalUpdate?.({
               content: visibleContent,
               progress: streamingLocalProgress,
-              status: hasStreamingLocalToolCalls ? "Preparing tool request..." : promisedToolAction ? "Preparing file changes..." : visibleContent ? "Streaming answer..." : "Thinking...",
+              status: hasStreamingLocalToolCalls ? "Preparing tool request..." : promisedToolAction ? "Preparing tool action..." : visibleContent ? "Streaming answer..." : "Thinking...",
             });
           },
           {
@@ -4657,17 +4901,22 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: undefined,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
 
-      if (assistantResponse.toolCalls?.length) {
+      const bridgeToolCalls = assistantResponse.toolCalls?.length
+        ? assistantResponse.toolCalls
+        : parseVisibleTextToolCalls(assistantResponse.content, passSettings.provider);
+
+      if (bridgeToolCalls.length) {
         const activeProgress = createLocalComputerProgress("active", "Running bridge tools");
         let liveBridgeToolCalls: ChatToolCall[] = [];
-        const pendingBridgeApprovals = await collectPendingBridgeApprovals(assistantResponse.toolCalls, bridgeContext);
+        const pendingBridgeApprovals = await collectPendingBridgeApprovals(bridgeToolCalls, bridgeContext);
 
         if (pendingBridgeApprovals.approvals.length > 0) {
-          const approvalProgress = createLocalComputerProgress("pending", "File tool approval required");
+          const approvalProgress = createLocalComputerProgress("pending", "Tool approval required");
           const waitingToolCalls = stampLocalToolCallIds(pendingBridgeApprovals.waitingToolCalls, passIndex);
 
           finalResponse = {
@@ -4692,7 +4941,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }));
           onExternalUpdate?.({
             progress: approvalProgress,
-            status: "File tool approval is needed in Gilbert Codex.",
+            status: "Tool approval is needed in Gilbert Codex.",
             toolCall: waitingToolCalls[0],
           });
 
@@ -4712,7 +4961,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
         const bridgeRun = await executeToolBridgeCalls({
           approval: () => ({ approved: true }),
-          calls: assistantResponse.toolCalls,
+          calls: bridgeToolCalls,
           context: bridgeContext,
           onToolCallUpdate: (toolCall) => {
             const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
@@ -4722,6 +4971,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             }
 
             liveBridgeToolCalls = upsertToolCall(liveBridgeToolCalls, stampedToolCall);
+            attachLiveTerminalSession([stampedToolCall]);
             updateGeneratedMessage(chatId, messageId, (message) => ({
               ...message,
               content: "",
@@ -4740,6 +4990,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
         bridgeToolResultMessages.push(...bridgeRun.resultMessages);
         allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
+        applyBridgeRunSideEffects(bridgeRun, completedBridgeToolCalls);
         localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "bridge tool"));
 
         updateGeneratedMessage(chatId, messageId, (message) => ({
@@ -4777,6 +5028,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         content: assistantHasLocalToolCalls ? "" : sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy),
         reasoning: assistantDisplayReasoning,
+        sources: allSources.length > 0 ? allSources : undefined,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       };
 
@@ -4788,6 +5040,31 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       if (!assistantHasLocalToolCalls && shouldSynthesizeEmptyFinalFromToolResults(finalResponse.content, allToolCalls)) {
+        const recoverableBridgeRetryInstruction = createRecoverableBridgeToolRetryInstruction(allToolCalls, prompt);
+
+        if (recoverableBridgeRetryInstruction && recoverableBridgeToolRetries < MAX_MALFORMED_TOOL_RECOVERY_RETRIES) {
+          recoverableBridgeToolRetries += 1;
+          const retryProgress = createLocalComputerProgress("active", "Retrying corrected tool call");
+
+          updateGeneratedMessage(chatId, messageId, (message) => ({
+            ...message,
+            content: "",
+            progress: withLocalComputerProgress(retryProgress, message.progress),
+            toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
+          }));
+          onExternalUpdate?.({
+            progress: retryProgress,
+            status: "Retrying corrected tool call...",
+          });
+
+          messages = [
+            ...messages,
+            createMessage("user", recoverableBridgeRetryInstruction),
+          ];
+          passIndex += 1;
+          continue;
+        }
+
         const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
           messages,
           "The provider returned no visible final answer after completed tool results. Use the attached tool result messages and write the requested answer now.",
@@ -4804,6 +5081,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
@@ -4855,12 +5133,13 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
 
       if (!assistantHasLocalToolCalls) {
-        const fabricatedToolActivity = looksLikeFabricatedToolActivity(finalResponse.content, allToolCalls);
+        const fabricatedToolProgress = looksLikeFabricatedToolProgress(finalResponse.content, allToolCalls);
         const toolProtocolNarration = looksLikeToolProtocolNarration(finalResponse.content);
         const unexecutedToolActionPromise = looksLikeUnexecutedToolActionPromise(finalResponse.content);
         const visibleToolResultLeak = isVisibleToolResultLeak(finalResponse.content, allToolCalls);
@@ -4870,7 +5149,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           !toolBudgetReached &&
           needsFreshLocalToolEvidence(prompt, workspaceSettings.enabled);
 
-        if (localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolActivity || toolProtocolNarration || unexecutedToolActionPromise || visibleToolResultLeak) {
+        if (localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolProgress || toolProtocolNarration || unexecutedToolActionPromise || visibleToolResultLeak) {
           if (localToolEvidenceRequired) {
             freshLocalToolEvidenceRetries += 1;
           }
@@ -4879,15 +5158,15 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           if (finalizationRetries > MAX_TOOL_FINALIZATION_RETRIES) {
             const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
               [...messages, createMessage("assistant", assistantResponse.content)],
-              fabricatedToolActivity
-                ? "The previous finalization attempt claimed tool activity that was not backed by app tool-call records. Do not repeat that claim."
+              fabricatedToolProgress
+                ? "The previous finalization attempt claimed tool progress that was not backed by app tool-call records. Do not repeat that claim."
                 : toolProtocolNarration
                   ? "The previous finalization attempt exposed tool-call protocol narration. Do not repeat it."
                 : unexecutedToolActionPromise
                   ? "The previous finalization attempt promised a tool action without executing it. Do not repeat the promise."
                 : visibleToolResultLeak
                   ? "The previous finalization attempt repeated raw tool result text. Use the saved tool evidence to write a normal answer instead."
-                : "The previous finalization attempt exposed tool activity instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
+                : "The previous finalization attempt exposed tool progress instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
               assistantResponse.reasoning,
             );
 
@@ -4900,6 +5179,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               content: createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
               progress: localProgress,
               reasoning: assistantResponse.reasoning,
+              sources: allSources.length > 0 ? allSources : undefined,
               toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
             };
           }
@@ -4922,8 +5202,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               "user",
               localToolEvidenceRequired
                 ? createFreshLocalToolEvidenceInstruction(prompt, finalResponse.content)
-                : fabricatedToolActivity
-                ? createFabricatedToolActivityRecoveryInstruction(prompt, finalResponse.content, allToolCalls)
+                : fabricatedToolProgress
+                ? createFabricatedToolProgressRecoveryInstruction(prompt, finalResponse.content, allToolCalls)
                 : toolProtocolNarration
                   ? createToolProtocolNarrationRecoveryInstruction(prompt, finalResponse.content)
                 : unexecutedToolActionPromise
@@ -5006,10 +5286,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       totalExecutedToolCalls += toolRun.executedCount;
       const completedToolCalls = stampLocalToolCallIds(toolRun.toolCalls, passIndex);
       allArtifacts = mergeChatArtifacts(allArtifacts, toolRun.artifacts) ?? [];
+      allSources = mergeChatSources(allSources, toolRun.sources);
       allToolCalls = [...allToolCalls, ...completedToolCalls];
       attachLiveTerminalSession(allToolCalls);
       localProgress = toolRun.waitingForApproval ? toolRun.progress : createLocalComputerProgress("complete", deepResearch ? `${totalExecutedToolCalls} deep research tools ran` : `${totalExecutedToolCalls} ran`);
       finalResponse.artifacts = allArtifacts.length > 0 ? allArtifacts : undefined;
+      finalResponse.sources = allSources.length > 0 ? allSources : undefined;
       finalResponse.toolCalls = allToolCalls;
       finalResponse.approvalRequests = toolRun.approvalRequests.map((approval) => ({
         ...approval,
@@ -5077,6 +5359,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy) || createToolFinalAnswerUnavailableMessage(allToolCalls, prompt),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
@@ -5142,6 +5425,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: toolRun.directAnswer,
           progress: localProgress,
           reasoning: finalResponse.reasoning,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
@@ -5162,6 +5446,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           content: createNoExecutedToolFinalAnswer(toolRun.contextMessage),
           progress: localProgress,
           reasoning: assistantResponse.reasoning,
+          sources: allSources.length > 0 ? allSources : undefined,
           toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         };
       }
@@ -5205,15 +5490,12 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return gitFallback;
     }
 
+    const latestCompleteToolCall = [...toolCalls].reverse().find((toolCall) => toolCall.status === "complete" && (toolCall.output || toolCall.detail));
     const latestIssueToolCall = [...toolCalls].reverse().find((toolCall) => toolCall.status !== "complete" && (toolCall.output || toolCall.detail));
-    const latestToolCall = latestIssueToolCall ?? [...toolCalls].reverse().find((toolCall) => toolCall.output || toolCall.detail);
+    const latestToolCall = latestCompleteToolCall ?? latestIssueToolCall;
 
     if (!latestToolCall) {
-      return "I could not finish a clean response from the available tool results. Please retry the last request.";
-    }
-
-    if (!latestToolCall) {
-      return "The model finished without producing a final answer for this run. Try sending the prompt again — the tool runs above should make the next attempt faster.";
+      return "I do not have a completed tool result to answer from yet.";
     }
 
     const rawLatestOutput = latestToolCall.output ? latestToolCall.output : latestToolCall.detail ? latestToolCall.detail : "";
@@ -5221,23 +5503,217 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       ? summarizeCompletedToolFallback(latestToolCall, rawLatestOutput)
       : summarizeUnsuccessfulToolSection(rawLatestOutput);
 
+    if (latestToolCall.resultPolicy?.synthesizeAfterwards) {
+      return createSynthesisRecoveryFallback(latestToolCall, fallbackOutput);
+    }
+
     if (latestToolCall.status === "complete") {
-      return fallbackOutput || "I ran the requested tool, but could not produce a clean final answer. Please retry the last request.";
+      return fallbackOutput || `${latestToolCall.label} completed.`;
     }
 
     return [
-      `The run stopped on this ${latestToolCall.label} result:`,
+      `${latestToolCall.label} did not complete cleanly.`,
       latestToolCall.status ? `Status: ${latestToolCall.status}` : "",
       fallbackOutput,
     ].filter(Boolean).join("\n\n");
 
   }
 
+  function createSynthesisRecoveryFallback(toolCall: ChatToolCall, fallbackOutput: string) {
+    const suggestedPaths = extractSuggestedFileReadCandidates(fallbackOutput);
+
+    if (suggestedPaths.length > 0) {
+      return [
+        "I could not read the requested file path.",
+        `Closest suggested path: ${suggestedPaths[0]}`,
+      ].join("\n");
+    }
+
+    if (isMissingFileReadError(fallbackOutput)) {
+      const requestedPath = extractMissingReadPath(fallbackOutput) || extractToolInputPath(toolCall.input);
+      const fileName = requestedPath ? getLastPathSegment(requestedPath) : "";
+      return fileName
+        ? `I could not find \`${fileName}\` in the selected workspace.`
+        : "I could not find that file in the selected workspace.";
+    }
+
+    if (isRecoverableBridgeArgumentError(fallbackOutput)) {
+      const inputPath = extractToolInputPath(toolCall.input);
+      return inputPath
+        ? `I could not inspect \`${inputPath}\` because the tool arguments were malformed.`
+        : "I could not inspect the requested file because the tool arguments were malformed.";
+    }
+
+    if (toolCall.status !== "complete" && fallbackOutput) {
+      return [
+        `${toolCall.label} did not complete cleanly.`,
+        summarizeUserFacingFailure(fallbackOutput),
+      ].filter(Boolean).join("\n");
+    }
+
+    return fallbackOutput || `${toolCall.label} completed.`;
+  }
+
+  function summarizeUserFacingFailure(output: string) {
+    const trimmed = output.replace(/\s+/g, " ").trim();
+
+    if (!trimmed) {
+      return "";
+    }
+
+    if (isMissingFileReadError(trimmed)) {
+      const requestedPath = extractMissingReadPath(trimmed);
+      const fileName = requestedPath ? getLastPathSegment(requestedPath) : "";
+      return fileName
+        ? `I could not find \`${fileName}\` in the selected workspace.`
+        : "I could not find that file in the selected workspace.";
+    }
+
+    if (isRecoverableBridgeArgumentError(trimmed)) {
+      return "";
+    }
+
+    return trimmed.length > 260 ? `${trimmed.slice(0, 257)}...` : trimmed;
+  }
+
+  function createRecoverableBridgeToolRetryInstruction(toolCalls: ChatToolCall[], originalPrompt: string) {
+    const latestRecoverableToolCall = [...toolCalls].reverse().find((toolCall) => {
+      if (toolCall.status !== "error" && toolCall.status !== "skipped") {
+        return false;
+      }
+
+      const rawOutput = getToolCallRawOutput(toolCall);
+      return extractSuggestedFileReadCandidates(rawOutput).length > 0 ||
+        extractNearbyPathCandidates(rawOutput).length > 0 ||
+        isRecoverableBridgeArgumentError(rawOutput) ||
+        isMissingFileReadToolCall(toolCall, rawOutput);
+    });
+
+    if (!latestRecoverableToolCall) {
+      return "";
+    }
+
+    const rawOutput = getToolCallRawOutput(latestRecoverableToolCall);
+    const suggestedPaths = [
+      ...extractSuggestedFileReadCandidates(rawOutput),
+      ...extractNearbyPathCandidates(rawOutput),
+    ];
+    const missingReadPath = extractMissingReadPath(rawOutput) || extractToolInputPath(latestRecoverableToolCall.input);
+    const missingReadQuery = missingReadPath ? createMissingReadSearchQuery(missingReadPath) : "";
+
+    return [
+      "RECOVERABLE TOOL ERROR",
+      `Original user request: ${originalPrompt}`,
+      `The previous ${latestRecoverableToolCall.label} call failed in a way that can be corrected.`,
+      suggestedPaths.length > 0
+        ? [
+            "Retry the same intent now by calling files_read or files_read_range with the closest matching suggested path.",
+            `Suggested paths: ${suggestedPaths.join("; ")}`,
+          ].join("\n")
+        : missingReadQuery
+          ? [
+              "The requested file path was not found. Search the workspace by file name before giving up.",
+              `Call files_search now with query "${missingReadQuery}", includePath true, includeContent false, and maxMatches 20.`,
+              "If that search finds a likely file, read it next. If it finds no matches, answer that the file is not present.",
+            ].join("\n")
+          : "Retry the same intent now with valid JSON argument types and only schema-supported keys.",
+      "Do not write a final answer until the corrected tool call has either succeeded or there is no safe correction.",
+    ].join("\n\n");
+  }
+
+  function getToolCallRawOutput(toolCall: ChatToolCall) {
+    return [toolCall.output, toolCall.detail].filter(Boolean).join("\n");
+  }
+
+  function extractSuggestedFileReadCandidates(output: string) {
+    const match = output.match(/try\s+files_read\s+on\s+one\s+of:\s*([^\n]+)/i);
+
+    if (!match?.[1]) {
+      return [];
+    }
+
+    return match[1]
+      .split(/\s*,\s*/)
+      .map((path) => path.trim().replace(/^`|`$/g, ""))
+      .filter(Boolean)
+      .slice(0, 6);
+  }
+
+  function extractNearbyPathCandidates(output: string) {
+    const match = output.match(/nearby paths:\s*([^\n]+)/i);
+
+    if (!match?.[1]) {
+      return [];
+    }
+
+    return match[1]
+      .split(/\s*,\s*/)
+      .map((path) => path.trim().replace(/^`|`$/g, ""))
+      .filter(Boolean)
+      .slice(0, 6);
+  }
+
+  function isMissingFileReadToolCall(toolCall: ChatToolCall, output: string) {
+    const isReadTool = toolCall.toolId === "files_read" ||
+      toolCall.toolId === "files_read_range" ||
+      /read.*(?:workspace\s+)?file/i.test(toolCall.label);
+
+    return isReadTool && isMissingFileReadError(output);
+  }
+
+  function isMissingFileReadError(output: string) {
+    return /could not read\b/i.test(output) &&
+      /\b(?:cannot find the file specified|cannot find the path specified|no such file or directory|not found|os error [23])\b/i.test(output);
+  }
+
+  function extractMissingReadPath(output: string) {
+    const backtickMatch = output.match(/could not read\s+`([^`]+)`/i);
+    if (backtickMatch?.[1]) {
+      return backtickMatch[1].trim();
+    }
+
+    const plainMatch = output.match(/could not read\s+(.+?)(?::\s+could not read|:\s+the system|:\s+no such|\r?\n|$)/i);
+    return plainMatch?.[1]?.trim() ?? "";
+  }
+
+  function extractToolInputPath(input: string | undefined) {
+    if (!input) {
+      return "";
+    }
+
+    try {
+      const parsed = JSON.parse(input) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const path = (parsed as Record<string, unknown>).path;
+        return typeof path === "string" ? path : "";
+      }
+    } catch {
+      return "";
+    }
+
+    return "";
+  }
+
+  function createMissingReadSearchQuery(path: string) {
+    const fileName = getLastPathSegment(path);
+    const dotIndex = fileName.lastIndexOf(".");
+    return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+  }
+
+  function getLastPathSegment(path: string) {
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  }
+
+  function isRecoverableBridgeArgumentError(output: string) {
+    return /\b(arguments?|maxBytes|offset|replaceAll)\b[\s\S]{0,120}\b(?:must be|is not allowed|invalid|required)\b/i.test(output) ||
+      /\btool\s+[\w.-]+\s+received\s+(?:invalid json arguments|arguments that could not be parsed as json)\b/i.test(output);
+  }
+
   function summarizeCompletedToolFallback(toolCall: ChatToolCall, output: string) {
     const trimmed = output.trim();
 
     if (!trimmed) {
-      return "The tool completed, but the model did not produce a final response. Open Activity for the saved run details.";
+      return `${toolCall.label} completed.`;
     }
 
     if (shouldKeepToolOutputOutOfChat(toolCall, trimmed)) {
@@ -5248,9 +5724,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       }
 
       return [
-        "The tool completed, but the model did not produce a final response.",
+        `${toolCall.label} completed.`,
         `I kept the raw ${toolCall.label.toLowerCase()} output out of the chat because it is too large or file-content-like.`,
-        "Open Activity for the exact result, or retry the request so the model can synthesize from the saved tool results.",
       ].join("\n");
     }
 
@@ -5282,7 +5757,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return trimmed;
     }
 
-    return `${trimmed.slice(0, maxChars)}\n\n[Fallback output truncated for chat readability. Open Activity for the exact omitted output.]`;
+    return `${trimmed.slice(0, maxChars)}\n\n[Fallback output truncated for chat readability.]`;
   }
 
   function createGitToolFallbackAnswer(toolCalls: ChatToolCall[], originalPrompt: string) {
@@ -5467,7 +5942,7 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       retryBudgetExhausted
         ? "Do not request more tools in this final synthesis pass because the bounded recovery loop has already been used."
         : "Do not request more tools in this final synthesis pass because the remaining blocker is not recoverable by changing tool arguments.",
-      "Do not paste raw tool output, Activity blocks, stack traces, adaptation recommendations, or tool-loop wording.",
+      "Do not paste raw tool output, tool-progress blocks, stack traces, adaptation recommendations, or tool-loop wording.",
       "Do not claim success for an edit, command, file read, or web search unless the tool result says it completed.",
       "Explain the blocker in one concise user-facing sentence and give the best next step from the available evidence.",
     ].filter(Boolean).join(" ");
@@ -5477,11 +5952,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const unsuccessfulSection = extractFirstUnsuccessfulToolSection(contextMessage);
 
     if (!unsuccessfulSection) {
-      return "I could not complete that tool action, and no file changes were applied. Check Activity for the exact tool result.";
+      return "I could not complete that tool action.";
     }
 
     return [
-      "I could not complete that tool action, and no file changes were applied.",
+      "I could not complete that tool action.",
       summarizeUnsuccessfulToolSection(unsuccessfulSection),
     ].filter(Boolean).join("\n\n");
   }
@@ -5770,7 +6245,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           : chat,
       );
 
-      return sortByUpdatedAt ? sortChatsByUpdatedAt(nextChats) : nextChats;
+      const committedChats = sortByUpdatedAt ? sortChatsByUpdatedAt(nextChats) : nextChats;
+      pendingChatsRef.current = committedChats;
+      return committedChats;
     });
   }
 
@@ -6288,8 +6765,9 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     const isPlanningMode = toolSettings.planning && input.mode === "plan";
+    const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, input.localWorkspace ?? localWorkspaceRef.current);
     const effectiveProviderSettings = createPromptAwareProviderSettings(content);
-    const webSearchEnabled = Boolean(toolSettings.webSearch && content && shouldAttachWebSearchContext(input, content, effectiveProviderSettings, Boolean(options.discordReply)));
+    const webSearchEnabled = Boolean(toolSettings.webSearch && content && shouldAttachWebSearchContext(input, content, effectiveProviderSettings, Boolean(options.discordReply), workspaceSettings));
     const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, input.webSearch);
     const webSearchMaxResults = runtimeWebSearchSettings.maxResults;
     const webSearchProviderLabel = formatWebSearchProviderLabel(runtimeWebSearchSettings.provider);
@@ -6338,7 +6816,6 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           status: "active",
         }
       : undefined;
-    const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, input.localWorkspace ?? localWorkspaceRef.current);
     const effectiveThinkingSettings = effectiveProviderSettings.thinking;
     const discordContextMessages = options.discordReply ? createDiscordRuntimeContextMessages(workspaceSettings, webSearchEnabled, runtimeWebSearchSettings.provider) : [];
     const assistantMessage: ChatMessage = {
@@ -6529,8 +7006,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           [
             "RESEARCH PHASE FOR PLAN MODE",
             `Original user request: ${content}`,
-            "Model-callable local tools are disabled. Use only attached workspace context, project memory, conversation context, and host-managed web context.",
-            "Do NOT emit tool calls, function-call JSON, terminal commands as actions, Git/GitHub/MCP/workflow calls, file reads, edits, deletes, tests, browser automation, or weather actions.",
+            "Use attached workspace context, project memory, conversation context, and host-managed web context for this research pass.",
+            "Do not invent text-only tool protocols, terminal transcripts, Git/GitHub/MCP/workflow calls, file reads, edits, deletes, tests, browser automation, or weather actions in visible Markdown.",
             "Write a Markdown summary titled 'Research observations'. List the specific files, paths, functions, components, snippets, sources, and assumptions that are already present in the attached context.",
             "Do not write the plan itself this turn. The plan is produced in a later turn from these observations.",
           ].join("\n\n"),
@@ -6751,8 +7228,8 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           return;
         }
 
-        setChats((currentChats) =>
-          sortChatsByUpdatedAt(
+        setChats((currentChats) => {
+          const nextChats = sortChatsByUpdatedAt(
             currentChats.map((chat) =>
               chat.id === currentChat.id
                 ? {
@@ -6785,8 +7262,11 @@ function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                   }
                 : chat,
             ),
-          ),
-        );
+          );
+
+          pendingChatsRef.current = nextChats;
+          return nextChats;
+        });
         if (assistantResponse.waitingForApproval) {
           setAgentRunWaiting(
             agentRun.id,

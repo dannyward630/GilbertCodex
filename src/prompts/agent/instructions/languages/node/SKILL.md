@@ -11,10 +11,10 @@ description: Use when the workspace is a Node.js, npm, Yarn, pnpm, Bun, React, N
 - A `workspaces` field or `pnpm-workspace.yaml` means a monorepo. Run package-level commands with `cwd` set to the specific package folder, not the repo root.
 
 ## Bootstrap a new project
-- In this reset build, model-callable scaffold and terminal tools are disabled. Provide the exact starter command only when the user is asking for guidance, and do not claim it was run.
+- Use attached terminal tools when they are available. If terminal access is not attached, provide the exact starter command only when the user is asking for guidance, and do not claim it was run.
 - Common starters include `npm create vite@latest . -- --template react`, `npx create-next-app@latest`, and `npx create-expo-app`.
 - Install once with the detected manager: `npm install`, `pnpm install`, `yarn install`, or `bun install`. Add packages with `npm install <pkg>` and dev deps with `--save-dev` so the file diff is clear in review.
-- Verification requires user-provided command output in this build.
+- Verification requires attached tool output or user-provided command output.
 
 ## Run the right thing
 - Prefer existing `npm run` scripts over reinventing commands. Common names: `dev`, `build`, `start`, `test`, `typecheck`, `lint`, `format`, `preview`.

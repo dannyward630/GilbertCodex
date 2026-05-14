@@ -81,7 +81,7 @@ function createNotificationFromMessage(message?: ChatMessage): AgentNotification
 
   if (hasApprovalBlockedTool(message.toolCalls)) {
     return {
-      body: "A local action was blocked and may need your approval in the Activity panel.",
+      body: "A local action was blocked and may need your approval.",
       title: "Gilbert needs approval",
     };
   }

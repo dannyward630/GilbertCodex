@@ -19,9 +19,7 @@ export function createFilesStatTool(backend: FilesBackend = defaultFilesBackend)
         return { content: "Tool bridge run aborted before files_stat could call the backend.", ok: false };
       }
 
-      // Try listing first; if it succeeds the path is a directory. Listing a
-      // file generally throws cleanly, which lets us fall through to the file
-      // probe without ambiguity.
+      // Try listing first because successful directory reads avoid an ambiguous file probe.
       try {
         const listing = await backend.listDirectory(resolution.path.resolved, 1);
         return {
@@ -37,8 +35,7 @@ export function createFilesStatTool(backend: FilesBackend = defaultFilesBackend)
           ok: true,
         };
       } catch (listingError) {
-        // Fall through to the file probe; preserve the listing error in case
-        // both probes fail so we can be informative.
+        // Preserve the listing error in case the file probe also fails.
         try {
           const file = await backend.readTextFile(resolution.path.resolved, 1);
           return {

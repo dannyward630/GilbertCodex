@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "gilbert-codex"
-version = "0.3.0"
+version = "0.3.5"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",

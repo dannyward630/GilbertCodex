@@ -113,7 +113,7 @@ export const MODEL_CATALOG_CATEGORIES: ModelCatalogCategory[] = [
     label: "Fast & low cost",
   },
   {
-    description: "Large context windows for long repos, documents, and prior activity traces.",
+    description: "Large context windows for long repos, documents, and prior work traces.",
     id: "long-context",
     label: "Long context",
   },

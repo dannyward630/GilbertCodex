@@ -982,18 +982,13 @@ fn configure_pty_command(command: &mut CommandBuilder, working_directory: &Path)
     command.env("GILBERT_CODEX_TERMINAL", "1");
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    // Strip env that the host (GilbertCodex itself, especially when launched
-    // via `tauri dev`) leaks into children — most notoriously the Vite/dev
-    // server PORT vars that have been pinning user projects to port 1420.
+    // Strip GilbertCodex dev-server env vars so child projects do not inherit our host/port settings.
     for key in inherited_env_vars_to_scrub() {
         command.env_remove(key);
     }
 }
 
-/// Env vars that must NEVER inherit from the GilbertCodex host process into
-/// AI-spawned tool commands. Keeping these around causes user projects to
-/// silently bind to GilbertCodex's own dev port, copy our HMR config, or
-/// pick up secrets from our build environment.
+/// Env vars that must never inherit from GilbertCodex into AI-spawned tool commands.
 fn inherited_env_vars_to_scrub() -> &'static [&'static str] {
     &[
         "PORT",
@@ -1022,8 +1017,7 @@ fn inherited_env_vars_to_scrub() -> &'static [&'static str] {
     ]
 }
 
-/// Same scrub list applied to a plain `std::process::Command`. Both PTY and
-/// piped spawns must go through one of these helpers.
+/// Applies the same scrub list to non-PTY process spawns.
 fn scrub_inherited_dev_env(command: &mut Command) {
     for key in inherited_env_vars_to_scrub() {
         command.env_remove(key);
@@ -1226,6 +1220,8 @@ fn stop_process_child_with_deadline(
     child: &mut std::process::Child,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let pid = child.id();
+    kill_process_tree(pid);
     let _ = child.kill();
     let started_at = Instant::now();
 
@@ -1235,12 +1231,28 @@ fn stop_process_child_with_deadline(
         }
 
         if started_at.elapsed() >= timeout {
+            kill_process_tree(pid);
             return Ok(None);
         }
 
         thread::sleep(Duration::from_millis(25));
     }
 }
+
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) {
+    let mut command = Command::new("taskkill.exe");
+    command.creation_flags(CREATE_NO_WINDOW);
+    let _ = command
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(not(windows))]
+fn kill_process_tree(_pid: u32) {}
 
 fn wait_for_pty_child_exit(child: &mut dyn PtyChild, timeout: Duration) {
     let started_at = Instant::now();

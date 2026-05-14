@@ -18,7 +18,8 @@ describe("provider context surface", () => {
     });
 
     expect(surface.length).toBeLessThan(40_000);
-    expect(surface).toContain("Tool output truncated for provider context recovery");
+    expect(surface).toContain("Tool output replay excerpt ended for provider context recovery");
+    expect(surface).not.toContain("Tool output truncated for provider context recovery");
     expect(surface).not.toContain("x".repeat(100_000));
   });
 });

@@ -2,7 +2,7 @@
 
 This document tracks what is known about running Gilbert Codex on Windows, macOS, and Linux.
 
-Last updated: May 13, 2026.
+Last updated: May 14, 2026.
 
 ## Current Support State
 
@@ -19,9 +19,9 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 - Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
 - Tauri bundle targets are configured broadly so host-platform packages can be produced by each OS.
-- The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux, but it is no longer exposed as a model-callable tool.
-- Model-callable local tools are disabled in the reset build. Web search remains host-managed; the next tool runtime should be rebuilt with platform boundaries documented before it is re-enabled.
-- Native terminal, browser preview, file picker, and packaging behavior still need OS-specific verification.
+- The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux, and terminal access now routes through the approval-gated provider tool bridge when exposed to chat.
+- The rebuilt tool bridge covers file, editing, terminal, browser preview, Git, GitHub, web, and MCP-facing surfaces where provider support, settings, and permissions allow them. macOS and Linux still need native verification for each host-facing tool family.
+- Native terminal, browser preview, file picker, tool bridge, and packaging behavior still need OS-specific verification.
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
 - Browser automation uses a platform-appropriate user agent.
 - Setup docs now use cross-platform `npm` commands, with a Windows `npm.cmd` note where useful.
@@ -47,8 +47,9 @@ Someone with access to macOS and Linux should verify:
 - `npm run app:build`
 - First launch, local account creation, sign-in, and local app storage.
 - File picker, selected workspace roots, file indexing, read/write/delete safeguards, and full-computer scope behavior.
+- Tool-bridge file reads, editing, terminal execution, browser preview, local Git, GitHub, web search, and MCP-facing behavior.
 - Terminal startup and command execution for Bash, Zsh, and sh.
-- GitHub device-flow login, token persistence, repository reads, branch creation, API commits, and pull request creation.
+- GitHub device-flow login, token persistence, repository reads, branch creation, API commits, pull request creation, release helpers, and workflow actions.
 - Discord slash-command bridge startup, ngrok discovery, interaction validation, and response editing.
 - Desktop notifications and permission prompts.
 - Browser preview panel and local dev-server URL detection.

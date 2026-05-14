@@ -129,6 +129,7 @@ export function AppTopBar({
       ],
       view: [
         { label: "Show sidebar", shortcut: "Ctrl+B", checked: sidebarOpen, onSelect: onToggleSidebar },
+        { label: "Terminal", shortcut: "Ctrl+`", checked: terminalOpen, disabled: !desktopRuntime, onSelect: onToggleTerminal },
         { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onSelect: () => onRouteChange("chat") },
         { label: "Radar", checked: activeRoute === "radar", onSelect: () => onRouteChange("radar") },
         { label: "Settings", checked: activeRoute === "settings", onSelect: () => onRouteChange("settings") },
@@ -197,6 +198,9 @@ export function AppTopBar({
       } else if (key === "b") {
         event.preventDefault();
         onToggleSidebar();
+      } else if (desktopRuntime && (event.code === "Backquote" || event.key === "`")) {
+        event.preventDefault();
+        onToggleTerminal();
       } else if (key === ",") {
         event.preventDefault();
         onRouteChange("settings");
@@ -205,7 +209,7 @@ export function AppTopBar({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenSearch, onRouteChange, onToggleSidebar, onToggleTerminal]);
+  }, [desktopRuntime, onNewChat, onOpenSearch, onRouteChange, onToggleSidebar, onToggleTerminal]);
 
   function isInteractiveTarget(target: HTMLElement) {
     return Boolean(target.closest("button, input, textarea, select, a, [role='menu'], [data-topbar-interactive='true']"));

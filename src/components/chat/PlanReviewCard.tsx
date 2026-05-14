@@ -8,7 +8,6 @@ interface PlanReviewCardProps {
   content: string;
   isStreaming?: boolean;
   message: ChatMessage;
-  onOpenActivity?: () => void;
   onRequestRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onResolvePlanApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
 }
@@ -22,7 +21,7 @@ interface PlanCardStateDescriptor {
   tone: "info" | "warning" | "success" | "danger" | "muted";
 }
 
-export function PlanReviewCard({ content, isStreaming, message, onOpenActivity, onRequestRevision, onResolvePlanApproval }: PlanReviewCardProps) {
+export function PlanReviewCard({ content, isStreaming, message, onRequestRevision, onResolvePlanApproval }: PlanReviewCardProps) {
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionFeedback, setRevisionFeedback] = useState("");
   const [submittingRevision, setSubmittingRevision] = useState(false);
@@ -192,12 +191,6 @@ export function PlanReviewCard({ content, isStreaming, message, onOpenActivity, 
           <small>{descriptor.description}</small>
         </div>
         <div className="plan-review-meta">
-          {onOpenActivity ? (
-            <button className="plan-review-activity" type="button" aria-label="Open plan activity" title="Open activity" onClick={onOpenActivity}>
-              <span className="plan-review-activity-label">Activity</span>
-              <ArrowRight size={14} aria-hidden="true" />
-            </button>
-          ) : null}
           {showCollapseToggle ? (
             <button
               className="plan-review-collapse"

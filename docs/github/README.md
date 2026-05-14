@@ -1,8 +1,8 @@
 # GitHub Integration Setup
 
-This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, and workflow automation.
+This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, workflow automation, and app tool-bridge workflows.
 
-Last verified: May 13, 2026.
+Last verified: May 14, 2026.
 
 Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -108,7 +108,7 @@ Do not copy or commit the client secret. Gilbert Codex does not need it for devi
 
 ## Step 4: Understand The Requested Scopes
 
-Gilbert currently requests a broad scope set for future GitHub surfaces and repository administration features. GitHub model-callable tools are disabled in the reset build.
+Gilbert currently requests a broad scope set for GitHub surfaces and repository administration features. GitHub actions that can affect repositories should stay visible in activity or review UI and should remain behind the app's approval policy for high-impact operations.
 
 Current requested scopes:
 
@@ -128,9 +128,9 @@ Important details:
 
 ## Step 5: Current Chat Status
 
-GitHub model-callable tools are not available in chat while the tool runtime is being rebuilt. Do not expect repository inventory, remote file reads, commits, releases, workflow dispatches, or pull requests to run from model output in this build.
+GitHub tool-bridge surfaces can be attached to chat when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, remote file reads, branch creation, API commits, draft pull requests, release helpers, workflow listing, workflow dispatch, and workflow-run inspection should all route through the Tauri command layer instead of the GitHub CLI.
 
-For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
+For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.5 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 
 ## Repository Webhooks
 
@@ -187,3 +187,4 @@ GitHub says repository webhooks require repository owner or admin access. Use or
 - Keep requested scopes in `src/app/githubClient.ts`, Settings UI copy, and this document aligned.
 - Keep GitHub token storage notes in `SECURITY.md` current.
 - Prefer draft PR creation until richer review cards and diffs are available in the UI.
+- Keep GitHub tool-bridge actions aligned with visible approval, activity, and release-note flows.

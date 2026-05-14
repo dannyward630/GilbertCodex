@@ -2,7 +2,7 @@
 
 This guide explains how to prepare Discord so users can chat with Gilbert Codex from Discord.
 
-Last verified: May 13, 2026.
+Last verified: May 14, 2026.
 
 Platform note: this bridge is verified on Windows. macOS and Linux have partial source support and need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -21,10 +21,10 @@ For the default slash-command path, the desktop app can:
 - Turn `/gilbert prompt: ...` requests into ongoing Gilbert chat requests.
 - Turn `/gilbertnewchat prompt: ...` requests into a fresh Gilbert chat.
 - Edit the original Discord interaction response while Gilbert works, then replace it with the final answer.
-- Use the same host-managed web-search and project context settings that are enabled inside Gilbert Codex.
+- Use the same host-managed web-search, project context, provider tool bridge, and permission settings that are enabled inside Gilbert Codex.
 - Convert Gilbert's richer Markdown into Discord-safe Markdown before posting back to Discord.
 
-In the current reset build, Discord-initiated chats do not expose the removed local action runtime. Web search can still attach host-managed source context when it is enabled in Gilbert Codex.
+Discord-initiated chats use the same alpha tool-bridge boundaries as in-app chats. Web search can attach host-managed source context when it is enabled, and local or remote actions remain subject to the selected provider, workspace scope, and review policy.
 
 A plain Discord incoming webhook cannot read user messages; it only posts messages into a channel. Use one of these paths:
 
@@ -277,7 +277,7 @@ Use this path when Gilbert or another system only needs to post into Discord.
 - The desktop runtime includes the Discord slash-command receiver, signature verification, ngrok process management, and interaction response editing.
 - Auto-start starts the bridge when the app opens if Discord bridge is enabled, Slash chat is selected, and the Application ID/Public Key are present.
 - Discord responses stream by repeatedly editing the original interaction response, with throttling to avoid noisy Discord updates.
-- Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass the reset-state local action boundaries.
-- Discord requests use the same disabled local-action runtime state as in-app requests. Host-managed web search remains available when enabled.
+- Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass app approval, workspace, or provider tool-bridge boundaries.
+- Discord requests use the same alpha tool bridge as in-app requests. Host-managed web search remains available when enabled, and high-impact actions remain review-gated.
 - Bot gateway mode is still future runtime work.
 - Incoming Discord webhooks are still one-way notification paths.

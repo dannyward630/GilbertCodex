@@ -78,7 +78,7 @@ function formatDiffPreviewText(lines: ChatToolFileChangeLine[], truncated: boole
     .map((line) => `${markerForLine(line.kind)}${line.content}`)
     .join("\n");
 
-  return truncated ? `${body}\n[Diff preview trimmed for Activity row; full tool output remains available.]` : body;
+  return truncated ? `${body}\n[Diff preview trimmed; full tool output remains available.]` : body;
 }
 
 function markerForLine(kind: ChatToolFileChangeLine["kind"]) {

@@ -126,7 +126,7 @@ async function createReadSuggestions(backend: FilesBackend, requestedPath: strin
       : "That path is an empty directory.";
   }
 
-  const { extension, parent, stem } = splitPath(requestedPath);
+  const { extension, name, parent, stem } = splitPath(requestedPath);
 
   if (!parent) {
     return "";
@@ -156,7 +156,14 @@ async function createReadSuggestions(backend: FilesBackend, requestedPath: strin
     .slice(0, 8)
     .map((entry) => `\`${entry.path}\``);
 
-  return nearMatches.length > 0 ? `Nearby paths: ${nearMatches.join(", ")}` : "";
+  if (nearMatches.length > 0) {
+    return `Nearby paths: ${nearMatches.join(", ")}`;
+  }
+
+  const searchQuery = stem || name;
+  return searchQuery
+    ? `No nearby path matched \`${name}\`. Try files_search with query \`${searchQuery}\`, includePath=true, includeContent=false, and maxMatches=20 before answering.`
+    : "";
 }
 
 function createModuleDirectoryCandidates(requestedPath: string) {

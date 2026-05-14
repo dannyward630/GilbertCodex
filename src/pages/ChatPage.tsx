@@ -5,7 +5,7 @@ import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
 import { GitReviewPanel } from "../components/git/GitReviewPanel";
-import { RightRail, chatHasLiveRightRailActivity, chatHasRightRailContent } from "../components/inspector/RightRail";
+import { RightRail, chatHasPendingRightRailAction, chatHasRightRailContent } from "../components/inspector/RightRail";
 import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
 import { useAnimatedPresence } from "../lib/useAnimatedPresence";
 import type { AppInfo } from "../types/app";
@@ -135,9 +135,8 @@ export function ChatPage({
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
   const [gitReviewOpen, setGitReviewOpen] = useState(false);
-  const rightRailHasActivity = useMemo(() => chatHasLiveRightRailActivity(chat), [chat]);
+  const rightRailNeedsAction = useMemo(() => chatHasPendingRightRailAction(chat), [chat]);
   const rightRailHasContent = useMemo(() => chatHasRightRailContent(chat), [chat]);
-  const handleOpenActivity = useCallback(() => setRightRailOpen(true), []);
   const queuedMessages = useMemo(() => getQueuedMessages(chat.messages), [chat.messages]);
   const emptyChat = chat.messages.length === 0;
   const conversationMainStyle = {
@@ -309,8 +308,13 @@ export function ChatPage({
   useEffect(() => {
     if (!rightRailHasContent) {
       setRightRailOpen(false);
+      return;
     }
-  }, [chat.id, rightRailHasContent]);
+
+    if (rightRailNeedsAction) {
+      setRightRailOpen(true);
+    }
+  }, [chat.id, rightRailHasContent, rightRailNeedsAction]);
 
   useEffect(() => {
     if (!showBrowserPreview || browserPreviewExpanded) {
@@ -385,8 +389,6 @@ export function ChatPage({
       <ConversationHeader
         browserPreviewEnabled={browserPreviewEnabled}
         browserPreviewOpen={showBrowserPreview}
-        inspectorAvailable={rightRailHasContent}
-        inspectorOpen={showRightRail}
         pinned={Boolean(chat.pinned)}
         title={chat.title}
         onAddAutomation={onAddAutomation}
@@ -399,15 +401,6 @@ export function ChatPage({
         onForkWorktree={() => void onForkChatWorktree()}
         onOpenNewWindow={() => void onOpenChatInNewWindow()}
         onToggleBrowserPreview={handleToggleBrowserPreview}
-        onToggleInspector={() => {
-          if (showGitReview) {
-            setGitReviewOpen(false);
-            setRightRailOpen(rightRailHasContent);
-            return;
-          }
-
-          setRightRailOpen((open) => (rightRailHasContent ? !open : false));
-        }}
         onOpenSideChat={onOpenSideChat}
         onRename={onRenameChat}
         onTogglePin={onTogglePin}
@@ -452,7 +445,6 @@ export function ChatPage({
                 chat={chat}
                 hasApiKey={hasApiKey}
                 onHeaderBlurChange={setHeaderBlurActive}
-                onOpenActivity={rightRailHasContent ? handleOpenActivity : undefined}
                 onRequestPlanRevision={onRequestPlanRevision}
                 onRegenerateResponse={onRegenerateResponse}
                 onResolveToolApproval={onResolveToolApproval}
@@ -464,7 +456,7 @@ export function ChatPage({
         </section>
         {renderRightRail ? (
           <div className="side-panel-presence" data-presence={rightRailPresence.exiting ? "exit" : "enter"}>
-            <RightRail chat={chat} hasActivity={rightRailHasActivity} onClose={() => setRightRailOpen(false)} onResolveToolApproval={onResolveToolApproval} onSubmitPlanningInput={onSubmitPlanningInput} />
+            <RightRail chat={chat} onClose={() => setRightRailOpen(false)} onResolveToolApproval={onResolveToolApproval} onSubmitPlanningInput={onSubmitPlanningInput} />
           </div>
         ) : null}
         {renderGitReview ? (
@@ -475,6 +467,7 @@ export function ChatPage({
         {renderBrowserPreview ? (
           <div className="side-panel-presence" data-presence={browserPreviewPresence.exiting ? "exit" : "enter"}>
             <BrowserPreviewPanel
+              closing={browserPreviewPresence.exiting}
               expanded={browserPreviewExpanded}
               initialUrl={browserPreviewUrl ?? undefined}
               previewWidth={browserPreviewWidth}

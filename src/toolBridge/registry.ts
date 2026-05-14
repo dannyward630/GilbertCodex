@@ -116,6 +116,18 @@ const TOOL_ID_ALIASES: Record<string, string> = {
   tree: "files_tree_summary",
   tree_summary: "files_tree_summary",
   run_terminal: "terminal_run",
+  brave_search: "web_search",
+  "brave.search": "web_search",
+  "brave-search": "web_search",
+  duckduckgo_search: "web_search",
+  "duckduckgo.search": "web_search",
+  "duckduckgo-search": "web_search",
+  search_web: "web_search",
+  "search.web": "web_search",
+  "search-web": "web_search",
+  web: "web_search",
+  "web.search": "web_search",
+  "web-search": "web_search",
   write_file: "files_write",
 };
 

@@ -153,11 +153,25 @@
   flex: 1 1 auto;
   gap: 5px;
   overflow-x: auto;
-  scrollbar-width: none;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  overscroll-behavior-inline: contain;
+  scroll-behavior: smooth;
+  scrollbar-color: color-mix(in srgb, var(--browser-preview-muted) 46%, transparent) transparent;
+  scrollbar-width: thin;
 }
 
 .browser-preview-tabs::-webkit-scrollbar {
-  display: none;
+  height: 5px;
+}
+
+.browser-preview-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.browser-preview-tabs::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--browser-preview-muted) 38%, transparent);
 }
 
 .browser-preview-tab {
@@ -542,48 +556,48 @@
 }
 
 @container (max-width: 520px) {
-  .desktop-root[data-runtime="web"] .browser-preview-tabbar {
+  .browser-preview-tabbar {
     gap: 6px;
     padding-left: 6px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-badge {
+  .browser-preview-badge {
     padding-inline: 8px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-tab {
+  .browser-preview-tab {
     flex-basis: min(184px, 64%);
     min-width: 112px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-toolbar {
+  .browser-preview-toolbar {
     gap: 7px;
     padding-inline: 8px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-nav {
+  .browser-preview-nav {
     gap: 0;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-nav button,
-  .desktop-root[data-runtime="web"] .browser-preview-tools button {
+  .browser-preview-nav button,
+  .browser-preview-tools button {
     width: 28px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-tools {
+  .browser-preview-tools {
     display: none;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-search-select {
+  .browser-preview-search-select {
     width: 92px;
     padding-left: 8px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-address {
+  .browser-preview-address {
     padding-inline: 10px;
   }
 
-  .desktop-root[data-runtime="web"] .browser-preview-start {
+  .browser-preview-start {
     padding-inline: 16px;
   }
 }

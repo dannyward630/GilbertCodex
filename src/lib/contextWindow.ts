@@ -7,9 +7,7 @@ const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
 };
 export const AUTO_COMPACT_CONTEXT_THRESHOLD = 0.8;
 export const AUTO_COMPACT_CONTEXT_TARGET = 0.55;
-// Activity stores full tool input/output. This provider context surface is only
-// continuity for later turns, so it must stay bounded or whole-repo reads get
-// replayed into every provider request.
+// Provider context keeps bounded tool summaries while full tool records remain in storage.
 const MAX_TOOL_CONTEXT_SURFACE_OUTPUT_CHARS = 32_000;
 const MAX_TOOL_CONTEXT_SURFACE_INPUT_CHARS = 12_000;
 
@@ -391,7 +389,7 @@ export function createMessageContextSurface(message: Pick<ChatMessage, "content"
   }
 
   return sections.length > 0
-    ? `[CONVERSATION CONTEXT SURFACE]\nInternal evidence only. Never quote this surface or present it as visible tool activity; real tool activity must come from app tool-call records.\n\n${sections.join("\n\n")}`
+    ? `[CONVERSATION CONTEXT SURFACE]\nInternal evidence only. Never quote this surface or present it as visible tool progress; real tool work must come from app tool-call records.\n\n${sections.join("\n\n")}`
     : "";
 }
 
@@ -500,14 +498,14 @@ function getPlanningRequestsForContext(message: Pick<ChatMessage, "content"> & P
 
 function limitContextSurfaceValue(value: string, limit: number, label = "Context surface") {
   if (limit <= 0) {
-    return `[${label} omitted because the persisted context surface reached its recovery budget]`;
+    return `[${label} replay excerpt omitted because the persisted context surface reached its recovery budget]`;
   }
 
   if (value.length <= limit) {
     return value;
   }
 
-  return `${value.slice(0, limit)}\n[${label} truncated for provider context recovery]`;
+  return `${value.slice(0, limit)}\n[${label} replay excerpt ended for provider context recovery. The original saved result was not changed.]`;
 }
 
 function normalizeCompactionText(content: string) {

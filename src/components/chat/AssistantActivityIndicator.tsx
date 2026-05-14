@@ -70,7 +70,7 @@ export function AssistantWorkTrace({
   const live = Boolean(thinkingStreaming || activitySnapshot?.live);
   const hasWaitingIndicator = Boolean(thinkingStreaming && !responseStarted);
   const canExpand = hasThinking || hasActivity || hasWaitingIndicator;
-  const [expanded, setExpanded] = useState(() => !responseStarted || live);
+  const [expanded, setExpanded] = useState(() => !responseStarted || live || hasActivity);
   const [manuallyToggled, setManuallyToggled] = useState(false);
   const detail = live ? "working" : hasThinking ? formatThinkingNoteCount(thinkingNotes.length) : activitySnapshot?.detail ?? "";
   const activityInsertIndex = hasActivity && thinkingNotes.length > 1 ? Math.max(1, thinkingNotes.length - 1) : thinkingNotes.length;
@@ -216,7 +216,7 @@ export function AssistantActivityIndicator({ snapshot }: AssistantActivityIndica
               {hiddenFileCount > 0 ? <span className="assistant-file-activity-more">+{hiddenFileCount} more {hiddenFileCount === 1 ? "file" : "files"}</span> : null}
             </div>
           ) : hasToolDetails ? (
-            <div className="assistant-tool-activity-list" aria-label="Tool activity details">
+            <div className="assistant-tool-activity-list" aria-label="Tool progress details">
               {snapshot.toolCalls.map((toolCall, index) => (
                 <div className="assistant-tool-activity-row" data-status={toolCall.status} key={`${toolCall.id}-${index}`}>
                   <span>{formatToolStatusWord(toolCall.status)}</span>
@@ -326,21 +326,24 @@ export function createAssistantActivitySnapshot(
     return null;
   }
 
-  const toolCalls = message.toolCalls ?? [];
+  const allToolCalls = message.toolCalls ?? [];
   const progressItems = getInlineProgressItems(message.progress);
-  const fileItems = getAssistantFileItems(toolCalls);
-  const fileStats = summarizeFileItems(fileItems);
-  const commandCount = countCommandToolCalls(toolCalls);
-  const activeToolCount = toolCalls.filter((toolCall) => toolCall.status === "active").length;
-  const waitingToolCount = toolCalls.filter((toolCall) => toolCall.status === "waiting_approval").length;
+  const allActiveToolCount = allToolCalls.filter((toolCall) => toolCall.status === "active").length;
+  const waitingToolCount = allToolCalls.filter((toolCall) => toolCall.status === "waiting_approval").length;
   const hasActiveProgress = progressItems.some((item) => item.status === "active");
   const hasWebSearchActivity = message.webSearch?.status === "active";
   const hasPlanningActivity = Boolean(message.planning && !message.planning.completedAt);
+  const live = Boolean(message.isStreaming && (allActiveToolCount > 0 || waitingToolCount > 0 || hasActiveProgress || hasWebSearchActivity || hasPlanningActivity || allToolCalls.length > 0 || progressItems.length > 0));
+  const toolCalls = live ? allToolCalls : allToolCalls.filter((toolCall) => toolCall.status !== "active");
+  const activeToolCount = live ? allActiveToolCount : 0;
+  const commandCount = countCommandToolCalls(toolCalls);
+  const includeEstimatedFileItems = live || waitingToolCount > 0;
+  const fileItems = getAssistantFileItems(toolCalls, { includeEstimated: includeEstimatedFileItems });
+  const fileStats = summarizeFileItems(fileItems);
   const hasSurfaceActivity = fileItems.length > 0 || toolCalls.length > 0 || progressItems.length > 0 || hasWebSearchActivity || hasPlanningActivity;
-  const live = Boolean(message.isStreaming && (activeToolCount > 0 || waitingToolCount > 0 || hasActiveProgress || hasWebSearchActivity || hasPlanningActivity || hasSurfaceActivity));
   const responseStarted = Boolean(options.responseStarted);
 
-  if (!live || !hasSurfaceActivity) {
+  if (!hasSurfaceActivity) {
     return null;
   }
 
@@ -406,6 +409,10 @@ function createActivityLabel({
 
   if (fileStats.fileCount > 0 && live) {
     return formatLiveFileSummary(fileStats, commandCount);
+  }
+
+  if (fileStats.fileCount > 0) {
+    return formatCompletedFileSummary(fileStats, commandCount);
   }
 
   if (commandCount > 0) {
@@ -481,7 +488,7 @@ function isInternalOnlyProgressItem(item: ChatProgressItem) {
   return id === "provider-payload-guardrail" || label === "provider payload guardrail";
 }
 
-function getAssistantFileItems(toolCalls: ChatToolCall[]): AssistantActivityFileItem[] {
+function getAssistantFileItems(toolCalls: ChatToolCall[], options: { includeEstimated?: boolean } = {}): AssistantActivityFileItem[] {
   return toolCalls.flatMap((toolCall) => {
     if (toolCall.fileChanges?.length) {
       return toolCall.fileChanges.map((change) => ({
@@ -494,7 +501,7 @@ function getAssistantFileItems(toolCalls: ChatToolCall[]): AssistantActivityFile
       }));
     }
 
-    if (toolCall.status !== "active" && toolCall.status !== "waiting_approval") {
+    if (!options.includeEstimated || (toolCall.status !== "active" && toolCall.status !== "waiting_approval")) {
       return [];
     }
 
@@ -677,6 +684,22 @@ function formatLiveFileSummary(stats: AssistantActivityFileStats, commandCount =
 
   if (parts.length === 0) {
     return `Changing ${formatFileCount(stats.fileCount)}`;
+  }
+
+  return capitalizeFirst(parts.join(", "));
+}
+
+function formatCompletedFileSummary(stats: AssistantActivityFileStats, commandCount = 0) {
+  const parts = [
+    stats.creations > 0 ? `created ${formatFileCount(stats.creations)}` : "",
+    stats.updates > 0 ? `edited ${formatFileCount(stats.updates)}` : "",
+    stats.moves > 0 ? `moved ${formatFileCount(stats.moves)}` : "",
+    stats.removals > 0 ? `deleted ${formatFileCount(stats.removals)}` : "",
+    commandCount > 0 ? `ran ${formatCommandCount(commandCount)}` : "",
+  ].filter(Boolean);
+
+  if (parts.length === 0) {
+    return `Changed ${formatFileCount(stats.fileCount)}`;
   }
 
   return capitalizeFirst(parts.join(", "));

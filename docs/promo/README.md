@@ -2,15 +2,16 @@
 
 This folder contains a lightweight promotional scene for sharing Gilbert Codex as an open-source desktop agent workspace.
 
-Last reviewed for the v0.3.0 tool-runtime release notes on May 13, 2026. Recapture the screenshots after major activity-rail, tool-ledger, composer, or settings UI changes so the public README does not drift behind the app.
+Last reviewed for the v0.3.5 tool-bridge release prep on May 14, 2026. Recapture the screenshots after major activity-rail, tool-bridge, composer, or settings UI changes so the public README does not drift behind the app.
 
 ## Outputs
 
 - `../assets/readme/gilbert-codex-readme-demo.gif`: short animated README preview that plays inline on GitHub when animated images are enabled.
 - `../assets/readme/gilbert-codex-overview.png`: focused chat workspace screenshot.
 - `../assets/readme/gilbert-codex-activity.png`: live activity rail, tool-call ledger, artifacts, and run-detail screenshot.
-- `../assets/readme/gilbert-codex-toolbox.png`: Toolbox screenshot.
+- `../assets/readme/gilbert-codex-toolbox.png`: tool/search configuration screenshot kept under the existing filename for README link stability.
 - `../assets/readme/gilbert-codex-settings.png`: Settings screenshot.
+- `../assets/readme/gilbert-codex-readme-logo.svg`: README wordmark used on the GitHub landing page.
 - `promo.html`: optional source scene for generating a longer standalone promo video outside release assets.
 
 ## Refreshing The README Screenshots

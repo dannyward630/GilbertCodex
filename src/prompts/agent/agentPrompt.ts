@@ -133,16 +133,7 @@ interface LedgerEntry {
   tool: string;
 }
 
-/**
- * Builds a "session ledger" — a compact, dedup'd record of completed tool
- * actions across the conversation. The model gets this as part of the system
- * prompt every turn so a follow-up like "thanks, what's next?" doesn't cause
- * it to re-run a task that already succeeded.
- *
- * Kept short on purpose (<=30 entries, ~140 chars each). The full tool
- * outputs already live in the message context surface; the ledger is the
- * "you already did this — don't redo it" reminder layer.
- */
+// Builds a compact session ledger so follow-up turns do not rerun completed tool work.
 function formatSessionLedger(messages: ChatMessage[]): string {
   const entries: LedgerEntry[] = [];
   const seen = new Set<string>();
@@ -176,7 +167,7 @@ function formatSessionLedger(messages: ChatMessage[]): string {
 
   const lines = [
     "# Session Ledger",
-    "The following tool actions already completed in this conversation. Do not redo any of them. If the user's follow-up does not contradict a prior result, build on it — read the latest tool output and continue. Re-running an identical action is wasteful and confuses the user.",
+    "The following tool actions already completed in this conversation. Do not redo any of them. If the user's follow-up does not contradict a prior result, build on it: read the latest tool output and continue. Re-running an identical action is wasteful and confuses the user.",
     omittedCount > 0
       ? `Showing the most recent ${visibleEntries.length} of ${totalCount} completed tool actions (${omittedCount} older entries omitted).`
       : `Total completed tool actions: ${totalCount}.`,
@@ -195,9 +186,7 @@ function summarizeLedgerInput(input: string | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
-  // Take the most distinguishing line — typically "Path: ..." or
-  // "Command: ..." or "Query: ..." — instead of the whole approval-style
-  // preview. Falls back to the first non-empty line.
+  // Prefer the most distinguishing preview line instead of the whole approval-style block.
   const lines = input.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const distinguishing = lines.find((line) =>
     /^(Path|Command|Query|URL|Repository|Branch|Tag):/i.test(line),

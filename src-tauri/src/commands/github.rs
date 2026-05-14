@@ -1,8 +1,4 @@
-//! GitHub desktop commands.
-//!
-//! This module owns the native side of the GitHub integration: local token
-//! storage, OAuth device flow, REST API normalization, and source-control
-//! operations that do not require a local clone or GitHub CLI installation.
+//! GitHub desktop commands for token storage, OAuth device flow, REST normalization, and API-backed source control.
 
 use crate::{
     commands::auth,

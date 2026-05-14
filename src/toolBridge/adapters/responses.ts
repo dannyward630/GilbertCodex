@@ -1,6 +1,6 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
 import { finalizeToolResult } from "../resultFinalizer";
-import { decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyResponsesToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -8,16 +8,23 @@ export function applyResponsesToolBridge(body: Record<string, unknown>, options:
   if (tools.length > 0) {
     body.tools = tools.map(createResponsesToolSchema);
     body.tool_choice = options.toolChoice ?? "auto";
-  } else if (options.toolChoice === "none") {
+  } else if (options.toolChoice === "none" && options.toolResultDelivery !== "inline-user-message") {
     body.tool_choice = "none";
+    delete body.tools;
+  } else if (options.toolResultDelivery === "inline-user-message") {
+    delete body.tool_choice;
     delete body.tools;
   }
 
   if (options.toolResultMessages?.length) {
-    body.input = appendResponsesToolResultItems(body.input, options.toolResultMessages, {
-      maxToolResultContentChars: options.maxToolResultContentChars,
-      skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
-    });
+    body.input = options.toolResultDelivery === "inline-user-message"
+      ? appendInlineUserToolResultItems(body.input, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+        })
+      : appendResponsesToolResultItems(body.input, options.toolResultMessages, {
+          maxToolResultContentChars: options.maxToolResultContentChars,
+          skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
+        });
   }
 
   return body;
@@ -62,6 +69,26 @@ function appendResponsesToolResultItems(
       call_id: result.callId,
       output,
       type: "function_call_output",
+    });
+  }
+
+  return input;
+}
+
+function appendInlineUserToolResultItems(
+  currentInput: unknown,
+  results: ToolResultMessage[],
+  options: { maxToolResultContentChars?: number | null },
+) {
+  const input = Array.isArray(currentInput) ? [...currentInput] : [];
+  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
+
+  for (const result of results) {
+    const inlineResult = createInlineToolResultMessage(result, remainingToolResultChars);
+    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, inlineResult.providerRawCharCount);
+    input.push({
+      content: inlineResult.content,
+      role: "user",
     });
   }
 

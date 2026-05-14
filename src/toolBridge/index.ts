@@ -16,6 +16,7 @@ export {
   tryResolveAllowedPath,
 } from "./paths";
 export { BRIDGE_TOOL_CALL_ID_PREFIX, createBridgeChatToolCall, formatToolResultContent, safeStringify } from "./results";
+export { parseVisibleTextToolCalls } from "./parsers";
 export {
   createVisibleFallbackFromToolCall,
   finalizeToolResult,
@@ -25,6 +26,27 @@ export {
   type ToolResultKind,
   type VisibleToolResultMode,
 } from "./resultFinalizer";
+export {
+  createBrowserPreviewTool,
+  createBrowserTools,
+  browserTools,
+  defaultBrowserPreviewBackend,
+  type BrowserPreviewBackend,
+} from "./tools/browser";
+export {
+  createTerminalRunTool,
+  createTerminalTools,
+  defaultTerminalBackend,
+  terminalTools,
+  type TerminalBackend,
+} from "./tools/terminal";
+export {
+  createWebSearchTool,
+  createWebTools,
+  defaultWebSearchToolBackend,
+  webTools,
+  type WebSearchToolBackend,
+} from "./tools/web";
 export {
   createEditingTools,
   createFilesApplyPatchTool,

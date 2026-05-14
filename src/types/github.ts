@@ -1,9 +1,4 @@
-/**
- * Shared contracts for GitHub desktop integration.
- *
- * These shapes mirror the camelCase payloads emitted by the Rust Tauri commands,
- * not the snake_case fields returned directly by GitHub's REST API.
- */
+// Shared GitHub desktop contracts mirror Rust Tauri camelCase payloads, not raw REST fields.
 export interface GithubUser {
   avatarUrl?: string;
   htmlUrl: string;

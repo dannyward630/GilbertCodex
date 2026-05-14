@@ -1,6 +1,6 @@
 {
   "name": "gilbert-codex",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "description": "GUI-first local desktop agent workspace built with React, Tauri, and Rust.",
   "license": "MIT",
   "type": "module",

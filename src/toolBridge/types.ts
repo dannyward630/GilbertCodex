@@ -1,6 +1,6 @@
 import type { ChatToolCall } from "../types/chat";
 import type { LocalPermissionMode } from "../types/localWorkspace";
-import type { ModelProviderId } from "../types/settings";
+import type { ModelProviderId, WebSearchSettings } from "../types/settings";
 
 export type ToolBridgeProviderFormat = "openai-compatible" | "anthropic-messages" | "openai-responses";
 export type ToolBridgeRisk = "diagnostic" | "read" | "mutating" | "terminal" | "network" | "destructive" | "credential" | "publish";
@@ -25,6 +25,8 @@ export interface ToolExecutionContext {
   permissionMode: LocalPermissionMode;
   provider: ModelProviderId;
   signal?: AbortSignal;
+  webSearchMaxResults?: number;
+  webSearchSettings?: WebSearchSettings;
   workspaceRoots?: string[];
 }
 
@@ -53,9 +55,7 @@ export interface ToolDefinition {
 
 export interface ToolCallRequest {
   arguments: unknown;
-  // If the raw arguments string could not be parsed as JSON, this field carries
-  // the parse error. The orchestrator surfaces it as the call's failure reason
-  // instead of running schema validation against a string.
+  // Parse error for raw JSON arguments; the orchestrator reports it without schema validation.
   argumentsParseError?: string;
   id: string;
   name: string;
@@ -72,15 +72,12 @@ export interface ToolResultMessage {
 }
 
 export interface ProviderToolBridgeOptions {
-  // If true, the adapter will NOT synthesize a fake assistant message carrying
-  // the original tool_call(s). Set this when the caller's message history
-  // already contains the assistant turn that emitted the tool calls. Defaults
-  // to false to preserve the legacy contract: the adapter prepends a synthetic
-  // assistant message for each result so providers see a well-formed
-  // (assistant -> tool) pair.
+  // When true, adapters skip synthetic assistant tool-call turns because history already contains them.
   resultsHistoryAlreadyContainsAssistantTurns?: boolean;
-  // Maximum aggregate characters of completed tool output to place back into
-  // the next provider request. Activity keeps the full raw output separately.
+  // Native provider tool-result turns are best for tool use, but weaker models often synthesize
+  // more reliably when completed results are supplied as plain user context.
+  toolResultDelivery?: "native" | "inline-user-message";
+  // Maximum completed tool output characters to include in the next provider request.
   maxToolResultContentChars?: number | null;
   toolChoice?: ToolBridgeToolChoice;
   toolResultMessages?: ToolResultMessage[];

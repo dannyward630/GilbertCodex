@@ -147,6 +147,9 @@ export async function searchWebWithProvider(query: string, settings: WebSearchSe
       }
 
       const braveError = formatWebSearchErrorMessage(error, "Brave Search failed.");
+      if (!shouldUseDuckDuckGoFallbackForBraveError(braveError)) {
+        throw new Error(braveError);
+      }
 
       try {
         return {
@@ -188,12 +191,23 @@ export async function searchWebWithProvider(query: string, settings: WebSearchSe
   };
 }
 
-/**
- * Searches DuckDuckGo for current web evidence.
- *
- * Desktop routes through Rust to avoid renderer CORS limits and to support
- * normal result pages; browser fallback uses DuckDuckGo's Instant Answer API.
- */
+export function shouldUseDuckDuckGoFallbackForBraveError(message: string) {
+  const normalized = message.trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    /\b(?:api key|subscription token|HTTP 400|HTTP 401|HTTP 403|HTTP 422|HTTP 429|invalid Brave Search header|Could not build Brave Search URL|Could not parse Brave Search response)\b/i.test(normalized)
+  ) {
+    return false;
+  }
+
+  return /\b(?:returned no usable sources|timed out|request failed|network|dns|HTTP 5\d\d)\b/i.test(normalized);
+}
+
+// Searches DuckDuckGo through Rust on desktop and uses the Instant Answer API in browser fallback.
 export async function searchDuckDuckGo(query: string, options: SearchProviderOptions = {}): Promise<WebSearchResult[]> {
   const normalizedQuery = normalizeQuery(query);
 

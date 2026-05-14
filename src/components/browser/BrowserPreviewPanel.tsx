@@ -14,12 +14,13 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
 import type { Webview } from "@tauri-apps/api/webview";
 import { isTauriDesktopRuntime } from "../../app/tauriClient";
 import { loadPersistentString, savePersistentString } from "../../lib/appStorage";
 
 interface BrowserPreviewPanelProps {
+  closing?: boolean;
   expanded: boolean;
   initialUrl?: string;
   previewWidth: number;
@@ -75,6 +76,7 @@ const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
 const LOCAL_PROBE_TIMEOUT_MS = 900;
 const LOCAL_PREVIEW_PORTS = [5173, 5174, 3000, 3001, 4173, 4174, 4200, 4201, 4321, 4322, 5000, 5001, 5500, 6006, 8000, 8001, 8080, 8081, 1313, 4000];
 const NATIVE_BROWSER_CREATE_TIMEOUT_MS = 6_000;
+const HIDDEN_NATIVE_BROWSER_BOUNDS: NativeBrowserBounds = { height: 1, width: 1, x: 0, y: 0 };
 const SEARCH_ENGINES: SearchEngine[] = [
   {
     homeUrl: "https://www.google.com/",
@@ -103,6 +105,7 @@ const SEARCH_ENGINES: SearchEngine[] = [
 ];
 
 export function BrowserPreviewPanel({
+  closing = false,
   expanded,
   initialUrl,
   previewWidth,
@@ -113,6 +116,7 @@ export function BrowserPreviewPanel({
   onResizeStart,
   onToggleExpanded,
 }: BrowserPreviewPanelProps) {
+  const activeTabElementRef = useRef<HTMLDivElement | null>(null);
   const nativeFrameRef = useRef<HTMLDivElement>(null);
   const nativeBrowserRef = useRef<NativeBrowserInstance | null>(null);
   const nativeBrowserGenerationRef = useRef(0);
@@ -133,11 +137,24 @@ export function BrowserPreviewPanel({
   const selectedSearchEngine = getSearchEngine(searchEngineId);
   const previewTitle = formatPreviewTitle(activeUrl);
   const activeUrlIsLocal = Boolean(activeUrl && isLocalHttpUrl(activeUrl));
-  const nativeBrowserEnabled = isTauriDesktopRuntime() && Boolean(activeUrl && !activeUrlIsLocal);
+  const nativeBrowserEnabled = !closing && isTauriDesktopRuntime() && Boolean(activeUrl && !activeUrlIsLocal);
   const showFrame = Boolean(activeUrl && (!activeUrlIsLocal || activeLocalStatus === "available"));
   const activeHistoryState = getTabHistoryState(activeTab);
   const canGoBack = activeHistoryState.historyIndex > 0;
   const canGoForward = activeHistoryState.historyIndex >= 0 && activeHistoryState.historyIndex < activeHistoryState.history.length - 1;
+
+  const releaseNativeBrowserInstance = useCallback(() => {
+    const instance = nativeBrowserRef.current;
+
+    if (!instance) {
+      return;
+    }
+
+    nativeBrowserRef.current = null;
+    closeNativeBrowserInstance(instance);
+    setNativeBrowserStatus("idle");
+    setNativeBrowserError("");
+  }, []);
 
   const syncNativeBrowserBounds = useCallback(() => {
     const instance = nativeBrowserRef.current;
@@ -150,11 +167,12 @@ export function BrowserPreviewPanel({
     const bounds = getNativeBrowserBounds(frame);
 
     if (!bounds) {
+      releaseNativeBrowserInstance();
       return;
     }
 
     void setNativeBrowserBounds(instance.webview, bounds);
-  }, []);
+  }, [releaseNativeBrowserInstance]);
 
   useEffect(() => {
     saveBrowserPreviewSession(session);
@@ -171,6 +189,15 @@ export function BrowserPreviewPanel({
       void closeStaleNativeBrowserInstances();
     };
   }, []);
+
+  useEffect(() => {
+    if (!closing) {
+      return;
+    }
+
+    releaseNativeBrowserInstance();
+    void closeStaleNativeBrowserInstances();
+  }, [closing, releaseNativeBrowserInstance]);
 
   useEffect(() => {
     if (!normalizedInitialUrl) {
@@ -201,6 +228,10 @@ export function BrowserPreviewPanel({
     setAddressDraft(activeUrl ?? "");
     setAddressInvalid(false);
   }, [activeTab.id, activeUrl]);
+
+  useEffect(() => {
+    activeTabElementRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTab.id, session.tabs.length]);
 
   useEffect(() => {
     if (!activeUrl || !isLocalHttpUrl(activeUrl)) {
@@ -338,6 +369,7 @@ export function BrowserPreviewPanel({
   }
 
   function navigateToUrl(nextUrl: string) {
+    releaseNativeBrowserInstance();
     updateActiveTab((tab) => ({
       ...tab,
       ...createNavigationHistoryUpdate(tab, nextUrl),
@@ -365,6 +397,7 @@ export function BrowserPreviewPanel({
   function openNewTab() {
     const nextTab = createPreviewTab();
 
+    releaseNativeBrowserInstance();
     setSession((currentSession) => ({
       activeTabId: nextTab.id,
       tabs: [...ensureSession(currentSession).tabs, nextTab],
@@ -372,6 +405,7 @@ export function BrowserPreviewPanel({
   }
 
   function navigateHistory(delta: -1 | 1) {
+    releaseNativeBrowserInstance();
     updateActiveTab((tab) => {
       const historyState = getTabHistoryState(tab);
       const nextIndex = historyState.historyIndex + delta;
@@ -394,6 +428,10 @@ export function BrowserPreviewPanel({
   }
 
   function closeTab(tabId: string) {
+    if (tabId === activeTab.id) {
+      releaseNativeBrowserInstance();
+    }
+
     setSession((currentSession) => {
       const ensuredSession = ensureSession(currentSession);
       const currentTabIndex = ensuredSession.tabs.findIndex((tab) => tab.id === tabId);
@@ -424,11 +462,38 @@ export function BrowserPreviewPanel({
       return;
     }
 
+    releaseNativeBrowserInstance();
     updateActiveTab((tab) => ({
       ...tab,
       reloadKey: tab.reloadKey + 1,
       updatedAt: new Date().toISOString(),
     }));
+  }
+
+  function activateTab(tabId: string) {
+    if (tabId === activeTab.id) {
+      return;
+    }
+
+    releaseNativeBrowserInstance();
+    setSession((current) => ({ ...ensureSession(current), activeTabId: tabId }));
+  }
+
+  function handleClosePanel() {
+    releaseNativeBrowserInstance();
+    void closeStaleNativeBrowserInstances();
+    onClose();
+  }
+
+  function handleTabListWheel(event: WheelEvent<HTMLDivElement>) {
+    const tabList = event.currentTarget;
+
+    if (tabList.scrollWidth <= tabList.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return;
+    }
+
+    event.preventDefault();
+    tabList.scrollLeft += event.deltaY;
   }
 
   return (
@@ -454,20 +519,29 @@ export function BrowserPreviewPanel({
               <Globe2 size={14} aria-hidden="true" />
               <span>Browser</span>
             </div>
-            <div className="browser-preview-tabs" role="tablist" aria-label="Browser tabs">
+            <div className="browser-preview-tabs" role="tablist" aria-label="Browser tabs" onWheel={handleTabListWheel}>
               {session.tabs.map((tab) => {
                 const tabTitle = formatPreviewTitle(tab.url);
                 const selected = tab.id === activeTab.id;
 
                 return (
-                  <div className="browser-preview-tab" data-selected={selected} key={tab.id}>
+                  <div
+                    className="browser-preview-tab"
+                    data-selected={selected}
+                    key={tab.id}
+                    ref={(node) => {
+                      if (selected) {
+                        activeTabElementRef.current = node;
+                      }
+                    }}
+                  >
                     <button
                       className="browser-preview-tab-select"
                       type="button"
                       role="tab"
                       aria-selected={selected}
                       title={tab.url ?? "New tab"}
-                      onClick={() => setSession((current) => ({ ...ensureSession(current), activeTabId: tab.id }))}
+                      onClick={() => activateTab(tab.id)}
                     >
                       <Globe2 size={15} aria-hidden="true" />
                       <span>{tabTitle}</span>
@@ -487,7 +561,7 @@ export function BrowserPreviewPanel({
             <button type="button" aria-label={expanded ? "Restore browser" : "Expand browser"} onClick={onToggleExpanded}>
               {expanded ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
             </button>
-            <button type="button" aria-label="Close browser" onClick={onClose}>
+            <button type="button" aria-label="Close browser" onClick={handleClosePanel}>
               <X size={15} aria-hidden="true" />
             </button>
           </div>
@@ -573,7 +647,7 @@ export function BrowserPreviewPanel({
               ) : null}
             </div>
           ) : null}
-          {showFrame && !nativeBrowserEnabled ? <iframe className="browser-preview-frame" key={`${activeTab.id}-${activeTab.reloadKey}-${activeUrl}`} title={previewTitle} src={activeUrl} /> : null}
+          {showFrame && !nativeBrowserEnabled && !closing ? <iframe className="browser-preview-frame" key={`${activeTab.id}-${activeTab.reloadKey}-${activeUrl}`} title={previewTitle} src={activeUrl} /> : null}
           {!showFrame ? (
             <BrowserStartPage
               activeLocalStatus={activeUrlIsLocal ? activeLocalStatus : "available"}
@@ -1077,7 +1151,7 @@ async function probeUrl(url: string) {
       return true;
     }
   } catch {
-    // CORS, network failure, or abort — fall through to opaque probe
+    // CORS, network failure, or abort; fall through to opaque probe.
   }
 
   try {
@@ -1235,7 +1309,40 @@ function closeNativeBrowserInstance(instance: NativeBrowserInstance | null) {
     return;
   }
 
-  void instance.webview.close().catch(() => undefined);
+  void (async () => {
+    try {
+      await instance.webview.hide();
+    } catch {
+      // Hiding is best effort; the webview may already be disposed.
+    }
+
+    try {
+      await setNativeBrowserBounds(instance.webview, HIDDEN_NATIVE_BROWSER_BOUNDS);
+    } catch {
+      // The webview may already be disposed; close remains best effort.
+    }
+
+    try {
+      await instance.webview.close();
+    } catch {
+      // Retry by label below in case the original handle is already stale.
+    }
+
+    window.setTimeout(() => {
+      void closeNativeBrowserLabel(instance.label);
+    }, 80);
+  })();
+}
+
+async function closeNativeBrowserLabel(label: string) {
+  try {
+    const { Webview } = await loadTauriWebviewModule();
+    const webviews = await Webview.getAll();
+
+    await Promise.all(webviews.filter((webview) => webview.label === label).map((webview) => hideAndCloseNativeBrowser(webview)));
+  } catch {
+    // Best effort cleanup for a native webview that may already be gone.
+  }
 }
 
 async function closeStaleNativeBrowserInstances(currentLabel?: string) {
@@ -1246,17 +1353,31 @@ async function closeStaleNativeBrowserInstances(currentLabel?: string) {
     await Promise.all(
       webviews
         .filter((webview) => webview.label.startsWith("browser-preview-") && webview.label !== currentLabel)
-        .map((webview) => webview.close().catch(() => undefined)),
+        .map(hideAndCloseNativeBrowser),
     );
   } catch {
     // Best effort cleanup for native webviews that may survive a hot reload.
   }
 }
 
+async function hideAndCloseNativeBrowser(webview: Webview) {
+  try {
+    await webview.hide();
+  } catch {
+    // Continue to close even if hide is unavailable for a stale handle.
+  }
+
+  try {
+    await webview.close();
+  } catch {
+    return;
+  }
+}
+
 function getNativeBrowserBounds(element: HTMLElement): NativeBrowserBounds | null {
   const rect = element.getBoundingClientRect();
 
-  if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top)) {
+  if (!element.isConnected || !Number.isFinite(rect.left) || !Number.isFinite(rect.top) || rect.width < 2 || rect.height < 2) {
     return null;
   }
 

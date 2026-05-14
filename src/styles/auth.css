@@ -9,6 +9,41 @@
     var(--app-bg);
 }
 
+.app-startup-root {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+  background:
+    linear-gradient(135deg, rgba(17, 18, 20, 0.98), rgba(26, 29, 33, 0.98) 48%, rgba(32, 28, 24, 0.98)),
+    var(--app-bg);
+}
+
+.app-startup-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.app-startup-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+}
+
+.app-startup-mark img {
+  width: 27px;
+  height: 27px;
+}
+
 .auth-topbar {
   background: transparent;
   border-bottom-color: color-mix(in srgb, var(--line) 58%, transparent);
@@ -49,6 +84,12 @@
 }
 
 :root[data-theme="light"] .auth-root {
+  background:
+    linear-gradient(135deg, #edf0f3, #f7f8fa 48%, #ebe5de),
+    var(--app-bg);
+}
+
+:root[data-theme="light"] .app-startup-root {
   background:
     linear-gradient(135deg, #edf0f3, #f7f8fa 48%, #ebe5de),
     var(--app-bg);

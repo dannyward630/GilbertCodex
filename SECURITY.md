@@ -4,7 +4,7 @@ Gilbert Codex is a local desktop agent workspace in early development. Please re
 
 ## Supported Versions
 
-The project is pre-1.0. Security fixes target the latest `main` branch until formal releases exist.
+The project is pre-1.0. Security fixes target the latest `main` branch and the newest published alpha, currently prepared as `0.3.5`.
 
 ## Reporting A Vulnerability
 
@@ -24,7 +24,7 @@ Do not include real API keys, tokens, passwords, private workspace content, cust
 - Local accounts are for app state separation, not cloud identity or multi-user hardening.
 - The Tauri desktop app stores local account records in the app data area.
 - The browser preview uses localStorage fallbacks for development-only account and workspace state.
-- Terminal sessions and local file tools can expose private paths or file contents in logs and screenshots.
+- Terminal sessions, local file tools, Git/GitHub actions, and provider tool-bridge output can expose private paths or file contents in logs and screenshots.
 - The desktop app uses a Tauri CSP and grants only the notification commands needed for permission checks and sending notifications.
 
 ## Secret Handling
@@ -40,4 +40,4 @@ Track these before a stable release (not exhaustive):
 
 - **OS-backed secrets:** Move provider API keys, GitHub tokens, and related credentials from plain app storage into the platform secure store (Windows Credential Manager, macOS Keychain, freedesktop.org Secret Service) with a migration path for existing installs.
 - **Discord and tunnels:** Apply the same storage approach to Discord bot tokens, incoming webhook URLs, and ngrok auth tokens where they are persisted today.
-- **Local QA (Windows focus):** Smoke-test interactive terminal PTY, a short `run_terminal` invocation, and in-app browser preview against a dev server URL emitted in terminal output; confirm permission modes (`ask-first`, and so on) behave as expected after changes to local tools.
+- **Local QA (Windows focus):** Smoke-test interactive terminal PTY, a short tool-bridge terminal invocation, and in-app browser preview against a dev server URL emitted in terminal output; confirm permission modes behave as expected after changes to local tools.

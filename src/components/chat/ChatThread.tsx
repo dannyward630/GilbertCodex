@@ -26,14 +26,13 @@ interface ChatThreadProps {
   chat: ChatSummary;
   hasApiKey: boolean;
   onHeaderBlurChange?: (active: boolean) => void;
-  onOpenActivity?: () => void;
   onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onStopGeneration?: (messageId: string) => void;
 }
 
-export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpenActivity, onRequestPlanRevision, onRegenerateResponse, onResolveToolApproval, onStopGeneration }: ChatThreadProps) {
+export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onRequestPlanRevision, onRegenerateResponse, onResolveToolApproval, onStopGeneration }: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
   const headerBlurActiveRef = useRef(false);
   const programmaticScrollFrameRef = useRef<number | null>(null);
@@ -187,7 +186,6 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                   content={displayMessage.content}
                   isStreaming={message.isStreaming}
                   message={actionMessage}
-                  onOpenActivity={onOpenActivity}
                   onRequestRevision={onRequestPlanRevision}
                   onResolvePlanApproval={onResolveToolApproval}
                 />
@@ -200,9 +198,7 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onOpe
                 onRegenerateResponse={onRegenerateResponse}
                 onStopGeneration={onStopGeneration}
               />
-              {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? (
-                <ResponseRecoveryActions messageId={message.id} onOpenActivity={onOpenActivity} onRegenerateResponse={onRegenerateResponse} />
-              ) : null}
+              {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
             </MessageBlock>
           </Fragment>
         );
@@ -401,11 +397,9 @@ function stripCodeForSourceScan(value: string) {
 
 function ResponseRecoveryActions({
   messageId,
-  onOpenActivity,
   onRegenerateResponse,
 }: {
   messageId: string;
-  onOpenActivity?: () => void;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
 }) {
   return (
@@ -413,11 +407,6 @@ function ResponseRecoveryActions({
       <button type="button" onClick={() => void onRegenerateResponse?.(messageId)}>
         Continue response
       </button>
-      {onOpenActivity ? (
-        <button type="button" onClick={onOpenActivity}>
-          Open activity
-        </button>
-      ) : null}
     </div>
   );
 }

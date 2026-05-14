@@ -66,7 +66,7 @@ describe("assistant activity indicator", () => {
     });
   });
 
-  it("hides completed activity after the assistant response is done", () => {
+  it("keeps completed work visible after the assistant response is done", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Done.",
       toolCalls: [
@@ -86,10 +86,28 @@ describe("assistant activity indicator", () => {
       ],
     }), { responseStarted: true });
 
-    expect(snapshot).toBeNull();
+    expect(snapshot?.label).toBe("Edited 1 file");
+    expect(snapshot?.live).toBe(false);
+    expect(snapshot?.fileItems[0]).toMatchObject({
+      additions: 4,
+      deletions: 1,
+      estimated: false,
+      kind: "update",
+      path: "C:/repo/src/app/App.tsx",
+    });
+
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: snapshot,
+      responseStarted: true,
+      thinkingContent: "",
+      thinkingStreaming: false,
+    }));
+
+    expect(html).toContain("Edited 1 file");
+    expect(html).toContain("src/app/App.tsx");
   });
 
-  it("drops stale active tool activity once the assistant response is finished", () => {
+  it("drops stale active tool progress once the assistant response is finished", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Done.",
       toolCalls: [
@@ -108,7 +126,7 @@ describe("assistant activity indicator", () => {
     expect(snapshot).toBeNull();
   });
 
-  it("keeps completed file changes visible only while the response is still streaming", () => {
+  it("renders completed file changes while the response is still streaming", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Writing the final summary...",
       isStreaming: true,

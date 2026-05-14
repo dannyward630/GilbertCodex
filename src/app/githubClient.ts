@@ -132,14 +132,7 @@ export interface GithubPollDeviceLoginRequest {
   deviceCode: string;
 }
 
-/**
- * OAuth scopes requested by the desktop GitHub integration.
- *
- * GitHub still enforces repository, organization, SSO, and token policy checks,
- * but requesting the broad bundle up front keeps all source-control integration
- * actions usable
- * without forcing contributors through repeated reconnect flows.
- */
+// Broad GitHub OAuth scope bundle keeps integration actions usable while GitHub still enforces account policy.
 export const GITHUB_FULL_ACCESS_OAUTH_SCOPES = [
   "repo",
   "workflow",

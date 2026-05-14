@@ -25,8 +25,7 @@ export interface ExecuteToolBridgeCallsOptions {
   approval?: ToolApprovalCallback;
   calls: ToolCallRequest[];
   context: ToolExecutionContext;
-  // Cap concurrent tool executions per batch. Defaults to
-  // DEFAULT_BRIDGE_MAX_CONCURRENCY. Use 1 to force sequential execution.
+  // Caps concurrent tool executions per batch; use 1 to force sequential execution.
   maxConcurrency?: number;
   onToolCallUpdate?: (toolCall: ChatToolCall) => void;
   registry?: ToolRegistry;
@@ -40,8 +39,6 @@ export interface ToolBridgeOrchestratorOptions {
   maxLoops?: number;
   onToolCallUpdate?: (toolCall: ChatToolCall) => void;
   // Provider format used to filter tools before advertising them on each turn.
-  // Must match the adapter the caller will use to send the request, or tools
-  // advertised here may be stripped out before they reach the model.
   providerFormat?: ToolBridgeProviderFormat;
   registry?: ToolRegistry;
   send: (request: {
@@ -180,10 +177,7 @@ export async function executeToolBridgeCalls(
   const calls = options.calls;
   const total = calls.length;
 
-  // Flag duplicate call ids deterministically. First occurrence in input order
-  // is treated as the legitimate one; later occurrences are recorded as
-  // skipped so we don't double-execute and don't emit colliding tool_call_ids
-  // back to the provider.
+  // Skip duplicate call IDs so one provider call cannot execute twice or collide in result replay.
   const seen = new Map<string, number>();
   const isDuplicate = calls.map((call) => {
     const count = seen.get(call.id) ?? 0;
@@ -243,7 +237,7 @@ export async function executeToolBridgeCalls(
 }
 
 function makeDuplicateStep(call: ToolCallRequest): ToolBridgeExecutionStep {
-  const reason = `Duplicate tool call id "${call.id}" — only the first instance was executed.`;
+  const reason = `Duplicate tool call id "${call.id}"; only the first instance was executed.`;
   const result: ToolExecutionResult = { content: reason, ok: false, skippedReason: reason };
   const chatToolCall = createBridgeChatToolCall(call, undefined, result, "skipped");
 

@@ -121,7 +121,7 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             <Globe2 size={19} aria-hidden="true" />
             <div>
               <h2>Web provider</h2>
-              <p>Brave is tried first when selected; DuckDuckGo is used only if Brave cannot return usable sources.</p>
+              <p>Brave is tried first when selected; DuckDuckGo fallback is limited to transient failures or no-source results so Brave setup errors stay visible.</p>
             </div>
           </div>
 

@@ -15,10 +15,10 @@ description: Use for implementing code changes, debugging, refactoring, reposito
    Prefer existing helpers, local patterns, and current architecture. Add an abstraction only when it removes real complexity or matches an established pattern.
 
 4. Edit precisely.
-   In this reset build, model-callable edit tools are disabled. Do not claim edits were made unless the conversation already includes evidence. When giving guidance, prefer focused patches or exact replacements.
+   Use attached editing tools when they are available. Do not claim edits were made unless the conversation already includes tool evidence, a diff, or explicit user-provided proof.
 
 5. Verify proportionally.
-   Verification requires existing or user-provided command output. Recommend the narrowest useful check first, and avoid claiming it passed without evidence.
+   Run attached terminal or test tools when they are available. Otherwise recommend the narrowest useful check first, and avoid claiming it passed without evidence.
 
 6. Finish with evidence.
    Summarize changed behavior, changed files, verification, and remaining risk.

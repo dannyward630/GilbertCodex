@@ -22,10 +22,10 @@ export interface ToolResultFinalizationOptions {
 }
 
 export interface ToolResultFinalization {
-  activityContent: string;
   providerContent: string;
   providerRawCharCount: number;
   resultKind: ToolResultKind;
+  toolRecordContent: string;
   visibleFallback: string;
   visiblePolicy: ChatToolResultPolicy;
 }
@@ -45,6 +45,7 @@ const DEFAULT_POLICY: ToolResultPolicyTemplate = {
 const TOOL_RESULT_POLICIES: Record<string, ToolResultPolicyTemplate> = {
   bridge_echo: { kind: "diagnostic", mode: "allow_raw", synthesizeAfterwards: false },
   bridge_sum: { kind: "diagnostic", mode: "allow_raw", synthesizeAfterwards: false },
+  browser_preview_open: { kind: "summary", mode: "safe_summary", synthesizeAfterwards: true },
   files_append: { kind: "edit", mode: "safe_summary", synthesizeAfterwards: true },
   files_apply_patch: { kind: "edit", mode: "safe_summary", synthesizeAfterwards: true },
   files_count_lines: { kind: "summary", mode: "safe_summary", synthesizeAfterwards: true },
@@ -70,12 +71,13 @@ const TOOL_RESULT_POLICIES: Record<string, ToolResultPolicyTemplate> = {
   git_status: { kind: "git", mode: "safe_summary", synthesizeAfterwards: true },
   terminal_run: { kind: "terminal", mode: "safe_summary", synthesizeAfterwards: true },
   tool_smoke_test: { kind: "diagnostic", mode: "safe_summary", synthesizeAfterwards: false },
+  web_search: { kind: "search", mode: "safe_summary", synthesizeAfterwards: true },
 };
 
 export function finalizeToolResult(options: ToolResultFinalizationOptions): ToolResultFinalization {
   const rawContent = createToolResultContent(options.result);
   const policyTemplate = resolveToolResultPolicy(options.toolId, options.result);
-  const activityContent = rawContent;
+  const toolRecordContent = rawContent;
   const providerContent = limitToolResultContentForProvider(rawContent, options.maxProviderChars);
   const visibleFallback = createVisibleFallback({
     arguments: options.arguments,
@@ -92,10 +94,10 @@ export function finalizeToolResult(options: ToolResultFinalizationOptions): Tool
   };
 
   return {
-    activityContent,
     providerContent,
     providerRawCharCount: rawContent.length,
     resultKind: policyTemplate.kind,
+    toolRecordContent,
     visibleFallback,
     visiblePolicy,
   };
@@ -126,8 +128,8 @@ export function limitToolResultContentForProvider(content: string, maxChars: num
 
   if (limit <= 0) {
     return [
-      "[Tool output omitted from provider context because the model-visible tool-result budget was already used.]",
-      "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact content is still needed.",
+      "[Provider-visible tool output excerpt omitted because the model-visible tool-result budget was already used.]",
+      "The original tool result remains complete in the app record. Do not claim the tool or file read itself was truncated.",
     ].join("\n");
   }
 
@@ -137,8 +139,8 @@ export function limitToolResultContentForProvider(content: string, maxChars: num
 
   const marker = [
     "",
-    `[Tool output truncated for provider context after ${limit.toLocaleString("en-US")} characters.]`,
-    "The full result is saved in Activity. Use files_search or a narrower files_read/files_read_many call if exact omitted content is still needed.",
+    `[Provider-visible tool output excerpt ended after ${limit.toLocaleString("en-US")} characters.]`,
+    "The original tool result remains complete in the app record. Do not claim the tool or file read itself was truncated.",
   ].join("\n");
   const sliceLength = Math.max(0, limit - marker.length);
 
@@ -264,7 +266,7 @@ function createSafeSummary({
   if (!result.ok) {
     return [
       `${title} did not complete cleanly.`,
-      result.error || result.skippedReason || firstMeaningfulLine(rawContent) || "Review Activity for details.",
+      result.error || result.skippedReason || firstMeaningfulLine(rawContent) || "Review the tool result details.",
     ].filter(Boolean).join("\n");
   }
 
@@ -272,7 +274,7 @@ function createSafeSummary({
     return [
       path ? `Read \`${path}\`.` : "Read the requested file content.",
       summarizeSize(rawContent),
-      "Use the saved tool result to answer the request; do not paste the raw file body unless the user explicitly asked for it.",
+      "The raw file body is tool evidence for the next synthesis pass, not a final chat answer.",
     ].filter(Boolean).join("\n");
   }
 
@@ -280,7 +282,7 @@ function createSafeSummary({
     return [
       `${title} completed.`,
       createSummaryDetail(rawContent),
-      "Use the saved result to answer the request instead of pasting the raw tool recap.",
+      "The raw tool recap is evidence for the next synthesis pass, not a final chat answer.",
     ].filter(Boolean).join("\n");
   }
 
@@ -288,7 +290,7 @@ function createSafeSummary({
     return [
       `${title} completed.`,
       createSummaryDetail(rawContent),
-      "Use the matching paths and line references from the saved result to answer the request.",
+      "The matching paths and line references are evidence for the next synthesis pass.",
     ].filter(Boolean).join("\n");
   }
 
@@ -303,7 +305,7 @@ function createSafeSummary({
     return [
       `${title} completed.`,
       createSummaryDetail(rawContent),
-      "Use the saved Git result to answer with a concise status, diff, or next step.",
+      "The Git result is evidence for the next synthesis pass, not a final chat answer.",
     ].filter(Boolean).join("\n");
   }
 
@@ -397,6 +399,15 @@ function summarizeSize(content: string) {
 
 function matchesToolResultSignature(content: string, toolId?: string, resultKind?: ToolResultKind) {
   const normalized = content.toLowerCase();
+
+  if (
+    normalized.includes("not a final chat answer") ||
+    normalized.includes("tool evidence for the next synthesis pass") ||
+    normalized.includes("use the saved tool result to answer the request") ||
+    normalized.includes("use the saved result to answer the request")
+  ) {
+    return true;
+  }
 
   if (toolId === "files_tree_summary" || resultKind === "summary") {
     if (normalized.includes("workspace tree summary for")) {

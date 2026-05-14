@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createActivityThinkingNotes } from "./thinkingActivity";
 
-describe("thinking activity summaries", () => {
+describe("thinking summaries", () => {
   it("keeps a detailed high-level trail without dumping raw reasoning", () => {
     const notes = createActivityThinkingNotes(
       [

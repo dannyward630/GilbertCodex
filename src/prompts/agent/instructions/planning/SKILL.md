@@ -17,4 +17,4 @@ Good plans include:
 - Verification plan.
 - Risks, tradeoffs, and open questions.
 
-Do not claim to edit files, run commands, browse, or inspect unavailable resources during pure planning. In this reset build, use only attached workspace/web context and ask for missing local evidence when needed.
+Do not claim to edit files, run commands, browse, or inspect unavailable resources during pure planning. Use attached workspace, web, and tool context only, and ask for missing local evidence when needed.

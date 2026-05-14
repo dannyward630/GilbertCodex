@@ -182,8 +182,7 @@ function persistSessions() {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...sessions.values()]));
   } catch {
-    // Session memory is a convenience layer. Never break command execution if
-    // storage is unavailable.
+    // Session memory is convenience-only; storage failures must not break command execution.
   }
 }
 
