@@ -13,6 +13,8 @@ interface OpenableImageProps {
   alt?: string;
   caption?: string;
   className?: string;
+  downloadName?: string;
+  showViewerCaption?: boolean;
   src: string;
 }
 
@@ -79,10 +81,14 @@ export function MessageArtifacts({ artifacts }: { artifacts?: ChatArtifact[] }) 
     return null;
   }
 
+  const imageArtifacts = artifacts.filter((artifact) => isImageArtifact(artifact) && artifact.url);
+  const otherArtifacts = artifacts.filter((artifact) => !imageArtifacts.includes(artifact));
+
   return (
     <>
-      <div className="message-artifacts" aria-label="Generated artifacts">
-        {artifacts.map((artifact, index) => (
+      <div className="message-artifacts" aria-label="Generated artifacts" data-has-images={imageArtifacts.length > 0}>
+        {imageArtifacts.length > 0 ? <GeneratedImageGrid artifacts={imageArtifacts} /> : null}
+        {otherArtifacts.map((artifact, index) => (
           <ArtifactCard
             artifact={artifact}
             key={artifact.id ?? `${artifact.title}-${index}`}
@@ -99,12 +105,17 @@ export function MessageArtifacts({ artifacts }: { artifacts?: ChatArtifact[] }) 
 
 function ArtifactCard({ artifact, onPreview }: { artifact: ChatArtifact; onPreview: () => void }) {
   const isPdf = isPdfArtifact(artifact);
+  const isImage = isImageArtifact(artifact);
   const detail = artifact.detail ?? formatArtifactKind(artifact.kind);
+
+  if (isImage && artifact.url) {
+    return <GeneratedImageTile artifact={artifact} />;
+  }
 
   return (
     <article className="message-artifact-card" data-kind={isPdf ? "pdf" : artifact.kind ?? "file"}>
       <div className="message-artifact-icon" aria-hidden="true">
-        <FileText size={20} />
+        {isImage ? <ImageIcon size={20} /> : <FileText size={20} />}
       </div>
       <div className="message-artifact-body">
         <div>
@@ -133,6 +144,44 @@ function ArtifactCard({ artifact, onPreview }: { artifact: ChatArtifact; onPrevi
         </div>
       </div>
     </article>
+  );
+}
+
+function GeneratedImageGrid({ artifacts }: { artifacts: ChatArtifact[] }) {
+  return (
+    <div className="generated-image-grid" data-count={Math.min(artifacts.length, 4)} aria-label="Generated images">
+      {artifacts.map((artifact, index) => (
+        <GeneratedImageTile artifact={artifact} key={artifact.id ?? `${artifact.title}-${index}`} />
+      ))}
+    </div>
+  );
+}
+
+function GeneratedImageTile({ artifact }: { artifact: ChatArtifact }) {
+  if (!artifact.url) {
+    return null;
+  }
+
+  const aspect = artifact.width && artifact.height
+    ? `${artifact.width} / ${artifact.height}`
+    : undefined;
+  const style = aspect
+    ? ({ "--generated-image-aspect": aspect } as CSSProperties)
+    : undefined;
+
+  return (
+    <figure className="generated-image-tile" style={style}>
+      <OpenableImage
+        alt="Generated image"
+        className="generated-image-preview"
+        downloadName={artifact.title}
+        showViewerCaption={false}
+        src={artifact.url}
+      />
+      <a className="generated-image-download" href={artifact.url} download={artifact.title} aria-label="Download generated image" title="Download">
+        <Download size={17} aria-hidden="true" />
+      </a>
+    </figure>
   );
 }
 
@@ -443,6 +492,17 @@ function isPdfArtifact(artifact: ChatArtifact) {
   return artifact.title.toLowerCase().endsWith(".pdf") || artifact.url?.startsWith("data:application/pdf") || /pdf/i.test(artifact.detail ?? "");
 }
 
+function isImageArtifact(artifact: ChatArtifact) {
+  const title = artifact.title.toLowerCase();
+  const mimeType = artifact.mimeType?.toLowerCase() ?? "";
+  const url = artifact.url?.toLowerCase() ?? "";
+
+  return artifact.kind === "image"
+    || mimeType.startsWith("image/")
+    || url.startsWith("data:image/")
+    || /\.(?:png|jpe?g|webp|gif|avif|svg)$/.test(title);
+}
+
 function formatArtifactKind(kind?: ChatArtifact["kind"]) {
   if (kind === "document") {
     return "Generated document";
@@ -459,7 +519,14 @@ function formatArtifactKind(kind?: ChatArtifact["kind"]) {
   return "Generated artifact";
 }
 
-export function OpenableImage({ alt = "Image attachment", caption, className, src }: OpenableImageProps) {
+export function OpenableImage({
+  alt = "Image attachment",
+  caption,
+  className,
+  downloadName,
+  showViewerCaption = true,
+  src,
+}: OpenableImageProps) {
   const [viewerOpen, setViewerOpen] = useState(false);
 
   return (
@@ -470,7 +537,16 @@ export function OpenableImage({ alt = "Image attachment", caption, className, sr
           <Maximize2 size={15} aria-hidden="true" />
         </span>
       </button>
-      {viewerOpen ? <ImageLightbox alt={alt} caption={caption} src={src} onClose={() => setViewerOpen(false)} /> : null}
+      {viewerOpen ? (
+        <ImageLightbox
+          alt={alt}
+          caption={caption}
+          downloadName={downloadName}
+          showCaption={showViewerCaption}
+          src={src}
+          onClose={() => setViewerOpen(false)}
+        />
+      ) : null}
     </>
   );
 }
@@ -486,7 +562,21 @@ function MessageImageTile({ attachment }: { attachment: ChatImageAttachment }) {
   return <OpenableImage alt={attachment.name} caption={details ? `${attachment.name} - ${details}` : attachment.name} src={attachment.dataUrl} />;
 }
 
-function ImageLightbox({ alt, caption, onClose, src }: { alt: string; caption?: string; onClose: () => void; src: string }) {
+function ImageLightbox({
+  alt,
+  caption,
+  downloadName,
+  onClose,
+  showCaption = true,
+  src,
+}: {
+  alt: string;
+  caption?: string;
+  downloadName?: string;
+  onClose: () => void;
+  showCaption?: boolean;
+  src: string;
+}) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -502,13 +592,17 @@ function ImageLightbox({ alt, caption, onClose, src }: { alt: string; caption?: 
   return (
     <div className="image-viewer-backdrop" role="dialog" aria-modal="true" aria-label={alt} onClick={onClose}>
       <div className="image-viewer" onClick={(event) => event.stopPropagation()}>
-        <header className="image-viewer-toolbar">
-          <span>
-            <ImageIcon size={16} aria-hidden="true" />
-            {caption || alt}
-          </span>
+        <header className="image-viewer-toolbar" data-compact={!showCaption}>
+          {showCaption ? (
+            <span>
+              <ImageIcon size={16} aria-hidden="true" />
+              {caption || alt}
+            </span>
+          ) : (
+            <span className="sr-only">{alt}</span>
+          )}
           <div>
-            <a href={src} download={alt || "image"} aria-label="Download image" title="Download image">
+            <a href={src} download={downloadName || alt || "image"} aria-label="Download image" title="Download image">
               <Download size={17} aria-hidden="true" />
             </a>
             <button type="button" aria-label="Close image viewer" title="Close" onClick={onClose}>

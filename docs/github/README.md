@@ -130,7 +130,7 @@ Important details:
 
 GitHub operations are available when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, branch reads, API commits, draft pull requests, release helpers, workflow listing, workflow dispatch, and workflow-run inspection should all route through the Tauri command layer instead of the GitHub CLI.
 
-For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.5 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
+For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.5.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 
 ## Repository Webhooks
 

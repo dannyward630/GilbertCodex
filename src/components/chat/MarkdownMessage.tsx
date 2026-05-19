@@ -178,9 +178,9 @@ function sanitizeMarkdownImageSrc(src?: string) {
 }
 
 export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {
-  const displayContent = useMemo(() => normalizeMarkdownForDisplay(content), [content]);
+  const displayContent = useMemo(() => normalizeMarkdownForDisplay(content, { final: !isStreaming }), [content, isStreaming]);
 
-  if (!content) {
+  if (!displayContent.trim()) {
     return null;
   }
 

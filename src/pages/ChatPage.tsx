@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { GitBranch, Grid2X2, Sparkles } from "lucide-react";
+import { GitBranch, Grid2X2, Image as ImageIcon, Sparkles } from "lucide-react";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
@@ -69,6 +69,7 @@ interface ChatPageProps {
   projects: ProjectSummary[];
   queuedMessageCount?: number;
   heldQueuedMessageIds?: string[];
+  onImageGenerationChange: (enabled: boolean) => void;
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
   thinking: ThinkingSettings;
@@ -132,6 +133,7 @@ export function ChatPage({
   projects,
   queuedMessageCount = 0,
   heldQueuedMessageIds = [],
+  onImageGenerationChange,
   onThinkingChange,
   onWebSearchChange,
   thinking,
@@ -586,6 +588,7 @@ export function ChatPage({
       queuedMessageCount={Math.max(queuedMessageCount, queuedMessages.length)}
       queuedMessages={queuedMessages}
       heldQueuedMessageIds={heldQueuedMessageIds}
+      onImageGenerationChange={onImageGenerationChange}
       onThinkingChange={onThinkingChange}
       onWebSearchChange={onWebSearchChange}
       thinking={thinking}
@@ -747,6 +750,10 @@ const starterSuggestions = [
   {
     icon: Sparkles,
     label: "Explain this project to me",
+  },
+  {
+    icon: ImageIcon,
+    label: "Generate an image of a clean app icon for this project",
   },
   {
     icon: Grid2X2,

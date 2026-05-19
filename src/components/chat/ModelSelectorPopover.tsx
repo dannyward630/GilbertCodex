@@ -49,7 +49,7 @@ interface ModelSelectorEntryGroup {
   label: string;
 }
 
-const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["lmstudio", "ollama", "vllm"]);
+const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["9router", "lmstudio", "ollama", "vllm"]);
 const RECOMMENDED_HOSTED_MODEL_ORDER = [
   OPENROUTER_FREE_AUTO_MODEL,
   LAGUNA_M1_FREE_MODEL,
@@ -286,35 +286,11 @@ function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>, expanded: b
       const bounds = getModelSelectorBounds(anchor);
       const gap = 10;
       const availableWidth = Math.max(280, bounds.right - bounds.left);
-      const emptyChatLayout = Boolean(anchor.closest('.conversation-main[data-empty="true"]'));
-      const preferredWidth = expanded ? (emptyChatLayout ? 760 : 720) : 368;
+      const preferredWidth = expanded ? 720 : 368;
       const width = Math.min(preferredWidth, availableWidth);
       const preferredLeft = anchorRect.right - width;
       const left = clamp(preferredLeft, bounds.left, bounds.right - width);
       const viewportHeight = Math.max(320, bounds.bottom - bounds.top);
-
-      if (emptyChatLayout) {
-        const maxHeight = Math.min(expanded ? 720 : 430, viewportHeight);
-        const centeredLeft = clamp(anchorRect.left + anchorRect.width / 2 - width / 2, bounds.left, bounds.right - width);
-
-        setPosition({
-          layout: "empty",
-          placement: "viewport",
-          style: {
-            height: expanded ? `${maxHeight}px` : undefined,
-            left: `${centeredLeft}px`,
-            maxHeight: `${maxHeight}px`,
-            maxWidth: `${width}px`,
-            opacity: 1,
-            pointerEvents: "auto",
-            position: "fixed",
-            right: "auto",
-            top: `${bounds.top}px`,
-            width: `${width}px`,
-          },
-        });
-        return;
-      }
 
       const availableAbove = anchorRect.top - bounds.top - gap;
       const availableBelow = bounds.bottom - anchorRect.bottom - gap;

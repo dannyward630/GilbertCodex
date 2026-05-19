@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env, fs,
@@ -22,12 +23,16 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const NINE_ROUTER_ADDR: &str = "127.0.0.1:20128";
 const NINE_ROUTER_BASE_URL: &str = "http://127.0.0.1:20128/v1";
 const NINE_ROUTER_DASHBOARD_URL: &str = "http://127.0.0.1:20128";
-const NINE_ROUTER_STARTUP_WAIT_MS: u64 = 8_000;
+const NINE_ROUTER_STARTUP_WAIT_MS: u64 = 20_000;
 const NINE_ROUTER_HTTP_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const NINE_ROUTER_HTTP_TIMEOUT_MS: u64 = 180_000;
 const NINE_ROUTER_HTTP_MAX_TIMEOUT_MS: u64 = 600_000;
 const NINE_ROUTER_OAUTH_CALLBACK_TIMEOUT_MS: u64 = 300_000;
 const NINE_ROUTER_REPO_URL: &str = "https://github.com/decolua/9router.git";
+const NINE_ROUTER_CLI_TOKEN_HEADER: &str = "x-9r-cli-token";
+const NINE_ROUTER_CLI_TOKEN_SALT: &str = "9r-cli-auth";
+const NINE_ROUTER_UNINSTALL_REMOVE_RETRY_COUNT: usize = 5;
+const NINE_ROUTER_UNINSTALL_STOP_RETRY_COUNT: usize = 3;
 
 #[derive(Clone, Default)]
 pub struct NineRouterLocalState {
@@ -201,11 +206,16 @@ pub async fn nine_router_local_status(
 #[tauri::command]
 pub async fn nine_router_local_install(
     app: AppHandle,
+    state: tauri::State<'_, NineRouterLocalState>,
     on_event: Channel<NineRouterInstallEvent>,
 ) -> Result<NineRouterLocalStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || install_nine_router_blocking(app, on_event))
-        .await
-        .map_err(|error| format!("9Router Local install task failed: {error}"))?
+    let state = state.inner().clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        install_nine_router_blocking(app, &state, on_event)
+    })
+    .await
+    .map_err(|error| format!("9Router Local install task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -272,10 +282,24 @@ pub async fn nine_router_local_stop(
 }
 
 #[tauri::command]
+pub async fn nine_router_local_uninstall(
+    app: AppHandle,
+    state: tauri::State<'_, NineRouterLocalState>,
+) -> Result<NineRouterLocalStatus, String> {
+    let state = state.inner().clone();
+
+    tauri::async_runtime::spawn_blocking(move || uninstall_nine_router_blocking(&app, &state))
+        .await
+        .map_err(|error| format!("Subscription sandbox uninstall task failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn nine_router_local_http(
+    app: AppHandle,
     request: NineRouterHttpRequest,
 ) -> Result<NineRouterHttpResponse, String> {
     let url = validate_nine_router_http_url(&request.url)?;
+    let should_attach_cli_token = should_attach_nine_router_cli_token(&url);
     let method = parse_nine_router_http_method(&request.method)?;
     let timeout_ms = request
         .timeout_ms
@@ -288,9 +312,13 @@ pub async fn nine_router_local_http(
         .map_err(|error| format!("Could not create 9Router Local HTTP client: {error}"))?;
     let mut native_request = client.request(method, url);
 
+    let mut has_cli_token_header = false;
     for (name, value) in request.headers.unwrap_or_default() {
         let trimmed_name = name.trim();
         let normalized_name = trimmed_name.to_ascii_lowercase();
+        if normalized_name == NINE_ROUTER_CLI_TOKEN_HEADER {
+            has_cli_token_header = true;
+        }
 
         if matches!(
             normalized_name.as_str(),
@@ -304,6 +332,11 @@ pub async fn nine_router_local_http(
         let header_value = reqwest::header::HeaderValue::from_str(&value)
             .map_err(|_| format!("9Router Local request header value is invalid for {name}"))?;
         native_request = native_request.header(header_name, header_value);
+    }
+
+    if should_attach_cli_token && !has_cli_token_header {
+        native_request =
+            native_request.header(NINE_ROUTER_CLI_TOKEN_HEADER, nine_router_cli_token(&app)?);
     }
 
     if let Some(body) = request.body {
@@ -330,10 +363,12 @@ pub async fn nine_router_local_http(
 
 #[tauri::command]
 pub async fn nine_router_local_stream(
+    app: AppHandle,
     request: NineRouterHttpRequest,
     on_event: Channel<NineRouterHttpStreamEvent>,
 ) -> Result<(), String> {
     let url = validate_nine_router_http_url(&request.url)?;
+    let should_attach_cli_token = should_attach_nine_router_cli_token(&url);
     let method = parse_nine_router_http_method(&request.method)?;
     let timeout_ms = request
         .timeout_ms
@@ -346,9 +381,13 @@ pub async fn nine_router_local_stream(
         .map_err(|error| format!("Could not create 9Router Local HTTP client: {error}"))?;
     let mut native_request = client.request(method, url);
 
+    let mut has_cli_token_header = false;
     for (name, value) in request.headers.unwrap_or_default() {
         let trimmed_name = name.trim();
         let normalized_name = trimmed_name.to_ascii_lowercase();
+        if normalized_name == NINE_ROUTER_CLI_TOKEN_HEADER {
+            has_cli_token_header = true;
+        }
 
         if matches!(
             normalized_name.as_str(),
@@ -362,6 +401,11 @@ pub async fn nine_router_local_stream(
         let header_value = reqwest::header::HeaderValue::from_str(&value)
             .map_err(|_| format!("9Router Local request header value is invalid for {name}"))?;
         native_request = native_request.header(header_name, header_value);
+    }
+
+    if should_attach_cli_token && !has_cli_token_header {
+        native_request =
+            native_request.header(NINE_ROUTER_CLI_TOKEN_HEADER, nine_router_cli_token(&app)?);
     }
 
     if let Some(body) = request.body {
@@ -873,8 +917,15 @@ fn stop_nine_router_processes(
 
 fn install_nine_router_blocking(
     app: AppHandle,
+    state: &NineRouterLocalState,
     on_event: Channel<NineRouterInstallEvent>,
 ) -> Result<NineRouterLocalStatus, String> {
+    let _operation_guard = state
+        .shared
+        .operation
+        .lock()
+        .map_err(|_| "Could not lock the subscription install operation.".to_string())?;
+
     let _ = on_event.send(NineRouterInstallEvent::Started {
         message: "Preparing 9Router Local install.".to_string(),
     });
@@ -944,10 +995,10 @@ fn install_nine_router_blocking(
 
     let status = create_status(
         &app,
-        &NineRouterLocalState::default(),
+        state,
         is_nine_router_listening(),
         false,
-        None,
+        current_child_pid(state)?,
         "9Router Local is installed.",
     );
     let _ = on_event.send(NineRouterInstallEvent::Finished {
@@ -955,6 +1006,56 @@ fn install_nine_router_blocking(
     });
 
     Ok(status)
+}
+
+fn uninstall_nine_router_blocking(
+    app: &AppHandle,
+    state: &NineRouterLocalState,
+) -> Result<NineRouterLocalStatus, String> {
+    let _operation_guard = state
+        .shared
+        .operation
+        .lock()
+        .map_err(|_| "Could not lock the subscription uninstall operation.".to_string())?;
+
+    let _ = write_preferences(app, &NineRouterLocalPreferences { auto_start: false });
+    for attempt in 0..NINE_ROUTER_UNINSTALL_STOP_RETRY_COUNT {
+        let _ = stop_nine_router_processes(app, state)?;
+        if wait_for_nine_router_shutdown(Duration::from_millis(1_500)) {
+            break;
+        }
+
+        if attempt + 1 < NINE_ROUTER_UNINSTALL_STOP_RETRY_COUNT {
+            thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    remove_app_data_path_if_exists(app, &nine_router_install_dir(app)?, "subscription runtime")?;
+    remove_app_data_path_if_exists(app, &nine_router_data_dir(app)?, "subscription data")?;
+    remove_app_data_path_if_exists(
+        app,
+        &nine_router_preferences_path(app)?,
+        "subscription preferences",
+    )?;
+    remove_app_data_path_if_exists(
+        app,
+        &nine_router_pid_path(app)?,
+        "subscription process marker",
+    )?;
+
+    let running = is_nine_router_listening();
+    Ok(create_status(
+        app,
+        state,
+        running,
+        false,
+        current_child_pid(state)?,
+        if running {
+            "Sandbox subscriptions were removed, but another local process is still using the subscription port."
+        } else {
+            "Sandbox subscriptions were uninstalled."
+        },
+    ))
 }
 
 fn create_status(
@@ -966,22 +1067,15 @@ fn create_status(
     message: &str,
 ) -> NineRouterLocalStatus {
     let install_dir = nine_router_install_dir(app).ok();
-    let bundled_runtime_dir = bundled_nine_router_dir(app);
-    let bundled_installed = bundled_runtime_dir
-        .as_ref()
-        .and_then(|path| resolve_bundled_launch_spec(path))
-        .is_some();
-    let data_dir = nine_router_data_dir(app).ok();
-    let user_installed = install_dir
+    let data_dir = nine_router_data_dir(app).ok().filter(|path| path.exists());
+    let installed = install_dir
         .as_ref()
         .map(|path| path.join("package.json").is_file())
         .unwrap_or(false);
-    let user_built = install_dir
+    let built = install_dir
         .as_ref()
         .map(|path| path.join(".next").is_dir())
         .unwrap_or(false);
-    let installed = bundled_installed || user_installed;
-    let built = bundled_installed || user_built;
     let tool_versions = cached_tool_versions(state);
 
     NineRouterLocalStatus {
@@ -994,11 +1088,10 @@ fn create_status(
         git_version: tool_versions.git,
         install_dir: install_dir
             .as_ref()
-            .filter(|_| user_installed)
-            .or(bundled_runtime_dir.as_ref().filter(|_| bundled_installed))
+            .filter(|path| path.exists())
             .map(|path| path_to_string(path)),
         installed,
-        launch_supported: resolve_launch_spec(app).is_some(),
+        launch_supported: installed && resolve_launch_spec(app).is_some(),
         launched,
         message: message.to_string(),
         node_version: tool_versions.node,
@@ -1080,11 +1173,44 @@ fn validate_nine_router_http_url(raw_url: &str) -> Result<reqwest::Url, String> 
     Ok(url)
 }
 
+fn should_attach_nine_router_cli_token(url: &reqwest::Url) -> bool {
+    let path = url.path();
+    path == "/api" || path.starts_with("/api/")
+}
+
+fn nine_router_cli_token(app: &AppHandle) -> Result<String, String> {
+    let raw_machine_id = read_or_create_nine_router_machine_id(app)?;
+    let digest = Sha256::digest(format!("{raw_machine_id}{NINE_ROUTER_CLI_TOKEN_SALT}").as_bytes());
+    Ok(format!("{digest:x}").chars().take(16).collect())
+}
+
+fn read_or_create_nine_router_machine_id(app: &AppHandle) -> Result<String, String> {
+    let data_dir = nine_router_data_dir(app)?;
+    let machine_id_path = data_dir.join("machine-id");
+
+    if let Ok(existing) = fs::read_to_string(&machine_id_path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("Could not prepare 9Router machine id folder: {error}"))?;
+    let generated = uuid::Uuid::new_v4().to_string();
+    fs::write(&machine_id_path, &generated)
+        .map_err(|error| format!("Could not save 9Router machine id: {error}"))?;
+    Ok(generated)
+}
+
 fn parse_nine_router_http_method(method: &str) -> Result<reqwest::Method, String> {
     match method.trim().to_ascii_uppercase().as_str() {
+        "DELETE" => Ok(reqwest::Method::DELETE),
         "GET" => Ok(reqwest::Method::GET),
         "POST" => Ok(reqwest::Method::POST),
-        _ => Err("9Router Local only supports GET and POST requests from Gilbert.".to_string()),
+        _ => Err(
+            "9Router Local only supports GET, POST, and DELETE requests from Gilbert.".to_string(),
+        ),
     }
 }
 
@@ -1125,12 +1251,6 @@ fn resolve_launch_spec(app: &AppHandle) -> Option<LaunchSpec> {
         });
     }
 
-    if let Some(spec) =
-        bundled_nine_router_dir(app).and_then(|path| resolve_bundled_launch_spec(&path))
-    {
-        return Some(spec);
-    }
-
     let install_dir = nine_router_install_dir(app).ok()?;
     if install_dir.join("package.json").is_file() && install_dir.join(".next").is_dir() {
         return Some(LaunchSpec {
@@ -1141,76 +1261,6 @@ fn resolve_launch_spec(app: &AppHandle) -> Option<LaunchSpec> {
     }
 
     None
-}
-
-fn resolve_bundled_launch_spec(bundled_dir: &Path) -> Option<LaunchSpec> {
-    for candidate in bundled_candidates(bundled_dir) {
-        if candidate.is_file() {
-            return Some(LaunchSpec {
-                args: Vec::new(),
-                cwd: candidate.parent().map(Path::to_path_buf),
-                program: candidate,
-            });
-        }
-    }
-
-    let node_program = bundled_node_program(bundled_dir)?;
-    let cli_path = bundled_dir
-        .join("package")
-        .join("node_modules")
-        .join("9router")
-        .join("cli.js");
-
-    if cli_path.is_file() {
-        return Some(LaunchSpec {
-            args: vec![
-                path_to_string(&cli_path),
-                "--no-browser".to_string(),
-                "--skip-update".to_string(),
-                "--port".to_string(),
-                "20128".to_string(),
-            ],
-            cwd: cli_path.parent().map(Path::to_path_buf),
-            program: node_program,
-        });
-    }
-
-    for server_path in bundled_standalone_server_candidates(bundled_dir) {
-        if server_path.is_file() {
-            return Some(LaunchSpec {
-                args: vec![path_to_string(&server_path)],
-                cwd: server_path.parent().map(Path::to_path_buf),
-                program: node_program,
-            });
-        }
-    }
-
-    None
-}
-
-fn bundled_nine_router_dir(app: &AppHandle) -> Option<PathBuf> {
-    Some(app.path().resource_dir().ok()?.join("9router"))
-}
-
-fn bundled_node_program(bundled_dir: &Path) -> Option<PathBuf> {
-    let executable = if cfg!(windows) { "node.exe" } else { "node" };
-    [
-        bundled_dir.join("node").join(executable),
-        bundled_dir.join(executable),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
-
-fn bundled_standalone_server_candidates(bundled_dir: &Path) -> Vec<PathBuf> {
-    vec![
-        bundled_dir.join("app").join("server.js"),
-        bundled_dir
-            .join("app")
-            .join(".next")
-            .join("standalone")
-            .join("server.js"),
-    ]
 }
 
 fn current_child_pid(state: &NineRouterLocalState) -> Result<Option<u32>, String> {
@@ -1259,6 +1309,63 @@ fn nine_router_pid_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|path| path.join("nine-router-local.pid"))
         .map_err(|error| format!("Could not resolve app data folder: {error}"))
+}
+
+fn remove_app_data_path_if_exists(app: &AppHandle, path: &Path, label: &str) -> Result<(), String> {
+    let mut last_error = None;
+
+    for attempt in 0..NINE_ROUTER_UNINSTALL_REMOVE_RETRY_COUNT {
+        match remove_app_data_path_once(app, path, label) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < NINE_ROUTER_UNINSTALL_REMOVE_RETRY_COUNT {
+                    thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| format!("Could not remove {label}.")))
+}
+
+fn remove_app_data_path_once(app: &AppHandle, path: &Path, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve app data folder: {error}"))?;
+    fs::create_dir_all(&app_data_dir)
+        .map_err(|error| format!("Could not prepare app data folder: {error}"))?;
+
+    let app_data_root = fs::canonicalize(&app_data_dir)
+        .map_err(|error| format!("Could not inspect app data folder: {error}"))?;
+    let target =
+        fs::canonicalize(path).map_err(|error| format!("Could not inspect {label}: {error}"))?;
+
+    if !target.starts_with(&app_data_root) {
+        return Err(format!(
+            "Refusing to remove {label} outside Gilbert app data."
+        ));
+    }
+
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {label}: {error}"))?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() || metadata.is_file() {
+        fs::remove_file(path).map_err(|error| format!("Could not remove {label}: {error}"))?;
+        return Ok(());
+    }
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| format!("Could not remove {label}: {error}"))?;
+    }
+
+    Ok(())
 }
 
 fn read_preferences(app: &AppHandle) -> NineRouterLocalPreferences {
@@ -1582,19 +1689,6 @@ fn format_exit_code(output: &Output) -> String {
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
-}
-
-fn bundled_candidates(bundled_dir: &std::path::Path) -> Vec<PathBuf> {
-    let executable = if cfg!(windows) {
-        "9router.exe"
-    } else {
-        "9router"
-    };
-
-    vec![
-        bundled_dir.join(executable),
-        bundled_dir.with_file_name(executable),
-    ]
 }
 
 fn parse_launch_args(value: Option<String>) -> Vec<String> {

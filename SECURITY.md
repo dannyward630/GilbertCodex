@@ -4,7 +4,7 @@ Gilbert Codex is a local desktop agent workspace in early development. Please re
 
 ## Supported Versions
 
-The project is pre-1.0. Security fixes target the latest `main` branch and the newest published alpha, currently prepared as `0.3.5`.
+The project is pre-1.0. Security fixes target the latest `main` branch and the newest published alpha, currently prepared as `0.5.0`.
 
 ## Reporting A Vulnerability
 

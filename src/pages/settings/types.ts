@@ -39,6 +39,7 @@ export interface SettingsPageProps {
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onPersonalizationChange: (settings: AppPersonalizationSettings) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
+  onSubscriptionSandboxUninstalled?: (settings: ProviderSettings) => void;
   personalization: AppPersonalizationSettings;
   projects: ProjectSummary[];
   settings: ProviderSettings;

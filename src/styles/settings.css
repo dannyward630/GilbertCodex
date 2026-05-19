@@ -978,26 +978,58 @@
   overflow-wrap: anywhere;
 }
 
-.settings-install-log {
+.settings-install-progress {
   display: grid;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
-  max-height: 300px;
-  overflow: auto;
-  padding: 10px;
+  padding: 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--field-bg);
 }
 
-.settings-install-log code {
+.settings-install-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   min-width: 0;
-  white-space: pre-wrap;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.45;
+}
+
+.settings-install-progress-heading strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
   overflow-wrap: anywhere;
+}
+
+.settings-install-progress-heading span,
+.settings-install-progress small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-install-progress-track {
+  width: 100%;
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.settings-install-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8ee6b0, #79c9ff);
+  transition: width 180ms ease;
+}
+
+.settings-install-progress[data-status="error"] .settings-install-progress-track span {
+  background: linear-gradient(90deg, #ff8a80, #ffd27a);
 }
 
 .settings-danger-button {
@@ -1024,6 +1056,19 @@
 .settings-danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.settings-danger-card {
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--danger) 8%, transparent), transparent 70%),
+    var(--surface-panel);
+}
+
+.settings-danger-card .settings-card-heading > svg {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .database-settings-grid {

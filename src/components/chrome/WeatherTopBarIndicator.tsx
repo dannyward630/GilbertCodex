@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { fetchWeatherJson } from "../../app/tauriClient";
+import { scheduleIdleTask } from "../../lib/idleTask";
 import { MapboxWeatherMap } from "../weather/MapboxWeatherMap";
 import { loadOpenMeteoWeather, type OpenMeteoWeatherSnapshot } from "../../services/openMeteoWeather";
 import { resolveWeatherSourcePlan } from "../../services/weatherProviders";
@@ -65,6 +66,10 @@ const WEATHER_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 const WEATHER_STALE_REFRESH_MS = WEATHER_REFRESH_INTERVAL_MS - 5_000;
 const WEATHER_HEARTBEAT_MS = 30_000;
 
+interface RefreshWeatherOptions {
+  allowLocationPrompt?: boolean;
+}
+
 interface WeatherTopBarIndicatorProps {
   onOpenRadar?: () => void;
 }
@@ -85,7 +90,7 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
   const mountedRef = useRef(true);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const refreshWeather = useCallback(async () => {
+  const refreshWeather = useCallback(async (options: RefreshWeatherOptions = {}) => {
     if (refreshInFlightRef.current) {
       return;
     }
@@ -97,7 +102,7 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
     setState((current) => ({ ...current, loading: true }));
 
     try {
-      const location = loadStoredWeatherLocation() ?? await requestAndRememberWeatherLocation();
+      const location = loadStoredWeatherLocation() ?? (options.allowLocationPrompt ? await requestAndRememberWeatherLocation() : null);
 
       if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
@@ -108,7 +113,9 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
           ...EMPTY_WEATHER_STATE,
           error: "Add a weather location so the desktop app can choose the right weather source.",
         });
-        setOpen(true);
+        if (options.allowLocationPrompt) {
+          setOpen(true);
+        }
         return;
       }
 
@@ -124,7 +131,9 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
           ...EMPTY_WEATHER_STATE,
           error: "Weather could not load in the desktop app. Check the saved location, then refresh.",
         });
-        setOpen(true);
+        if (options.allowLocationPrompt) {
+          setOpen(true);
+        }
       }
     } finally {
       if (requestId === requestIdRef.current) {
@@ -157,11 +166,11 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
     void refreshWeather();
   }, [locationDraft.countryCode, locationDraft.latitude, locationDraft.longitude, refreshWeather]);
 
-  const refreshWeatherIfStale = useCallback(() => {
+  const refreshWeatherIfStale = useCallback((options: RefreshWeatherOptions = {}) => {
     const lastRefreshStartedAt = lastRefreshStartedAtRef.current;
 
     if (!lastRefreshStartedAt || Date.now() - lastRefreshStartedAt >= WEATHER_STALE_REFRESH_MS) {
-      void refreshWeather();
+      void refreshWeather(options);
     }
   }, [refreshWeather]);
 
@@ -179,7 +188,9 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
       }, millisecondsUntilNextFiveMinuteMark());
     }
 
-    void refreshWeather().finally(scheduleNextRefresh);
+    const cancelInitialRefresh = scheduleIdleTask(() => {
+      void refreshWeather().finally(scheduleNextRefresh);
+    }, 1_200);
     heartbeatRef.current = window.setInterval(refreshWeatherIfStale, WEATHER_HEARTBEAT_MS);
 
     function handleVisibleAgain() {
@@ -188,8 +199,12 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
       }
     }
 
-    window.addEventListener("focus", refreshWeatherIfStale);
-    window.addEventListener("online", refreshWeatherIfStale);
+    function handleRefreshSignal() {
+      refreshWeatherIfStale();
+    }
+
+    window.addEventListener("focus", handleRefreshSignal);
+    window.addEventListener("online", handleRefreshSignal);
     document.addEventListener("visibilitychange", handleVisibleAgain);
 
     return () => {
@@ -203,8 +218,9 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
         window.clearInterval(heartbeatRef.current);
       }
 
-      window.removeEventListener("focus", refreshWeatherIfStale);
-      window.removeEventListener("online", refreshWeatherIfStale);
+      cancelInitialRefresh();
+      window.removeEventListener("focus", handleRefreshSignal);
+      window.removeEventListener("online", handleRefreshSignal);
       document.removeEventListener("visibilitychange", handleVisibleAgain);
     };
   }, [refreshWeather, refreshWeatherIfStale]);
@@ -254,7 +270,7 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
         title={state.label}
         onClick={() => {
           setOpen((current) => !current);
-          refreshWeatherIfStale();
+          refreshWeatherIfStale({ allowLocationPrompt: true });
         }}
       >
         <span className="topbar-weather-emoji" aria-hidden="true">
@@ -269,7 +285,7 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
           state={state}
           onDraftChange={setLocationDraft}
           onOpenRadar={onOpenRadar}
-          onRefresh={() => void refreshWeather()}
+          onRefresh={() => void refreshWeather({ allowLocationPrompt: true })}
           onSaveLocation={saveManualWeatherLocation}
         />
       ) : null}

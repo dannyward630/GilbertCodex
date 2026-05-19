@@ -95,6 +95,7 @@ export type ChatArtifactKind = "code" | "document" | "file" | "image" | "other" 
 
 export interface ChatArtifact {
   detail?: string;
+  height?: number;
   id?: string;
   kind?: ChatArtifactKind;
   mimeType?: string;
@@ -103,6 +104,7 @@ export interface ChatArtifact {
   sourceText?: string;
   title: string;
   url?: string;
+  width?: number;
 }
 
 export interface ChatSource {

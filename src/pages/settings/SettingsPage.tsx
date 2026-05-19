@@ -107,6 +107,7 @@ export function SettingsPage({
   onLocalWorkspaceChange,
   onPersonalizationChange,
   onSettingsChange,
+  onSubscriptionSandboxUninstalled,
   personalization,
   projects,
   settings,
@@ -811,7 +812,7 @@ export function SettingsPage({
     }
 
     if (displaySection === "nineRouter") {
-      return <NineRouterSettingsPage settings={settings} onSettingsChange={onSettingsChange} />;
+      return <NineRouterSettingsPage settings={settings} onSettingsChange={onSettingsChange} onSubscriptionSandboxUninstalled={onSubscriptionSandboxUninstalled} />;
     }
 
     if (displaySection === "model") {

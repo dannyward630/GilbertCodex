@@ -7,6 +7,7 @@ export type ToolRegistryId =
   | "colorTools"
   | "desktopComputer"
   | "fileSafety"
+  | "imageGeneration"
   | "fileCreation"
   | "fileBrowser"
   | "fileSearch"
@@ -28,7 +29,7 @@ export type ToolRegistryId =
 
 export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
 
-/** New installs keep the core provider, planning/thinking UI, local workspace, web search, terminal, and preview tools enabled. */
+/** New installs keep the core provider, planning/thinking UI, local workspace, image generation, web search, terminal, and preview tools enabled. */
 export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   browserPreview: true,
   codeEdit: true,
@@ -37,6 +38,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   colorTools: false,
   desktopComputer: true,
   fileSafety: true,
+  imageGeneration: true,
   fileCreation: true,
   fileBrowser: true,
   fileSearch: true,
@@ -66,6 +68,7 @@ const ACTIVE_TOOL_REGISTRY_IDS = new Set<ToolRegistryId>([
   "fileBrowser",
   "fileCreation",
   "fileSafety",
+  "imageGeneration",
   "fileSearch",
   "planning",
   "provider",

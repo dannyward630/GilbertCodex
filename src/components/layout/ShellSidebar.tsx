@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Puzzle, Search, Settings, Trash2, UserRound } from "lucide-react";
+import { Folder, FolderOpen, FolderPlus, Heart, ListPlus, LogOut, MessageSquarePlus, Pin, Puzzle, Search, Settings, Trash2, UserRound } from "lucide-react";
 import { DEFAULT_PROJECT, formatChatAge, hasComposerDraftContent, isDiscardableEmptyChat, isEmptyChat, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
@@ -291,6 +291,7 @@ export const ShellSidebar = memo(function ShellSidebar({
         activeSection={activeSettingsSection}
         locationServicesEnabled={locationServicesEnabled}
         open={open}
+        onLogout={onLogout}
         onRouteChange={onRouteChange}
         onSectionChange={onSettingsSectionChange}
       />
@@ -353,6 +354,10 @@ export const ShellSidebar = memo(function ShellSidebar({
           <button className="sidebar-settings sidebar-account-settings" data-active={false} type="button" onClick={() => onRouteChange("settings")}>
             <Settings size={16} aria-hidden="true" />
             <span>Settings</span>
+          </button>
+          <button className="sidebar-settings sidebar-account-settings" data-active={activeRoute === "support"} type="button" onClick={() => onRouteChange("support")}>
+            <Heart size={16} aria-hidden="true" />
+            <span>Fund project</span>
           </button>
         </section>
       </div>

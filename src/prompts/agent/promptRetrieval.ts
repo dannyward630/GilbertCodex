@@ -269,6 +269,7 @@ function getEnabledToolNames(settings: ProviderSettings, toolBridge?: ProviderTo
     tools.browserPreview ? "browser_preview_open" : "",
     tools.terminal ? "terminal_run" : "",
     tools.webSearch ? "web_search" : "",
+    tools.imageGeneration ? "image_generate" : "",
   ].filter(Boolean);
 }
 

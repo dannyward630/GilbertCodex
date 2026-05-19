@@ -1,14 +1,24 @@
-const FENCE_LINE_PATTERN = /^\s{0,3}(`{3,}|~{3,})/;
-const WHOLE_MESSAGE_TEXT_FENCE_PATTERN = /^\s{0,3}(`{3,}|~{3,})[ \t]*(markdown|md|text|txt)?[ \t]*\r?\n([\s\S]*?)\r?\n\s{0,3}\1[ \t]*\s*$/i;
+const FENCE_LINE_PATTERN = /^(\s{0,3})(`{3,}|~{3,})([^\r\n]*)$/;
+const WHOLE_MESSAGE_FENCE_PATTERN = /^\s{0,3}(`{3,}|~{3,})[ \t]*([^\r\n]*)\r?\n([\s\S]*?)\r?\n\s{0,3}\1[ \t]*\s*$/i;
+const PROSE_FENCE_LANGUAGES = new Set(["markdown", "md", "text", "txt"]);
+const LOG_FENCE_LANGUAGES = new Set(["bash", "bat", "cmd", "console", "diff", "log", "logs", "output", "powershell", "ps", "ps1", "sh", "shell", "terminal", "zsh"]);
 
 interface FenceMatch {
   char: "`" | "~";
+  indent: string;
+  info: string;
+  language: string;
   length: number;
 }
 
+interface MarkdownDisplayOptions {
+  final?: boolean;
+}
+
 // Normalizes display Markdown while leaving real code fences untouched.
-export function normalizeMarkdownForDisplay(content: string) {
-  const displayContent = unwrapWholeMessageTextFence(content);
+export function normalizeMarkdownForDisplay(content: string, options: MarkdownDisplayOptions = {}) {
+  const final = options.final ?? true;
+  const displayContent = final ? repairMalformedMarkdownFences(unwrapWholeMessageTextFence(content), { final }) : content;
 
   if (!displayContent.includes("|")) {
     return displayContent;
@@ -47,50 +57,157 @@ export function normalizeMarkdownForDisplay(content: string) {
 }
 
 export function unwrapWholeMessageTextFence(content: string) {
-  const match = WHOLE_MESSAGE_TEXT_FENCE_PATTERN.exec(content);
+  const match = WHOLE_MESSAGE_FENCE_PATTERN.exec(content);
 
   if (!match) {
     return content;
   }
 
-  const language = (match[2] ?? "").toLowerCase();
+  const language = getFenceLanguage(match[2] ?? "");
   const body = match[3];
 
-  if (language) {
+  if (shouldUnwrapWholeMessageFence(body, language)) {
     return body;
   }
 
-  return shouldUnwrapUnlabeledWholeMessageFence(body) ? body : content;
+  return content;
 }
 
-function shouldUnwrapUnlabeledWholeMessageFence(body: string) {
+function repairMalformedMarkdownFences(content: string, options: Required<MarkdownDisplayOptions>) {
+  const lines = content.split(/\r\n|\n|\r/);
+  const normalizedLines: string[] = [];
+  let openFence: (FenceMatch & { bodyLines: string[] }) | null = null;
+
+  for (const line of lines) {
+    const fence = matchFence(line);
+
+    if (!openFence) {
+      normalizedLines.push(line);
+
+      if (fence) {
+        openFence = { ...fence, bodyLines: [] };
+      }
+      continue;
+    }
+
+    if (fence && fence.char === openFence.char && fence.length >= openFence.length && isClosingFenceLine(fence)) {
+      normalizedLines.push(line);
+      openFence = null;
+      continue;
+    }
+
+    if (isMalformedClosingFenceLine(line, openFence)) {
+      normalizedLines.push(`${openFence.indent}${openFence.char.repeat(openFence.length)}`);
+      openFence = null;
+      continue;
+    }
+
+    if (options.final && shouldCloseFenceBeforeLine(line, openFence)) {
+      normalizedLines.push(`${openFence.indent}${openFence.char.repeat(openFence.length)}`);
+      openFence = null;
+      normalizedLines.push(line);
+
+      if (fence) {
+        openFence = { ...fence, bodyLines: [] };
+      }
+      continue;
+    }
+
+    normalizedLines.push(line);
+    openFence.bodyLines.push(line);
+  }
+
+  if (options.final && openFence && shouldCloseUnclosedFenceAtEnd(openFence)) {
+    normalizedLines.push(`${openFence.indent}${openFence.char.repeat(openFence.length)}`);
+  }
+
+  return normalizedLines.join("\n");
+}
+
+function shouldUnwrapWholeMessageFence(body: string, language: string) {
   const trimmed = body.trim();
 
   if (!trimmed) {
     return false;
   }
 
-  if (looksLikeStandaloneCode(trimmed)) {
+  if (looksLikeStandaloneJson(trimmed) || looksLikeStandaloneCode(trimmed) || looksLikeTerminalOutputOrDiff(trimmed)) {
     return false;
   }
 
-  return (
-    /^#{1,6}\s+\S/m.test(trimmed) ||
-    /(?:^|\n)\s*(?:[-*]|\d+\.)\s+\S/.test(trimmed) ||
-    /\b(?:answer|changed|fixed|goal|here is|implemented|summary|the issue|updated|verification|what changed)\b/i.test(trimmed) ||
-    trimmed.split(/\s+/).length >= 12
-  );
+  if (PROSE_FENCE_LANGUAGES.has(language)) {
+    return true;
+  }
+
+  return looksLikeProseAnswer(trimmed);
 }
 
 function looksLikeStandaloneCode(value: string) {
   const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const codeLikeLines = lines.filter((line) =>
+    looksLikeCodeLine(line) ||
     /^(?:import|export|const|let|var|function|class|interface|type|return|if|for|while|switch|try|catch)\b/.test(line) ||
     /^(?:\{|\}|\[|\]|<\/?\w|[.#][\w-]+\s*\{)/.test(line) ||
     /[;{}]\s*$/.test(line),
   ).length;
+  const requiredCodeLines = lines.length <= 2 ? 1 : Math.max(2, Math.ceil(lines.length * 0.45));
 
-  return codeLikeLines >= Math.max(2, Math.ceil(lines.length * 0.45));
+  return codeLikeLines >= requiredCodeLines;
+}
+
+function looksLikeStandaloneJson(value: string) {
+  if (!/^\s*[\[{]/.test(value) || !/[\]}]\s*$/.test(value)) {
+    return false;
+  }
+
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeTerminalOutputOrDiff(value: string) {
+  const lines = value.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+
+  if (lines.length === 0) {
+    return false;
+  }
+
+  if (/^(?:diff --git|@@\s|Index: |\+\+\+ |--- )/m.test(value)) {
+    return true;
+  }
+
+  const logLikeLines = lines.filter((line) =>
+    /^(?:PS [^>]+>|[$>] |[A-Z]:\\|npm (?:ERR!|WARN|notice)|error TS\d+|Exit code:|Command:|Shell:|Working directory:|at \S+\s+\(|\[\d{2}:\d{2}:\d{2})/i.test(line),
+  ).length;
+
+  return logLikeLines >= Math.max(2, Math.ceil(lines.length * 0.45));
+}
+
+function looksLikeProseAnswer(value: string) {
+  return (
+    /^#{1,6}\s+\S/m.test(value) ||
+    /(?:^|\n)\s*(?:[-*]|\d+\.)\s+\S/.test(value) ||
+    /\b(?:answer|changed|fixed|goal|here is|implemented|summary|the issue|updated|verification|what changed)\b/i.test(value) ||
+    (value.split(/\s+/).length >= 12 && value.split(/\r?\n/).some(isSentenceLikeProseLine))
+  );
+}
+
+function isSentenceLikeProseLine(line: string) {
+  const trimmed = line.trim();
+
+  return /^[A-Z][^{}\[\];<>]*[.!?:]$/.test(trimmed) && trimmed.split(/\s+/).length >= 5 && !looksLikeCodeLine(trimmed);
+}
+
+function looksLikeCodeLine(line: string) {
+  return (
+    /^(?:import|export|const|let|var|function|class|interface|type|return|if|for|while|switch|try|catch|else|case|break|continue|await|async)\b/.test(line) ||
+    /^(?:\/\/|\/\*|\*\/|\* |#include\b|using\b|namespace\b)/.test(line) ||
+    /^(?:\{|\}|\[|\]|<\/?\w|[.#][\w-]+\s*\{)/.test(line) ||
+    /(?:=>|===?|!==?|&&|\|\||[;{}]\s*$)/.test(line)
+  );
 }
 
 function matchFence(line: string): FenceMatch | null {
@@ -100,10 +217,65 @@ function matchFence(line: string): FenceMatch | null {
     return null;
   }
 
-  const marker = match[1];
+  const indent = match[1] ?? "";
+  const marker = match[2] ?? "";
+  const info = match[3]?.trim() ?? "";
   const char = marker[0];
 
-  return char === "`" || char === "~" ? { char, length: marker.length } : null;
+  return char === "`" || char === "~" ? { char, indent, info, language: getFenceLanguage(info), length: marker.length } : null;
+}
+
+function getFenceLanguage(info: string) {
+  return info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+}
+
+function isClosingFenceLine(fence: FenceMatch) {
+  return fence.info.length === 0;
+}
+
+function isMalformedClosingFenceLine(line: string, openFence: FenceMatch) {
+  const trimmed = line.trim();
+
+  return (
+    openFence.length === 3 &&
+    trimmed === openFence.char.repeat(2)
+  );
+}
+
+function shouldCloseFenceBeforeLine(line: string, openFence: FenceMatch & { bodyLines: string[] }) {
+  const trimmed = line.trim();
+
+  if (!trimmed || LOG_FENCE_LANGUAGES.has(openFence.language) || looksLikeCodeLine(trimmed)) {
+    return false;
+  }
+
+  if (!isClearlyProseContinuation(trimmed)) {
+    return false;
+  }
+
+  return isCodeFenceLanguage(openFence.language) || openFence.bodyLines.some((bodyLine) => looksLikeCodeLine(bodyLine.trim()));
+}
+
+function shouldCloseUnclosedFenceAtEnd(openFence: FenceMatch & { bodyLines: string[] }) {
+  if (LOG_FENCE_LANGUAGES.has(openFence.language)) {
+    return false;
+  }
+
+  const body = openFence.bodyLines.join("\n").trim();
+  return Boolean(body && (isCodeFenceLanguage(openFence.language) || looksLikeStandaloneCode(body)));
+}
+
+function isClearlyProseContinuation(line: string) {
+  return (
+    /^#{1,6}\s+\S/.test(line) ||
+    /^(?:[-*]|\d+\.)\s+\S/.test(line) ||
+    /^(?:Examples?|Risks?|Verification|Summary|What changed|The issue|That means|This means|So\b|The\b|This\b|Here\b|I\b|We\b)/i.test(line) ||
+    isSentenceLikeProseLine(line)
+  );
+}
+
+function isCodeFenceLanguage(language: string) {
+  return Boolean(language && !PROSE_FENCE_LANGUAGES.has(language) && !LOG_FENCE_LANGUAGES.has(language));
 }
 
 function getPipeDelimiterCells(line: string) {

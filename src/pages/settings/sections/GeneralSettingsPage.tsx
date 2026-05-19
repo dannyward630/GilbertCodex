@@ -58,7 +58,7 @@ export function GeneralSettingsPage({ activeProviderLabel, appInfo, localWorkspa
           <div className="settings-stack">
             <strong className="settings-large-value">{settings.model}</strong>
             <span className="settings-subtle-text">
-              {settings.thinking.enabled ? "Thinking enabled" : "Thinking off"} - {settings.webSearch.enabled ? "Web on" : "Web off"}
+              {settings.thinking.enabled ? "Thinking enabled" : "Thinking off"} - {settings.webSearch.enabled ? "Web on" : "Web off"} - {settings.tools.imageGeneration ? "Images on" : "Images off"}
             </span>
           </div>
         </article>

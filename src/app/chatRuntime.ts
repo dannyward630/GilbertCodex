@@ -511,7 +511,7 @@ export function createToolProtocolNarrationRecoveryInstruction(prompt: string, n
     `Original user request: ${prompt}`,
     "The previous visible response exposed hidden tool-call protocol or provider-native tool JSON instead of doing useful work.",
     "Do not explain hidden tool protocol, batching mechanics, cwd choices, shell choices, timeout choices, provider-native JSON, or step-by-step tool formatting.",
-    "Do not emit visible tool-call syntax or JSON envelopes.",
+    "Do not emit visible tool-call syntax, JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output.",
     "If the same action is still needed and the app exposes that tool, request it through the real provider tool-call channel now. If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected protocol narration excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -855,7 +855,7 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Cite web sources with Markdown links when the tool results include URLs.",
-    "Do not output hidden tool protocol text as prose.",
+    "Do not output hidden tool protocol text as prose. Do not output JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output.",
   ].join("\n\n");
 }
 
@@ -869,7 +869,7 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
-    "Do not emit hidden tool protocol text. Do not promise to keep inspecting unless the next step is impossible without user input.",
+    "Do not emit hidden tool protocol text, JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
 }
 
@@ -884,6 +884,7 @@ export function createFinalAnswerRecoveryInstruction(prompt: string, detail: str
     "Do not mention background work, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
     "Do not paste raw TOOL blocks or adaptation recommendations.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
+    "Do not output JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output.",
     "If the available context is insufficient, say exactly what is missing in one short sentence, then give the best answer possible from the available evidence.",
   ].join("\n\n");
 }

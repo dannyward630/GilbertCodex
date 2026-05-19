@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, LogOut } from "lucide-react";
 import { memo, useMemo } from "react";
 import { SidebarSection } from "../../components/sidebar/SidebarSection";
 import type { PrimaryRoute } from "../../types/navigation";
@@ -8,12 +8,13 @@ import type { SettingsSectionId } from "./types";
 interface SettingsSideMenuProps {
   activeSection: SettingsSectionId;
   locationServicesEnabled: boolean;
+  onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onSectionChange: (section: SettingsSectionId) => void;
   open: boolean;
 }
 
-export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, locationServicesEnabled, onRouteChange, onSectionChange, open }: SettingsSideMenuProps) {
+export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, locationServicesEnabled, onLogout, onRouteChange, onSectionChange, open }: SettingsSideMenuProps) {
   const activeNavSection = resolveSettingsNavSection(activeSection);
   const navItems = useMemo(() => SETTINGS_NAV_ITEMS, [locationServicesEnabled]);
   const sidebarItems = useMemo(
@@ -43,6 +44,13 @@ export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, 
           title="Settings"
           items={sidebarItems}
         />
+      </div>
+
+      <div className="sidebar-footer sidebar-settings-footer">
+        <button className="sidebar-settings sidebar-settings-logout" type="button" onClick={onLogout}>
+          <LogOut size={16} aria-hidden="true" />
+          <span>Log out</span>
+        </button>
       </div>
     </aside>
   );

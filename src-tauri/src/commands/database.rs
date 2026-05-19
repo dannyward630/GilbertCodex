@@ -174,6 +174,16 @@ struct StoredDatabaseRecord {
     updated_at: u64,
 }
 
+async fn run_database_worker<T, F>(label: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("{label} worker stopped unexpectedly: {error}"))?
+}
+
 struct CategoryDefinition {
     id: &'static str,
     label: &'static str,
@@ -181,34 +191,43 @@ struct CategoryDefinition {
 }
 
 #[tauri::command]
-pub fn gilbert_database_load(
+pub async fn gilbert_database_load(
     app: AppHandle,
     namespace: String,
     seeds: Vec<DeviceStorageSeed>,
 ) -> Result<DeviceStorageSnapshot, String> {
-    let namespace = require_active_namespace(&app, &namespace)?;
-    storage::load_namespace(&app, &namespace, &seeds)
+    run_database_worker("Database load", move || {
+        let namespace = require_active_namespace(&app, &namespace)?;
+        storage::load_namespace(&app, &namespace, &seeds)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn gilbert_database_set_value(
+pub async fn gilbert_database_set_value(
     app: AppHandle,
     namespace: String,
     key: String,
     value: String,
 ) -> Result<(), String> {
-    let namespace = require_active_namespace(&app, &namespace)?;
-    storage::write_value(&app, &namespace, &key, &value)
+    run_database_worker("Database write", move || {
+        let namespace = require_active_namespace(&app, &namespace)?;
+        storage::write_value(&app, &namespace, &key, &value)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn gilbert_database_set_values(
+pub async fn gilbert_database_set_values(
     app: AppHandle,
     namespace: String,
     values: Vec<DeviceStorageSeed>,
 ) -> Result<(), String> {
-    let namespace = require_active_namespace(&app, &namespace)?;
-    storage::write_values(&app, &namespace, &values)
+    run_database_worker("Database batch write", move || {
+        let namespace = require_active_namespace(&app, &namespace)?;
+        storage::write_values(&app, &namespace, &values)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -326,51 +345,54 @@ pub fn gilbert_database_finalize_migration(
 }
 
 #[tauri::command]
-pub fn gilbert_database_auto_finalize_migration(
+pub async fn gilbert_database_auto_finalize_migration(
     app: AppHandle,
 ) -> Result<DatabaseAutoMigrationFinalizeResponse, String> {
-    let database_path = storage::database_path(&app)
-        .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
-    if !database_path.exists() {
-        return Ok(DatabaseAutoMigrationFinalizeResponse {
-            already_finalized: true,
-            backup: None,
-            removed_storage_keys: Vec::new(),
-            removed_legacy_paths: Vec::new(),
-            failed_legacy_paths: Vec::new(),
-        });
-    }
+    run_database_worker("Database migration finalizer", move || {
+        let database_path = storage::database_path(&app)
+            .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
+        if !database_path.exists() {
+            return Ok(DatabaseAutoMigrationFinalizeResponse {
+                already_finalized: true,
+                backup: None,
+                removed_storage_keys: Vec::new(),
+                removed_legacy_paths: Vec::new(),
+                failed_legacy_paths: Vec::new(),
+            });
+        }
 
-    let legacy_paths = safe_legacy_replacement_paths(&app)?;
-    let has_legacy_paths = legacy_paths.iter().any(|path| path.exists());
-    let auto_finalized = storage::schema_v3_auto_finalized(&app)?;
-    let has_legacy_hot_storage = storage::schema_v3_has_legacy_hot_storage(&app)?;
+        let legacy_paths = safe_legacy_replacement_paths(&app)?;
+        let has_legacy_paths = legacy_paths.iter().any(|path| path.exists());
+        let auto_finalized = storage::schema_v3_auto_finalized(&app)?;
+        let has_legacy_hot_storage = storage::schema_v3_has_legacy_hot_storage(&app)?;
 
-    if auto_finalized && !has_legacy_paths && !has_legacy_hot_storage {
-        return Ok(DatabaseAutoMigrationFinalizeResponse {
-            already_finalized: true,
-            backup: None,
-            removed_storage_keys: Vec::new(),
-            removed_legacy_paths: Vec::new(),
-            failed_legacy_paths: Vec::new(),
-        });
-    }
+        if auto_finalized && !has_legacy_paths && !has_legacy_hot_storage {
+            return Ok(DatabaseAutoMigrationFinalizeResponse {
+                already_finalized: true,
+                backup: None,
+                removed_storage_keys: Vec::new(),
+                removed_legacy_paths: Vec::new(),
+                failed_legacy_paths: Vec::new(),
+            });
+        }
 
-    let backup = Some(create_database_backup_with_label(&app, "auto-v3")?);
-    let removed_storage_keys = storage::finalize_schema_v3_migration(&app)?;
-    let (removed_legacy_paths, failed_legacy_paths) = cleanup_paths(&legacy_paths);
+        let backup = Some(create_database_backup_with_label(&app, "auto-v3")?);
+        let removed_storage_keys = storage::finalize_schema_v3_migration(&app)?;
+        let (removed_legacy_paths, failed_legacy_paths) = cleanup_paths(&legacy_paths);
 
-    if failed_legacy_paths.is_empty() {
-        storage::mark_schema_v3_auto_finalized(&app)?;
-    }
+        if failed_legacy_paths.is_empty() {
+            storage::mark_schema_v3_auto_finalized(&app)?;
+        }
 
-    Ok(DatabaseAutoMigrationFinalizeResponse {
-        already_finalized: false,
-        backup,
-        removed_storage_keys,
-        removed_legacy_paths,
-        failed_legacy_paths,
+        Ok(DatabaseAutoMigrationFinalizeResponse {
+            already_finalized: false,
+            backup,
+            removed_storage_keys,
+            removed_legacy_paths,
+            failed_legacy_paths,
+        })
     })
+    .await
 }
 
 fn create_database_backup(app: &AppHandle) -> Result<DatabaseBackupResponse, String> {

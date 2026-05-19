@@ -1,14 +1,24 @@
 # Gilbert Codex Roadmap
 
-This roadmap shows the public direction for Gilbert Codex after the v0.3.5 alpha. It is product-facing by design: contributors should be able to see what is upcoming, why it matters, and where their work can help.
+This roadmap shows the public direction for Gilbert Codex after the v0.5.0 alpha. It is product-facing by design: contributors should be able to see what is upcoming, why it matters, and where their work can help.
 
 Roadmap items are not release promises or fixed dates. They are the current areas the project is moving toward.
 
 ## Near-Term Focus
 
+### Apps, Plugins, And Skills
+
+v0.5.0 makes the main chat workspace feel far more complete. The next missing product surface is the Apps page.
+
+- Build a real Apps / Plugins / Skills hub instead of a placeholder.
+- Show installed, available, and coming-soon capabilities with clear permission language.
+- Let users discover useful integrations without mixing them into core settings.
+- Keep high-impact app actions reviewable before they can affect local files, GitHub, terminals, or external accounts.
+- Make the page useful for contributors who want to add integrations without learning the whole app first.
+
 ### Runtime Reliability
 
-The main v0.3.5 foundation is making app-owned runtime behavior boringly reliable across providers, permission modes, and real repositories.
+The main v0.5.0 foundation is making app-owned runtime behavior boringly reliable across providers, subscription routes, permission modes, and real repositories.
 
 - Expand provider compatibility tests for OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, local servers, and OpenRouter-routed models.
 - Improve malformed-call recovery so invalid arguments become clear retryable errors instead of silent wrong behavior.
@@ -62,6 +72,7 @@ The navigation needs to scale better as users add more projects, chats, and inte
 - Provider profiles for local, cloud, free-route, and paid-route setups.
 - Model capability badges for images, voice, context length, reasoning, structured output, and speed.
 - Task presets for coding, planning, research, review, and multimodal work.
+- More subscription-account health and quota visibility for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other connected providers.
 - Better context-window and provider-visible request accounting.
 - Safer fallback behavior when hosted routes ignore structured output or return malformed content.
 
@@ -75,7 +86,7 @@ The navigation needs to scale better as users add more projects, chats, and inte
 
 ### Multimodal Creation
 
-- Image generation and image editing with saved artifacts.
+- Broader image generation and image editing support beyond the first Codex / ChatGPT-backed subscription path.
 - Image-to-code and screenshot-to-fix workflows.
 - Video generation job tracking with thumbnails and generated media library controls.
 - More useful attachment handling for PDFs, images, code bundles, and local assets.

@@ -312,7 +312,7 @@ describe("provider structured output request bodies", () => {
   });
 });
 
-describe("9Router Local request errors", () => {
+describe("subscription route request errors", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -329,7 +329,7 @@ describe("9Router Local request errors", () => {
     };
   }
 
-  it("explains provider-credential failures from 9Router", async () => {
+  it("explains provider-credential failures from subscription routing", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({
         error: {
@@ -345,17 +345,17 @@ describe("9Router Local request errors", () => {
     )));
 
     await expect(sendProviderMessage(createNineRouterSettings("cx/gpt-5.5"), [createMessage()])).rejects.toThrow(
-      "9Router is running, but Codex is not connected for cx/gpt-5.5.",
+      "Subscription routing is running, but Codex is not connected for cx/gpt-5.5.",
     );
   });
 
-  it("turns bare local fetch failures into a 9Router startup hint", async () => {
+  it("turns bare local fetch failures into a subscription startup hint", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }));
 
     await expect(sendProviderMessage(createNineRouterSettings("cx/gpt-5.5"), [createMessage()])).rejects.toThrow(
-      "Could not reach 9Router Local at http://127.0.0.1:20128/v1/chat/completions.",
+      "Could not reach subscriptions at http://127.0.0.1:20128/v1/chat/completions.",
     );
   });
 

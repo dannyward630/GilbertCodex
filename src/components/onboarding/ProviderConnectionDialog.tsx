@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, CheckCircle2, ExternalLink, KeyRound, Play, RefreshCcw, Route, ShieldCheck, UserCheck } from "lucide-react";
+import { ArrowRight, ExternalLink, KeyRound, Route } from "lucide-react";
 import { ensureNineRouterLocal, getNineRouterLocalStatus, isTauriDesktopRuntime, type NineRouterLocalStatus } from "../../app/tauriClient";
 import {
   chooseNineRouterModel,
@@ -18,6 +18,7 @@ import {
   type NineRouterStatusMessage,
 } from "../../services/nineRouterClient";
 import { getDefaultBaseUrlForProvider, OPENROUTER_AUTO_MODEL, OPENROUTER_FREE_AUTO_MODEL } from "../../lib/models";
+import { scheduleIdleTask } from "../../lib/idleTask";
 import type { ModelProviderId, ProviderSettings } from "../../types/settings";
 import { DialogShell } from "../dialogs/AppDialog";
 
@@ -88,7 +89,9 @@ export function ProviderConnectionDialog({
     }
 
     setStatusMessage(null);
-    void refreshNineRouterState({ start: false });
+    return scheduleIdleTask(() => {
+      void refreshNineRouterState({ quiet: true, start: true });
+    }, 700);
   }, [open]);
 
   async function refreshNineRouterState(options: { quiet?: boolean; start?: boolean } = {}) {
@@ -127,29 +130,16 @@ export function ProviderConnectionDialog({
       if (!options.quiet) {
         setStatusMessage({
           kind: nextConnections.length > 0 ? "success" : "warning",
-          text: nextConnections.length > 0 ? `${nextConnections.length} subscription account${nextConnections.length === 1 ? "" : "s"} found.` : "The subscription helper is running with no connected accounts yet.",
+          text: nextConnections.length > 0 ? `${nextConnections.length} subscription account${nextConnections.length === 1 ? "" : "s"} found.` : "Subscriptions are running with no connected accounts yet.",
         });
       }
     } catch (error) {
       if (mountedRef.current && accountConnectRunRef.current === runId) {
-        setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not check the subscription helper." });
+        setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not check subscriptions." });
       }
     } finally {
       if (mountedRef.current && accountConnectRunRef.current === runId) {
         setBusy((current) => (current === "refresh" ? null : current));
-      }
-    }
-  }
-
-  async function startNineRouter() {
-    setBusy("start");
-    setStatusMessage({ kind: "warning", text: "Starting subscription helper..." });
-
-    try {
-      await refreshNineRouterState({ quiet: false, start: true });
-    } finally {
-      if (mountedRef.current) {
-        setBusy((current) => (current === "start" ? null : current));
       }
     }
   }
@@ -171,7 +161,7 @@ export function ProviderConnectionDialog({
       }
 
       if (!nextStatus.running) {
-        throw new Error(nextStatus.message || `Install and start the subscription helper before connecting ${provider.name}.`);
+        throw new Error(nextStatus.message || `Set up subscriptions before connecting ${provider.name}.`);
       }
 
       await connectNineRouterAccount(provider, nextStatus.dashboardUrl || NINE_ROUTER_DASHBOARD_FALLBACK, {
@@ -239,7 +229,7 @@ export function ProviderConnectionDialog({
       }
 
       if (!nextStatus.running) {
-        throw new Error(nextStatus.message || "Install and start the subscription helper before switching to it.");
+        throw new Error(nextStatus.message || "Set up subscriptions before switching to them.");
       }
 
       if (nextModels.length === 0) {
@@ -277,13 +267,11 @@ export function ProviderConnectionDialog({
   }
 
   const runtimeReady = Boolean(runtimeStatus?.running);
-  const runtimeLabel = runtimeStatus
-    ? runtimeStatus.running
-      ? "Running"
-      : runtimeStatus.installed
-        ? "Installed"
-        : "Not installed"
-    : "Checking";
+  const runtimeInstalled = Boolean(runtimeStatus?.installed);
+  const subscriptionSetupNeeded = isTauriDesktopRuntime() && Boolean(runtimeStatus) && !runtimeInstalled;
+  const useSubscriptionsAsPrimaryAction = runtimeReady && activeConnectionCount > 0;
+  const primaryActionLabel = subscriptionSetupNeeded ? "Set up subscriptions" : useSubscriptionsAsPrimaryAction ? "Use subscriptions" : openRouterHasKey ? "Use OpenRouter Auto" : "Use Free Fallback";
+  const primaryBusyLabel = busy === "activate-subscriptions" ? "Using subscriptions" : busy === "fallback" ? "Switching" : primaryActionLabel;
   const displayStatusMessage = statusMessage
     ? {
         ...statusMessage,
@@ -291,9 +279,23 @@ export function ProviderConnectionDialog({
       }
     : null;
 
+  function handlePrimaryAction() {
+    if (subscriptionSetupNeeded) {
+      onOpenNineRouterSettings();
+      return;
+    }
+
+    if (useSubscriptionsAsPrimaryAction) {
+      void activateNineRouter();
+      return;
+    }
+
+    useOpenRouterFallback();
+  }
+
   return (
     <DialogShell
-      description="Choose whether Gilbert should use connected subscription accounts or the OpenRouter fallback route for this session."
+      description="Use subscriptions first, fall back cleanly. Sign in with the provider accounts you already pay for; Gilbert keeps OpenRouter ready when nothing is connected."
       icon={Route}
       onClose={onClose}
       open={open}
@@ -311,101 +313,30 @@ export function ProviderConnectionDialog({
           <button className="dialog-button" type="button" onClick={onClose}>
             Later
           </button>
-          <button className="dialog-button dialog-button-primary provider-connection-primary-action" type="button" disabled={busy !== null} onClick={useOpenRouterFallback}>
-            {openRouterHasKey ? "Use OpenRouter Auto" : "Use Free Fallback"}
+          <button className="dialog-button dialog-button-primary provider-connection-primary-action" type="button" disabled={busy !== null} onClick={handlePrimaryAction}>
+            {primaryBusyLabel}
             <ArrowRight size={15} aria-hidden="true" />
           </button>
         </>
       }
     >
       <div className="provider-connection-dialog-content">
-        <section className="provider-connection-summary" aria-label="Provider setup summary">
-          <div>
-            <span className="provider-connection-pill">{runtimeLabel}</span>
-            <h3>Use subscriptions first, fall back cleanly.</h3>
-            <p>
-              Connect Codex, GitHub Copilot, Claude Code, Gemini CLI, or another subscription account. If nothing is connected, Gilbert keeps the OpenRouter fallback ready.
-            </p>
+        {displayStatusMessage ? (
+          <div className="provider-connection-status" data-kind={displayStatusMessage.kind} role="status" aria-live="polite">
+            {displayStatusMessage.text}
           </div>
-          <div className="provider-connection-meter" aria-label="Connected provider accounts">
-            <strong>{activeConnectionCount}/{NINE_ROUTER_ACCOUNT_PROVIDERS.length}</strong>
-            <span>{connectedAccountCount > 0 ? "saved accounts" : "none connected"}</span>
-          </div>
-        </section>
-
-        <div className="provider-connection-paths">
-          <section className="provider-connection-path" data-active={settings.provider === NINE_ROUTER_PROVIDER_ID}>
-            <div className="provider-connection-path-heading">
-              <span aria-hidden="true">
-                <UserCheck size={18} />
-              </span>
-              <div>
-                <strong>Account subscriptions</strong>
-                <small>{models.length > 0 ? `${models.length} live routes` : runtimeReady ? "No live routes loaded" : "Runtime not running"}</small>
-              </div>
-            </div>
-            <div className="provider-connection-row-list">
-              <div>
-                <span>Runtime</span>
-                <strong>{formatSubscriptionHelperText(runtimeStatus?.message || "Checking subscription helper")}</strong>
-              </div>
-              <div>
-                <span>Selected route</span>
-                <strong>{selectedNineRouterModel}</strong>
-              </div>
-            </div>
-            <div className="provider-connection-actions">
-              <button type="button" disabled={busy !== null} onClick={runtimeReady ? activateNineRouter : startNineRouter}>
-                {runtimeReady ? <CheckCircle2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
-                {busy === "activate-subscriptions" ? "Switching" : runtimeReady ? "Use subscriptions" : busy === "start" ? "Starting" : "Start helper"}
-              </button>
-              <button type="button" disabled={busy !== null} onClick={() => refreshNineRouterState()}>
-                <RefreshCcw size={15} aria-hidden="true" />
-                {busy === "refresh" ? "Checking" : "Refresh"}
-              </button>
-            </div>
-          </section>
-
-          <section className="provider-connection-path" data-active={settings.provider === "openrouter"}>
-            <div className="provider-connection-path-heading">
-              <span aria-hidden="true">
-                <ShieldCheck size={18} />
-              </span>
-              <div>
-                <strong>OpenRouter fallback</strong>
-                <small>{openRouterHasKey ? "Saved key detected" : "Free route selected"}</small>
-              </div>
-            </div>
-            <div className="provider-connection-row-list">
-              <div>
-                <span>Fallback model</span>
-                <strong>{openRouterFallbackModel}</strong>
-              </div>
-              <div>
-                <span>Mode</span>
-                <strong>{openRouterHasKey ? "Paid/free OpenRouter routing" : "Free OpenRouter routing"}</strong>
-              </div>
-            </div>
-            <div className="provider-connection-actions">
-              <button type="button" disabled={busy !== null} onClick={useOpenRouterFallback}>
-                <CheckCircle2 size={15} aria-hidden="true" />
-                Use fallback
-              </button>
-              <button type="button" onClick={onOpenProviderSettings}>
-                <KeyRound size={15} aria-hidden="true" />
-                Keys
-              </button>
-            </div>
-          </section>
-        </div>
+        ) : null}
 
         <section className="provider-account-panel" aria-label="Subscription account providers">
-          <div className="provider-account-panel-heading">
+          <div className="provider-account-panel-heading" aria-label="Subscription account summary">
             <div>
-              <h4>Subscription Accounts</h4>
-              <span>{runtimeReady ? "Sign in with the provider account you already pay for." : isTauriDesktopRuntime() ? "Start or install the local helper before account sign-in." : "Open the desktop app to connect subscription accounts."}</span>
+              <h4>Subscription accounts</h4>
+              <span>{runtimeReady ? "Ready for provider sign-in." : isTauriDesktopRuntime() ? runtimeInstalled ? "Starting subscriptions automatically." : "Install subscriptions once, then sign in." : "Open the desktop app to connect subscription accounts."}</span>
             </div>
-            <span>{connectedAccountCount} saved</span>
+            <div className="provider-account-counts" aria-label="Saved subscription accounts">
+              <strong>{activeConnectionCount}/{NINE_ROUTER_ACCOUNT_PROVIDERS.length}</strong>
+              <span>{connectedAccountCount > 0 ? `${connectedAccountCount} saved` : "none saved"}</span>
+            </div>
           </div>
 
           <div className="provider-account-grid">
@@ -449,11 +380,6 @@ export function ProviderConnectionDialog({
           </div>
         </section>
 
-        {displayStatusMessage ? (
-          <div className="provider-connection-status" data-kind={displayStatusMessage.kind} role="status" aria-live="polite">
-            {displayStatusMessage.text}
-          </div>
-        ) : null}
       </div>
     </DialogShell>
   );
@@ -461,8 +387,13 @@ export function ProviderConnectionDialog({
 
 function formatSubscriptionHelperText(text: string) {
   return text
-    .replace(/\b[9]Router Local\b/g, "the subscription helper")
-    .replace(/\b[9]Router\b/g, "the subscription helper")
-    .replace(/\b(from|in) the subscription helper settings\b/gi, "$1 Subscriptions settings")
-    .replace(/\bStart the subscription helper, then retry\b/g, "Open Subscriptions, then retry");
+    .replace(/\b[9]Router Local started and is ready\./g, "Subscriptions are ready.")
+    .replace(/\b[9]Router Local is already running\./g, "Subscriptions are ready.")
+    .replace(/\b[9]Router Local is installed\./g, "Subscriptions are installed.")
+    .replace(/\b[9]Router Local was started, but the API is not ready yet\./g, "Subscriptions are still starting. Try again in a moment.")
+    .replace(/\b[9]Router Local\b/g, "subscriptions")
+    .replace(/\b[9]Router\b/g, "subscriptions")
+    .replace(/\b(from|in) subscriptions settings\b/gi, "$1 Subscriptions settings")
+    .replace(/\bStart subscriptions, then retry\b/g, "Open Subscriptions, then retry")
+    .replace(/\bsubscription helper\b/gi, "subscriptions");
 }

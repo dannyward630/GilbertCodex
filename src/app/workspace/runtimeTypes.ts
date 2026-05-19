@@ -1,0 +1,50 @@
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+
+import type { AppInfo } from "../../types/app";
+import type { AgentRun } from "../../types/agentRun";
+import type { ChatSummary } from "../../types/chat";
+import type { DiscordBridgeSettings } from "../../types/discord";
+import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ProjectSummary } from "../../types/project";
+import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
+import type { TerminalAttachedSession } from "../../types/terminal";
+import type { ComposerDraftRestoreRequest, QueuedChatSend } from "./WorkspaceApp";
+
+export interface WorkspaceRuntimeDeps extends Record<string, any> {
+  activeChat: ChatSummary;
+  activeChatId: string;
+  agentRuns: AgentRun[];
+  appInfo: AppInfo;
+  appearanceMode: AppearanceMode;
+  browserPreviewTarget: { id: number; url: string } | null;
+  chats: ChatSummary[];
+  composerDraftToRestore: ComposerDraftRestoreRequest | null;
+  defaultTerminalWorkingDirectory: string;
+  discordBridgeSettings: DiscordBridgeSettings;
+  localWorkspace: LocalWorkspaceSettings;
+  pendingChatsRef: MutableRefObject<ChatSummary[]>;
+  projects: ProjectSummary[];
+  providerSettings: ProviderSettings;
+  queuedChatSends: QueuedChatSend[];
+  queuedChatSendsRef: MutableRefObject<QueuedChatSend[]>;
+  sendingChatIds: string[];
+  terminalAttachedSession: TerminalAttachedSession | null;
+  updateQueuedChatSends: (updater: SetStateAction<QueuedChatSend[]>) => void;
+  setActiveChatId: Dispatch<SetStateAction<string>>;
+  setAgentRuns: Dispatch<SetStateAction<AgentRun[]>>;
+  setAppInfo: Dispatch<SetStateAction<AppInfo>>;
+  setAppearanceMode: Dispatch<SetStateAction<AppearanceMode>>;
+  setBrowserPreviewTarget: Dispatch<SetStateAction<{ id: number; url: string } | null>>;
+  setChats: (action: SetStateAction<ChatSummary[]>) => void;
+  setChatsState: Dispatch<SetStateAction<ChatSummary[]>>;
+  setComposerDraftToRestore: Dispatch<SetStateAction<ComposerDraftRestoreRequest | null>>;
+  setDefaultTerminalWorkingDirectory: Dispatch<SetStateAction<string>>;
+  setDiscordBridgeSettings: Dispatch<SetStateAction<DiscordBridgeSettings>>;
+  setLocalWorkspace: Dispatch<SetStateAction<LocalWorkspaceSettings>>;
+  setPersonalizationSettings: Dispatch<SetStateAction<AppPersonalizationSettings>>;
+  setProjects: Dispatch<SetStateAction<ProjectSummary[]>>;
+  setProviderSettings: Dispatch<SetStateAction<ProviderSettings>>;
+  setQueuedChatSends: Dispatch<SetStateAction<QueuedChatSend[]>>;
+  setSendingChatIds: Dispatch<SetStateAction<string[]>>;
+  setTerminalAttachedSession: Dispatch<SetStateAction<TerminalAttachedSession | null>>;
+}

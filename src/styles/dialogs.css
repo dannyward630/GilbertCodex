@@ -8,6 +8,15 @@
   background: rgba(0, 0, 0, 0.5);
 }
 
+:root[data-runtime="desktop"] .dialog-backdrop {
+  inset: var(--app-titlebar-height) 0 0;
+  padding-top: 20px;
+}
+
+:root[data-runtime="desktop"] .app-dialog {
+  max-height: min(680px, calc(100dvh - var(--app-titlebar-height) - 48px));
+}
+
 .app-dialog {
   display: grid;
   gap: 18px;

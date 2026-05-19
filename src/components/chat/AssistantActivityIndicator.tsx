@@ -499,7 +499,8 @@ export function createAssistantActivitySnapshot(
   const hasWebSearchActivity = message.webSearch?.status === "active";
   const hasPlanningActivity = Boolean(message.planning && !message.planning.completedAt);
   const live = Boolean(message.isStreaming && (allActiveToolCount > 0 || waitingToolCount > 0 || hasActiveProgress || hasWebSearchActivity || hasPlanningActivity));
-  const toolCalls = live ? allToolCalls : allToolCalls.filter((toolCall) => toolCall.status !== "active");
+  const activityToolCalls = allToolCalls.filter((toolCall) => shouldShowActivityToolCall(toolCall, message, live));
+  const toolCalls = live ? activityToolCalls : activityToolCalls.filter((toolCall) => toolCall.status !== "active");
   const activeToolCount = live ? allActiveToolCount : 0;
   const commandCount = countCommandToolCalls(toolCalls);
   const includeEstimatedFileItems = live || waitingToolCount > 0;
@@ -548,6 +549,26 @@ export function createAssistantActivitySnapshot(
     progressItems,
     toolCalls,
   };
+}
+
+function shouldShowActivityToolCall(toolCall: ChatToolCall, message: ChatMessage, live: boolean) {
+  if (toolCall.toolId !== "image_generate") {
+    return true;
+  }
+
+  if (live && (toolCall.status === "active" || toolCall.status === "waiting_approval")) {
+    return true;
+  }
+
+  return !hasGeneratedImageArtifact(message);
+}
+
+function hasGeneratedImageArtifact(message: ChatMessage) {
+  return (message.artifacts ?? []).some((artifact) =>
+    artifact.kind === "image"
+    || artifact.mimeType?.toLowerCase().startsWith("image/")
+    || artifact.url?.toLowerCase().startsWith("data:image/"),
+  );
 }
 
 function createActivityLabel({

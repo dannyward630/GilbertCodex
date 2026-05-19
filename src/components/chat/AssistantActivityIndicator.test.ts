@@ -346,6 +346,30 @@ describe("assistant activity indicator", () => {
     expect(snapshot).toBeNull();
   });
 
+  it("hides completed image-generation tool progress once image artifacts are attached", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      artifacts: [
+        {
+          kind: "image",
+          mimeType: "image/png",
+          title: "generated-image.png",
+          url: "data:image/png;base64,iVBORw0KGgo=",
+        },
+      ],
+      content: "Done.",
+      toolCalls: [
+        {
+          id: "tool-image",
+          label: "Generate image",
+          status: "complete",
+          toolId: "image_generate",
+        },
+      ],
+    }), { responseStarted: true });
+
+    expect(snapshot).toBeNull();
+  });
+
   it("renders completed file changes while the response is still streaming", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Writing the final summary...",

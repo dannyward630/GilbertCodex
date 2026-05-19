@@ -46,6 +46,7 @@ import { ModelSelectorPopover, type LiveModelCatalogStatus } from "./ModelSelect
 import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment, isMediaAttachment, isVideoAttachment } from "../../lib/chatAttachments";
 import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, isPlainResearchChat, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { scheduleIdleTask } from "../../lib/idleTask";
 import {
   AUTO_COMPACT_CONTEXT_THRESHOLD,
   formatTokenCount,
@@ -153,6 +154,7 @@ interface ChatComposerProps {
   heldQueuedMessageIds?: string[];
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
+  onImageGenerationChange: (enabled: boolean) => void;
   thinking: ThinkingSettings;
   webSearch: WebSearchSettings;
 }
@@ -339,6 +341,7 @@ export function ChatComposer({
   heldQueuedMessageIds = [],
   onThinkingChange,
   onWebSearchChange,
+  onImageGenerationChange,
   thinking,
   webSearch,
 }: ChatComposerProps) {
@@ -391,6 +394,7 @@ export function ChatComposer({
     [liveModelCatalogs, model, providerSettings.provider],
   );
   const webSearchProviderLabel = formatWebSearchProviderLabel(webSearch.provider);
+  const imageGenerationEnabled = providerSettings.tools.imageGeneration;
   const estimatedContextUsage = useMemo(
     () =>
       estimateModelProviderContextWindowUsage({
@@ -533,7 +537,9 @@ export function ChatComposer({
       }
     }
 
-    void refreshGitStatus(true);
+    const cancelInitialRefresh = scheduleIdleTask(() => {
+      void refreshGitStatus(true);
+    }, 900);
 
     const refreshTimer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -552,6 +558,7 @@ export function ChatComposer({
 
     return () => {
       disposed = true;
+      cancelInitialRefresh();
       window.clearInterval(refreshTimer);
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
@@ -648,6 +655,28 @@ export function ChatComposer({
 
   const liveModelCatalogRequestKey = createLiveModelCatalogRequestKey(providerSettings);
   providerSettingsRef.current = providerSettings;
+
+  useEffect(() => {
+    const subscriptionProviderReady =
+      providerSettings.provider === "9router" ||
+      Boolean(providerSettings.providerModels["9router"]?.trim());
+
+    if (subscriptionProviderReady) {
+      return;
+    }
+
+    delete liveModelCatalogCache.current["9router"];
+    clearLiveModelCatalog("9router");
+    setLiveModelCatalogStatus((current) => {
+      if (!current["9router"]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next["9router"];
+      return next;
+    });
+  }, [providerSettings.provider, providerSettings.providerModels]);
 
   useEffect(() => {
     if (openMenu !== "model") {
@@ -862,6 +891,10 @@ export function ChatComposer({
       enabled: !webSearch.enabled,
       provider: webSearch.provider,
     });
+  }
+
+  function toggleImageGeneration() {
+    onImageGenerationChange(!imageGenerationEnabled);
   }
 
   function addAttachmentFiles(files: File[]) {
@@ -1626,6 +1659,22 @@ export function ChatComposer({
                   className="composer-menu-item composer-menu-item-stacked"
                   type="button"
                   role="menuitemcheckbox"
+                  aria-checked={imageGenerationEnabled}
+                  onClick={toggleImageGeneration}
+                >
+                  <ImageIcon size={18} aria-hidden="true" />
+                  <span>
+                    <strong>Generate images</strong>
+                    <small>{imageGenerationEnabled ? "Subscription image tool available" : "Model cannot create image artifacts"}</small>
+                  </span>
+                  <span className="composer-switch" data-on={imageGenerationEnabled}>
+                    <span />
+                  </span>
+                </button>
+                <button
+                  className="composer-menu-item composer-menu-item-stacked"
+                  type="button"
+                  role="menuitemcheckbox"
                   aria-checked={planMode.enabled}
                   onClick={togglePlanMode}
                 >
@@ -1825,6 +1874,7 @@ export function ChatComposer({
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
         {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
         {webSearch.enabled ? <span className="composer-status composer-status-web">{webSearchProviderLabel} web on</span> : null}
+        {imageGenerationEnabled ? <span className="composer-status">Images on</span> : null}
         {planMode.enabled ? <span className="composer-status">Plan mode</span> : null}
       </div>
       </form>

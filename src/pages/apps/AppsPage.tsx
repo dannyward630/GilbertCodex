@@ -1,14 +1,14 @@
-import { ArrowLeft, MapPin, Puzzle, Radar, ShieldCheck } from "lucide-react";
-import { PluginDirectory } from "../plugins/PluginsPage";
+import { ArrowLeft, Puzzle, ShieldCheck } from "lucide-react";
 import "../../styles/apps.css";
 
 interface AppsPageProps {
   locationServicesEnabled: boolean;
   onBackToChat: () => void;
   onOpenRadar: () => void;
+  onOpenSupport: () => void;
 }
 
-export function AppsPage({ locationServicesEnabled, onBackToChat, onOpenRadar }: AppsPageProps) {
+export function AppsPage({ onBackToChat }: AppsPageProps) {
   return (
     <section className="apps-page">
       <header className="apps-hero">
@@ -18,7 +18,7 @@ export function AppsPage({ locationServicesEnabled, onBackToChat, onOpenRadar }:
           </span>
           <span>
             <h1>Apps</h1>
-            <small>Native tools and capability bundles</small>
+            <small>Plugins, Apps, Skills, and more</small>
           </span>
         </div>
         <button className="apps-back-button" type="button" onClick={onBackToChat}>
@@ -27,42 +27,24 @@ export function AppsPage({ locationServicesEnabled, onBackToChat, onOpenRadar }:
         </button>
       </header>
 
-      {locationServicesEnabled ? (
-        <section className="apps-native-section" aria-labelledby="apps-native-title">
-          <div className="apps-section-heading">
-            <h2 id="apps-native-title">Native Apps</h2>
-          </div>
-          <div className="apps-card-grid">
-            <article className="apps-card">
-              <span className="apps-card-icon">
-                <Radar size={23} aria-hidden="true" />
-              </span>
-              <span className="apps-card-copy">
-                <strong>Radar</strong>
-                <small>Country-aware weather layers</small>
-              </span>
-              <span className="apps-card-meta">
-                <MapPin size={14} aria-hidden="true" />
-                <span>Location</span>
-              </span>
-              <button type="button" onClick={onOpenRadar}>
-                Open
-              </button>
-            </article>
-          </div>
-        </section>
-      ) : null}
+      <main className="apps-coming-soon" aria-labelledby="apps-coming-soon-title">
+        <span className="apps-coming-kicker">
+          <ShieldCheck size={15} aria-hidden="true" />
+          Next update
+        </span>
 
-      <section className="apps-plugin-section" aria-labelledby="apps-plugin-title">
-        <div className="apps-section-heading">
-          <h2 id="apps-plugin-title">Plugins</h2>
-          <span>
-            <ShieldCheck size={14} aria-hidden="true" />
-            <small>Reviewable permissions</small>
-          </span>
+        <div className="apps-coming-copy">
+          <h2 id="apps-coming-soon-title">Coming soon in the next update</h2>
+          <p>Plugins, Apps, Skills, and more.</p>
         </div>
-        <PluginDirectory embedded />
-      </section>
+
+        <div className="apps-coming-list" aria-label="Upcoming capabilities">
+          <span>Plugins</span>
+          <span>Apps</span>
+          <span>Skills</span>
+          <span>More</span>
+        </div>
+      </main>
     </section>
   );
 }

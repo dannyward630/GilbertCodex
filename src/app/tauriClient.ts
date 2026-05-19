@@ -205,7 +205,7 @@ export type NineRouterInstallEvent =
 export interface NineRouterHttpRequest {
   body?: string;
   headers?: Record<string, string>;
-  method: "GET" | "POST";
+  method: "DELETE" | "GET" | "POST";
   timeoutMs?: number;
   url: string;
 }
@@ -284,7 +284,7 @@ export async function ensureNineRouterLocal(): Promise<NineRouterLocalStatus> {
       installed: false,
       launchSupported: false,
       launched: false,
-      message: "9Router Local starts when you use subscription routing in the desktop app.",
+      message: "Subscriptions start when you use subscription routing in the desktop app.",
       nodeVersion: null,
       npmVersion: null,
       pid: null,
@@ -309,7 +309,7 @@ export async function setNineRouterLocalAutoStart(enabled: boolean): Promise<Nin
       installed: false,
       launchSupported: false,
       launched: false,
-      message: enabled ? "9Router Local auto-start is available in the desktop app." : "9Router Local auto-start is disabled.",
+      message: enabled ? "Subscription auto-start is available in the desktop app." : "Subscription auto-start is disabled.",
       nodeVersion: null,
       npmVersion: null,
       pid: null,
@@ -342,7 +342,7 @@ export async function stopNineRouterLocal(): Promise<NineRouterLocalStatus> {
       installed: false,
       launchSupported: false,
       launched: false,
-      message: "9Router Local stop is available in the desktop app.",
+      message: "Subscription stop is available in the desktop app.",
       nodeVersion: null,
       npmVersion: null,
       pid: null,
@@ -353,9 +353,17 @@ export async function stopNineRouterLocal(): Promise<NineRouterLocalStatus> {
   return invoke<NineRouterLocalStatus>("nine_router_local_stop");
 }
 
+export async function uninstallNineRouterLocal(): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Sandbox subscriptions can be uninstalled from the desktop app.");
+  }
+
+  return invoke<NineRouterLocalStatus>("nine_router_local_uninstall");
+}
+
 export async function installNineRouterLocal(onEvent: (event: NineRouterInstallEvent) => void): Promise<NineRouterLocalStatus> {
   if (!isTauriDesktopRuntime()) {
-    throw new Error("9Router Local install is available in the desktop app.");
+    throw new Error("Subscription setup is available in the desktop app.");
   }
 
   const onEventChannel = new Channel<NineRouterInstallEvent>(onEvent);
@@ -382,7 +390,7 @@ export async function nineRouterLocalHttp(request: NineRouterHttpRequest): Promi
 
 export async function nineRouterLocalStream(request: NineRouterHttpRequest, onEvent: (event: NineRouterHttpStreamEvent) => void): Promise<void> {
   if (!isTauriDesktopRuntime()) {
-    throw new Error("9Router Local native streaming is available in the desktop app.");
+    throw new Error("Subscription streaming is available in the desktop app.");
   }
 
   const onEventChannel = new Channel<NineRouterHttpStreamEvent>(onEvent);
@@ -391,7 +399,7 @@ export async function nineRouterLocalStream(request: NineRouterHttpRequest, onEv
 
 export async function startNineRouterOAuthCallback(): Promise<NineRouterOAuthCallbackStartResponse> {
   if (!isTauriDesktopRuntime()) {
-    throw new Error("9Router account sign-in is available in the desktop app.");
+    throw new Error("Subscription account sign-in is available in the desktop app.");
   }
 
   return invoke<NineRouterOAuthCallbackStartResponse>("nine_router_oauth_callback_start");
@@ -399,7 +407,7 @@ export async function startNineRouterOAuthCallback(): Promise<NineRouterOAuthCal
 
 export async function finishNineRouterOAuthCallback(id: string, timeoutMs = 300_000): Promise<NineRouterOAuthCallbackResponse> {
   if (!isTauriDesktopRuntime()) {
-    throw new Error("9Router account sign-in is available in the desktop app.");
+    throw new Error("Subscription account sign-in is available in the desktop app.");
   }
 
   return invoke<NineRouterOAuthCallbackResponse>("nine_router_oauth_callback_finish", {

@@ -1,4 +1,4 @@
-export type PrimaryRoute = "chat" | "apps" | "radar" | "settings";
+export type PrimaryRoute = "chat" | "apps" | "radar" | "settings" | "support";
 
 export interface NavigationItem {
   id: PrimaryRoute;

@@ -380,6 +380,28 @@
   border-top: 1px solid color-mix(in srgb, var(--sidebar-border) 72%, transparent);
 }
 
+.sidebar-settings-footer {
+  gap: 8px;
+}
+
+.sidebar-settings-logout {
+  justify-content: flex-start;
+  min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--danger) 18%, var(--sidebar-border));
+  background: color-mix(in srgb, var(--sidebar) 62%, transparent);
+}
+
+.sidebar-settings-logout svg {
+  color: color-mix(in srgb, var(--danger) 58%, var(--text-muted));
+}
+
+.sidebar-settings-logout:hover,
+.sidebar-settings-logout:focus-visible {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 .sidebar-account-card {
   position: relative;
   display: grid;

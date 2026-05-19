@@ -235,6 +235,7 @@ function disablePlanningExecutionTools(tools: ProviderSettings["tools"]): Provid
     fileCreation: false,
     fileSafety: false,
     fileSearch: false,
+    imageGeneration: false,
     pdfTools: false,
     reactNativeTools: false,
     sourceControl: false,

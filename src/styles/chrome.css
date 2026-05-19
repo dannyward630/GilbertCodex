@@ -22,6 +22,15 @@
   z-index: 20;
 }
 
+:root[data-runtime="desktop"]:has(.dialog-backdrop) .app-topbar {
+  z-index: 140;
+  border-bottom-color: var(--line-soft);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--workspace-bg) 94%, white 6%), var(--workspace-bg)),
+    var(--workspace-bg);
+  box-shadow: 0 10px 28px color-mix(in srgb, black 16%, transparent);
+}
+
 .app-topbar:active {
   cursor: grabbing;
 }

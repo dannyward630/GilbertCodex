@@ -3,6 +3,7 @@ import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRun
 import {
   createCompletedToolFallbackSummary,
   createNeutralToolSynthesisFailureMessage,
+  createToolProtocolNarrationRecoveryInstruction,
   isInterruptedAssistantMessage,
   isFileReadSynthesisToolCall,
   looksLikeInFlightToolPlanning,
@@ -42,6 +43,25 @@ describe("tool protocol leak guards", () => {
       id: "assistant-tool-json",
       role: "assistant",
     })).toBe(true);
+  });
+
+  it("detects fenced provider-native tool_calls JSON printed as visible text", () => {
+    const content = [
+      "```json",
+      `{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"files_read","arguments":"{\\"path\\":\\"src/app/App.tsx\\"}"}}]}`,
+      "```",
+    ].join("\n");
+
+    expect(looksLikeToolProtocolNarration(content)).toBe(true);
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+  });
+
+  it("tells recovery turns not to emit JSON envelopes or whole-response fences", () => {
+    const instruction = createToolProtocolNarrationRecoveryInstruction("inspect files", `{"tool_calls":[]}`);
+
+    expect(instruction).toContain("Do not emit visible tool-call syntax");
+    expect(instruction).toContain("provider tool_calls");
+    expect(instruction).toContain("whole-response code fence");
   });
 
   it("detects OpenAI-style function tool_calls JSON printed as visible text", () => {

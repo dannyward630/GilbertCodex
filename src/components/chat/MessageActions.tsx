@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Clock3, Copy, MoreHorizontal, Pencil, RefreshCcw, Square } from "lucide-react";
 import { copyTextToClipboard } from "../../lib/clipboard";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
+import { normalizeMarkdownForDisplay } from "../../lib/markdown";
+import { stripVisibleToolProtocol } from "../../lib/visibleToolProtocol";
 import type { ChatMessage } from "../../types/chat";
 
 interface MessageActionsProps {
@@ -45,7 +47,9 @@ export function MessageActions({ canRegenerate, message, onEditMessage, onRegene
   const [menuOpen, setMenuOpen] = useState(false);
   const timeLabel = formatMessageTime(message.createdAt);
   const fullTimeLabel = formatMessageDateTime(message.createdAt);
-  const copyContent = message.content;
+  const copyContent = message.role === "assistant"
+    ? normalizeMarkdownForDisplay(stripVisibleToolProtocol(message.content), { final: !message.isStreaming })
+    : message.content;
   const copyDisabled = !copyContent.trim();
   const showRegenerate = Boolean(canRegenerate && onRegenerateResponse && message.role === "assistant" && !message.isStreaming);
   const regenerateLabel = isInterruptedAssistantMessage(message) ? "Continue response" : "Regenerate response";

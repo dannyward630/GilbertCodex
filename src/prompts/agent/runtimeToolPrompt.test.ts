@@ -12,7 +12,7 @@ function attachedTool(id: string, family: NonNullable<ToolDefinition["executorMe
     id,
     inputSchema: { type: "object" },
     permission: family === "terminal" ? "terminal" : "read-only",
-    risk: family === "terminal" ? "terminal" : family === "web" ? "network" : "read",
+    risk: family === "terminal" ? "terminal" : family === "web" || family === "media" ? "network" : "read",
     title: id,
   };
 }
@@ -163,6 +163,29 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("budget: passes 11/12; executions 47/48");
   });
 
+  it("tells the model to use attached image generation for visual creation", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: false,
+      hasWebContext: false,
+      latestUserPrompt: "generate an image of a clean app icon",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [attachedTool("image_generate", "media")],
+      },
+    });
+
+    expect(prompt).toContain("image_generate");
+    expect(prompt).toContain("call image_generate instead of merely describing the image");
+    expect(prompt).toContain("subject, style or medium, composition/framing, colors, lighting, text requirements, and constraints");
+    expect(prompt).toContain("set n/count from 1 to 4");
+    expect(prompt).toContain("Omit the model unless the user explicitly asks for a complete cx/* subscription image route");
+    expect(prompt).toContain("Never pass partial model routes such as cx/");
+    expect(prompt).toContain("OpenAI native image ids such as gpt-image-1");
+    expect(prompt).toContain("attached image artifact");
+    expect(prompt).toContain("do not paste base64");
+  });
+
   it("tells the model to use attached local Git tools for change reviews", () => {
     const prompt = createRuntimeToolPrompt({
       hasLocalComputerContext: true,
@@ -243,5 +266,6 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("Do not wrap the whole answer in a fenced code block");
     expect(prompt).toContain("Use fenced code blocks only for actual code snippets");
     expect(prompt).toContain("ordinary summaries, plans, bullets, tables, or explanations");
+    expect(prompt).toContain("Do not emit JSON envelopes, provider tool_calls");
   });
 });

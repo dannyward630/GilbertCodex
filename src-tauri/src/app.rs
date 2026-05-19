@@ -19,6 +19,10 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
                     window.set_icon(icon.clone())?;
                 }
             }
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.center();
+                let _ = main_window.maximize();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -98,6 +102,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::nine_router::nine_router_local_status,
             commands::nine_router::nine_router_local_stop,
             commands::nine_router::nine_router_local_stream,
+            commands::nine_router::nine_router_local_uninstall,
             commands::nine_router::nine_router_oauth_callback_finish,
             commands::nine_router::nine_router_oauth_callback_start,
             commands::app_info::open_external_url,

@@ -26,11 +26,10 @@ test-results/
 target/
 src-tauri/target/
 src-tauri/.tauri/
-src-tauri/resources/9router/*
-!src-tauri/resources/9router/README.md
 
 # Claude / Cursor local agent settings (may contain machine-specific paths)
 .claude/
+.codex-output/
 .codex-logs/
 .codex-security-scans/
 

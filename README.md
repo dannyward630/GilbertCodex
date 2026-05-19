@@ -6,7 +6,7 @@
 
 Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewing, researching, and shipping code from one focused surface. It combines React, TypeScript, Tauri 2, and a Rust command layer so local workspace features can run without requiring a hosted backend for the public alpha.
 
-[![Version](https://img.shields.io/badge/version-0.3.5-d8b36c)](docs/releases/v0.3.5.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-d8b36c)](docs/releases/v0.5.0.md)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db)](https://tauri.app/)
 [![React 18](https://img.shields.io/badge/React-18-61dafb)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6)](https://www.typescriptlang.org/)
@@ -22,7 +22,7 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ## Current Status
 
-Gilbert Codex v0.3.5 is the next major public alpha update. The app now includes local account sign-in, a chat workspace, project-scoped state, multi-provider model streaming, planning mode, thinking controls, source-backed context, Discord slash-command bridge setup/runtime, GitHub account setup, settings, desktop notifications, and a Tauri command layer.
+Gilbert Codex v0.5.0 is the largest public alpha jump so far: a middle-ground release between the early 0.3 line and the road to 1.0. The app now feels much closer to a serious desktop AI workspace, with local users, project-scoped state, multi-provider model streaming, thinking/planning controls, source-backed context, subscription account sign-in, image-generation artifacts, GitHub and Discord setup, safer deletion/review flows, and a cleaner modular app runtime.
 
 This is still alpha software. Provider behavior varies by model, and some edge cases are still being tightened as real users test the app. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths remain gated by explicit permission and review behavior.
 
@@ -32,28 +32,31 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The v0.3.5 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.3.5).
+The v0.5.0 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.0).
 
 Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.3.5 release notes](docs/releases/v0.3.5.md) for release-prep notes, setup notes, known limitations, and validation commands.
+See [v0.5.0 release notes](docs/releases/v0.5.0.md) for release-prep notes, setup notes, known limitations, and validation commands.
 
 ## Product Shape
 
 - Desktop shell: Tauri 2 window, custom chrome, local app metadata, and Rust commands.
-- Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
-- Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, targeted stop controls, and local persistence.
+- Local users: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
+- Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, queued sends, targeted stop controls, bulk delete review, and local persistence.
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
+- Subscription routing: optional local subscription routing for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported provider accounts, with account sign-in, sign-out, usage visibility, model catalogs, and clean OpenRouter fallback.
+- Image generation: chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. Codex / ChatGPT-backed image generation is the first-class path in this release; broader provider coverage is still being tightened.
 - Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
-- Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and workspace controls.
+- Settings: provider key/base URL entry, subscription setup, GitHub browser login, Discord bridge setup/runtime controls, support/funding links, connection validation, appearance mode, model, generation, thinking, and workspace controls.
 
 ## Coming Next
 
 The next roadmap is focused on making Gilbert faster, clearer, and more capable in real coding sessions. See the full [roadmap](docs/ROADMAP.md) for the active direction.
 
+- Apps page: the next big product surface is the Apps / Plugins / Skills area. v0.5.0 intentionally marks it as coming next instead of pretending the page is complete.
 - Activity and inspector polish: grouped runs, easier progress scanning, cleaner source cards, and less protocol-facing noise.
 - Source-control workflow: richer review cards, GitHub issue/PR/release helpers, workflow visibility, and contributor-friendly starter issues.
 - Research upgrades: stronger source quality, thinking/planning context, and better citation surfaces.

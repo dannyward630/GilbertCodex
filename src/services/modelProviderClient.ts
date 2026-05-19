@@ -518,9 +518,9 @@ async function fetchNineRouterNativeResponse(url: string, init: RequestInit, sig
   throwIfSignalAborted(signal);
 
   const nativeResponse = await nineRouterLocalHttp({
-    body: normalizeNativeRequestBody(init.body, "9Router Local native bridge"),
+    body: normalizeNativeRequestBody(init.body, "Subscriptions native bridge"),
     headers: headersToRecord(init.headers),
-    method: normalizeNativeRequestMethod(init.method, "9Router Local native bridge"),
+    method: normalizeNativeRequestMethod(init.method, "Subscriptions native bridge"),
     timeoutMs,
     url,
   });
@@ -608,16 +608,16 @@ async function fetchNineRouterNativeStreamResponse(url: string, init: RequestIni
   signal?.addEventListener("abort", abortFromSignal, { once: true });
 
   void nineRouterLocalStream({
-    body: normalizeNativeRequestBody(init.body, "9Router Local native bridge"),
+    body: normalizeNativeRequestBody(init.body, "Subscriptions native bridge"),
     headers: headersToRecord(init.headers),
-    method: normalizeNativeRequestMethod(init.method, "9Router Local native bridge"),
+    method: normalizeNativeRequestMethod(init.method, "Subscriptions native bridge"),
     timeoutMs,
     url,
   }, handleEvent).then(
     () => {
       signal?.removeEventListener("abort", abortFromSignal);
       if (!responseStarted) {
-        rejectResponse?.(new Error("9Router Local stream ended before returning headers."));
+        rejectResponse?.(new Error("Subscription stream ended before returning headers."));
         return;
       }
 
@@ -658,7 +658,7 @@ function createProviderFetchError(providerLabel: string, url: string, error: unk
   const message = error instanceof Error ? error.message : String(error);
 
   if (providerLabel === "9Router Local" && /failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
-    return new Error(`Could not reach 9Router Local at ${url}. Start 9Router in Settings, then retry.`);
+    return new Error(`Could not reach subscriptions at ${url}. Open Subscriptions, then retry.`);
   }
 
   return error;
@@ -674,7 +674,7 @@ async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: Ab
   throwIfSignalAborted(signal);
 
   if (!status.running) {
-    throw new Error(status.message || "9Router Local is not running. Open Subscriptions and start it, then retry.");
+    throw new Error(status.message || "Subscriptions are not ready. Open Subscriptions, then retry.");
   }
 }
 
@@ -721,14 +721,14 @@ function formatNineRouterRequestError(model: string, providerMessage: string | u
     const providerName = formatNineRouterProviderName(providerId);
 
     if (model === "free-combo") {
-      return `9Router is running, but the selected free-combo route is not ready. It fell through to ${providerName} with no active credentials. Open the 9Router dashboard, connect a provider or create the free-combo, then choose a live 9Router model.`;
+      return `Subscription routing is running, but the selected free-combo route is not ready. It fell through to ${providerName} with no active credentials. Open Subscriptions, connect a provider or create the free-combo, then choose a live subscription model.`;
     }
 
-    return `9Router is running, but ${providerName} is not connected for ${model}. Open the 9Router dashboard, connect ${providerName}, then retry or choose a connected model from the 9Router model list.`;
+    return `Subscription routing is running, but ${providerName} is not connected for ${model}. Open Subscriptions, connect ${providerName}, then retry or choose a connected subscription model.`;
   }
 
   if (status === 404 && model === "free-combo") {
-    return "9Router is running, but free-combo is not available in the local model catalog. Create that combo in 9Router or switch Gilbert to a live 9Router model.";
+    return "Subscription routing is running, but free-combo is not available in the local model catalog. Create that combo in Subscriptions or switch Gilbert to a live subscription model.";
   }
 
   return "";

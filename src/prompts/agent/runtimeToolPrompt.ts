@@ -41,6 +41,9 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
     hasTool("web_search")
       ? formatWebSearchToolGuidance(latestUserPrompt)
       : "Live web search is not attached for this request.",
+    hasTool("image_generate")
+      ? "Image generation is available through image_generate for this request. When the user asks to create, generate, draw, render, design, or produce an image, call image_generate instead of merely describing the image. Put a strong visual brief in the tool prompt: subject, style or medium, composition/framing, colors, lighting, text requirements, and constraints. If the user asks for multiple options, set n/count from 1 to 4 and ask for distinct variations in the prompt. Omit the model unless the user explicitly asks for a complete cx/* subscription image route. Never pass partial model routes such as cx/ or OpenAI native image ids such as gpt-image-1 in this tool. Mention the attached image artifact after it succeeds; do not paste base64."
+      : "Image generation is not attached for this request.",
     hasWebContext
       ? "Live web-search context is present. Treat it as the only current external evidence for this answer and cite only the provided URLs."
       : hasTool("web_search")
@@ -60,7 +63,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? "For research requests, use focused web_search calls only when source coverage is insufficient. Prefer primary sources, avoid duplicate queries, and synthesize only from cited live sources plus local tool evidence."
       : "",
     hasExactToolBridge && attachedTools.length === 0 ? "No provider tools are attached. Answer from chat, attachments, and already-provided context only." : "",
-    "Visible answers should be normal Markdown prose. Do not wrap the whole answer in a fenced code block, and do not use code fences for ordinary summaries, plans, bullets, tables, or explanations. Use fenced code blocks only for actual code snippets, diffs, logs, terminal output, or code-only content the user explicitly requested. Never mention hidden tool protocols or unavailable tool syntax unless the user directly asks about tool availability.",
+    "Visible answers should be normal Markdown prose. Do not wrap the whole answer in a fenced code block, and do not use code fences for ordinary summaries, plans, bullets, tables, or explanations. Do not emit JSON envelopes, provider tool_calls, or raw tool-call markup as visible text. Use fenced code blocks only for actual code snippets, diffs, logs, terminal output, or code-only content the user explicitly requested. Never mention hidden tool protocols or unavailable tool syntax unless the user directly asks about tool availability.",
   ];
 
   return sections.filter(Boolean).join("\n");

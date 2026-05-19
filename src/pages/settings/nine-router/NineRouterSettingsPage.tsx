@@ -1,4 +1,4 @@
-import { CheckCircle2, Download, ExternalLink, KeyRound, Play, RefreshCcw, Route, ServerCog, UserCheck } from "lucide-react";
+import { CheckCircle2, Download, ExternalLink, KeyRound, LogOut, Play, RefreshCcw, Route, ServerCog, Trash2, UserCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ensureNineRouterLocal,
@@ -9,10 +9,12 @@ import {
   nineRouterLocalHttp,
   openExternalUrl,
   startNineRouterOAuthCallback,
+  uninstallNineRouterLocal,
   type NineRouterInstallEvent,
   type NineRouterLocalStatus,
 } from "../../../app/tauriClient";
 import { getDefaultBaseUrlForProvider, getDefaultModelForProvider } from "../../../lib/models";
+import { scheduleIdleTask } from "../../../lib/idleTask";
 import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "../../../services/nativeHttp";
 import {
   choosePreferredConnection,
@@ -37,15 +39,17 @@ import {
   type NineRouterOAuthPollResponse,
 } from "../../../services/nineRouterClient";
 import type { ProviderSettings } from "../../../types/settings";
+import { ConfirmDialog } from "../../../components/dialogs/AppDialog";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
 
 interface NineRouterSettingsPageProps {
   onSettingsChange: (settings: ProviderSettings) => void;
+  onSubscriptionSandboxUninstalled?: (settings: ProviderSettings) => void;
   settings: ProviderSettings;
 }
 
-type NineRouterBusyState = `account:${string}` | "install" | "start" | "status" | null;
+type NineRouterBusyState = `account:${string}` | `disconnect:${string}` | "install" | "start" | "status" | "uninstall" | null;
 type NineRouterModelCatalogState = {
   message: string;
   models: string[];
@@ -82,13 +86,31 @@ type NineRouterUsageState = {
   status: "idle" | "loading" | "ready" | "error";
   usage?: NineRouterUsagePayload;
 };
+type NineRouterInstallProgressState = {
+  detail: string;
+  label: string;
+  percent: number;
+  status: "error" | "idle" | "running" | "success";
+};
+type NineRouterDisconnectTarget = {
+  connections: NineRouterConnection[];
+  provider: NineRouterAccountProvider;
+};
 
 const NINE_ROUTER_MODEL_TEST_MESSAGE = "Reply with OK only.";
+const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
+  detail: "",
+  label: "Ready to install",
+  percent: 0,
+  status: "idle",
+};
 
-export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRouterSettingsPageProps) {
+export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandboxUninstalled, settings }: NineRouterSettingsPageProps) {
   const [busy, setBusy] = useState<NineRouterBusyState>(null);
   const accountConnectRunRef = useRef(0);
-  const [installLog, setInstallLog] = useState<string[]>([]);
+  const uninstallInFlightRef = useRef(false);
+  const [installProgress, setInstallProgress] = useState<NineRouterInstallProgressState>(NINE_ROUTER_INSTALL_PROGRESS_IDLE);
+  const [uninstallProgress, setUninstallProgress] = useState<NineRouterInstallProgressState | null>(null);
   const [connectionCatalog, setConnectionCatalog] = useState<NineRouterConnectionCatalogState>({
     connections: [],
     message: "Not checked",
@@ -102,6 +124,8 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
   const [modelTestBusy, setModelTestBusy] = useState(false);
   const [status, setStatus] = useState<NineRouterLocalStatus | null>(null);
   const [statusMessage, setStatusMessage] = useState<SettingsStatusMessage | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<NineRouterDisconnectTarget | null>(null);
+  const [uninstallConfirmOpen, setUninstallConfirmOpen] = useState(false);
   const [usageByConnectionId, setUsageByConnectionId] = useState<Record<string, NineRouterUsageState>>({});
   const isNineRouterActive = settings.provider === NINE_ROUTER_PROVIDER_ID;
   const nineRouterBaseUrl = settings.baseUrls[NINE_ROUTER_PROVIDER_ID]?.trim() || status?.baseUrl || getDefaultBaseUrlForProvider(NINE_ROUTER_PROVIDER_ID);
@@ -129,16 +153,15 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
     modelCatalog.models.length > 0 &&
     Boolean(savedNineRouterModel) &&
     !modelCatalog.models.includes(savedNineRouterModel);
-  const helperReady = Boolean(status?.running);
-  const helperStatusLabel = !status ? "Checking" : status.running ? "Ready" : status.installed ? "Installed, waiting to start" : "Not installed";
-  const helperActionLabel = status?.installed ? "Start helper" : "Install helper";
+  const helperReady = Boolean(status?.running && status.installed);
+  const helperStatusLabel = !status ? "Checking" : status.running && status.installed ? "Ready" : status.installed ? "Starting automatically" : "Not installed";
+  const helperActionLabel = status?.installed ? "Start subscriptions" : "Install subscriptions";
   const helperActionBusyLabel = status?.installed ? "Starting" : "Installing";
+  const hasSandboxFootprint = Boolean(status?.installed || status?.dataDir || status?.installDir);
+  const showInstallProgress = busy === "install" || installProgress.status === "running" || installProgress.status === "error";
+  const showUninstallProgress = busy === "uninstall" || uninstallProgress?.status === "running" || uninstallProgress?.status === "error";
   const installBlocked = useMemo(() => {
     if (!status) {
-      return "";
-    }
-
-    if (status.installed) {
       return "";
     }
 
@@ -159,9 +182,12 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
     : null;
 
   useEffect(() => {
-    void refreshStatus({ quiet: true });
+    const cancelStartup = scheduleIdleTask(() => {
+      void startNineRouter({ quiet: true });
+    }, 350);
 
     return () => {
+      cancelStartup();
       accountConnectRunRef.current += 1;
       void stopCodexOAuthProxy();
     };
@@ -192,7 +218,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
         void refreshProviderConnections({ quiet: true });
       }
     } catch (error) {
-      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not check the subscription helper." });
+      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not check subscriptions." });
     } finally {
       if (!options.quiet) {
         setBusy((current) => (current === "status" ? null : current));
@@ -200,28 +226,40 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
     }
   }
 
-  async function startNineRouter() {
-    setBusy("start");
-    setStatusMessage(null);
+  async function startNineRouter(options: { quiet?: boolean } = {}) {
+    if (!options.quiet) {
+      setBusy("start");
+      setStatusMessage(null);
+    }
 
     try {
       const nextStatus = await ensureNineRouterLocal();
       setStatus(nextStatus);
-      setStatusMessage({ kind: nextStatus.running ? "success" : "warning", text: nextStatus.message });
+      if (!options.quiet) {
+        setStatusMessage({ kind: nextStatus.running ? "success" : "warning", text: nextStatus.message });
+      }
       if (nextStatus.running) {
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
       }
     } catch (error) {
-      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not start the subscription helper." });
+      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not start subscription routing." });
     } finally {
-      setBusy((current) => (current === "start" ? null : current));
+      if (!options.quiet) {
+        setBusy((current) => (current === "start" ? null : current));
+      }
     }
   }
 
   async function installAndStartNineRouter() {
     setBusy("install");
-    setInstallLog([]);
+    setUninstallProgress(null);
+    setInstallProgress({
+      detail: "Checking local tools and folders.",
+      label: "Preparing subscriptions",
+      percent: 6,
+      status: "running",
+    });
     setStatusMessage(null);
 
     try {
@@ -229,38 +267,155 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
         handleInstallEvent(event);
       });
       setStatus(installedStatus);
+      setInstallProgress({
+        detail: "Launching the local routing API.",
+        label: "Starting subscriptions",
+        percent: 96,
+        status: "running",
+      });
       const startedStatus = await ensureNineRouterLocal();
       setStatus(startedStatus);
       setStatusMessage({ kind: startedStatus.running ? "success" : "warning", text: startedStatus.message });
+      setInstallProgress({
+        detail: startedStatus.message,
+        label: startedStatus.running ? "Subscriptions are ready" : "Start needs attention",
+        percent: startedStatus.running ? 100 : 96,
+        status: startedStatus.running ? "success" : "error",
+      });
       if (startedStatus.running) {
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
       }
     } catch (error) {
-      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not install the subscription helper." });
+      const message = error instanceof Error ? error.message : "Could not install subscriptions.";
+      setInstallProgress((current) => ({
+        ...current,
+        detail: message,
+        label: "Install could not finish",
+        status: "error",
+      }));
+      setStatusMessage({ kind: "error", text: message });
     } finally {
       setBusy((current) => (current === "install" ? null : current));
     }
   }
 
+  async function uninstallSandboxSubscriptions() {
+    if (uninstallInFlightRef.current) {
+      return;
+    }
+
+    uninstallInFlightRef.current = true;
+    accountConnectRunRef.current += 1;
+    setUninstallConfirmOpen(false);
+    setBusy("uninstall");
+    setStatusMessage({ kind: "warning", text: "Uninstalling sandbox subscriptions. Stopping the local runtime and removing saved subscription data." });
+    setUninstallProgress({
+      detail: "Stopping the local routing process.",
+      label: "Uninstalling sandbox subscriptions",
+      percent: 20,
+      status: "running",
+    });
+
+    try {
+      void stopCodexOAuthProxy();
+      setUninstallProgress({
+        detail: "Removing the local runtime, saved sign-ins, and cached routing data.",
+        label: "Removing subscription files",
+        percent: 58,
+        status: "running",
+      });
+      const nextStatus = await uninstallNineRouterLocal();
+      setStatus(nextStatus);
+      setInstallProgress(NINE_ROUTER_INSTALL_PROGRESS_IDLE);
+      setUninstallProgress(nextStatus.running
+        ? {
+            detail: nextStatus.message,
+            label: "Uninstall needs attention",
+            percent: 92,
+            status: "error",
+          }
+        : null);
+      setConnectionCatalog({
+        connections: [],
+        message: "Subscriptions uninstalled",
+        status: "idle",
+      });
+      setModelCatalog({
+        message: "Not checked",
+        models: [],
+        status: "idle",
+      });
+      setUsageByConnectionId({});
+
+      const openRouterModel = settings.providerModels.openrouter?.trim() || getDefaultModelForProvider("openrouter");
+      const nextSettings = createSubscriptionSandboxUninstalledSettings(settings, openRouterModel);
+      if (onSubscriptionSandboxUninstalled) {
+        onSubscriptionSandboxUninstalled(nextSettings);
+      } else {
+        onSettingsChange(nextSettings);
+      }
+
+      setUninstallConfirmOpen(false);
+      setStatusMessage({
+        kind: nextStatus.running ? "warning" : "success",
+        text: nextStatus.running ? nextStatus.message : "Sandbox subscriptions were uninstalled. You can install them again whenever you need subscription routing.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not uninstall sandbox subscriptions.";
+      setUninstallProgress((current) => ({
+        detail: message,
+        label: "Uninstall could not finish",
+        percent: current?.percent ?? 58,
+        status: "error",
+      }));
+      setStatusMessage({ kind: "error", text: message });
+    } finally {
+      uninstallInFlightRef.current = false;
+      setBusy((current) => (current === "uninstall" ? null : current));
+    }
+  }
+
   function handleInstallEvent(event: NineRouterInstallEvent) {
-    if (event.event === "started" || event.event === "step") {
-      appendInstallLog(event.data.message);
+    if (event.event === "started") {
+      setInstallProgress({
+        detail: "Checking local tools and folders.",
+        label: "Preparing subscriptions",
+        percent: 8,
+        status: "running",
+      });
+      return;
+    }
+
+    if (event.event === "step") {
+      const step = getInstallStepProgress(event.data.message);
+      setInstallProgress({
+        detail: step.detail,
+        label: step.label,
+        percent: step.startPercent,
+        status: "running",
+      });
       return;
     }
 
     if (event.event === "output") {
-      const output = [event.data.stdout, event.data.stderr].filter(Boolean).join("\n").trim();
-      appendInstallLog(output ? `${event.data.label}\n${output}` : `${event.data.label} complete`);
+      const step = getInstallStepProgress(event.data.label);
+      setInstallProgress({
+        detail: step.doneDetail,
+        label: step.doneLabel,
+        percent: step.donePercent,
+        status: "running",
+      });
       return;
     }
 
     setStatus(event.data.status);
-    appendInstallLog("Subscription helper install complete.");
-  }
-
-  function appendInstallLog(line: string) {
-    setInstallLog((current) => [...current, formatSubscriptionHelperText(line)].slice(-8));
+    setInstallProgress({
+      detail: "Launching the local routing API.",
+      label: "Subscriptions installed",
+      percent: 94,
+      status: "running",
+    });
   }
 
   async function refreshProviderConnections(options: { quiet?: boolean; refreshUsage?: boolean } = {}) {
@@ -324,7 +479,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
       });
 
       if (!options.quiet) {
-        setStatusMessage({ kind: models.length > 0 ? "success" : "warning", text: models.length > 0 ? `${message} loaded.` : "The subscription helper is running, but it did not report any live models." });
+        setStatusMessage({ kind: models.length > 0 ? "success" : "warning", text: models.length > 0 ? `${message} loaded.` : "Subscriptions are running, but no live models were reported yet." });
       }
 
       return models;
@@ -405,7 +560,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
       }
 
       if (!nextStatus.running) {
-        throw new Error(nextStatus.message || "Install and start the subscription helper before connecting Codex.");
+        throw new Error(nextStatus.message || "Set up subscriptions before connecting Codex.");
       }
 
       await stopCodexOAuthProxy();
@@ -415,7 +570,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
       const authData = await fetchNineRouterJson<NineRouterAuthorizeResponse>(authUrl);
 
       if (!authData.authUrl || !authData.state || !authData.codeVerifier) {
-        throw new Error("The subscription helper did not return a complete Codex sign-in request.");
+        throw new Error("Subscriptions did not return a complete Codex sign-in request.");
       }
 
       const proxyUrl = createNineRouterUrl(nineRouterDashboardUrl, "/api/oauth/codex/start-proxy", {
@@ -427,7 +582,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
       const proxy = await fetchNineRouterJson<NineRouterCodexProxyResponse>(proxyUrl);
 
       if (!proxy.success || !proxy.serverSide) {
-        throw new Error(proxy.reason === "port_busy" ? "Codex sign-in is already open. Finish or close the previous sign-in window, then retry." : "The subscription helper could not start the Codex sign-in callback.");
+        throw new Error(proxy.reason === "port_busy" ? "Codex sign-in is already open. Finish or close the previous sign-in window, then retry." : "Subscriptions could not start the Codex sign-in callback.");
       }
 
       setStatusMessage({ kind: "warning", text: "Finish the OpenAI sign-in in your browser. Gilbert will pick it up automatically." });
@@ -485,7 +640,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
       }
 
       if (!nextStatus.running) {
-        throw new Error(nextStatus.message || `Install and start the subscription helper before connecting ${provider.name}.`);
+        throw new Error(nextStatus.message || `Set up subscriptions before connecting ${provider.name}.`);
       }
 
       if (provider.flow === "device_code") {
@@ -504,13 +659,74 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
     }
   }
 
+  async function disconnectProviderAccount(target = disconnectTarget) {
+    if (!target || target.connections.length === 0) {
+      setDisconnectTarget(null);
+      return;
+    }
+    if (busy === `disconnect:${target.provider.id}`) {
+      return;
+    }
+
+    const runId = accountConnectRunRef.current + 1;
+    accountConnectRunRef.current = runId;
+    setBusy(`disconnect:${target.provider.id}`);
+    setStatusMessage(null);
+
+    try {
+      let nextStatus = status;
+      if (!nextStatus?.running) {
+        nextStatus = await ensureNineRouterLocal();
+        setStatus(nextStatus);
+      }
+
+      if (!nextStatus.running) {
+        throw new Error(nextStatus.message || `Start subscriptions before signing out from ${target.provider.name}.`);
+      }
+
+      const results = await Promise.allSettled(
+        target.connections.map((connection) => deleteNineRouterConnection(nineRouterDashboardUrl, connection.id)),
+      );
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+
+      if (failures.length > 0) {
+        throw new Error(failures[0]);
+      }
+
+      if (accountConnectRunRef.current !== runId) {
+        return;
+      }
+
+      const [connections] = await Promise.all([
+        refreshProviderConnections({ quiet: true, refreshUsage: false }),
+        refreshModelCatalog({ quiet: true }),
+      ]);
+      void refreshAccountUsage(connections);
+      setDisconnectTarget(null);
+      setStatusMessage({
+        kind: "success",
+        text: `${target.provider.name} signed out from subscriptions.`,
+      });
+    } catch (error) {
+      if (accountConnectRunRef.current === runId) {
+        setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : `Could not sign out from ${target.provider.name}.` });
+      }
+    } finally {
+      if (accountConnectRunRef.current === runId) {
+        setBusy((current) => (current === `disconnect:${target.provider.id}` ? null : current));
+      }
+    }
+  }
+
   async function connectDeviceCodeProvider(provider: NineRouterAccountProvider, runId: number) {
     const deviceData = await fetchNineRouterJson<NineRouterDeviceCodeResponse>(joinLocalUrl(nineRouterDashboardUrl, `/api/oauth/${provider.id}/device-code`));
     const deviceCode = deviceData.device_code?.trim();
     const verifyUrl = deviceData.verification_uri_complete || deviceData.verification_uri;
 
     if (!deviceCode || !verifyUrl) {
-      throw new Error(`The subscription helper did not return a complete ${provider.name} device sign-in request.`);
+      throw new Error(`Subscriptions did not return a complete ${provider.name} device sign-in request.`);
     }
 
     const userCode = deviceData.user_code?.trim();
@@ -537,11 +753,11 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
     }));
 
     if (!authData.authUrl || !authData.state) {
-      throw new Error(`The subscription helper did not return a complete ${provider.name} sign-in request.`);
+      throw new Error(`Subscriptions did not return a complete ${provider.name} sign-in request.`);
     }
 
     if (provider.id !== "cline" && !authData.codeVerifier) {
-      throw new Error(`The subscription helper did not return a code verifier for ${provider.name}.`);
+      throw new Error(`Subscriptions did not return a code verifier for ${provider.name}.`);
     }
 
     setStatusMessage({ kind: "warning", text: `Finish ${provider.name} sign-in in your browser. Gilbert will close the loop automatically.` });
@@ -684,7 +900,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
               <Download size={19} aria-hidden="true" />
               <div>
                 <h2>Set up subscriptions</h2>
-                <p>Install the local helper once. Gilbert starts it when you use subscription routing.</p>
+                <p>Install the local subscription runtime once. Gilbert starts it automatically for subscription routing.</p>
               </div>
             </div>
             <div className="settings-row-list">
@@ -695,8 +911,8 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
               </div>
               <div className="settings-row">
                 <span>Launch</span>
-                <strong>Starts only when you use subscription routing</strong>
-                <span className="settings-row-static-pill">Manual</span>
+                <strong>Starts automatically when Subscriptions opens or when a route needs it</strong>
+                <span className="settings-row-static-pill">Automatic</span>
               </div>
               {helperInstallBlocked ? (
                 <div className="settings-row">
@@ -711,7 +927,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
                 className="settings-primary-button"
                 type="button"
                 disabled={busy !== null || !status || Boolean(helperInstallBlocked)}
-                onClick={status?.installed ? startNineRouter : installAndStartNineRouter}
+                onClick={status?.installed ? () => startNineRouter() : installAndStartNineRouter}
               >
                 {status?.installed ? <Play size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
                 {busy === "install" || busy === "start" ? helperActionBusyLabel : helperActionLabel}
@@ -721,6 +937,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
                 {busy === "status" ? "Checking" : "Check again"}
               </button>
             </div>
+            {showInstallProgress ? <InstallProgressMeter progress={installProgress} /> : null}
           </article>
         ) : (
           <>
@@ -735,6 +952,7 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
               <div className="nine-router-account-grid">
                 {accountRows.map(({ connection, connections, provider, usageState }) => {
                   const providerBusy = busy === `account:${provider.id}`;
+                  const providerDisconnecting = busy === `disconnect:${provider.id}`;
                   const connected = Boolean(connection);
 
                   return (
@@ -771,9 +989,21 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
                       {connection?.lastError ? <span className="settings-status" data-kind="error">{formatSubscriptionHelperText(connection.lastError)}</span> : null}
                       {!connected ? <span className="settings-status">{provider.usageNote}</span> : null}
 
-                      <button className="settings-primary-button settings-full-width-button" type="button" disabled={busy !== null} onClick={() => connectProviderAccount(provider)}>
-                        {provider.flow === "device_code" ? <ExternalLink size={16} aria-hidden="true" /> : <KeyRound size={16} aria-hidden="true" />}
-                        {providerBusy ? "Waiting for sign-in" : connected ? `Reconnect ${provider.name}` : `Sign in with ${provider.name}`}
+                      <button
+                        className={`${connected ? "settings-danger-button" : "settings-primary-button"} settings-full-width-button`}
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          if (connected) {
+                            setDisconnectTarget({ connections, provider });
+                            return;
+                          }
+
+                          void connectProviderAccount(provider);
+                        }}
+                      >
+                        {connected ? <LogOut size={16} aria-hidden="true" /> : provider.flow === "device_code" ? <ExternalLink size={16} aria-hidden="true" /> : <KeyRound size={16} aria-hidden="true" />}
+                        {providerDisconnecting ? "Signing out" : providerBusy ? "Waiting for sign-in" : connected ? `Sign out from ${provider.name}` : `Sign in with ${provider.name}`}
                       </button>
                     </section>
                   );
@@ -808,6 +1038,28 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
                   <span>Selected route</span>
                   <strong>{selectedNineRouterModel}</strong>
                 </div>
+                <div className="settings-row">
+                  <span>Image generation</span>
+                  <strong>{settings.tools.imageGeneration ? "Available in chat" : "Disabled"}</strong>
+                  <button
+                    className="settings-switch"
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.tools.imageGeneration}
+                    data-on={settings.tools.imageGeneration}
+                    onClick={() =>
+                      onSettingsChange({
+                        ...settings,
+                        tools: {
+                          ...settings.tools,
+                          imageGeneration: !settings.tools.imageGeneration,
+                        },
+                      })
+                    }
+                  >
+                    <span />
+                  </button>
+                </div>
               </div>
               {savedModelMissingFromCatalog ? (
                 <span className="settings-status" data-kind="warning">
@@ -833,23 +1085,63 @@ export function NineRouterSettingsPage({ onSettingsChange, settings }: NineRoute
           </>
         )}
 
-        {!helperReady && installLog.length > 0 ? (
-          <article className="settings-card settings-card-wide">
+        {hasSandboxFootprint ? (
+          <article className="settings-card settings-card-wide settings-danger-card" aria-busy={busy === "uninstall"}>
             <div className="settings-card-heading">
-              <CheckCircle2 size={19} aria-hidden="true" />
+              <Trash2 size={19} aria-hidden="true" />
               <div>
-                <h2>Install log</h2>
-                <p>Latest install steps.</p>
+                <h2>Local sandbox environment</h2>
+                <p>Remove the local subscription runtime, saved subscription sign-ins, and cached routing data from this device.</p>
               </div>
             </div>
-            <div className="settings-install-log" aria-live="polite">
-              {installLog.map((line, index) => (
-                <code key={`${index}-${line.slice(0, 20)}`}>{line}</code>
-              ))}
+            <div className="settings-row-list">
+              <div className="settings-row">
+                <span>Sandbox subscriptions</span>
+                <strong>{status?.running ? "Running" : status?.installed ? "Installed" : "Stored data found"}</strong>
+                <span className="settings-row-static-pill">{status?.running ? "Active" : "Local"}</span>
+              </div>
+              <div className="settings-row">
+                <span>Reinstall</span>
+                <strong>After uninstall, use Set up subscriptions to install a fresh copy.</strong>
+              </div>
             </div>
+            <button className="settings-danger-button settings-full-width-button" type="button" disabled={busy !== null || !hasSandboxFootprint} onClick={() => setUninstallConfirmOpen(true)}>
+              <Trash2 size={16} aria-hidden="true" />
+              {busy === "uninstall" ? "Uninstalling sandbox subscriptions" : "Uninstall sandbox subscriptions"}
+            </button>
+            {showUninstallProgress && uninstallProgress ? <InstallProgressMeter progress={uninstallProgress} /> : null}
           </article>
         ) : null}
       </div>
+      <ConfirmDialog
+        confirmLabel={disconnectTarget && busy === `disconnect:${disconnectTarget.provider.id}` ? "Signing out..." : "Sign out"}
+        description={disconnectTarget ? `This removes ${disconnectTarget.connections.length} saved ${disconnectTarget.provider.name} subscription account${disconnectTarget.connections.length === 1 ? "" : "s"} from this device.` : ""}
+        icon={LogOut}
+        onClose={() => {
+          if (!disconnectTarget || busy !== `disconnect:${disconnectTarget.provider.id}`) {
+            setDisconnectTarget(null);
+          }
+        }}
+        onConfirm={() => {
+          void disconnectProviderAccount();
+        }}
+        open={Boolean(disconnectTarget)}
+        title={disconnectTarget ? `Sign out from ${disconnectTarget.provider.name}?` : "Sign out?"}
+        tone="danger"
+      />
+      <ConfirmDialog
+        confirmLabel="Uninstall sandbox subscriptions"
+        description="This removes the local sandbox environment from this device, including saved subscription sign-ins and local routing data. You can reinstall it from Subscriptions."
+        onClose={() => {
+          if (busy !== "uninstall") {
+            setUninstallConfirmOpen(false);
+          }
+        }}
+        onConfirm={uninstallSandboxSubscriptions}
+        open={uninstallConfirmOpen}
+        title="Uninstall sandbox subscriptions?"
+        tone="danger"
+      />
     </>
   );
 }
@@ -894,12 +1186,101 @@ function UsageQuotaList({ provider, usageState }: { provider: NineRouterAccountP
   );
 }
 
+function createSubscriptionSandboxUninstalledSettings(settings: ProviderSettings, openRouterModel: string): ProviderSettings {
+  const fallbackModel = openRouterModel.trim() || getDefaultModelForProvider("openrouter");
+  const providerModels = {
+    ...settings.providerModels,
+    openrouter: fallbackModel,
+    [NINE_ROUTER_PROVIDER_ID]: "",
+  };
+
+  if (settings.provider !== NINE_ROUTER_PROVIDER_ID) {
+    providerModels[settings.provider] = settings.model;
+  }
+
+  return {
+    ...settings,
+    model: fallbackModel,
+    provider: "openrouter",
+    providerModels,
+  };
+}
+
+function InstallProgressMeter({ progress }: { progress: NineRouterInstallProgressState }) {
+  const percent = clampPercent(progress.percent);
+
+  return (
+    <div className="settings-install-progress" data-status={progress.status} aria-live="polite">
+      <div className="settings-install-progress-heading">
+        <strong>{progress.label}</strong>
+        <span>{percent}%</span>
+      </div>
+      <div className="settings-install-progress-track" role="progressbar" aria-label="Subscriptions install progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      {progress.detail ? <small>{formatSubscriptionHelperText(progress.detail)}</small> : null}
+    </div>
+  );
+}
+
+function getInstallStepProgress(rawLabel: string) {
+  const label = formatSubscriptionHelperText(rawLabel);
+  const normalized = rawLabel.toLowerCase();
+
+  if (/clone|update|source/.test(normalized)) {
+    return {
+      detail: "Preparing the local subscription source.",
+      doneDetail: "Source is ready.",
+      doneLabel: "Source ready",
+      donePercent: 42,
+      label: /update/.test(normalized) ? "Updating subscriptions" : "Downloading subscriptions",
+      startPercent: 22,
+    };
+  }
+
+  if (/dependencies|npm|install/.test(normalized)) {
+    return {
+      detail: "Installing dependencies. This can take a few minutes.",
+      doneDetail: "Dependencies are installed.",
+      doneLabel: "Dependencies installed",
+      donePercent: 68,
+      label: "Installing dependencies",
+      startPercent: 48,
+    };
+  }
+
+  if (/build/.test(normalized)) {
+    return {
+      detail: "Building the local routing runtime.",
+      doneDetail: "Build complete.",
+      doneLabel: "Build complete",
+      donePercent: 92,
+      label: "Building subscriptions",
+      startPercent: 76,
+    };
+  }
+
+  return {
+    detail: label,
+    doneDetail: "Step complete.",
+    doneLabel: "Step complete",
+    donePercent: 90,
+    label,
+    startPercent: 16,
+  };
+}
+
 function formatSubscriptionHelperText(text: string) {
   return text
-    .replace(/\b[9]Router Local\b/g, "the subscription helper")
-    .replace(/\b[9]Router\b/g, "the subscription helper")
-    .replace(/\b(from|in) the subscription helper settings\b/gi, "$1 Subscriptions settings")
-    .replace(/\bStart the subscription helper, then retry\b/g, "Open Subscriptions, then retry");
+    .replace(/\b[9]Router Local started and is ready\./g, "Subscriptions are ready.")
+    .replace(/\b[9]Router Local is already running\./g, "Subscriptions are ready.")
+    .replace(/\b[9]Router Local is installed\./g, "Subscriptions are installed.")
+    .replace(/\b[9]Router Local was started, but the API is not ready yet\./g, "Subscriptions are still starting. Try again in a moment.")
+    .replace(/\b[9]Router Local\b/g, "subscriptions")
+    .replace(/\b[9]Router\b/g, "subscriptions")
+    .replace(/\b(from|in) subscriptions settings\b/gi, "$1 Subscriptions settings")
+    .replace(/\bStart subscriptions, then retry\b/g, "Open Subscriptions, then retry")
+    .replace(/\bsubscription helper\b/gi, "subscriptions");
 }
 
 function chooseNineRouterModel(savedModel: string, catalog: NineRouterModelCatalogState) {
@@ -1136,7 +1517,7 @@ async function fetchNineRouterJson<T>(url: string) {
   const payload = await readJsonResponse<T & { error?: { message?: string } }>(response);
 
   if (!response.ok) {
-    throw new Error(payload.error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+    throw new Error(payload.error?.message || `Subscription request failed with HTTP ${response.status}.`);
   }
 
   return payload;
@@ -1154,10 +1535,26 @@ async function postNineRouterJson<T>(url: string, body: unknown) {
 
   if (!response.ok) {
     const error = payload.error;
-    throw new Error(typeof error === "string" ? error : error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscription request failed with HTTP ${response.status}.`);
   }
 
   return payload;
+}
+
+async function deleteNineRouterConnection(dashboardUrl: string, connectionId: string) {
+  const response = await fetchWithTimeout(joinLocalUrl(dashboardUrl, `/api/providers/${encodeURIComponent(connectionId)}`), {
+    method: "DELETE",
+  });
+  const payload = await readJsonResponse<{ error?: { message?: string } | string }>(response);
+
+  if (response.status === 404) {
+    return;
+  }
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscription sign-out failed with HTTP ${response.status}.`);
+  }
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit) {
@@ -1167,9 +1564,9 @@ async function fetchWithTimeout(url: string, init: RequestInit) {
   try {
     if (isTauriDesktopRuntime()) {
       const nativeResponse = await nineRouterLocalHttp({
-        body: normalizeNativeRequestBody(init.body, "The subscription helper bridge"),
+        body: normalizeNativeRequestBody(init.body, "The subscriptions bridge"),
         headers: headersToRecord(init.headers),
-        method: normalizeNativeRequestMethod(init.method, "The subscription helper bridge"),
+        method: normalizeNativeRequestMethod(init.method, "The subscriptions bridge"),
         timeoutMs: 10_000,
         url,
       });
@@ -1186,12 +1583,12 @@ async function fetchWithTimeout(url: string, init: RequestInit) {
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`The subscription helper did not answer ${url} within 10 seconds.`);
+      throw new Error(`Subscriptions did not answer ${url} within 10 seconds.`);
     }
 
     const message = error instanceof Error ? error.message : String(error);
     if (/failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
-      throw new Error(`Could not reach the subscription helper at ${url}. Open Subscriptions, then retry.`);
+      throw new Error(`Could not reach subscriptions at ${url}. Open Subscriptions, then retry.`);
     }
 
     throw error;
@@ -1248,7 +1645,7 @@ function formatNineRouterUiError(model: string, providerMessage: string | undefi
     return "free-combo is not available in the local subscription catalog.";
   }
 
-  return providerMessage || `Subscription helper request failed with HTTP ${status}.`;
+  return providerMessage || `Subscription request failed with HTTP ${status}.`;
 }
 
 function formatNineRouterProviderName(providerId: string) {

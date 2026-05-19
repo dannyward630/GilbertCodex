@@ -1,7 +1,7 @@
-export function normalizeNativeRequestMethod(method: string | undefined, bridgeLabel: string): "GET" | "POST" {
+export function normalizeNativeRequestMethod(method: string | undefined, bridgeLabel: string): "DELETE" | "GET" | "POST" {
   const normalizedMethod = (method ?? "GET").trim().toUpperCase();
 
-  if (normalizedMethod === "GET" || normalizedMethod === "POST") {
+  if (normalizedMethod === "DELETE" || normalizedMethod === "GET" || normalizedMethod === "POST") {
     return normalizedMethod;
   }
 

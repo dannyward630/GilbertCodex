@@ -26,6 +26,7 @@ import { normalizeToolBridgePermissionMode } from "../toolBridge/permissions";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import { autoFinalizeDeviceDatabaseMigration, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValues, type DeviceDatabaseSeed } from "./deviceDatabase";
+import { scheduleIdleTask } from "./idleTask";
 import type {
   ChatAttachment,
   ChatArtifact,
@@ -212,7 +213,9 @@ export async function initializeDeviceStorage(userId: string | null) {
   }
 
   purgeLegacyBrowserStorage();
-  void autoFinalizeDeviceDatabaseMigration().catch(() => undefined);
+  scheduleIdleTask(() => {
+    void autoFinalizeDeviceDatabaseMigration().catch(() => undefined);
+  }, 4_000);
 }
 
 export function getDeviceDatabasePath() {
