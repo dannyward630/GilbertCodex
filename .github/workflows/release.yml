@@ -40,8 +40,12 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Prepare public tool bridge shim
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-toolbridge-shim.ps1
+      - name: Verify private release tool bridge is available
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "src/toolBridge/index.ts")) {
+            throw "Release builds must include the private local tool bridge. Refusing to ship a public shim installer without tools."
+          }
 
       - name: Check updater signing key
         shell: pwsh
