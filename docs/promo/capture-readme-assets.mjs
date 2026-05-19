@@ -355,7 +355,6 @@ try {
   await page.waitForSelector(".right-rail");
   await page.locator(".message-sources-toggle").first().click();
   await waitForStableUi(page);
-  await capture(page, "gilbert-codex-activity.png");
   await capture(page, "gilbert-codex-chat-progress.png");
 
   await page.locator(".sidebar-action").filter({ hasText: "New chat" }).first().click();

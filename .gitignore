@@ -8,8 +8,6 @@ src/toolBridge/tools/
 src/toolBridge/memory/
 src/toolBridge/__tests__/
 src/webSearch/
-docs/assets/readme/gilbert-codex-activity.png
-docs/assets/readme/gilbert-codex-toolbox.png
 docs/promo/reddit/
 docs/promo/social/
 .gilbert/
