@@ -40,6 +40,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Prepare public tool bridge shim
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-toolbridge-shim.ps1
+
       - name: Check updater signing key
         shell: pwsh
         env:

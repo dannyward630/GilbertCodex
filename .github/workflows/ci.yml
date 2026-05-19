@@ -37,6 +37,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Prepare public tool bridge shim
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-toolbridge-shim.ps1
+
       - name: Build frontend
         run: npm run build
 
