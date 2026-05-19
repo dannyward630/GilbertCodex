@@ -6,7 +6,8 @@
   align-items: start;
   justify-items: center;
   padding-top: 74px;
-  background: rgba(0, 0, 0, 0.42);
+  background: color-mix(in srgb, var(--modal-scrim) 84%, transparent);
+  backdrop-filter: blur(14px) saturate(1.05);
 }
 
 .search-dialog {
@@ -15,10 +16,10 @@
   overflow: auto;
   padding: 14px 8px 18px;
   color: var(--text);
-  border: 1px solid #3b3d40;
+  border: 1px solid var(--popover-border);
   border-radius: 26px;
-  background: #2b2b2b;
-  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
+  background: var(--panel-gradient);
+  box-shadow: var(--shadow-popover);
 }
 
 .search-input-row {
@@ -28,7 +29,7 @@
   gap: 10px;
   min-height: 48px;
   padding: 0 14px;
-  color: #9a9c9f;
+  color: var(--text-dim);
 }
 
 .search-input-row input {
@@ -40,7 +41,7 @@
 }
 
 .search-input-row input::placeholder {
-  color: #a5a5a5;
+  color: color-mix(in srgb, var(--text-dim) 82%, transparent);
 }
 
 .search-input-row button {
@@ -65,7 +66,7 @@
 .search-group h2 {
   margin: 0;
   padding: 0 28px;
-  color: #a2a2a0;
+  color: var(--text-dim);
   font-size: 16px;
   font-weight: 650;
   letter-spacing: 0;
@@ -83,14 +84,16 @@
   gap: 14px;
   min-height: 48px;
   padding: 0 20px 0 54px;
-  color: #d6d6d2;
+  color: var(--text-muted);
   border-radius: 18px;
   background: transparent;
   text-align: left;
 }
 
 .search-result:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 44%, transparent), color-mix(in srgb, var(--gold) 8%, transparent)),
+    var(--hover);
 }
 
 .search-result span:first-child {
@@ -106,7 +109,7 @@
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  color: #8f9092;
+  color: var(--text-dim);
   font-size: 16px;
   font-weight: 650;
 }
@@ -114,9 +117,9 @@
 .search-result-meta kbd {
   min-width: 54px;
   padding: 2px 9px;
-  color: #d6d6d2;
+  color: var(--text-muted);
   border-radius: 999px;
-  background: #444444;
+  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
   font: inherit;
   font-size: 14px;
   text-align: center;

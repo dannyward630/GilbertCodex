@@ -138,6 +138,23 @@
   }
 }
 
+@keyframes gil-browser-expand {
+  0% {
+    opacity: 0.94;
+    transform: translate3d(10px, -8px, 0) scale(0.986);
+  }
+
+  62% {
+    opacity: 1;
+    transform: translate3d(0, 1px, 0) scale(1.002);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 @keyframes gil-sidebar-in {
   0% {
     opacity: 0;
@@ -416,7 +433,6 @@
   }
 
   .route-panel[data-active="true"] > .conversation-frame,
-  .route-panel[data-active="true"] > .utility-page,
   .route-panel[data-active="true"] > .settings-page {
     animation: gil-page-enter 300ms var(--motion-ease-soft) both;
     backface-visibility: hidden;
@@ -428,6 +444,7 @@
   }
 
   .topbar-logo,
+  .sidebar-account-card,
   .sidebar-account-avatar {
     transition:
       transform 360ms var(--motion-spring),
@@ -435,19 +452,17 @@
   }
 
   .topbar-center:hover .topbar-logo,
-  .sidebar-account:hover .sidebar-account-avatar {
+  .sidebar-account-card:hover .sidebar-account-avatar {
     transform: translateY(-1px) scale(1.015);
   }
 
   .shell-sidebar[data-open="true"] {
     animation: gil-sidebar-in 440ms var(--motion-ease-soft) both;
-    will-change: transform, opacity;
   }
 
   .shell-sidebar[data-open="false"] {
     animation: gil-sidebar-out 320ms var(--motion-ease) both;
     pointer-events: none;
-    will-change: transform, opacity;
   }
 
   .sidebar-action,
@@ -598,8 +613,6 @@
   .composer-menu-item,
   .composer-submenu button,
   .thinking-effort-grid button,
-  .thinking-trace-toggle,
-  .thinking-trace-note,
   .local-permission-menu button,
   .project-list button,
   .model-selector-row,
@@ -620,7 +633,6 @@
   .composer-menu-item:hover,
   .composer-submenu button:hover,
   .thinking-effort-grid button:hover,
-  .thinking-trace-toggle:hover,
   .local-permission-menu button:hover,
   .project-list button:hover,
   .model-selector-row:hover,
@@ -646,7 +658,7 @@
   .browser-preview-nav button,
   .browser-preview-tools button,
   .browser-preview-tab,
-  .browser-preview-shortcuts button,
+  .browser-preview-local-actions button,
   .browser-preview-start-search button {
     transition:
       background-color var(--motion-fast) var(--motion-ease),
@@ -670,7 +682,7 @@
   .browser-preview-nav button:hover:not(:disabled),
   .browser-preview-tools button:hover:not(:disabled),
   .browser-preview-tab:hover,
-  .browser-preview-shortcuts button:hover,
+  .browser-preview-local-actions button:hover,
   .browser-preview-start-search button:hover {
     transform: translateY(-1px) scale(1.008);
   }
@@ -816,8 +828,18 @@
     will-change: transform, opacity;
   }
 
+  .side-panel-presence[data-presence="enter"] .browser-preview-panel[data-expanded="true"],
+  .browser-preview-panel[data-expanded="true"],
+  .side-panel-presence[data-presence="enter"] .git-review-panel[data-expanded="true"],
+  .git-review-panel[data-expanded="true"],
+  .conversation-body[data-plan-review-expanded="true"] .right-rail {
+    animation: gil-browser-expand 280ms var(--motion-ease-soft) both;
+    transform-origin: right center;
+    will-change: transform, opacity;
+  }
+
   .browser-preview-start,
-  .plan-review-card,
+  .plan-review-response,
   .approval-card {
     animation: gil-pop-in 240ms var(--motion-ease-soft) both;
   }
@@ -840,11 +862,11 @@
     transform: translateX(3px) scale(1.002);
   }
 
-  .plan-review-card[data-state="streaming"] {
+  .plan-review-response[data-state="streaming"] {
     position: relative;
   }
 
-  .plan-review-card[data-state="streaming"]::after {
+  .plan-review-response[data-state="streaming"]::after {
     content: "";
     position: absolute;
     inset: 0;

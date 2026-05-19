@@ -148,6 +148,72 @@ export interface ComputerReadFileResult {
   truncated: boolean;
 }
 
+export interface ComputerReadFileRangeResult {
+  content: string;
+  endLine: number;
+  extension?: string;
+  lineCount: number;
+  modifiedAt?: number;
+  name: string;
+  path: string;
+  requestedEndLine: number;
+  requestedStartLine: number;
+  size: number;
+  startLine: number;
+  totalLines: number;
+  truncated: boolean;
+}
+
+export interface ComputerTextSearchLineContext {
+  line: number;
+  preview: string;
+}
+
+export interface ComputerTextSearchMatch {
+  after?: ComputerTextSearchLineContext[];
+  before?: ComputerTextSearchLineContext[];
+  line: number;
+  preview: string;
+}
+
+export interface ComputerTextSearchFileResult {
+  contentMatches: ComputerTextSearchMatch[];
+  extension: string | null;
+  name: string;
+  path: string;
+  pathMatched: boolean;
+  size?: number | null;
+}
+
+export interface ComputerTextSearchRequest {
+  caseSensitive?: boolean;
+  contextLines?: number;
+  excludeDirectories?: string[];
+  extensions?: string[];
+  globs?: string[];
+  includeContent?: boolean;
+  includeGenerated?: boolean;
+  includePath?: boolean;
+  maxMatches?: number;
+  maxMatchesPerFile?: number;
+  path: string;
+  query: string;
+}
+
+export interface ComputerTextSearchResponse {
+  filesRead: number;
+  filesScanned: number;
+  filteredByGlob: number;
+  inaccessibleEntries: number;
+  limited: boolean;
+  matches: ComputerTextSearchFileResult[];
+  scannedDirectories: number;
+  skippedDirectories: number;
+  skippedFiles: number;
+  totalContentMatches: number;
+  unreadableFiles: number;
+}
+
 export interface ComputerWriteFileResult {
   bytesWritten: number;
   created: boolean;
@@ -157,6 +223,21 @@ export interface ComputerWriteFileResult {
   sha256?: string;
   /** Line-ending family applied to the written bytes ("crlf" or "lf"). */
   eol?: "crlf" | "lf";
+}
+
+export interface ComputerWriteFilesResult {
+  files: Array<{
+    error?: string;
+    ok: boolean;
+    requestedPath: string;
+    result?: ComputerWriteFileResult;
+  }>;
+}
+
+export interface ComputerCreateDirectoryResult {
+  created: boolean;
+  modifiedAt?: number;
+  path: string;
 }
 
 export interface ComputerDeleteFileResult {

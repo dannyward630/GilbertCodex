@@ -1,5 +1,6 @@
-import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from "../types/chat";
+import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment, ChatVideoAttachment } from "../types/chat";
 import { createId } from "./chatUtils";
+import { readFileAsDataUrl } from "./fileDataUrl";
 
 const RESIZED_IMAGE_MAX_EDGE = Number.POSITIVE_INFINITY;
 const RESIZED_IMAGE_QUALITY = 0.88;
@@ -16,9 +17,24 @@ const SAFE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+const SAFE_VIDEO_MIME_TYPES = new Set([
+  "video/mp4",
+  "video/mov",
+  "video/mpeg",
+  "video/quicktime",
+  "video/webm",
+]);
 
 export function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
   return attachment.kind === "image";
+}
+
+export function isVideoAttachment(attachment: ChatAttachment): attachment is ChatVideoAttachment {
+  return attachment.kind === "video";
+}
+
+export function isMediaAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment | ChatVideoAttachment {
+  return isImageAttachment(attachment) || isVideoAttachment(attachment);
 }
 
 export function formatAttachmentSize(size: number) {
@@ -40,7 +56,7 @@ export function attachmentSummary(attachments: ChatAttachment[]) {
 
   return attachments
     .map((attachment) => {
-      const kind = attachment.kind === "image" ? "Image" : "File";
+      const kind = attachment.kind === "image" ? "Image" : attachment.kind === "video" ? "Video" : "File";
       return `- ${kind}: ${attachment.name} (${formatAttachmentSize(attachment.size)})`;
     })
     .join("\n");
@@ -53,8 +69,23 @@ export async function createChatAttachmentFromFile(file: File): Promise<ChatAtta
   const mimeType = normalizeAttachmentMimeType(file.type, name);
   const isPdf = mimeType === "application/pdf" || name.toLowerCase().endsWith(".pdf");
   const isSvg = mimeType === "image/svg+xml" || name.toLowerCase().endsWith(".svg");
+  const isSafeVideo = mimeType.startsWith("video/") && SAFE_VIDEO_MIME_TYPES.has(mimeType.toLowerCase());
 
   if (!mimeType.startsWith("image/") || isSvg || !SAFE_IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) {
+    if (isSafeVideo) {
+      const dataUrl = await withTimeout(readFileAsDataUrl(file), FILE_READ_TIMEOUT_MS, "Could not read this video fast enough.");
+
+      return {
+        createdAt: now,
+        dataUrl: coerceDataUrlMimeType(dataUrl, mimeType),
+        id,
+        kind: "video",
+        mimeType,
+        name,
+        size: file.size,
+      } satisfies ChatVideoAttachment;
+    }
+
     if (isPdf) {
       const dataUrl = await withTimeout(readFileAsDataUrl(file), FILE_READ_TIMEOUT_MS, "Could not read this PDF fast enough.");
 
@@ -106,6 +137,10 @@ export async function createChatAttachmentFromFile(file: File): Promise<ChatAtta
 function normalizeAttachmentMimeType(type: string, name: string) {
   const normalizedType = type.trim().toLowerCase();
   if (normalizedType) {
+    if (normalizedType === "video/quicktime") {
+      return "video/mov";
+    }
+
     return normalizedType;
   }
 
@@ -126,29 +161,20 @@ function normalizeAttachmentMimeType(type: string, name: string) {
       return "image/png";
     case "svg":
       return "image/svg+xml";
+    case "mov":
+      return "video/mov";
+    case "mpeg":
+    case "mpg":
+      return "video/mpeg";
+    case "mp4":
+      return "video/mp4";
     case "webp":
       return "image/webp";
+    case "webm":
+      return "video/webm";
     default:
       return "application/octet-stream";
   }
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error("Could not read this file."));
-    });
-    reader.addEventListener("error", () => reject(new Error("Could not read this file.")));
-    reader.addEventListener("abort", () => reject(new Error("Could not read this file.")));
-    reader.readAsDataURL(file);
-  });
 }
 
 function getImageSize(dataUrl: string) {
@@ -224,6 +250,10 @@ function loadImage(dataUrl: string) {
 function dataUrlMimeType(dataUrl: string) {
   const match = /^data:([^;,]+)/.exec(dataUrl);
   return match?.[1] ?? "image/jpeg";
+}
+
+function coerceDataUrlMimeType(dataUrl: string, mimeType: string) {
+  return dataUrl.replace(/^data:[^;,]*(;base64,)/i, `data:${mimeType}$1`);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T>;

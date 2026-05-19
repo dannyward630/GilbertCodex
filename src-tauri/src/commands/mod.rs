@@ -6,6 +6,7 @@ pub mod computer;
 pub mod database;
 pub mod discord;
 pub mod github;
+pub mod nine_router;
 pub mod settings;
 pub mod terminal;
 pub mod updates;

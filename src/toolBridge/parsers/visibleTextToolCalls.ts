@@ -4,18 +4,28 @@ import { createToolCallRequest } from "./common";
 
 const MAX_VISIBLE_TEXT_TOOL_CALLS = 8;
 const TOOL_NAME_PATTERN = /^(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+$/i;
+const DIRECT_XML_TOOL_CALL_PATTERN = /<\s*((?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+)\b[^>]*>([\s\S]*?)<\s*\/\s*\1\s*>/gi;
+const XML_ARGUMENT_PATTERN = /<\s*([\w.$-]+)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/g;
+const DSML_TOOL_CALL_BLOCK_PATTERN = /<\s*\|\s*DSML\s*\|\s*tool_calls\s*>([\s\S]*?)<\s*\/\s*\|\s*DSML\s*\|\s*tool_calls\s*>/gi;
+const DSML_INVOKE_PATTERN = /<\s*\|\s*DSML\s*\|\s*invoke\b([^>]*)>([\s\S]*?)<\s*\/\s*\|\s*DSML\s*\|\s*invoke\s*>/gi;
+const DSML_PARAMETER_PATTERN = /<\s*\|\s*DSML\s*\|\s*parameter\b([^>]*)>([\s\S]*?)<\s*\/\s*\|\s*DSML\s*\|\s*parameter\s*>/gi;
+const ATTRIBUTE_PATTERN = /([\w.$-]+)\s*=\s*"([^"]*)"/g;
 
 export function parseVisibleTextToolCalls(content: string, provider: ModelProviderId): ToolCallRequest[] {
-  if (!/"tool_calls"\s*:\s*\[/i.test(content)) {
-    return [];
+  const calls: ToolCallRequest[] = [];
+
+  if (/"tool_calls"\s*:\s*\[/i.test(content)) {
+    calls.push(...parseJsonToolCalls(content, provider));
+
+    if (calls.length === 0) {
+      calls.push(...parseLooseToolCalls(content, provider));
+    }
   }
 
-  const parsedJsonCalls = parseJsonToolCalls(content, provider);
-  if (parsedJsonCalls.length > 0) {
-    return parsedJsonCalls;
-  }
+  calls.push(...parseDirectXmlToolCalls(content, provider));
+  calls.push(...parseDsmlToolCalls(content, provider));
 
-  return parseLooseToolCalls(content, provider);
+  return calls.slice(0, MAX_VISIBLE_TEXT_TOOL_CALLS);
 }
 
 function parseJsonToolCalls(content: string, provider: ModelProviderId) {
@@ -78,6 +88,177 @@ function parseLooseToolCalls(content: string, provider: ModelProviderId) {
   }
 
   return calls;
+}
+
+function parseDirectXmlToolCalls(content: string, provider: ModelProviderId) {
+  const calls: ToolCallRequest[] = [];
+  DIRECT_XML_TOOL_CALL_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = DIRECT_XML_TOOL_CALL_PATTERN.exec(content)) && calls.length < MAX_VISIBLE_TEXT_TOOL_CALLS) {
+    const name = match[1] ?? "";
+    if (!isLikelyBridgeToolName(name)) {
+      continue;
+    }
+
+    const request = createToolCallRequest(
+      provider,
+      `visible-xml-tool-call-${calls.length + 1}`,
+      name,
+      parseXmlToolArguments(match[2] ?? ""),
+      {
+        recoveredFromVisibleText: true,
+        source: "direct-xml-tool-tag",
+      },
+    );
+
+    if (request) {
+      calls.push(request);
+    }
+  }
+
+  return calls;
+}
+
+function parseDsmlToolCalls(content: string, provider: ModelProviderId) {
+  const calls: ToolCallRequest[] = [];
+  const blocks = extractDsmlToolCallBlocks(content);
+
+  for (const block of blocks) {
+    DSML_INVOKE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = DSML_INVOKE_PATTERN.exec(block)) && calls.length < MAX_VISIBLE_TEXT_TOOL_CALLS) {
+      const attributes = parseAttributes(match[1] ?? "");
+      const name = attributes.name ?? "";
+      if (!isLikelyBridgeToolName(name)) {
+        continue;
+      }
+
+      const request = createToolCallRequest(
+        provider,
+        `visible-dsml-tool-call-${calls.length + 1}`,
+        name,
+        parseDsmlToolArguments(match[2] ?? ""),
+        {
+          recoveredFromVisibleText: true,
+          source: "dsml-tool-call",
+        },
+      );
+
+      if (request) {
+        calls.push(request);
+      }
+    }
+  }
+
+  return calls;
+}
+
+function extractDsmlToolCallBlocks(content: string) {
+  const blocks: string[] = [];
+  DSML_TOOL_CALL_BLOCK_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = DSML_TOOL_CALL_BLOCK_PATTERN.exec(content))) {
+    blocks.push(match[1] ?? "");
+  }
+
+  return blocks.length > 0 ? blocks : [content];
+}
+
+function parseDsmlToolArguments(innerText: string) {
+  const result: Record<string, unknown> = {};
+  DSML_PARAMETER_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = DSML_PARAMETER_PATTERN.exec(innerText))) {
+    const attributes = parseAttributes(match[1] ?? "");
+    const name = attributes.name;
+    if (!name) {
+      continue;
+    }
+
+    const rawValue = decodeXmlEntities(match[2] ?? "").trim();
+    result[normalizeXmlArgumentKey(name)] = attributes.string === "true" ? rawValue : coerceXmlArgumentValue(rawValue);
+  }
+
+  return result;
+}
+
+function parseAttributes(text: string) {
+  const attributes: Record<string, string> = {};
+  ATTRIBUTE_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = ATTRIBUTE_PATTERN.exec(text))) {
+    const key = match[1]?.trim();
+    if (key) {
+      attributes[key] = decodeXmlEntities(match[2] ?? "");
+    }
+  }
+
+  return attributes;
+}
+
+function parseXmlToolArguments(innerText: string) {
+  const trimmed = innerText.trim();
+
+  if (!trimmed) {
+    return {};
+  }
+
+  if (trimmed.startsWith("{")) {
+    return parseLooseObject(trimmed);
+  }
+
+  const result: Record<string, unknown> = {};
+  XML_ARGUMENT_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = XML_ARGUMENT_PATTERN.exec(innerText))) {
+    const rawKey = match[1] ?? "";
+    if (!rawKey || isLikelyBridgeToolName(rawKey)) {
+      continue;
+    }
+
+    result[normalizeXmlArgumentKey(rawKey)] = coerceXmlArgumentValue(decodeXmlEntities(match[2] ?? "").trim());
+  }
+
+  return result;
+}
+
+function normalizeXmlArgumentKey(key: string) {
+  return key.replace(/[-_]+([a-zA-Z0-9])/g, (_match, char: string) => char.toUpperCase());
+}
+
+function coerceXmlArgumentValue(value: string) {
+  if (/^-?\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  if (/^-?\d+\.\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  if (/^(?:true|false)$/i.test(value)) {
+    return value.toLowerCase() === "true";
+  }
+
+  if (/^null$/i.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function decodeXmlEntities(value: string) {
+  return value
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function extractFirstJsonObject(content: string) {

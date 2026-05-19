@@ -16,25 +16,19 @@ Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewi
 
 ![Gilbert Codex animated desktop preview](docs/assets/readme/gilbert-codex-readme-demo.gif)
 
-| Focused chat workspace | Activity, tools, and sources |
+| Focused chat workspace | Local app settings |
 | --- | --- |
-| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex chat with activity rail, source cards, artifacts, and run details](docs/assets/readme/gilbert-codex-activity.png) |
-
-| Tool and search settings | Local app settings |
-| --- | --- |
-| ![Gilbert Codex settings page showing web search controls](docs/assets/readme/gilbert-codex-toolbox.png) | ![Gilbert Codex settings page showing app metadata, model, and permissions](docs/assets/readme/gilbert-codex-settings.png) |
+| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex settings page showing app metadata, model, and permissions](docs/assets/readme/gilbert-codex-settings.png) |
 
 ## Current Status
 
-Gilbert Codex v0.3.5 is the next major public alpha update. The app now includes local account sign-in, a chat workspace, project-scoped state, multi-provider model streaming, planning mode, thinking controls, host-managed web search, bounded workspace context, a rebuilt provider tool bridge, Discord slash-command bridge setup/runtime, GitHub account setup, settings, desktop notifications, and a Tauri command bridge.
+Gilbert Codex v0.3.5 is the next major public alpha update. The app now includes local account sign-in, a chat workspace, project-scoped state, multi-provider model streaming, planning mode, thinking controls, source-backed context, Discord slash-command bridge setup/runtime, GitHub account setup, settings, desktop notifications, and a Tauri command layer.
 
-The tool system has been rebuilt around provider-attached tools instead of legacy text-emitted tool markup. The current bridge covers diagnostic, file, editing, terminal, browser preview, local Git, GitHub, web, and MCP-facing surfaces where the selected provider, permission mode, and runtime settings allow them. Tool calls are represented as app-owned activity records, routed through validation, and summarized back into the next provider request without exposing raw protocol noise to users.
-
-This is still alpha software. Tool reliability varies by provider and model, and some edge cases are still being tightened as real users test the bridge. High-impact actions such as terminal execution, destructive operations, credential access, publishing, and outside-scope paths remain gated by explicit permission and review behavior.
+This is still alpha software. Provider behavior varies by model, and some edge cases are still being tightened as real users test the app. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths remain gated by explicit permission and review behavior.
 
 Platform status: Windows x64 is the verified alpha target. macOS and Linux have partial source support, but they still need contributors on those operating systems to run the app, package it, and finish native port issues. See [Platform Support And Porting Notes](docs/platform/README.md).
 
-The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, provider clients, tool bridge, local workspace context, types, and Rust commands without reverse-engineering the whole app.
+The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, provider clients, settings, types, and Rust commands without reverse-engineering the whole app.
 
 ## Download
 
@@ -44,7 +38,7 @@ Download the Windows x64 setup executable, run it, and configure provider keys o
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
-See [v0.3.5 release notes](docs/releases/v0.3.5.md) for the tool-bridge update, release-prep notes, setup notes, known limitations, and validation commands.
+See [v0.3.5 release notes](docs/releases/v0.3.5.md) for release-prep notes, setup notes, known limitations, and validation commands.
 
 ## Product Shape
 
@@ -52,19 +46,17 @@ See [v0.3.5 release notes](docs/releases/v0.3.5.md) for the tool-bridge update, 
 - Local identity: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
 - Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, targeted stop controls, and local persistence.
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Tool bridge: provider-attached diagnostic, file, editing, terminal, browser preview, Git, GitHub, web, and MCP surfaces with validation, permission filtering, approval gates, visible activity records, result finalization, and provider-context budgeting.
-- Web search: host-managed DuckDuckGo/Brave search context with a six-source cap, source cards, thinking/planning support, and clearer fallback messaging.
+- Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
-- Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, workspace, and web-search controls.
+- Settings: provider key/base URL entry, GitHub browser login, Discord bridge setup/runtime controls, connection validation, appearance mode, model, generation, thinking, and workspace controls.
 
 ## Coming Next
 
 The next roadmap is focused on making Gilbert faster, clearer, and more capable in real coding sessions. See the full [roadmap](docs/ROADMAP.md) for the active direction.
 
-- Tool bridge hardening: more provider compatibility tests, clearer approval cards, durable result replay, better malformed-call recovery, and stricter file/terminal safety.
-- Activity and inspector polish: grouped runs, easier progress scanning, better file-change summaries, cleaner source cards, and less protocol-facing noise.
-- Source-control workflow: richer local diff review cards, GitHub issue/PR/release helpers, workflow visibility, and contributor-friendly starter issues.
-- Web and research upgrades: stronger source quality, browser-preview handoff, thinking/planning web context, and better citation surfaces.
+- Activity and inspector polish: grouped runs, easier progress scanning, cleaner source cards, and less protocol-facing noise.
+- Source-control workflow: richer review cards, GitHub issue/PR/release helpers, workflow visibility, and contributor-friendly starter issues.
+- Research upgrades: stronger source quality, thinking/planning context, and better citation surfaces.
 - Model and provider UX: provider profiles, model capability badges, context-window hints, local/cloud filters, and task-focused presets for coding, planning, research, review, and multimodal work.
 - Voice and multimodal creation: voice-first chat, image generation/editing, image-to-code flows, video job tracking, thumbnails, and saved media artifacts.
 - Release maturity: signed updater work, clearer installer diagnostics, macOS/Linux packaging help, and better public alpha validation notes.
@@ -87,15 +79,13 @@ The next roadmap is focused on making Gilbert faster, clearer, and more capable 
 |   |-- localWorkspace/     Host-provided workspace context helpers
 |   |-- services/           Provider, planning, usage, and web-search clients
 |   |-- styles/             CSS split by surface
-|   |-- toolBridge/         Provider tool schemas, adapters, orchestration, and tool families
-|   |-- webSearch/          Web-search execution helpers
 |   `-- types/              Shared TypeScript contracts
 |-- src-tauri/              Tauri 2 and Rust host layer
 |   |-- capabilities/       Window and runtime permissions
 |   |-- icons/              App icon assets generated from the project logo
 |   |-- windows/            Branded NSIS installer artwork
 |   |-- src/commands/       Auth, app info, browser, Discord, GitHub, terminal, web, and workspace commands
-|   |-- src/core/           Rust provider, job, storage, and agent scaffolding
+|   |-- src/core/           Rust storage, secure-storage, and filesystem helpers
 |   `-- tauri.conf.json     Desktop app configuration
 |-- CONTRIBUTING.md         Local setup and contribution rules
 |-- PROGRESS.md             Current phase history and roadmap
@@ -166,11 +156,11 @@ See [Windows Installer](docs/INSTALLER.md) for what is bundled, what stays local
 
 Gilbert Codex is local-first. Provider keys and local endpoint URLs are entered through Settings and treated as local user data, not repository configuration. Desktop local accounts are stored in the local Gilbert Database, and the browser preview uses localStorage as a development fallback. Do not commit real API keys, local databases, logs, terminal output, private workspace data, or build artifacts.
 
-GitHub browser login uses OAuth device flow. For local development, create a GitHub OAuth App with device flow enabled, copy `.env.example` to `.env`, set `VITE_GITHUB_OAUTH_CLIENT_ID` to the public client ID, and sign in from Settings. No client secret belongs in the desktop app. GitHub tool surfaces use the locally stored access token and should remain behind visible review or permission boundaries for high-impact actions.
+GitHub browser login uses OAuth device flow. For local development, create a GitHub OAuth App with device flow enabled, copy `.env.example` to `.env`, set `VITE_GITHUB_OAUTH_CLIENT_ID` to the public client ID, and sign in from Settings. No client secret belongs in the desktop app. GitHub actions use the locally stored access token and should remain behind visible review or permission boundaries for high-impact actions.
 
 Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs for app updates and chat follow-ups. Bot gateway chat is still future runtime work.
 
-See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, provider errors, or tool-call output.
+See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, provider errors, or local automation output.
 
 ## Integration Setup
 

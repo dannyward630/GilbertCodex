@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn external_url_validation_allows_browser_protocols() {
         assert!(is_allowed_external_url("https://example.com"));
-        assert!(is_allowed_external_url("http://localhost:8787/"));
+        assert!(is_allowed_external_url("http://localhost:4173/"));
         assert!(is_allowed_external_url("mailto:test@example.com"));
     }
 

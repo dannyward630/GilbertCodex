@@ -11,7 +11,7 @@
   border: 1px solid transparent;
   background:
     linear-gradient(#202327, #202327) padding-box,
-    linear-gradient(135deg, rgba(117, 199, 255, 0.5), rgba(218, 188, 109, 0.36), rgba(167, 141, 255, 0.42)) border-box;
+    linear-gradient(135deg, rgba(117, 199, 255, 0.48), rgba(218, 188, 109, 0.22), rgba(167, 141, 255, 0.38)) border-box;
 }
 
 .mode-chip-thinking[data-active="true"] {
@@ -19,7 +19,8 @@
   color: #f6f8f8;
   background:
     linear-gradient(180deg, rgba(39, 45, 52, 0.98), rgba(31, 33, 35, 0.98)) padding-box,
-    linear-gradient(135deg, rgba(117, 199, 255, 0.68), rgba(218, 188, 109, 0.48), rgba(167, 141, 255, 0.54)) border-box;
+    linear-gradient(135deg, rgba(117, 199, 255, 0.72), rgba(218, 188, 109, 0.34), rgba(167, 141, 255, 0.52)) border-box;
+  box-shadow: 0 0 0 1px rgba(117, 199, 255, 0.18) inset;
 }
 
 .conversation-body[data-right-rail-open="true"] .mode-chip-thinking,
@@ -138,7 +139,7 @@
 
 .thinking-effort-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -166,10 +167,11 @@
 
 .thinking-effort-grid button[data-selected="true"] {
   color: #ffffff;
-  border-color: rgba(117, 199, 255, 0.42);
+  border-color: rgba(117, 199, 255, 0.62);
   background:
-    linear-gradient(135deg, rgba(117, 199, 255, 0.18), rgba(218, 188, 109, 0.1)),
-    rgba(255, 255, 255, 0.045);
+    linear-gradient(135deg, rgba(117, 199, 255, 0.24), rgba(218, 188, 109, 0.12)),
+    rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(117, 199, 255, 0.18);
 }
 
 .thinking-effort-grid strong,
@@ -187,63 +189,6 @@
 .thinking-effort-grid small {
   color: #98a0a6;
   font-size: 11px;
-}
-
-.thinking-trace-toggle,
-.thinking-trace-note {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 10px;
-  min-height: 54px;
-  padding: 8px;
-  color: #edf0ed;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  text-align: left;
-}
-
-.thinking-trace-note {
-  grid-template-columns: 22px minmax(0, 1fr);
-}
-
-.thinking-trace-toggle:hover,
-.thinking-trace-toggle:focus-visible {
-  background: rgba(255, 255, 255, 0.075);
-}
-
-.thinking-trace-toggle span,
-.thinking-trace-note span {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.thinking-trace-toggle strong,
-.thinking-trace-toggle small,
-.thinking-trace-note strong,
-.thinking-trace-note small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thinking-trace-toggle strong,
-.thinking-trace-note strong {
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.thinking-trace-toggle small,
-.thinking-trace-note small {
-  color: #9ca4aa;
-  font-size: 12px;
-}
-
-.thinking-trace-toggle svg:first-child,
-.thinking-trace-note svg:first-child {
-  color: #8ecbff;
 }
 
 .thinking-panel {
@@ -269,13 +214,11 @@
   height: 28px;
 }
 
-.composer-popover-attach .thinking-popover-header strong,
-.composer-popover-attach .thinking-trace-note strong {
+.composer-popover-attach .thinking-popover-header strong {
   font-size: 12px;
 }
 
-.composer-popover-attach .thinking-popover-header small,
-.composer-popover-attach .thinking-trace-note small {
+.composer-popover-attach .thinking-popover-header small {
   font-size: 10.5px;
 }
 
@@ -310,12 +253,6 @@
 
 .composer-popover-attach .thinking-effort-grid small {
   font-size: 10.5px;
-}
-
-.composer-popover-attach .thinking-trace-note {
-  min-height: 42px;
-  padding: 7px;
-  border-radius: 10px;
 }
 
 @keyframes thinking-spin {

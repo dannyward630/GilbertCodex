@@ -1,119 +1,166 @@
 :root {
-  color: #f4f4f2;
-  background: #111111;
+  color: #f5f4f1;
+  background: #2b2d31;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    "Aptos", "Inter", "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --app-bg: #111111;
-  --workspace-bg: #0f1012;
-  --chrome: #151719;
-  --chrome-border: #25282c;
-  --chrome-text: #e5e2dc;
-  --sidebar: #171a20;
-  --sidebar-warm: #241d18;
-  --sidebar-border: #25282e;
-  --sidebar-gradient: linear-gradient(180deg, rgba(31, 39, 49, 0.72) 0%, rgba(36, 29, 24, 0.92) 100%);
-  --surface: #1c1c1c;
-  --surface-raised: #242424;
-  --surface-soft: #2c2c2c;
-  --surface-panel: #1b1e22;
-  --chat-page-bg: #181b20;
-  --chat-page-bg-2: #15181d;
-  --chat-page-glow: rgba(255, 255, 255, 0.075);
-  --line: #303237;
-  --line-soft: #25272b;
-  --text: #f2f2ef;
-  --text-muted: #a4a4a0;
-  --text-dim: #777a7e;
-  --blue: #39a7ff;
-  --blue-soft: rgba(57, 167, 255, 0.18);
-  --green: #78c497;
-  --gold: #c8a656;
-  --danger: #ff6b5f;
-  --field-bg: #111316;
-  --field-border: #343a41;
+  --font-ui: "Aptos", "Inter", "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: "Aptos Display", "Aptos", "Inter", "Segoe UI Variable Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --app-bg: #2b2d31;
+  --workspace-bg: #2b2d31;
+  --chrome: #2b2d31;
+  --chrome-border: #3e4248;
+  --chrome-text: #f4f3ef;
+  --sidebar: #303236;
+  --sidebar-warm: #34312d;
+  --sidebar-border: #45484f;
+  --sidebar-gradient:
+    linear-gradient(180deg, rgba(56, 60, 67, 0.96) 0%, rgba(48, 50, 54, 0.98) 48%, rgba(58, 52, 68, 0.78) 100%),
+    radial-gradient(circle at 12% 8%, rgba(123, 200, 255, 0.16), transparent 34%),
+    radial-gradient(circle at 88% 96%, rgba(219, 192, 116, 0.13), transparent 36%),
+    var(--sidebar);
+  --surface: #2f3237;
+  --surface-raised: #383b41;
+  --surface-soft: #474b53;
+  --surface-panel: #34373d;
+  --surface-glass: rgba(52, 55, 61, 0.9);
+  --chat-page-bg: #282b30;
+  --chat-page-bg-2: #282b30;
+  --chat-page-glow: transparent;
+  --page-gradient: var(--chat-page-bg);
+  --page-gradient-soft: var(--chat-page-bg);
+  --panel-gradient: var(--surface-panel);
+  --field-gradient: var(--field-bg);
+  --line: #4d5159;
+  --line-soft: #42464d;
+  --text: #f5f4f1;
+  --text-muted: #c8cbd0;
+  --text-dim: #989ea7;
+  --blue: #7bc8ff;
+  --blue-soft: rgba(123, 200, 255, 0.16);
+  --cyan: #69d6cb;
+  --cyan-soft: rgba(105, 214, 203, 0.14);
+  --violet: #b4a7ff;
+  --violet-soft: rgba(180, 167, 255, 0.13);
+  --rose: #ff9aac;
+  --rose-soft: rgba(255, 154, 172, 0.12);
+  --green: #83d6a5;
+  --gold: #dbc074;
+  --danger: #ff8b82;
+  --red: #ff8b82;
+  --accent: var(--blue);
+  --accent-2: var(--cyan);
+  --accent-3: var(--gold);
+  --field-bg: #3a3d43;
+  --field-border: #555a63;
   --hover: rgba(255, 255, 255, 0.08);
-  --hover-strong: rgba(255, 255, 255, 0.11);
-  --popover-bg: #282b30;
-  --popover-border: rgba(255, 255, 255, 0.1);
-  --composer-bg: #202329;
-  --composer-bg-2: #1d2025;
-  --composer-border: #343941;
-  --composer-focus-border: #49505a;
-  --composer-muted: #aeb4b8;
-  --composer-control-bg: rgba(255, 255, 255, 0.065);
-  --composer-control-hover: rgba(255, 255, 255, 0.1);
-  --modal-scrim: rgba(5, 7, 10, 0.76);
-  --pdf-viewer-bg: #14171c;
-  --pdf-viewer-bg-2: #1b2028;
-  --pdf-viewer-rail: #171b21;
+  --hover-strong: rgba(255, 255, 255, 0.13);
+  --popover-bg: #383b41;
+  --popover-border: rgba(238, 242, 246, 0.14);
+  --composer-bg: #383b41;
+  --composer-bg-2: #383b41;
+  --composer-border: #555a63;
+  --composer-focus-border: #7f8ea2;
+  --composer-muted: #c3c7cd;
+  --composer-control-bg: rgba(245, 247, 250, 0.075);
+  --composer-control-hover: rgba(245, 247, 250, 0.13);
+  --modal-scrim: rgba(18, 20, 24, 0.62);
+  --pdf-viewer-bg: #30343a;
+  --pdf-viewer-bg-2: #3a3e45;
+  --pdf-viewer-rail: #34383f;
   --pdf-paper: #fffefa;
   --pdf-paper-text: #172033;
   --pdf-paper-muted: #526070;
   --pdf-paper-line: #d9dee8;
   --pdf-paper-soft: #f7f8fb;
   --page-frame-radius: 18px;
-  --shadow-lg: 0 22px 64px rgba(0, 0, 0, 0.36);
-  --shadow-popover: 0 24px 62px rgba(0, 0, 0, 0.45);
+  --shadow-subtle: 0 12px 28px rgba(0, 0, 0, 0.16);
+  --shadow-lg: 0 20px 54px rgba(0, 0, 0, 0.28);
+  --shadow-popover: 0 24px 58px rgba(0, 0, 0, 0.34);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--blue) 28%, transparent);
 }
 
 :root[data-theme="light"] {
-  color: #171a1f;
-  background: #e7e9ed;
-  --app-bg: #f3f4f6;
-  --workspace-bg: #e7e9ed;
-  --chrome: #f5f6f8;
-  --chrome-border: #d9dde3;
-  --chrome-text: #20242a;
-  --sidebar: #eef0f3;
-  --sidebar-warm: #e6e1da;
-  --sidebar-border: #d9dde3;
-  --sidebar-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(226, 229, 234, 0.95) 100%);
+  color: #131923;
+  background: #edf4f8;
+  --app-bg: #f7fafc;
+  --workspace-bg: #e9f1f6;
+  --chrome: #fbfcfd;
+  --chrome-border: #d7e0ea;
+  --chrome-text: #182230;
+  --sidebar: #f4f7fa;
+  --sidebar-warm: #f2eee8;
+  --sidebar-border: #d5dee8;
+  --sidebar-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(235, 243, 248, 0.96) 58%, rgba(247, 239, 229, 0.9) 100%);
   --surface: #ffffff;
-  --surface-raised: #f3f5f7;
-  --surface-soft: #e9ecef;
-  --surface-panel: #ffffff;
-  --chat-page-bg: #f2f4f7;
-  --chat-page-bg-2: #e9edf2;
-  --chat-page-glow: rgba(255, 255, 255, 0.78);
-  --line: #d5d9df;
-  --line-soft: #e4e7eb;
-  --text: #171a1f;
-  --text-muted: #5c6470;
-  --text-dim: #7d8590;
-  --blue: #1478c8;
-  --blue-soft: rgba(20, 120, 200, 0.14);
-  --green: #24794e;
-  --gold: #927133;
+  --surface-raised: #f0f5f9;
+  --surface-soft: #e3edf5;
+  --surface-panel: #fbfdff;
+  --surface-glass: rgba(255, 255, 255, 0.78);
+  --chat-page-bg: #f8fbfd;
+  --chat-page-bg-2: #edf4f8;
+  --chat-page-glow: rgba(45, 130, 218, 0.1);
+  --page-gradient:
+    linear-gradient(135deg, #fbfdff 0%, #f4f9fc 43%, color-mix(in srgb, #edf4f8 84%, var(--rose) 8%) 100%),
+    var(--chat-page-bg);
+  --page-gradient-soft:
+    linear-gradient(180deg, #fbfdff 0%, #edf4f8 100%),
+    var(--chat-page-bg);
+  --panel-gradient:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, color-mix(in srgb, var(--surface-panel) 90%, var(--blue) 4%) 100%),
+    var(--surface-panel);
+  --field-gradient:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, #f3f7fb 100%),
+    var(--field-bg);
+  --line: #d2dde8;
+  --line-soft: #e3eaf1;
+  --text: #131923;
+  --text-muted: #556270;
+  --text-dim: #788594;
+  --blue: #176fd4;
+  --blue-soft: rgba(23, 111, 212, 0.13);
+  --cyan: #0f9f99;
+  --cyan-soft: rgba(15, 159, 153, 0.11);
+  --violet: #6958d8;
+  --violet-soft: rgba(105, 88, 216, 0.1);
+  --rose: #c85c7d;
+  --rose-soft: rgba(200, 92, 125, 0.1);
+  --green: #1d845d;
+  --gold: #a7711f;
   --danger: #c9352b;
-  --field-bg: #f9fafb;
-  --field-border: #cbd1d8;
-  --hover: rgba(23, 30, 39, 0.07);
-  --hover-strong: rgba(23, 30, 39, 0.11);
+  --red: #c9352b;
+  --accent: var(--blue);
+  --accent-2: var(--cyan);
+  --accent-3: var(--gold);
+  --field-bg: #f7fafc;
+  --field-border: #cbd7e4;
+  --hover: rgba(17, 29, 44, 0.065);
+  --hover-strong: rgba(17, 29, 44, 0.105);
   --popover-bg: #ffffff;
   --popover-border: rgba(18, 25, 34, 0.12);
-  --composer-bg: #f0f2f5;
-  --composer-bg-2: #e6e9ee;
-  --composer-border: #cfd5dd;
-  --composer-focus-border: #aab5c2;
-  --composer-muted: #65707c;
-  --composer-control-bg: rgba(20, 28, 36, 0.075);
-  --composer-control-hover: rgba(20, 28, 36, 0.12);
-  --modal-scrim: rgba(33, 41, 54, 0.46);
-  --pdf-viewer-bg: #e5e9ef;
-  --pdf-viewer-bg-2: #f3f5f8;
+  --composer-bg: #fbfdff;
+  --composer-bg-2: #eef5fa;
+  --composer-border: #c9d7e5;
+  --composer-focus-border: #8ba7c8;
+  --composer-muted: #647382;
+  --composer-control-bg: rgba(23, 42, 63, 0.065);
+  --composer-control-hover: rgba(23, 42, 63, 0.11);
+  --modal-scrim: rgba(31, 42, 57, 0.46);
+  --pdf-viewer-bg: #e6eef5;
+  --pdf-viewer-bg-2: #f7fafc;
   --pdf-viewer-rail: #f8fafc;
   --pdf-paper: #fffefa;
   --pdf-paper-text: #172033;
   --pdf-paper-muted: #526070;
   --pdf-paper-line: #d9dee8;
   --pdf-paper-soft: #f7f8fb;
-  --shadow-lg: 0 24px 58px rgba(29, 38, 51, 0.18);
-  --shadow-popover: 0 24px 52px rgba(29, 38, 51, 0.18);
+  --shadow-subtle: 0 12px 30px rgba(36, 52, 72, 0.11);
+  --shadow-lg: 0 24px 58px rgba(36, 52, 72, 0.16);
+  --shadow-popover: 0 24px 52px rgba(36, 52, 72, 0.18);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent);
 }
 
 * {
@@ -131,6 +178,11 @@ body,
 body {
   min-width: 320px;
   overflow: hidden;
+  color: var(--text);
+  background: var(--workspace-bg);
+  font-family: var(--font-ui);
+  font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+  font-optical-sizing: auto;
 }
 
 button,
@@ -151,6 +203,11 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+::selection {
+  color: var(--app-bg);
+  background: color-mix(in srgb, var(--blue) 68%, white 16%);
+}
+
 .sidebar-scroll::-webkit-scrollbar,
 .chat-thread::-webkit-scrollbar {
   width: 8px;
@@ -159,7 +216,7 @@ input:focus-visible {
 .sidebar-scroll::-webkit-scrollbar-thumb,
 .chat-thread::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: #44474d;
+  background: color-mix(in srgb, var(--text-dim) 62%, transparent);
 }
 
 .sr-only {

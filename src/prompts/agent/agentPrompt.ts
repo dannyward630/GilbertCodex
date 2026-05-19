@@ -10,6 +10,7 @@ import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "..
 import { formatBackgroundTerminalSessionsForPrompt } from "../../lib/terminalSessions";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
+import type { ProviderToolBridgeOptions } from "../../toolBridge/types";
 
 const MAX_CONFIGURED_SYSTEM_PROMPT_TOKENS = 800;
 const MAX_USER_INSTRUCTIONS_TOKENS = 1200;
@@ -18,6 +19,7 @@ const MAX_TOTAL_SYSTEM_PROMPT_TOKENS = 5200;
 export interface AgentSystemPromptInput {
   messages: ChatMessage[];
   settings: ProviderSettings;
+  toolBridge?: ProviderToolBridgeOptions;
 }
 
 export interface AgentSystemPromptBuild {
@@ -30,8 +32,8 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput) {
   return buildAgentSystemPromptWithMetadata(input).prompt;
 }
 
-export function buildAgentSystemPromptWithMetadata({ messages, settings }: AgentSystemPromptInput): AgentSystemPromptBuild {
-  const retrievalContext = createAgentPromptRetrievalContext(settings, messages);
+export function buildAgentSystemPromptWithMetadata({ messages, settings, toolBridge }: AgentSystemPromptInput): AgentSystemPromptBuild {
+  const retrievalContext = createAgentPromptRetrievalContext(settings, messages, toolBridge);
   const selectedChunks = selectPromptChunks(retrievalContext);
   const selectedChunkIds = new Set(selectedChunks.map((entry) => entry.chunk.id));
   const sections = [
@@ -48,6 +50,7 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings }: Agent
         latestUserPrompt: retrievalContext.latestUserPrompt,
         selectedChunkIds,
         settings,
+        toolBridge,
       }),
     ),
     formatSessionLedger(messages),
@@ -79,15 +82,81 @@ function formatCurrentRuntimeContext() {
     dateStyle: "full",
     timeStyle: "long",
   }).format(now);
+  const deviceLanguage = getDeviceLanguageContext();
 
   return [
     "# Current Runtime Context",
     `Current local date and time: ${localDateTime}`,
     `Current ISO timestamp: ${now.toISOString()}`,
     `User/local timezone: ${timezone}`,
+    `Primary user/device language: ${deviceLanguage.primaryLocale}.`,
+    deviceLanguage.preferredLocales.length > 1 ? `User/device language preferences: ${deviceLanguage.preferredLocales.join(", ")}.` : "",
+    `Default assistant language: reply in the primary device language/locale (${deviceLanguage.primaryLocale}) unless the user explicitly asks for another language or the task requires preserving exact source text, code, logs, file names, quoted content, or API output.`,
     "Treat this date/time as authoritative for relative dates such as today, tomorrow, yesterday, latest, recent, currently, and now.",
-    "For current, latest, changing, or source-backed facts, use provided web context or call web_search when that tool is enabled. If live web evidence is unavailable, say what could not be verified instead of relying on stale model memory.",
-  ].join("\n");
+    "For current, latest, changing, official, or source-backed external facts, call web_search when that tool is enabled and current evidence is needed. If live web evidence is unavailable, say what could not be verified instead of relying on stale model memory.",
+  ].filter(Boolean).join("\n");
+}
+
+function getDeviceLanguageContext() {
+  const navigatorLanguages = typeof navigator !== "undefined" && Array.isArray(navigator.languages) ? navigator.languages : [];
+  const navigatorLanguage = typeof navigator !== "undefined" && typeof navigator.language === "string" ? navigator.language : "";
+  let intlLocale = "";
+
+  try {
+    intlLocale = Intl.DateTimeFormat().resolvedOptions().locale || "";
+  } catch {
+    intlLocale = "";
+  }
+
+  const preferredLocales = uniqueLocaleTags([
+    ...navigatorLanguages,
+    navigatorLanguage,
+    intlLocale,
+    "en-US",
+  ]);
+
+  return {
+    preferredLocales,
+    primaryLocale: preferredLocales[0] ?? "en-US",
+  };
+}
+
+function uniqueLocaleTags(values: string[]) {
+  const seen = new Set<string>();
+  const locales: string[] = [];
+
+  for (const value of values) {
+    const locale = normalizeLocaleTag(value);
+
+    if (!locale) {
+      continue;
+    }
+
+    const key = locale.toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    locales.push(locale);
+  }
+
+  return locales;
+}
+
+function normalizeLocaleTag(value: string) {
+  const normalized = value.trim().replace(/_/g, "-");
+
+  if (!normalized) {
+    return "";
+  }
+
+  try {
+    return Intl.getCanonicalLocales(normalized)[0] ?? normalized;
+  } catch {
+    return normalized;
+  }
 }
 
 function formatCurrentWorkspaceContext() {

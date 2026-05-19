@@ -1,0 +1,563 @@
+import {
+  finishNineRouterOAuthCallback,
+  isTauriDesktopRuntime,
+  nineRouterLocalHttp,
+  openExternalUrl,
+  startNineRouterOAuthCallback,
+} from "../app/tauriClient";
+import { getDefaultModelForProvider, normalizeNineRouterDiscoveredModelId } from "../lib/models";
+import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "./nativeHttp";
+
+export const NINE_ROUTER_PROVIDER_ID = "9router" as const;
+export const NINE_ROUTER_DASHBOARD_FALLBACK = "http://127.0.0.1:20128";
+export const NINE_ROUTER_CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback";
+export const NINE_ROUTER_CODEX_PROXY_APP_PORT = "20128";
+export const NINE_ROUTER_CODEX_POLL_INTERVAL_MS = 1_500;
+export const NINE_ROUTER_CODEX_MAX_POLL_ATTEMPTS = 200;
+export const NINE_ROUTER_DEVICE_POLL_MAX_ATTEMPTS = 90;
+
+export type NineRouterAccountFlow = "authorization_code" | "codex" | "device_code";
+
+export interface NineRouterAccountProvider {
+  description: string;
+  flow: NineRouterAccountFlow;
+  id: string;
+  name: string;
+  usageNote: string;
+}
+
+export interface NineRouterConnection {
+  authType?: string | null;
+  displayName?: string | null;
+  email?: string | null;
+  expiresAt?: string | null;
+  id: string;
+  isActive?: boolean | null;
+  lastError?: string | null;
+  name?: string | null;
+  provider: string;
+  providerSpecificData?: {
+    chatgptPlanType?: string | null;
+  } | null;
+  testStatus?: string | null;
+}
+
+export interface NineRouterAuthorizeResponse {
+  authUrl?: string;
+  codeVerifier?: string;
+  redirectUri?: string;
+  state?: string;
+}
+
+export interface NineRouterDeviceCodeResponse {
+  _authMethod?: string;
+  _clientId?: string;
+  _clientSecret?: string;
+  _region?: string;
+  _startUrl?: string;
+  codeVerifier?: string;
+  device_code?: string;
+  expires_in?: number;
+  interval?: number;
+  user_code?: string;
+  verification_uri?: string;
+  verification_uri_complete?: string;
+}
+
+export interface NineRouterOAuthPollResponse {
+  connection?: {
+    displayName?: string | null;
+    email?: string | null;
+    id?: string;
+    provider?: string;
+  };
+  error?: string;
+  errorDescription?: string;
+  pending?: boolean;
+  success?: boolean;
+}
+
+export interface NineRouterExchangeResponse extends NineRouterOAuthPollResponse {}
+
+export interface NineRouterCodexProxyResponse {
+  reason?: string;
+  serverSide?: boolean;
+  success?: boolean;
+}
+
+export interface NineRouterCodexPollResponse {
+  connectionId?: string;
+  email?: string;
+  error?: string;
+  status?: "done" | "error" | "pending" | "unknown" | string;
+}
+
+export type NineRouterStatusMessage = {
+  kind: "error" | "success" | "warning";
+  text: string;
+};
+
+export interface NineRouterConnectOptions {
+  isActive?: () => boolean;
+  onStatus?: (message: NineRouterStatusMessage) => void;
+}
+
+export const NINE_ROUTER_ACCOUNT_PROVIDERS: NineRouterAccountProvider[] = [
+  {
+    description: "ChatGPT/Codex subscription routes for GPT-5.5, GPT-5.4, and Codex 5.3.",
+    flow: "codex",
+    id: "codex",
+    name: "Codex / ChatGPT",
+    usageNote: "Shows the 5-hour and weekly ChatGPT/Codex quota windows when available.",
+  },
+  {
+    description: "Claude Code OAuth for Anthropic subscription-backed coding models.",
+    flow: "authorization_code",
+    id: "claude",
+    name: "Claude Code",
+    usageNote: "Shows Claude session and weekly usage windows.",
+  },
+  {
+    description: "Google Gemini CLI and Cloud Code Assist account quota.",
+    flow: "authorization_code",
+    id: "gemini-cli",
+    name: "Gemini CLI / Cloud Code",
+    usageNote: "Shows Cloud Code Assist quota and reset windows.",
+  },
+  {
+    description: "Google Antigravity subscription quota.",
+    flow: "authorization_code",
+    id: "antigravity",
+    name: "Antigravity",
+    usageNote: "Shows subscription quota when available from Google.",
+  },
+  {
+    description: "GitHub Copilot account for IDE-backed model routing.",
+    flow: "device_code",
+    id: "github",
+    name: "GitHub Copilot",
+    usageNote: "Shows Copilot quota snapshots when GitHub reports them.",
+  },
+  {
+    description: "Kiro device login for AWS/Kiro agentic request quota.",
+    flow: "device_code",
+    id: "kiro",
+    name: "Kiro",
+    usageNote: "Shows Kiro request usage and reset information.",
+  },
+  {
+    description: "Kilo Code OAuth device login for Kilo-backed routes.",
+    flow: "device_code",
+    id: "kilocode",
+    name: "Kilo Code",
+    usageNote: "Shows Kilo account status; quota appears when available.",
+  },
+  {
+    description: "Cline OAuth for Cline-backed coding routes.",
+    flow: "authorization_code",
+    id: "cline",
+    name: "Cline",
+    usageNote: "Shows account status; quota appears when available.",
+  },
+  {
+    description: "Qwen Code device login for Qwen-backed routes.",
+    flow: "device_code",
+    id: "qwen",
+    name: "Qwen Code",
+    usageNote: "Shows account status and quota messages when available.",
+  },
+  {
+    description: "iFlow account for iFlow-backed coding routes.",
+    flow: "authorization_code",
+    id: "iflow",
+    name: "iFlow",
+    usageNote: "Shows account status and usage messages when available.",
+  },
+  {
+    description: "Qoder account for Qoder-backed coding routes.",
+    flow: "authorization_code",
+    id: "qoder",
+    name: "Qoder",
+    usageNote: "Shows account status and usage messages when available.",
+  },
+  {
+    description: "Kimi Coding device login for Kimi-backed routes.",
+    flow: "device_code",
+    id: "kimi-coding",
+    name: "Kimi Coding",
+    usageNote: "Shows account status and quota messages when available.",
+  },
+  {
+    description: "CodeBuddy device login for CodeBuddy-backed routes.",
+    flow: "device_code",
+    id: "codebuddy",
+    name: "CodeBuddy",
+    usageNote: "Shows account status and quota messages when available.",
+  },
+];
+
+export async function loadNineRouterConnections(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK) {
+  const payload = await fetchNineRouterJson<{ connections?: NineRouterConnection[] }>(joinLocalUrl(dashboardUrl, "/api/providers"));
+  return payload.connections ?? [];
+}
+
+export async function loadNineRouterModels(baseUrl: string) {
+  const payload = await fetchNineRouterJson<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(joinLocalUrl(baseUrl, "/models"));
+  const seen = new Set<string>();
+
+  return (payload.data ?? []).flatMap((model) => {
+    const modelId = normalizeNineRouterDiscoveredModelId(model.id);
+
+    if (!modelId || seen.has(modelId)) {
+      return [];
+    }
+
+    seen.add(modelId);
+    return [modelId];
+  });
+}
+
+export async function connectNineRouterAccount(provider: NineRouterAccountProvider, dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, options: NineRouterConnectOptions = {}) {
+  if (provider.flow === "codex") {
+    await connectCodexAccount(dashboardUrl, options);
+    return;
+  }
+
+  if (provider.flow === "device_code") {
+    await connectDeviceCodeProvider(provider, dashboardUrl, options);
+    return;
+  }
+
+  await connectAuthorizationCodeProvider(provider, dashboardUrl, options);
+}
+
+export function chooseNineRouterModel(savedModel: string, models: string[]) {
+  const normalizedSavedModel = savedModel.trim();
+
+  if (models.length > 0) {
+    return normalizedSavedModel && models.includes(normalizedSavedModel) ? normalizedSavedModel : models[0];
+  }
+
+  return normalizedSavedModel || getDefaultModelForProvider(NINE_ROUTER_PROVIDER_ID);
+}
+
+export function choosePreferredConnection(connections: NineRouterConnection[]) {
+  return connections.find((connection) => isConnectionActive(connection)) ?? connections[0] ?? null;
+}
+
+export function isConnectionActive(connection: NineRouterConnection | null | undefined) {
+  if (!connection || connection.isActive === false) {
+    return false;
+  }
+
+  const status = connection.testStatus?.toLowerCase();
+  return status === "active" || status === "success";
+}
+
+export function formatConnectionIdentity(connection: NineRouterConnection | null | undefined) {
+  return connection?.email || connection?.displayName || connection?.name || "";
+}
+
+export function formatConnectionExpiry(connection: NineRouterConnection | null | undefined) {
+  if (!connection?.expiresAt) {
+    return connection ? "Auto-refresh" : "Not connected";
+  }
+
+  const expiresAt = new Date(connection.expiresAt);
+
+  if (Number.isNaN(expiresAt.getTime())) {
+    return "Auto-refresh";
+  }
+
+  const days = Math.ceil((expiresAt.getTime() - Date.now()) / 86_400_000);
+
+  if (days <= 0) {
+    return "Expired";
+  }
+
+  return `${days}d left`;
+}
+
+export function joinLocalUrl(baseUrl: string, path: string) {
+  const normalizedBase = baseUrl.trim().replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+export function createNineRouterUrl(baseUrl: string, path: string, params?: Record<string, string>) {
+  const url = new URL(joinLocalUrl(baseUrl, path));
+
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+
+  return url.toString();
+}
+
+export async function fetchNineRouterJson<T>(url: string) {
+  const response = await fetchWithTimeout(url, { method: "GET" });
+  const payload = await readJsonResponse<T & { error?: { message?: string } }>(response);
+
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+export async function postNineRouterJson<T>(url: string, body: unknown) {
+  const response = await fetchWithTimeout(url, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+async function connectCodexAccount(dashboardUrl: string, options: NineRouterConnectOptions) {
+  await stopCodexOAuthProxy(dashboardUrl);
+
+  try {
+    const authUrl = createNineRouterUrl(dashboardUrl, "/api/oauth/codex/authorize", {
+      redirect_uri: NINE_ROUTER_CODEX_REDIRECT_URI,
+    });
+    const authData = await fetchNineRouterJson<NineRouterAuthorizeResponse>(authUrl);
+
+    if (!authData.authUrl || !authData.state || !authData.codeVerifier) {
+      throw new Error("The subscription helper did not return a complete Codex sign-in request.");
+    }
+
+    const proxyUrl = createNineRouterUrl(dashboardUrl, "/api/oauth/codex/start-proxy", {
+      app_port: NINE_ROUTER_CODEX_PROXY_APP_PORT,
+      code_verifier: authData.codeVerifier,
+      redirect_uri: NINE_ROUTER_CODEX_REDIRECT_URI,
+      state: authData.state,
+    });
+    const proxy = await fetchNineRouterJson<NineRouterCodexProxyResponse>(proxyUrl);
+
+    if (!proxy.success || !proxy.serverSide) {
+      throw new Error(proxy.reason === "port_busy" ? "Codex sign-in is already open. Finish or close the previous sign-in window, then retry." : "The subscription helper could not start the Codex sign-in callback.");
+    }
+
+    options.onStatus?.({ kind: "warning", text: "Finish the OpenAI sign-in in your browser. Gilbert will pick it up automatically." });
+    await openExternalUrl(authData.authUrl);
+    await waitForCodexConnection(dashboardUrl, authData.state, options);
+  } finally {
+    void stopCodexOAuthProxy(dashboardUrl);
+  }
+}
+
+async function connectDeviceCodeProvider(provider: NineRouterAccountProvider, dashboardUrl: string, options: NineRouterConnectOptions) {
+  const deviceData = await fetchNineRouterJson<NineRouterDeviceCodeResponse>(joinLocalUrl(dashboardUrl, `/api/oauth/${provider.id}/device-code`));
+  const deviceCode = deviceData.device_code?.trim();
+  const verifyUrl = deviceData.verification_uri_complete || deviceData.verification_uri;
+
+  if (!deviceCode || !verifyUrl) {
+    throw new Error(`The subscription helper did not return a complete ${provider.name} device sign-in request.`);
+  }
+
+  const userCode = deviceData.user_code?.trim();
+  options.onStatus?.({
+    kind: "warning",
+    text: userCode ? `Finish ${provider.name} sign-in in your browser. Code: ${userCode}` : `Finish ${provider.name} sign-in in your browser. Gilbert will pick it up automatically.`,
+  });
+  await openExternalUrl(verifyUrl);
+  await waitForDeviceCodeConnection(provider, dashboardUrl, deviceData, options);
+}
+
+async function connectAuthorizationCodeProvider(provider: NineRouterAccountProvider, dashboardUrl: string, options: NineRouterConnectOptions) {
+  const callback = await startNineRouterOAuthCallback();
+  const authData = await fetchNineRouterJson<NineRouterAuthorizeResponse>(createNineRouterUrl(dashboardUrl, `/api/oauth/${provider.id}/authorize`, {
+    redirect_uri: callback.redirectUri,
+  }));
+
+  if (!authData.authUrl || !authData.state) {
+    throw new Error(`The subscription helper did not return a complete ${provider.name} sign-in request.`);
+  }
+
+  if (provider.id !== "cline" && !authData.codeVerifier) {
+    throw new Error(`The subscription helper did not return a code verifier for ${provider.name}.`);
+  }
+
+  options.onStatus?.({ kind: "warning", text: `Finish ${provider.name} sign-in in your browser. Gilbert will close the loop automatically.` });
+  await openExternalUrl(authData.authUrl);
+  const callbackData = await finishNineRouterOAuthCallback(callback.id, 300_000);
+
+  if (!isConnectActive(options)) {
+    return;
+  }
+
+  if (callbackData.error) {
+    throw new Error(callbackData.errorDescription || callbackData.error);
+  }
+
+  if (!callbackData.code) {
+    throw new Error(`${provider.name} did not return an authorization code.`);
+  }
+
+  const exchange = await postNineRouterJson<NineRouterExchangeResponse>(joinLocalUrl(dashboardUrl, `/api/oauth/${provider.id}/exchange`), {
+    code: callbackData.code,
+    codeVerifier: authData.codeVerifier,
+    redirectUri: callback.redirectUri,
+    state: callbackData.state || authData.state,
+  });
+
+  if (!exchange.success) {
+    throw new Error(exchange.errorDescription || exchange.error || `${provider.name} sign-in did not complete.`);
+  }
+}
+
+async function waitForDeviceCodeConnection(
+  provider: NineRouterAccountProvider,
+  dashboardUrl: string,
+  deviceData: NineRouterDeviceCodeResponse,
+  options: NineRouterConnectOptions,
+) {
+  let intervalSeconds = Math.max(2, Number(deviceData.interval ?? 5) || 5);
+  const extraData = provider.id === "kiro"
+    ? {
+        _authMethod: deviceData._authMethod,
+        _clientId: deviceData._clientId,
+        _clientSecret: deviceData._clientSecret,
+        _region: deviceData._region,
+        _startUrl: deviceData._startUrl,
+      }
+    : null;
+
+  for (let attempt = 0; attempt < NINE_ROUTER_DEVICE_POLL_MAX_ATTEMPTS; attempt += 1) {
+    if (!isConnectActive(options)) {
+      return;
+    }
+
+    await delay(intervalSeconds * 1_000);
+
+    const payload = await postNineRouterJson<NineRouterOAuthPollResponse>(joinLocalUrl(dashboardUrl, `/api/oauth/${provider.id}/poll`), {
+      codeVerifier: deviceData.codeVerifier,
+      deviceCode: deviceData.device_code,
+      extraData,
+    });
+
+    if (payload.success) {
+      return payload;
+    }
+
+    if (payload.error === "slow_down") {
+      intervalSeconds = Math.min(intervalSeconds + 5, 30);
+      continue;
+    }
+
+    if (payload.pending || payload.error === "authorization_pending" || !payload.error) {
+      continue;
+    }
+
+    throw new Error(payload.errorDescription || payload.error || `${provider.name} sign-in failed.`);
+  }
+
+  throw new Error(`${provider.name} sign-in timed out. Try again from Subscriptions settings.`);
+}
+
+async function waitForCodexConnection(dashboardUrl: string, state: string, options: NineRouterConnectOptions) {
+  for (let attempt = 0; attempt < NINE_ROUTER_CODEX_MAX_POLL_ATTEMPTS; attempt += 1) {
+    if (!isConnectActive(options)) {
+      return;
+    }
+
+    const payload = await fetchNineRouterJson<NineRouterCodexPollResponse>(createNineRouterUrl(dashboardUrl, "/api/oauth/codex/poll-status", {
+      state,
+    }));
+
+    if (payload.status === "done") {
+      return payload;
+    }
+
+    if (payload.status === "error") {
+      throw new Error(payload.error || "Codex sign-in failed.");
+    }
+
+    await delay(NINE_ROUTER_CODEX_POLL_INTERVAL_MS);
+  }
+
+  throw new Error("Codex sign-in timed out. Try again from Subscriptions settings.");
+}
+
+async function stopCodexOAuthProxy(dashboardUrl: string) {
+  try {
+    await fetchNineRouterJson<{ success?: boolean }>(createNineRouterUrl(dashboardUrl, "/api/oauth/codex/stop-proxy"));
+  } catch {
+    // The proxy may not be running yet.
+  }
+}
+
+function isConnectActive(options: NineRouterConnectOptions) {
+  return options.isActive?.() ?? true;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    if (isTauriDesktopRuntime()) {
+      const nativeResponse = await nineRouterLocalHttp({
+        body: normalizeNativeRequestBody(init.body, "The subscription helper bridge"),
+        headers: headersToRecord(init.headers),
+        method: normalizeNativeRequestMethod(init.method, "The subscription helper bridge"),
+        timeoutMs: 10_000,
+        url,
+      });
+
+      return new Response(nativeResponse.body, {
+        headers: nativeResponse.headers,
+        status: nativeResponse.status,
+      });
+    }
+
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`The subscription helper did not answer ${url} within 10 seconds.`);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    if (/failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
+      throw new Error(`Could not reach the subscription helper at ${url}. Open Subscriptions, then retry.`);
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+
+  if (!text) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
+}

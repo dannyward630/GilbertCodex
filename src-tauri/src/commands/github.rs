@@ -963,12 +963,16 @@ pub async fn github_list_tree(
     let tree = github_api::<GithubTreeApi>(&client, &token, Method::GET, url, None).await?;
     let limit = request.limit.filter(|value| *value > 0);
     let truncated_by_limit = limit.is_some_and(|max_entries| tree.tree.len() > max_entries);
-    let entries = tree
-        .tree
-        .into_iter()
-        .take(limit.unwrap_or(usize::MAX))
-        .filter_map(GithubTreeEntry::from_api)
-        .collect();
+    let mut entries = Vec::new();
+    for entry in tree.tree {
+        if limit.is_some_and(|max_entries| entries.len() >= max_entries) {
+            break;
+        }
+
+        if let Some(entry) = GithubTreeEntry::from_api(entry) {
+            entries.push(entry);
+        }
+    }
 
     Ok(GithubTreeResponse {
         branch,

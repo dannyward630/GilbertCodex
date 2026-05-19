@@ -1,8 +1,8 @@
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Eye, File, FileText, Image as ImageIcon, Maximize2, Minus, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Eye, File, FileText, Image as ImageIcon, Maximize2, Minus, Plus, Video, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { formatAttachmentSize, isImageAttachment } from "../../lib/chatAttachments";
+import { formatAttachmentSize, isImageAttachment, isVideoAttachment } from "../../lib/chatAttachments";
 import type { ChatArtifact, ChatAttachment, ChatImageAttachment } from "../../types/chat";
 
 interface MessageAttachmentsProps {
@@ -22,6 +22,7 @@ export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
   }
 
   const imageAttachments = attachments.filter(isImageAttachment);
+  const videoAttachments = attachments.filter(isVideoAttachment);
   const fileAttachments = attachments.filter((attachment) => attachment.kind === "file");
 
   return (
@@ -33,8 +34,17 @@ export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
           ))}
         </div>
       ) : null}
-      {fileAttachments.length > 0 ? (
+      {videoAttachments.length > 0 || fileAttachments.length > 0 ? (
         <div className="message-file-list">
+          {videoAttachments.map((attachment) => (
+            <a key={attachment.id} className="message-file-pill" href={attachment.dataUrl} download={attachment.name}>
+              <Video size={16} aria-hidden="true" />
+              <span>
+                <strong>{attachment.name}</strong>
+                <small>{formatAttachmentSize(attachment.size)}</small>
+              </span>
+            </a>
+          ))}
           {fileAttachments.map((attachment) => {
             const body = (
               <>

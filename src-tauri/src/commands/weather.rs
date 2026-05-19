@@ -4,10 +4,12 @@ use std::time::Duration;
 
 const WEATHER_CONNECT_TIMEOUT_SECS: u64 = 5;
 const WEATHER_CLIENT_TIMEOUT_SECS: u64 = 18;
-const MAX_WEATHER_RESPONSE_BYTES: usize = usize::MAX;
+const MAX_WEATHER_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const WEATHER_USER_AGENT: &str =
     "GilbertCodex/0.2.3 (https://github.com/UrbanWafflezz/GilbertCodex)";
 const ALLOWED_WEATHER_HOSTS: &[&str] = &[
+    "api.open-meteo.com",
+    "geocoding-api.open-meteo.com",
     "noaa.gov",
     "weather.gov",
     "api.weather.gov",
@@ -29,6 +31,30 @@ const ALLOWED_WEATHER_HOSTS: &[&str] = &[
     "www.spc.noaa.gov",
     "www.cpc.ncep.noaa.gov",
     "www.swpc.noaa.gov",
+    "api.weather.gc.ca",
+    "dd.weather.gc.ca",
+    "weather.gc.ca",
+    "dwd.de",
+    "opendata.dwd.de",
+    "maps.dwd.de",
+    "api.meteoalarm.org",
+    "feeds.meteoalarm.org",
+    "meteoalarm.org",
+    "api.met.no",
+    "thredds.met.no",
+    "met.no",
+    "bom.gov.au",
+    "reg.bom.gov.au",
+    "sws-data.sws.bom.gov.au",
+    "cma.gov.cn",
+    "data.cma.cn",
+    "smn.conagua.gob.mx",
+    "conagua.gob.mx",
+    "www.gob.mx",
+    "alertingauthority.wmo.int",
+    "worldweather.wmo.int",
+    "severeweather.wmo.int",
+    "wmo.int",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -150,7 +176,7 @@ fn validate_weather_url(raw_url: &str) -> Result<Url, String> {
         .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
     {
         return Err(format!(
-            "Weather requests are limited to official NOAA/NWS hosts. Blocked host: {host}"
+            "Weather requests are limited to registered weather provider hosts. Blocked host: {host}"
         ));
     }
 

@@ -23,7 +23,6 @@
   "scripts": {
     "dev": "vite --host localhost --port 1420",
     "typecheck": "tsc --noEmit",
-    "test:tool-bridge": "vitest run src/toolBridge",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host localhost --port 4173",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
@@ -34,8 +33,9 @@
     "app:dev": "tauri dev",
     "app:build": "tauri build",
     "installer:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-installer-assets.ps1",
-    "app:installer": "npm run installer:assets && tauri build --bundles nsis",
-    "app:release": "npm run installer:assets && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json"
+    "nine-router:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-nine-router-runtime.ps1",
+    "app:installer": "npm run installer:assets && npm run nine-router:bundle && tauri build --bundles nsis",
+    "app:release": "npm run installer:assets && npm run nine-router:bundle && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json"
   },
   "engines": {
     "node": ">=18"

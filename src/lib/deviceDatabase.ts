@@ -32,6 +32,8 @@ export interface DeviceDatabaseOverview {
   categories: DeviceDatabaseStorageCategory[];
   records: DeviceDatabaseStorageRecord[];
   context: DeviceDatabaseContextSummary;
+  engine: DeviceDatabaseEngineSummary;
+  migration: DeviceDatabaseMigrationSummary;
   legacyStorage: DeviceDatabaseLegacyStorageSummary;
 }
 
@@ -77,6 +79,33 @@ export interface DeviceDatabaseContextSummary {
   largestChatBytes: number;
 }
 
+export interface DeviceDatabaseEngineSummary {
+  schemaVersion: string;
+  journalMode: string;
+  synchronous: string;
+  walAutocheckpoint: number;
+  quickCheck: string;
+  pageSizeBytes: number;
+  pageCount: number;
+  freelistCount: number;
+  freeBytes: number;
+  walSizeBytes: number;
+  shmSizeBytes: number;
+}
+
+export interface DeviceDatabaseMigrationSummary {
+  targetSchemaVersion: string;
+  currentSchemaVersion: string;
+  status: string;
+  typedChatCount: number;
+  typedMessageCount: number;
+  typedAgentRunCount: number;
+  typedAgentRunEventCount: number;
+  typedMemoryChunkCount: number;
+  binaryVectorCount: number;
+  legacyAgentRunBlobBytes: number;
+}
+
 export interface DeviceDatabaseLegacyStorageSummary {
   totalBytes: number;
   files: DeviceDatabaseLegacyStorageEntry[];
@@ -91,6 +120,27 @@ export interface DeviceDatabaseLegacyStorageEntry {
 export interface DeviceDatabaseReset {
   removedPaths: string[];
   failedPaths: string[];
+}
+
+export interface DeviceDatabaseBackup {
+  backupPath: string;
+  fileSizeBytes: number;
+  createdAt: number;
+}
+
+export interface DeviceDatabaseMigrationFinalize {
+  backup: DeviceDatabaseBackup;
+  removedStorageKeys: string[];
+  removedLegacyPaths: string[];
+  failedLegacyPaths: string[];
+}
+
+export interface DeviceDatabaseAutoMigrationFinalize {
+  alreadyFinalized: boolean;
+  backup: DeviceDatabaseBackup | null;
+  removedStorageKeys: string[];
+  removedLegacyPaths: string[];
+  failedLegacyPaths: string[];
 }
 
 export function isDeviceDatabaseAvailable() {
@@ -120,6 +170,17 @@ export async function saveDeviceDatabaseValue(namespace: string, key: string, va
   });
 }
 
+export async function saveDeviceDatabaseValues(namespace: string, values: DeviceDatabaseSeed[]) {
+  if (!isDeviceDatabaseAvailable() || values.length === 0) {
+    return;
+  }
+
+  await invoke<void>("gilbert_database_set_values", {
+    namespace,
+    values,
+  });
+}
+
 export async function cleanupLegacyDeviceStorage() {
   if (!isDeviceDatabaseAvailable()) {
     return null;
@@ -134,6 +195,30 @@ export async function getDeviceDatabaseOverview() {
   }
 
   return invoke<DeviceDatabaseOverview>("gilbert_database_get_overview");
+}
+
+export async function backupDeviceDatabase() {
+  if (!isDeviceDatabaseAvailable()) {
+    return null;
+  }
+
+  return invoke<DeviceDatabaseBackup>("gilbert_database_backup");
+}
+
+export async function finalizeDeviceDatabaseMigration() {
+  if (!isDeviceDatabaseAvailable()) {
+    return null;
+  }
+
+  return invoke<DeviceDatabaseMigrationFinalize>("gilbert_database_finalize_migration");
+}
+
+export async function autoFinalizeDeviceDatabaseMigration() {
+  if (!isDeviceDatabaseAvailable()) {
+    return null;
+  }
+
+  return invoke<DeviceDatabaseAutoMigrationFinalize>("gilbert_database_auto_finalize_migration");
 }
 
 export async function resetDeviceDatabase() {

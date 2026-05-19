@@ -1,17 +1,34 @@
 import { ArrowLeft } from "lucide-react";
+import { memo, useMemo } from "react";
 import { SidebarSection } from "../../components/sidebar/SidebarSection";
 import type { PrimaryRoute } from "../../types/navigation";
-import { SETTINGS_NAV_ITEMS } from "./settingsNavigation";
+import { resolveSettingsNavSection, SETTINGS_NAV_ITEMS } from "./settingsNavigation";
 import type { SettingsSectionId } from "./types";
 
 interface SettingsSideMenuProps {
   activeSection: SettingsSectionId;
+  locationServicesEnabled: boolean;
   onRouteChange: (route: PrimaryRoute) => void;
   onSectionChange: (section: SettingsSectionId) => void;
   open: boolean;
 }
 
-export function SettingsSideMenu({ activeSection, onRouteChange, onSectionChange, open }: SettingsSideMenuProps) {
+export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, locationServicesEnabled, onRouteChange, onSectionChange, open }: SettingsSideMenuProps) {
+  const activeNavSection = resolveSettingsNavSection(activeSection);
+  const navItems = useMemo(() => SETTINGS_NAV_ITEMS, [locationServicesEnabled]);
+  const sidebarItems = useMemo(
+    () =>
+      navItems.map((item) => ({
+        active: activeNavSection === item.id,
+        icon: item.icon,
+        id: item.id,
+        label: item.label,
+        meta: item.meta,
+        onSelect: (sectionId: string) => onSectionChange(sectionId as SettingsSectionId),
+      })),
+    [activeNavSection, navItems, onSectionChange],
+  );
+
   return (
     <aside className="shell-sidebar shell-sidebar-settings" data-open={open}>
       <div className="sidebar-primary-actions">
@@ -24,16 +41,9 @@ export function SettingsSideMenu({ activeSection, onRouteChange, onSectionChange
       <div className="sidebar-scroll">
         <SidebarSection
           title="Settings"
-          items={SETTINGS_NAV_ITEMS.map((item) => ({
-            active: activeSection === item.id,
-            icon: item.icon,
-            id: item.id,
-            label: item.label,
-            meta: item.meta,
-            onSelect: (sectionId) => onSectionChange(sectionId as SettingsSectionId),
-          }))}
+          items={sidebarItems}
         />
       </div>
     </aside>
   );
-}
+});

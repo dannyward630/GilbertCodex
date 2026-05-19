@@ -14,7 +14,7 @@
   align-items: center;
   height: 48px;
   padding-left: 10px;
-  color: #e5e2dc;
+  color: var(--chrome-text);
   border-bottom: 1px solid transparent;
   background: transparent;
   cursor: grab;
@@ -47,7 +47,7 @@
 .topbar-center {
   gap: 8px;
   min-height: 28px;
-  color: #c9c3ba;
+  color: var(--text-muted);
   font-size: 12.5px;
   font-weight: 520;
   min-width: 0;
@@ -88,20 +88,20 @@
   height: 30px;
   padding: 0 8px;
   overflow: hidden;
-  color: #e8e1d9;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--surface-raised) 46%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
   cursor: default;
 }
 
 .topbar-weather:hover,
 .topbar-weather:focus-visible,
 .topbar-weather[aria-expanded="true"] {
-  color: #ffffff;
-  border-color: rgba(125, 190, 255, 0.34);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 38%, var(--surface-raised));
 }
 
 .topbar-weather-emoji,
@@ -136,13 +136,11 @@
   gap: 12px;
   width: min(720px, calc(100vw - 56px));
   padding: 14px;
-  color: #f3eee8;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  border: 1px solid var(--popover-border);
   border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(80, 145, 190, 0.2), rgba(18, 20, 23, 0.86)),
-    #17191c;
-  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.55);
+  background: var(--panel-gradient);
+  box-shadow: var(--shadow-popover);
   transform: translateX(-50%);
   cursor: default;
 }
@@ -158,7 +156,7 @@
 .weather-popover-footer,
 .weather-radar-placeholder span,
 .weather-day-card em {
-  color: #a8b4be;
+  color: var(--text-dim);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0;
@@ -166,7 +164,7 @@
 
 .weather-popover-hero h2 {
   margin: 3px 0;
-  color: #ffffff;
+  color: var(--text);
   font-size: 21px;
   letter-spacing: 0;
 }
@@ -175,7 +173,7 @@
 .weather-radar-placeholder p,
 .weather-day-card p {
   margin: 0;
-  color: #d9d5ce;
+  color: var(--text-muted);
 }
 
 .weather-popover-current {
@@ -189,7 +187,7 @@
   min-width: 116px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--surface-raised) 62%, transparent);
 }
 
 .weather-popover-current span {
@@ -199,14 +197,14 @@
 
 .weather-popover-current strong {
   grid-area: temp;
-  color: #ffffff;
+  color: var(--text);
   font-size: 30px;
   line-height: 1;
 }
 
 .weather-popover-current em {
   grid-area: unit;
-  color: #b6c0ca;
+  color: var(--text-dim);
   font-size: 11px;
   font-style: normal;
   font-weight: 700;
@@ -217,22 +215,22 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  color: #c9d8e4;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--surface-raised) 54%, transparent);
   cursor: default;
 }
 
 .weather-popover-refresh:hover:not(:disabled),
 .weather-popover-refresh:focus-visible:not(:disabled) {
-  color: #ffffff;
-  border-color: rgba(125, 190, 255, 0.34);
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 38%, var(--surface-raised));
 }
 
 .weather-popover-refresh:disabled {
-  color: #7f8b95;
+  color: var(--text-dim);
 }
 
 .weather-popover-refresh:disabled svg {
@@ -252,13 +250,13 @@
   min-width: 0;
   min-height: 136px;
   padding: 10px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.055);
+  background: color-mix(in srgb, var(--surface-raised) 50%, transparent);
 }
 
 .weather-day-name {
-  color: #f5f1ea;
+  color: var(--text);
   font-size: 12px;
   font-weight: 740;
 }
@@ -269,13 +267,13 @@
 }
 
 .weather-day-temp {
-  color: #ffffff;
+  color: var(--text);
   font-size: 15px;
   font-weight: 760;
 }
 
 .weather-day-temp small {
-  color: #9da8b2;
+  color: var(--text-dim);
   font-size: 12px;
   font-weight: 650;
 }
@@ -302,8 +300,8 @@
   min-height: 120px;
   display: grid;
   place-items: center;
-  color: #bfc6cc;
-  border: 1px dashed rgba(255, 255, 255, 0.16);
+  color: var(--text-dim);
+  border: 1px dashed color-mix(in srgb, var(--line) 76%, transparent);
   border-radius: 9px;
 }
 
@@ -314,10 +312,10 @@
   align-items: end;
   min-width: 0;
   padding: 10px;
-  color: #e9edf0;
-  border: 1px solid rgba(255, 210, 122, 0.24);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--gold) 24%, transparent);
   border-radius: 10px;
-  background: rgba(64, 48, 20, 0.42);
+  background: color-mix(in srgb, var(--gold) 12%, var(--surface-panel) 78%);
 }
 
 .weather-location-card > div,
@@ -329,7 +327,7 @@
 
 .weather-location-card span,
 .weather-location-card em {
-  color: #c7bca4;
+  color: color-mix(in srgb, var(--gold) 74%, var(--text-dim));
   font-size: 10.5px;
   font-style: normal;
   font-weight: 700;
@@ -338,7 +336,7 @@
 .weather-location-card strong {
   min-width: 0;
   overflow: hidden;
-  color: #ffffff;
+  color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
@@ -349,19 +347,19 @@
   min-width: 0;
   height: 32px;
   padding: 0 8px;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 8px;
-  background: rgba(7, 10, 13, 0.42);
+  background: var(--field-gradient);
   font-size: 12px;
 }
 
 .weather-location-card button {
   height: 32px;
   padding: 0 12px;
-  color: #1a1308;
+  color: color-mix(in srgb, var(--app-bg) 92%, black 8%);
   border-radius: 8px;
-  background: #ffd27a;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 84%, white 16%), color-mix(in srgb, var(--blue) 44%, var(--gold) 56%));
   font-size: 12px;
   font-weight: 780;
 }
@@ -388,7 +386,7 @@
 .weather-radar-placeholder strong {
   display: block;
   margin-top: 4px;
-  color: #ffffff;
+  color: var(--text);
   font-size: 16px;
   letter-spacing: 0;
 }
@@ -410,12 +408,12 @@
   place-content: center;
   gap: 5px;
   padding: 14px;
-  color: #c5d1dc;
+  color: var(--text-muted);
   text-align: center;
 }
 
 .mapbox-weather-map-empty strong {
-  color: #ffffff;
+  color: var(--text);
   font-size: 15px;
 }
 
@@ -455,10 +453,10 @@
   gap: 2px;
   max-width: min(360px, calc(100% - 96px));
   padding: 7px 9px;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 8px;
-  background: rgba(13, 18, 24, 0.68);
+  background: color-mix(in srgb, var(--surface-panel) 78%, transparent);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px);
   pointer-events: none;
@@ -473,7 +471,7 @@
 }
 
 .mapbox-weather-map-overlay span {
-  color: #b9c7d3;
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -488,10 +486,10 @@
   right: 10px;
   top: 10px;
   padding: 6px 8px;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
   border-radius: 8px;
-  background: rgba(13, 18, 24, 0.72);
+  background: color-mix(in srgb, var(--surface-panel) 80%, transparent);
   font-size: 11px;
   font-weight: 760;
   pointer-events: none;
@@ -505,10 +503,10 @@
   bottom: 10px;
   max-width: 220px;
   padding: 6px 8px;
-  color: #d9f0ff;
-  border: 1px solid rgba(125, 190, 255, 0.26);
+  color: color-mix(in srgb, var(--blue) 72%, var(--text) 28%);
+  border: 1px solid color-mix(in srgb, var(--blue) 26%, transparent);
   border-radius: 8px;
-  background: rgba(12, 22, 31, 0.74);
+  background: color-mix(in srgb, var(--blue-soft) 48%, var(--surface-panel) 72%);
   font-size: 11px;
   font-weight: 720;
   pointer-events: none;
@@ -566,7 +564,7 @@
 .topbar-menu-button {
   height: 32px;
   padding: 0 11px;
-  color: #cfc8bf;
+  color: var(--text-muted);
   border-radius: 6px;
   background: transparent;
   cursor: default;
@@ -577,8 +575,8 @@
 .topbar-menu-button[data-active="true"],
 .icon-button:hover,
 .window-controls button:hover {
-  background: rgba(255, 255, 255, 0.09);
-  color: #ffffff;
+  background: var(--hover);
+  color: var(--text);
 }
 
 .topbar-menu-panel {
@@ -588,12 +586,10 @@
   display: grid;
   width: 238px;
   padding: 6px;
-  border: 1px solid #34373b;
+  border: 1px solid var(--popover-border);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0) 100%),
-    #1d1f22;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+  background: var(--panel-gradient);
+  box-shadow: var(--shadow-popover);
 }
 
 .topbar-menu-item {
@@ -603,7 +599,7 @@
   gap: 10px;
   min-height: 32px;
   padding: 0 9px;
-  color: #ddd7ce;
+  color: var(--text);
   border-radius: 6px;
   background: transparent;
   cursor: default;
@@ -621,8 +617,8 @@
 
 .topbar-menu-item:hover,
 .topbar-menu-item:focus-visible {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  background: var(--hover);
 }
 
 .topbar-menu-item:disabled,
@@ -660,7 +656,7 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  color: #b8bdc3;
+  color: var(--text-muted);
   border-radius: 8px;
   background: transparent;
   cursor: default;
@@ -833,7 +829,7 @@
   min-height: 0;
   overflow: hidden;
   padding: 8px 10px 10px;
-  background: #0f0f10;
+  background: var(--workspace-bg);
 }
 
 .workspace-shell[data-sidebar-state="closing"],
@@ -870,4 +866,14 @@
 
 .route-panel[data-active="false"] {
   display: none;
+}
+
+.route-loading {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--text-dim);
+  font-size: 13px;
 }

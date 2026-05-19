@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { MessageArtifacts } from "../../../components/chat/MessageAttachments";
 import { formatAttachmentSize } from "../../../lib/chatAttachments";
 import { createId, DEFAULT_PROJECT, normalizeProjectName } from "../../../lib/chatUtils";
+import { readFileAsDataUrl } from "../../../lib/fileDataUrl";
 import { loadPdfLibraryState, savePdfLibraryState } from "../../../lib/appStorage";
 import { isPdfDataUrl } from "../../../lib/pdfLibrary";
 import type { ChatArtifact } from "../../../types/chat";
@@ -11,9 +12,10 @@ import type { ProjectSummary } from "../../../types/project";
 
 interface PdfSettingsPageProps {
   projects: ProjectSummary[];
+  showHeading?: boolean;
 }
 
-export function PdfSettingsPage({ projects }: PdfSettingsPageProps) {
+export function PdfSettingsPage({ projects, showHeading = true }: PdfSettingsPageProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [state, setState] = useState<PdfLibraryState>(() => loadPdfLibraryState());
   const projectNames = useMemo(() => createProjectNameList(projects), [projects]);
@@ -42,7 +44,7 @@ export function PdfSettingsPage({ projects }: PdfSettingsPageProps) {
     const now = new Date().toISOString();
     const records = await Promise.all(
       selectedFiles.map(async (file) => {
-        const dataUrl = await readFileAsDataUrl(file);
+        const dataUrl = await readFileAsDataUrl(file, "Could not read this PDF.");
         const id = createId("pdf");
 
         return {
@@ -134,7 +136,7 @@ export function PdfSettingsPage({ projects }: PdfSettingsPageProps) {
 
   return (
     <>
-      <div className="settings-section-heading">
+      {showHeading ? <div className="settings-section-heading">
         <div className="settings-section-icon" aria-hidden="true">
           <FileText size={22} />
         </div>
@@ -142,7 +144,7 @@ export function PdfSettingsPage({ projects }: PdfSettingsPageProps) {
           <h1>PDF</h1>
           <p>Library, context, and project guidance</p>
         </div>
-      </div>
+      </div> : null}
 
       <section className="settings-grid pdf-metrics-grid" aria-label="PDF library summary">
         <article className="settings-card pdf-metric-card">
@@ -307,22 +309,4 @@ function toArtifact(record: PdfLibraryRecord): ChatArtifact {
     title: record.fileName || record.title,
     url: record.dataUrl,
   };
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error("Could not read this PDF."));
-    });
-    reader.addEventListener("error", () => reject(new Error("Could not read this PDF.")));
-    reader.addEventListener("abort", () => reject(new Error("Could not read this PDF.")));
-    reader.readAsDataURL(file);
-  });
 }

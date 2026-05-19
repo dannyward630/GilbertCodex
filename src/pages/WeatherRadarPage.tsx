@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "../styles/radar.css";
 import mapboxgl, {
   type CircleLayerSpecification,
   type FillLayerSpecification,
@@ -12,17 +13,30 @@ import mapboxgl, {
 import "mapbox-gl/dist/mapbox-gl.css";
 import { ArrowLeft, CloudRain, Crosshair, Layers, Pause, Play, RefreshCw, Settings, ShieldAlert } from "lucide-react";
 import { fetchWeatherJson } from "../app/tauriClient";
+import { loadOpenMeteoWeather } from "../services/openMeteoWeather";
 import { loadMapboxSettings, subscribeMapboxSettings } from "../services/mapboxSettings";
+import {
+  applyMapboxControls,
+  applyVisibleMapboxBasemap,
+  createMapboxStandardConfig,
+  getBlockingMapboxErrorMessage,
+  readMapboxErrorMessage,
+  resolveVisibleMapboxStyleUrl,
+  useResolvedAppTheme,
+} from "../services/mapboxRuntime";
+import { resolveWeatherSourcePlan } from "../services/weatherProviders";
+import { loadWeatherSourceSettings, subscribeWeatherSourceSettings } from "../services/weatherSettings";
 import {
   createStoredWeatherLocation,
   isValidWeatherCoordinate,
   loadStoredWeatherLocation,
   normalizeCountryCode,
   requestAndRememberWeatherLocation,
+  resolveStoredWeatherLocationUnits,
   saveStoredWeatherLocation,
   type StoredWeatherLocation,
 } from "../services/weatherLocation";
-import { MAPBOX_STYLE_PRESETS, resolveMapboxStyleUrl, type MapboxSettings } from "../types/mapbox";
+import type { MapboxSettings } from "../types/mapbox";
 
 interface WeatherRadarPageProps {
   onBackToChat: () => void;
@@ -61,8 +75,6 @@ interface WeatherLocationDraft {
   longitude: string;
 }
 
-type ResolvedAppTheme = "dark" | "light";
-
 const ALERT_FILL_LAYER_ID = "gilbert-weather-alert-fill";
 const ALERT_LINE_LAYER_ID = "gilbert-weather-alert-line";
 const ALERT_SOURCE_ID = "gilbert-weather-alerts";
@@ -74,8 +86,6 @@ const OBSERVED_FRAME_OFFSETS_MINUTES = [-120, -110, -100, -90, -80, -70, -60, -5
 const RADAR_LAYER_ID = "gilbert-noaa-radar-raster";
 const RADAR_SOURCE_ID = "gilbert-noaa-radar-source";
 const TERRAIN_SOURCE_ID = "gilbert-radar-terrain";
-const VISIBLE_BASEMAP_LAYER_ID = "gilbert-mapbox-visible-basemap-layer";
-const VISIBLE_BASEMAP_SOURCE_ID = "gilbert-mapbox-visible-basemap-source";
 const WEATHER_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 
 const NOAA_RADAR_WMS_URL = "https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows";
@@ -87,12 +97,13 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
   const refreshTimerRef = useRef<number | null>(null);
   const playTimerRef = useRef<number | null>(null);
   const [settings, setSettings] = useState<MapboxSettings>(() => loadMapboxSettings());
+  const [weatherSourceSettings, setWeatherSourceSettings] = useState(() => loadWeatherSourceSettings());
   const [location, setLocation] = useState<StoredWeatherLocation | null>(() => loadStoredWeatherLocation());
   const [locationDraft, setLocationDraft] = useState<WeatherLocationDraft>(() => createLocationDraft(loadStoredWeatherLocation()));
   const [locationStatus, setLocationStatus] = useState("");
   const [mapReady, setMapReady] = useState(false);
   const [mapStatus, setMapStatus] = useState("");
-  const [dataStatus, setDataStatus] = useState("Loading NOAA/NWS weather layers...");
+  const [dataStatus, setDataStatus] = useState("Loading weather layers...");
   const [timelineAnchorMs, setTimelineAnchorMs] = useState(() => roundToFiveMinutes(Date.now()));
   const [activeFrameIndex, setActiveFrameIndex] = useState(CURRENT_FRAME_INDEX);
   const [alerts, setAlerts] = useState<WeatherAlertSummary[]>([]);
@@ -104,12 +115,22 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
   const [playing, setPlaying] = useState(false);
   const appTheme = useResolvedAppTheme();
   const styleUrl = useMemo(() => resolveVisibleMapboxStyleUrl(settings, appTheme), [appTheme, settings]);
+  const weatherPlan = useMemo(() => resolveWeatherSourcePlan(location, weatherSourceSettings), [location, weatherSourceSettings]);
   const frames = useMemo(() => createRadarFrames(timelineAnchorMs), [timelineAnchorMs]);
   const activeFrame = frames[Math.min(activeFrameIndex, frames.length - 1)] ?? frames[CURRENT_FRAME_INDEX];
+  const nativeRadarAvailable = weatherPlan.radarRuntimeProvider?.id === "nws";
+  const radarTitle = nativeRadarAvailable ? "Live Weather Radar" : "Weather Map";
   const readyForMap = settings.enabled && Boolean(settings.accessToken.trim()) && Boolean(location);
   const locationName = location ? `${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}` : "No saved location";
 
   useEffect(() => subscribeMapboxSettings(setSettings), []);
+  useEffect(() => subscribeWeatherSourceSettings(setWeatherSourceSettings), []);
+
+  useEffect(() => {
+    if (!nativeRadarAvailable) {
+      setPlaying(false);
+    }
+  }, [nativeRadarAvailable]);
 
   useEffect(() => {
     let mounted = true;
@@ -141,23 +162,33 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
     setTimelineAnchorMs(nextAnchor);
 
     if (!location) {
-      setDataStatus("Save a location to load NOAA/NWS radar.");
+      setDataStatus("Save a location to load weather.");
       return;
     }
 
-    setDataStatus("Refreshing NOAA/NWS weather layers...");
+    const runtimeLocation = resolveStoredWeatherLocationUnits(location, weatherSourceSettings.temperatureUnitMode);
+    const activePlan = resolveWeatherSourcePlan(runtimeLocation, weatherSourceSettings);
+    setDataStatus(`Refreshing ${activePlan.forecastLabel}...`);
 
     const [nextAlerts, nextForecast] = await Promise.all([
-      loadActiveAlerts(location).catch(() => ({ features: createEmptyFeatureCollection(), summaries: [] })),
-      loadHourlyForecast(location).catch(() => []),
+      activePlan.alertProvider.id === "nws"
+        ? loadActiveAlerts(runtimeLocation).catch(() => ({ features: createEmptyFeatureCollection(), summaries: [] }))
+        : Promise.resolve({ features: createEmptyFeatureCollection(), summaries: [] }),
+      activePlan.forecastAdapterKind === "nws"
+        ? loadHourlyForecast(runtimeLocation).catch(() => [])
+        : activePlan.forecastAdapterKind === "openMeteo"
+          ? loadOpenMeteoWeather(runtimeLocation, activePlan)
+              .then((snapshot) => snapshot.hourlyForecast)
+              .catch(() => [])
+          : Promise.resolve([]),
     ]);
 
     setAlertGeoJson(nextAlerts.features);
     setAlerts(nextAlerts.summaries);
     setHourlyForecast(nextForecast);
     setLastUpdatedAt(new Date().toISOString());
-    setDataStatus("NOAA/NWS layers ready");
-  }, [location]);
+    setDataStatus(activePlan.radarRuntimeProvider ? `${activePlan.forecastLabel} layers ready` : `${activePlan.forecastLabel} ready. ${activePlan.radarStatus}`);
+  }, [location, weatherSourceSettings]);
 
   useEffect(() => {
     void refreshRadarData();
@@ -248,14 +279,14 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
         container,
       } satisfies MapOptions);
     } catch (error) {
-      setMapStatus(readErrorMessage(error, "Mapbox map could not start."));
+      setMapStatus(readMapboxErrorMessage(error, "Mapbox map could not start."));
       return;
     }
 
     mapRef.current = map;
 
     map.on("error", (event) => {
-      const message = getBlockingMapboxErrorMessage(event);
+      const message = getBlockingMapboxErrorMessage(event, { [RADAR_SOURCE_ID]: "NOAA radar layer" });
 
       if (message) {
         setMapStatus(message);
@@ -264,7 +295,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
 
     map.on("load", () => {
       map.scrollZoom.enable();
-      applyMapboxControls(map, settings);
+      applyMapboxControls(map, settings, { scaleMaxWidth: 112 });
       applyVisibleMapboxBasemap(map, settings, appTheme);
       applyMapboxTerrain(map, settings);
       applyLocationLayer(map, location);
@@ -286,8 +317,13 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
       return;
     }
 
+    if (!nativeRadarAvailable) {
+      removeLayerAndSource(map, RADAR_LAYER_ID, RADAR_SOURCE_ID);
+      return;
+    }
+
     applyRadarLayer(map, activeFrame, settings.radarOpacity, forecastOverlayEnabled);
-  }, [activeFrame, forecastOverlayEnabled, mapReady, settings.radarOpacity]);
+  }, [activeFrame, forecastOverlayEnabled, mapReady, nativeRadarAvailable, settings.radarOpacity]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -323,6 +359,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
       latitude,
       longitude,
       source: "manual",
+      temperatureUnitMode: weatherSourceSettings.temperatureUnitMode,
     });
 
     saveStoredWeatherLocation(nextLocation);
@@ -340,7 +377,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
           </button>
           <div>
             <span>Weather</span>
-            <h1>Live NOAA/NWS Radar</h1>
+            <h1>{radarTitle}</h1>
           </div>
           <button className="weather-radar-primary-action" type="button" onClick={onOpenMapboxSettings}>
             <Settings size={16} aria-hidden="true" />
@@ -366,7 +403,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
           </button>
           <div>
             <span>Weather</span>
-            <h1>Live NOAA/NWS Radar</h1>
+            <h1>{radarTitle}</h1>
           </div>
         </header>
         <form
@@ -405,7 +442,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
         </button>
         <div>
           <span>Weather</span>
-          <h1>Live NOAA/NWS Radar</h1>
+          <h1>{radarTitle}</h1>
         </div>
         <div className="weather-radar-header-actions">
           <button className="weather-radar-secondary-action" type="button" onClick={() => recenterMap(mapRef.current, location)}>
@@ -425,48 +462,52 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
 
       <div className="weather-radar-body">
         <div className="weather-radar-map-panel">
-          <div className="weather-radar-map" ref={containerRef} aria-label="Full screen NOAA/NWS radar map" />
+          <div className="weather-radar-map" ref={containerRef} aria-label="Full screen weather map" />
 
           <div className="weather-radar-frame-card">
-            <span>{activeFrame.sourceLabel}</span>
-            <strong>{activeFrame.label}</strong>
-            <em>{activeFrame.timeLabel}</em>
+            <span>{nativeRadarAvailable ? activeFrame.sourceLabel : weatherPlan.forecastLabel}</span>
+            <strong>{nativeRadarAvailable ? activeFrame.label : "Forecast map"}</strong>
+            <em>{nativeRadarAvailable ? activeFrame.timeLabel : weatherPlan.radarStatus}</em>
           </div>
 
-          <div className="weather-radar-map-actions">
-            <button className="weather-radar-icon-button" type="button" aria-label={playing ? "Pause radar loop" : "Play radar loop"} onClick={() => setPlaying((current) => !current)}>
-              {playing ? <Pause size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
-            </button>
-            <label className="weather-radar-timeline">
-              <span>Past 2 h</span>
-              <input min={0} max={frames.length - 1} step={1} type="range" value={activeFrameIndex} onChange={(event) => setActiveFrameIndex(Number.parseInt(event.target.value, 10))} />
-              <span>Future</span>
-            </label>
-            <button className="weather-radar-chip-button" type="button" onClick={() => setActiveFrameIndex(CURRENT_FRAME_INDEX)}>
-              Current
-            </button>
-          </div>
+          {nativeRadarAvailable ? (
+            <>
+              <div className="weather-radar-map-actions">
+                <button className="weather-radar-icon-button" type="button" aria-label={playing ? "Pause radar loop" : "Play radar loop"} onClick={() => setPlaying((current) => !current)}>
+                  {playing ? <Pause size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
+                </button>
+                <label className="weather-radar-timeline">
+                  <span>Past 2 h</span>
+                  <input min={0} max={frames.length - 1} step={1} type="range" value={activeFrameIndex} onChange={(event) => setActiveFrameIndex(Number.parseInt(event.target.value, 10))} />
+                  <span>Future</span>
+                </label>
+                <button className="weather-radar-chip-button" type="button" onClick={() => setActiveFrameIndex(CURRENT_FRAME_INDEX)}>
+                  Current
+                </button>
+              </div>
 
-          <div className="weather-radar-layer-toggles">
-            <button className="weather-radar-toggle" data-active={alertsEnabled} type="button" onClick={() => setAlertsEnabled((current) => !current)}>
-              <ShieldAlert size={15} aria-hidden="true" />
-              Alerts
-            </button>
-            <button className="weather-radar-toggle" data-active={forecastOverlayEnabled} type="button" onClick={() => setForecastOverlayEnabled((current) => !current)}>
-              <Layers size={15} aria-hidden="true" />
-              Future layer
-            </button>
-          </div>
+              <div className="weather-radar-layer-toggles">
+                <button className="weather-radar-toggle" data-active={alertsEnabled} type="button" onClick={() => setAlertsEnabled((current) => !current)}>
+                  <ShieldAlert size={15} aria-hidden="true" />
+                  Alerts
+                </button>
+                <button className="weather-radar-toggle" data-active={forecastOverlayEnabled} type="button" onClick={() => setForecastOverlayEnabled((current) => !current)}>
+                  <Layers size={15} aria-hidden="true" />
+                  Future layer
+                </button>
+              </div>
 
-          <div className="weather-radar-legend" aria-label="Radar legend">
-            <span>Light</span>
-            <i data-level="1" />
-            <i data-level="2" />
-            <i data-level="3" />
-            <i data-level="4" />
-            <i data-level="5" />
-            <span>Heavy</span>
-          </div>
+              <div className="weather-radar-legend" aria-label="Radar legend">
+                <span>Light</span>
+                <i data-level="1" />
+                <i data-level="2" />
+                <i data-level="3" />
+                <i data-level="4" />
+                <i data-level="5" />
+                <span>Heavy</span>
+              </div>
+            </>
+          ) : null}
 
           {mapStatus ? <div className="weather-radar-status" data-kind="error">{mapStatus}</div> : null}
         </div>
@@ -479,13 +520,13 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
           </section>
 
           <section className="weather-radar-detail">
-            <span>Frame</span>
-            <strong>{activeFrame.label}</strong>
-            <small>{activeFrame.sourceLabel}</small>
+            <span>{nativeRadarAvailable ? "Frame" : "Weather source"}</span>
+            <strong>{nativeRadarAvailable ? activeFrame.label : weatherPlan.forecastProvider.shortLabel}</strong>
+            <small>{nativeRadarAvailable ? activeFrame.sourceLabel : weatherPlan.forecastStatus}</small>
           </section>
 
           <section className="weather-radar-detail">
-            <span>NWS alerts</span>
+            <span>{weatherPlan.alertProvider.shortLabel} alerts</span>
             {alerts.length > 0 ? (
               <div className="weather-radar-alert-list">
                 {alerts.slice(0, 4).map((alert) => (
@@ -497,7 +538,7 @@ export function WeatherRadarPage({ onBackToChat, onOpenMapboxSettings }: Weather
                 ))}
               </div>
             ) : (
-              <small>No active point alerts</small>
+              <small>{weatherPlan.alertProvider.id === "nws" ? "No active point alerts" : weatherPlan.alertStatus}</small>
             )}
           </section>
 
@@ -656,37 +697,6 @@ function applyLocationLayer(map: mapboxgl.Map, location: StoredWeatherLocation) 
   map.addLayer(layer);
 }
 
-function applyMapboxControls(map: mapboxgl.Map, settings: MapboxSettings) {
-  if (settings.attributionControl) {
-    map.addControl(new mapboxgl.AttributionControl({ compact: settings.compactAttribution }), "bottom-right");
-  }
-
-  if (settings.navigationControl) {
-    map.addControl(new mapboxgl.NavigationControl({ showCompass: true, showZoom: true, visualizePitch: true }), "top-right");
-  }
-
-  if (settings.fullscreenControl) {
-    map.addControl(new mapboxgl.FullscreenControl(), "top-right");
-  }
-
-  if (settings.scaleControl) {
-    map.addControl(new mapboxgl.ScaleControl({ maxWidth: 112, unit: settings.scaleUnit }), "bottom-left");
-  }
-
-  if (settings.geolocateControl) {
-    map.addControl(
-      new mapboxgl.GeolocateControl({
-        positionOptions: { enableHighAccuracy: true },
-        showAccuracyCircle: settings.showAccuracyCircle,
-        showUserHeading: settings.showUserHeading,
-        showUserLocation: true,
-        trackUserLocation: settings.trackUserLocation,
-      }),
-      "top-right",
-    );
-  }
-}
-
 function applyMapboxTerrain(map: mapboxgl.Map, settings: MapboxSettings) {
   if (settings.atmosphereEnabled && settings.projection === "globe") {
     map.setFog({
@@ -708,116 +718,6 @@ function applyMapboxTerrain(map: mapboxgl.Map, settings: MapboxSettings) {
     url: settings.terrainSourceUrl.trim(),
   });
   map.setTerrain({ exaggeration: settings.terrainExaggeration, source: TERRAIN_SOURCE_ID });
-}
-
-function applyVisibleMapboxBasemap(map: mapboxgl.Map, settings: MapboxSettings, appTheme: ResolvedAppTheme) {
-  const rasterStyle = getMapboxRasterStylePath(settings, appTheme);
-
-  if (!rasterStyle || !settings.accessToken.trim() || map.getSource(VISIBLE_BASEMAP_SOURCE_ID)) {
-    return;
-  }
-
-  const source: RasterSourceSpecification = {
-    attribution: "Mapbox / OpenStreetMap",
-    tileSize: 256,
-    tiles: [`https://api.mapbox.com/styles/v1/${rasterStyle}/tiles/256/{z}/{x}/{y}?access_token=${encodeURIComponent(settings.accessToken.trim())}`],
-    type: "raster",
-  };
-  const layer: RasterLayerSpecification = {
-    id: VISIBLE_BASEMAP_LAYER_ID,
-    source: VISIBLE_BASEMAP_SOURCE_ID,
-    type: "raster",
-  };
-  const beforeLayerId = map.getStyle().layers?.find((styleLayer) => styleLayer.type !== "background")?.id;
-
-  map.addSource(VISIBLE_BASEMAP_SOURCE_ID, source);
-  map.addLayer(layer, beforeLayerId);
-}
-
-function resolveVisibleMapboxStyleUrl(settings: MapboxSettings, appTheme: ResolvedAppTheme) {
-  if (settings.stylePreset === "custom") {
-    return resolveMapboxStyleUrl(settings);
-  }
-
-  if (settings.stylePreset === "satellite" || settings.stylePreset === "satelliteStreets" || settings.stylePreset === "standardSatellite") {
-    return MAPBOX_STYLE_PRESETS.satelliteStreets;
-  }
-
-  if (settings.stylePreset === "outdoors") {
-    return MAPBOX_STYLE_PRESETS.outdoors;
-  }
-
-  if (settings.stylePreset === "navigationDay" || settings.stylePreset === "navigationNight") {
-    return appTheme === "light" ? MAPBOX_STYLE_PRESETS.navigationDay : MAPBOX_STYLE_PRESETS.navigationNight;
-  }
-
-  return appTheme === "light" ? MAPBOX_STYLE_PRESETS.streets : MAPBOX_STYLE_PRESETS.dark;
-}
-
-function getMapboxRasterStylePath(settings: MapboxSettings, appTheme: ResolvedAppTheme) {
-  if (settings.stylePreset === "custom") {
-    return getCustomMapboxStylePath(settings.customStyleUrl);
-  }
-
-  if (settings.stylePreset === "satellite" || settings.stylePreset === "satelliteStreets" || settings.stylePreset === "standardSatellite") {
-    return "mapbox/satellite-streets-v12";
-  }
-
-  if (settings.stylePreset === "outdoors") {
-    return "mapbox/outdoors-v12";
-  }
-
-  if (settings.stylePreset === "navigationDay" || settings.stylePreset === "navigationNight") {
-    return appTheme === "light" ? "mapbox/navigation-day-v1" : "mapbox/navigation-night-v1";
-  }
-
-  return appTheme === "light" ? "mapbox/streets-v12" : "mapbox/dark-v11";
-}
-
-function getCustomMapboxStylePath(styleUrl: string) {
-  const match = styleUrl.trim().match(/^mapbox:\/\/styles\/([^/]+)\/([^?]+)/i);
-  return match ? `${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}` : "";
-}
-
-function useResolvedAppTheme(): ResolvedAppTheme {
-  const [theme, setTheme] = useState<ResolvedAppTheme>(() => readResolvedAppTheme());
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => setTheme(readResolvedAppTheme()));
-
-    observer.observe(root, {
-      attributeFilter: ["data-theme"],
-      attributes: true,
-    });
-
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
-}
-
-function readResolvedAppTheme(): ResolvedAppTheme {
-  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
-}
-
-function createMapboxStandardConfig(settings: MapboxSettings): MapOptions["config"] {
-  if (settings.stylePreset !== "standard" && settings.stylePreset !== "standardSatellite") {
-    return undefined;
-  }
-
-  return {
-    basemap: {
-      lightPreset: settings.lightPreset,
-      show3dObjects: settings.show3dObjects,
-      showPedestrianRoads: settings.showPedestrianRoads,
-      showPlaceLabels: settings.showPlaceLabels,
-      showPointOfInterestLabels: settings.showPointOfInterestLabels,
-      showRoadLabels: settings.showRoadLabels,
-      showTransitLabels: settings.showTransitLabels,
-      theme: settings.theme,
-    },
-  } as MapOptions["config"];
 }
 
 function createRadarFrames(anchorMs: number): RadarFrame[] {
@@ -1046,52 +946,6 @@ function formatForecastHour(isoDate: string, fallbackIndex: number) {
 
 function createStableAlertId(properties: Record<string, unknown>) {
   return [stringValue(properties.event), stringValue(properties.effective), stringValue(properties.areaDesc)].filter(Boolean).join(":") || `alert-${Date.now()}`;
-}
-
-function getBlockingMapboxErrorMessage(event: unknown) {
-  const record = asRecord(event);
-  const error = record.error;
-  const message = readErrorMessage(error, "");
-  const normalized = message.toLowerCase();
-
-  if (!message) {
-    return "";
-  }
-
-  if (/\b(401|403|unauthorized|forbidden|access token|style|sprite|glyph)\b/.test(normalized)) {
-    return message;
-  }
-
-  if (stringValue(record.sourceId) === VISIBLE_BASEMAP_SOURCE_ID) {
-    return `Mapbox basemap warning: ${message}`;
-  }
-
-  if (stringValue(record.sourceId) === RADAR_SOURCE_ID) {
-    return `NOAA radar layer warning: ${message}`;
-  }
-
-  return "";
-}
-
-function readErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === "string" && error.trim()) {
-    return error;
-  }
-
-  if (typeof error === "object" && error) {
-    const record = error as Record<string, unknown>;
-    const message = typeof record.message === "string" ? record.message.trim() : "";
-    const status = typeof record.status === "number" ? `HTTP ${record.status}` : "";
-    const statusText = typeof record.statusText === "string" ? record.statusText.trim() : "";
-
-    return [message, status, statusText].filter(Boolean).join(": ") || fallback;
-  }
-
-  return fallback;
 }
 
 function asArray(value: unknown): unknown[] {

@@ -1,15 +1,23 @@
 import {
+  createMessageContextSurface,
   estimateTextTokens,
+  getContextWindowSafetyMarginTokens,
   type ContextWindowPayloadBreakdownItem,
   type ContextWindowUsage,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
 } from "../lib/contextWindow";
-import { createProviderUsageRequestBody, modelForMessages, type ProviderUsage } from "./modelProviderClient";
+import {
+  createProviderUsageRequestBody,
+  estimateProviderRequestReasoningReserveTokens,
+  getProviderRequestMaxOutputTokens,
+  modelForMessages,
+  type ProviderUsage,
+} from "./modelProviderClient";
 import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
 import type { ProviderToolBridgeOptions } from "../toolBridge/types";
 import { finalizeToolResult } from "../toolBridge/resultFinalizer";
-import { decrementRemainingChars, normalizeRemainingChars } from "../toolBridge/adapters/sharedUtils";
+import { createProviderVisibleToolSchema, decrementRemainingChars, normalizeRemainingChars } from "../toolBridge/adapters/sharedUtils";
 
 interface ProviderContextUsageInput {
   chat: ChatSummary;
@@ -29,6 +37,86 @@ interface ProviderPayloadContextUsageInput {
   toolBridge?: ProviderToolBridgeOptions;
 }
 
+export interface ContextBudgetFitReport {
+  fits: boolean;
+  overflowTokens: number;
+  requestedTotalTokens: number;
+}
+
+export class ContextBudgetEngine {
+  estimateChatDraftUsage(input: ProviderContextUsageInput): ContextWindowUsage {
+    const visibleMessages = input.chat.messages.filter((message) => message.status !== "error");
+    const draftMessage = createDraftUsageMessage(input.draftContent, input.draftAttachments);
+    const messages = draftMessage ? [...visibleMessages, draftMessage] : visibleMessages;
+
+    return this.estimatePayloadUsage({
+      chatMessageCount: visibleMessages.length,
+      contextWindowTokens: input.contextWindowTokens,
+      draftCount: draftMessage ? 1 : 0,
+      messages,
+      settings: input.settings,
+      source: input.source,
+    });
+  }
+
+  estimateProviderPayload(input: ProviderPayloadContextUsageInput): ContextWindowUsage {
+    return this.estimatePayloadUsage({
+      chatMessageCount: input.messages.length,
+      contextWindowTokens: input.contextWindowTokens,
+      draftCount: 0,
+      messages: input.messages,
+      settings: input.settings,
+      source: input.source,
+      stream: input.stream,
+      toolBridge: input.toolBridge,
+    });
+  }
+
+  createFitReport(usage: ContextWindowUsage): ContextBudgetFitReport {
+    const requestedTotalTokens = usage.requestedTotalTokens ?? usage.totalTokens;
+    const overflowTokens = Math.max(requestedTotalTokens - Math.max(usage.contextWindowTokens, 1), 0);
+
+    return {
+      fits: overflowTokens === 0,
+      overflowTokens,
+      requestedTotalTokens,
+    };
+  }
+
+  private estimatePayloadUsage({
+    chatMessageCount,
+    contextWindowTokens,
+    draftCount,
+    messages,
+    settings,
+    source,
+    stream = true,
+    toolBridge,
+  }: {
+    chatMessageCount: number;
+    contextWindowTokens: number;
+    draftCount: number;
+    messages: ChatMessage[];
+    settings: ProviderSettings;
+    source: "estimate" | "openrouter" | "provider";
+    stream?: boolean;
+    toolBridge?: ProviderToolBridgeOptions;
+  }): ContextWindowUsage {
+    return estimateProviderUsageFromMessages({
+      chatMessageCount,
+      contextWindowTokens,
+      draftCount,
+      messages,
+      settings,
+      source,
+      stream,
+      toolBridge,
+    });
+  }
+}
+
+export const contextBudgetEngine = new ContextBudgetEngine();
+
 export function estimateModelProviderContextWindowUsage({
   chat,
   contextWindowTokens,
@@ -37,16 +125,11 @@ export function estimateModelProviderContextWindowUsage({
   settings,
   source,
 }: ProviderContextUsageInput): ContextWindowUsage {
-  const visibleMessages = chat.messages.filter((message) => message.status !== "error");
-  const draftMessage = createDraftUsageMessage(draftContent, draftAttachments);
-  const messages = draftMessage ? [...visibleMessages, draftMessage] : visibleMessages;
-  const draftCount = draftMessage ? 1 : 0;
-
-  return estimateProviderUsageFromMessages({
-    chatMessageCount: visibleMessages.length,
+  return contextBudgetEngine.estimateChatDraftUsage({
+    chat,
     contextWindowTokens,
-    draftCount,
-    messages,
+    draftAttachments,
+    draftContent,
     settings,
     source,
   });
@@ -60,10 +143,8 @@ export function estimateModelProviderPayloadUsage({
   stream = true,
   toolBridge,
 }: ProviderPayloadContextUsageInput): ContextWindowUsage {
-  return estimateProviderUsageFromMessages({
-    chatMessageCount: messages.length,
+  return contextBudgetEngine.estimateProviderPayload({
     contextWindowTokens,
-    draftCount: 0,
     messages,
     settings,
     source,
@@ -92,24 +173,31 @@ function estimateProviderUsageFromMessages({
   toolBridge?: ProviderToolBridgeOptions;
 }): ContextWindowUsage {
   const model = modelForMessages(settings, messages);
-  const body = createProviderUsageRequestBody(settings, messages, model, stream, toolBridge);
+  const body = createProviderUsageRequestBody(settings, messages, model, stream, toolBridge, contextWindowTokens);
   const requestBody = body as Record<string, unknown> & { messages?: unknown };
   const promptParts = getProviderPromptParts(requestBody, chatMessageCount, draftCount);
   const systemTokens = estimateSerializedPartsTokens(promptParts.system);
   const messageTokens = estimateSerializedPartsTokens(promptParts.messages);
   const draftTokens = estimateSerializedPartsTokens(promptParts.draft);
   const boundedContextWindow = Math.max(contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS, 1);
-  const boundedMaxOutput = Math.max(Math.round(settings.maxTokens || 0), 0);
+  const boundedMaxOutput = getProviderRequestMaxOutputTokens(requestBody, settings.maxTokens);
+  const reasoningReserveTokens = estimateProviderRequestReasoningReserveTokens(settings, requestBody);
+  const additionalReasoningReserveTokens = isReasoningReserveIncludedInMaxOutput(settings, requestBody) ? 0 : reasoningReserveTokens;
+  const safetyMarginTokens = getContextWindowSafetyMarginTokens(boundedContextWindow);
   const serializedBodyTokens = estimateSerializedTokens(body);
   const requestOverheadTokens = Math.max(serializedBodyTokens - systemTokens - messageTokens - draftTokens, estimateProviderControlTokens(body));
   const inputTokens = systemTokens + messageTokens + draftTokens + requestOverheadTokens;
-  const totalTokens = inputTokens + boundedMaxOutput;
+  const totalTokens = inputTokens + boundedMaxOutput + additionalReasoningReserveTokens + safetyMarginTokens;
   const payloadBreakdown = createProviderPayloadBreakdown({
     draftCount,
     draftTokens,
+    contextWindowTokens,
+    maxOutputTokens: boundedMaxOutput,
     messages,
     messageTokens,
+    reasoningReserveTokens,
     requestOverheadTokens,
+    safetyMarginTokens,
     systemTokens,
     toolBridge,
   });
@@ -118,12 +206,18 @@ function estimateProviderUsageFromMessages({
     availableTokens: Math.max(boundedContextWindow - totalTokens, 0),
     contextWindowTokens: boundedContextWindow,
     draftTokens,
+    fitsContextWindow: totalTokens <= boundedContextWindow,
     inputTokens,
     maxOutputTokens: boundedMaxOutput,
+    maxOutputTokenSource: "request",
     messageTokens,
     model,
+    overflowTokens: Math.max(totalTokens - boundedContextWindow, 0),
     payloadBreakdown,
     requestOverheadTokens,
+    requestedTotalTokens: totalTokens,
+    reasoningReserveTokens,
+    safetyMarginTokens,
     source,
     systemTokens,
     tokenSource: "estimate",
@@ -143,15 +237,18 @@ export function applyProviderUsageToContextEstimate(estimate: ContextWindowUsage
   const exactPromptTokens = Math.max(promptTokens, 0);
   const promptBreakdown = scalePromptBreakdown(estimate, exactPromptTokens);
   const effectiveOutputBudget = Math.max(estimate.maxOutputTokens, completionTokens ?? 0);
-  const totalTokens = exactPromptTokens + effectiveOutputBudget;
+  const totalTokens = exactPromptTokens + effectiveOutputBudget + (estimate.safetyMarginTokens ?? 0);
 
   return {
     ...estimate,
     ...promptBreakdown,
     availableTokens: Math.max(estimate.contextWindowTokens - totalTokens, 0),
+    fitsContextWindow: totalTokens <= estimate.contextWindowTokens,
     inputTokens: exactPromptTokens,
     openRouterCompletionTokens: completionTokens,
     openRouterTotalTokens: totalUsageTokens,
+    overflowTokens: Math.max(totalTokens - estimate.contextWindowTokens, 0),
+    requestedTotalTokens: totalTokens,
     tokenSource: "provider",
     totalTokens,
   };
@@ -167,20 +264,24 @@ export function projectDraftOntoProviderUsage(baseUsage: ContextWindowUsage, dra
   const maxOutputTokens = Math.max(Math.round(draftEstimate.maxOutputTokens), 0);
   const contextWindowTokens = Math.max(Math.round(draftEstimate.contextWindowTokens), 1);
   const inputTokens = baseUsage.inputTokens + draftTokens;
-  const totalTokens = inputTokens + maxOutputTokens;
+  const totalTokens = inputTokens + maxOutputTokens + (draftEstimate.safetyMarginTokens ?? baseUsage.safetyMarginTokens ?? 0);
 
   return {
     ...baseUsage,
     availableTokens: Math.max(contextWindowTokens - totalTokens, 0),
     contextWindowTokens,
     draftTokens,
+    fitsContextWindow: totalTokens <= contextWindowTokens,
     inputTokens,
     maxOutputTokens,
     model: draftEstimate.model,
     openRouterCompletionTokens: undefined,
     openRouterTotalTokens: undefined,
+    overflowTokens: Math.max(totalTokens - contextWindowTokens, 0),
     payloadBreakdown: mergeProjectedPayloadBreakdown(baseUsage.payloadBreakdown, draftEstimate.payloadBreakdown, draftTokens),
     payloadSpike: baseUsage.payloadSpike,
+    requestedTotalTokens: totalTokens,
+    safetyMarginTokens: draftEstimate.safetyMarginTokens ?? baseUsage.safetyMarginTokens,
     source: draftEstimate.source,
     tokenSource: "projected",
     totalTokens,
@@ -206,7 +307,7 @@ export function annotateProviderPayloadSpike(
   }
 
   const topContributors = [...(usage.payloadBreakdown ?? [])]
-    .filter((item) => item.tokens > 0)
+    .filter((item) => item.tokens > 0 && item.id !== "maxOutput" && item.id !== "reasoningReserve" && item.id !== "safetyMargin")
     .sort((left, right) => right.tokens - left.tokens)
     .slice(0, 3);
   const summary = [
@@ -229,6 +330,78 @@ export function annotateProviderPayloadSpike(
   };
 }
 
+/**
+ * Counts how many auto-compaction markers are present in a message list.
+ *
+ * Used to decide whether the displayed context counter may decrease on the
+ * next provider call. A presence-only check ("does ANY message look like a
+ * compaction marker?") is wrong here because compaction markers persist in
+ * the chat history forever — once any past compaction has happened, a
+ * presence check would silently disable the high-water-mark protection
+ * for every subsequent helper / sub-agent / streaming update, letting the
+ * displayed counter collapse to whatever the latest helper payload measures.
+ *
+ * Counting the markers and only allowing a decrease when the count has
+ * grown since the last recorded usage means we treat compactions as
+ * one-shot events, not as a permanent "from now on you can shrink" flag.
+ */
+export function countAutoCompactedProviderMessages(messages: ChatMessage[]): number {
+  let count = 0;
+  for (const message of messages) {
+    if (message.id.startsWith("context-compaction-") || message.content.startsWith("AUTO COMPACTED CONTEXT")) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function preserveContextUsageHighWaterMark(
+  usage: ContextWindowUsage,
+  previousUsage: ContextWindowUsage | null | undefined,
+  options: { allowDecrease?: boolean } = {},
+): ContextWindowUsage {
+  const previousOverBudget = previousUsage ? isUsageOverRequestBudget(previousUsage) : false;
+  const usageOverBudget = isUsageOverRequestBudget(usage);
+
+  if (
+    !previousUsage ||
+    options.allowDecrease ||
+    usage.inputTokens >= previousUsage.inputTokens ||
+    (previousOverBudget && !usageOverBudget)
+  ) {
+    return usage;
+  }
+
+  const preservedInputTokens = Math.max(Math.round(previousUsage.inputTokens), 0);
+  const inputDelta = preservedInputTokens - Math.max(Math.round(usage.inputTokens), 0);
+  const nonInputTokens = Math.max(
+    Math.round((usage.requestedTotalTokens ?? usage.totalTokens) - usage.inputTokens),
+    0,
+  );
+  const totalTokens = preservedInputTokens + nonInputTokens;
+
+  return {
+    ...usage,
+    availableTokens: Math.max(usage.contextWindowTokens - totalTokens, 0),
+    fitsContextWindow: totalTokens <= usage.contextWindowTokens,
+    inputTokens: preservedInputTokens,
+    messageTokens: usage.messageTokens + inputDelta,
+    openRouterCompletionTokens: undefined,
+    openRouterTotalTokens: undefined,
+    overflowTokens: Math.max(totalTokens - usage.contextWindowTokens, 0),
+    payloadBreakdown: preservePayloadBreakdownInputFloor(usage.payloadBreakdown, inputDelta),
+    requestedTotalTokens: totalTokens,
+    tokenSource: "projected",
+    totalTokens,
+  };
+}
+
+function isUsageOverRequestBudget(usage: ContextWindowUsage) {
+  return usage.fitsContextWindow === false ||
+    (usage.overflowTokens ?? 0) > 0 ||
+    (usage.requestedTotalTokens ?? usage.totalTokens) > Math.max(usage.contextWindowTokens, 1);
+}
+
 function createDraftUsageMessage(content: string, attachments: ChatAttachment[]): ChatMessage | null {
   if (!content.trim() && attachments.length === 0) {
     return null;
@@ -243,30 +416,54 @@ function createDraftUsageMessage(content: string, attachments: ChatAttachment[])
   };
 }
 
+function isReasoningReserveIncludedInMaxOutput(settings: ProviderSettings, body: Record<string, unknown>) {
+  if (!settings.thinking.enabled) {
+    return true;
+  }
+
+  if (body.thinking && typeof body.thinking === "object" && "budget_tokens" in body.thinking) {
+    return true;
+  }
+
+  if (settings.provider === "openai" && "max_output_tokens" in body) {
+    return true;
+  }
+
+  return false;
+}
+
 function createProviderPayloadBreakdown({
   draftCount,
   draftTokens,
+  contextWindowTokens,
+  maxOutputTokens,
   messages,
   messageTokens,
+  reasoningReserveTokens,
   requestOverheadTokens,
+  safetyMarginTokens,
   systemTokens,
   toolBridge,
 }: {
   draftCount: number;
   draftTokens: number;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
   messages: ChatMessage[];
   messageTokens: number;
+  reasoningReserveTokens: number;
   requestOverheadTokens: number;
+  safetyMarginTokens: number;
   systemTokens: number;
   toolBridge?: ProviderToolBridgeOptions;
 }): ContextWindowPayloadBreakdownItem[] {
   const attachmentTokens = estimateAttachmentPayloadTokens(messages);
-  const persistedToolOutputTokens = estimatePersistedToolOutputTokens(messages);
-  const bridgeToolOutputTokens = estimateBridgeToolResultTokens(toolBridge);
+  const persistedToolOutputTokens = estimatePersistedToolOutputTokens(messages, contextWindowTokens);
+  const bridgeToolOutputTokens = estimateBridgeToolResultTokenParts(toolBridge);
   const toolSchemaTokens = estimateToolSchemaTokens(toolBridge);
-  const toolOutputTokens = persistedToolOutputTokens + bridgeToolOutputTokens;
+  const toolOutputTokens = persistedToolOutputTokens + bridgeToolOutputTokens.other;
   const chatHistoryTokens = Math.max(messageTokens - attachmentTokens - persistedToolOutputTokens - draftTokens, 0);
-  const providerEnvelopeTokens = Math.max(requestOverheadTokens - bridgeToolOutputTokens - toolSchemaTokens, 0);
+  const providerEnvelopeTokens = Math.max(requestOverheadTokens - bridgeToolOutputTokens.total - toolSchemaTokens, 0);
   const toolOutputCount = countToolOutputs(messages, toolBridge);
   const attachmentCount = countAttachments(messages);
   const toolSchemaCount = toolBridge?.tools?.length ?? 0;
@@ -282,6 +479,18 @@ function createProviderPayloadBreakdown({
       id: "toolOutput",
       label: "Tool output",
       tokens: toolOutputTokens,
+    },
+    {
+      detail: "Provider-visible memory_search output attached to this request.",
+      id: "memory",
+      label: "Memory",
+      tokens: bridgeToolOutputTokens.memory,
+    },
+    {
+      detail: "Provider-visible web_search output attached to this request.",
+      id: "web",
+      label: "Web",
+      tokens: bridgeToolOutputTokens.web,
     },
     {
       detail: `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`,
@@ -309,6 +518,24 @@ function createProviderPayloadBreakdown({
       id: "providerEnvelope",
       label: "Provider envelope",
       tokens: providerEnvelopeTokens,
+    },
+    {
+      detail: "Reserved by the outgoing provider request for visible output.",
+      id: "maxOutput",
+      label: "Max output",
+      tokens: maxOutputTokens,
+    },
+    {
+      detail: "Thinking/reasoning budget tracked separately from visible chat input.",
+      id: "reasoningReserve",
+      label: "Reasoning reserve",
+      tokens: reasoningReserveTokens,
+    },
+    {
+      detail: "Safety margin for tokenizer/provider-envelope drift.",
+      id: "safetyMargin",
+      label: "Safety margin",
+      tokens: safetyMarginTokens,
     },
   ];
 
@@ -352,22 +579,34 @@ function estimateAttachmentPayloadTokens(messages: ChatMessage[]) {
   return estimateTextTokens(safeSerialize(messages.flatMap((message) => message.attachments ?? [])));
 }
 
-function estimatePersistedToolOutputTokens(messages: ChatMessage[]) {
+function estimatePersistedToolOutputTokens(messages: ChatMessage[], contextWindowTokens: number) {
   return estimateTextTokens(
     messages
-      .flatMap((message) => message.toolCalls ?? [])
-      .map((toolCall) => [toolCall.label, toolCall.input, toolCall.output, toolCall.detail].filter(Boolean).join("\n"))
+      .map((message) => createMessageContextSurface(message, { contextWindowTokens }))
+      .filter(Boolean)
       .join("\n\n"),
   );
 }
 
-function estimateBridgeToolResultTokens(toolBridge: ProviderToolBridgeOptions | undefined) {
+function estimateBridgeToolResultTokenParts(toolBridge: ProviderToolBridgeOptions | undefined) {
   if (!toolBridge?.toolResultMessages?.length) {
-    return 0;
+    return {
+      memory: 0,
+      other: 0,
+      total: 0,
+      web: 0,
+    };
   }
 
   let remainingToolResultChars = normalizeRemainingChars(toolBridge.maxToolResultContentChars);
-  const finalizedContents = toolBridge.toolResultMessages.map((message) => {
+  const parts = {
+    memory: 0,
+    other: 0,
+    total: 0,
+    web: 0,
+  };
+
+  for (const message of toolBridge.toolResultMessages) {
     const finalization = finalizeToolResult({
         arguments: message.arguments,
         maxProviderChars: remainingToolResultChars,
@@ -375,18 +614,23 @@ function estimateBridgeToolResultTokens(toolBridge: ProviderToolBridgeOptions | 
         toolId: message.name,
     });
     remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, finalization.providerRawCharCount);
-    return finalization.providerContent;
-  });
+    const tokens = estimateTextTokens(finalization.providerContent);
 
-  return estimateTextTokens(finalizedContents.join("\n\n"));
+    if (message.name === "memory_search") {
+      parts.memory += tokens;
+    } else if (message.name === "web_search") {
+      parts.web += tokens;
+    } else {
+      parts.other += tokens;
+    }
+  }
+
+  parts.total = parts.memory + parts.web + parts.other;
+  return parts;
 }
 
 function estimateToolSchemaTokens(toolBridge: ProviderToolBridgeOptions | undefined) {
-  return estimateSerializedTokens((toolBridge?.tools ?? []).map((tool) => ({
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-    name: tool.id,
-  })));
+  return estimateSerializedTokens((toolBridge?.tools ?? []).map(createProviderVisibleToolSchema));
 }
 
 function countToolOutputs(messages: ChatMessage[], toolBridge: ProviderToolBridgeOptions | undefined) {
@@ -501,6 +745,38 @@ function scalePromptBreakdown(estimate: ContextWindowUsage, exactPromptTokens: n
     requestOverheadTokens,
     systemTokens,
   };
+}
+
+function preservePayloadBreakdownInputFloor(breakdown: ContextWindowUsage["payloadBreakdown"], inputDelta: number) {
+  if (!breakdown?.length || inputDelta <= 0) {
+    return breakdown;
+  }
+
+  let applied = false;
+  const preserved = breakdown.map((item) => {
+    if (item.id !== "chatHistory") {
+      return item;
+    }
+
+    applied = true;
+    return {
+      ...item,
+      tokens: item.tokens + inputDelta,
+    };
+  });
+
+  if (applied) {
+    return preserved;
+  }
+
+  return [
+    ...preserved,
+    {
+      id: "chatHistory",
+      label: "Chat, tools, sources",
+      tokens: inputDelta,
+    },
+  ] satisfies ContextWindowUsage["payloadBreakdown"];
 }
 
 function normalizeUsageToken(value: unknown) {

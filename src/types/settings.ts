@@ -1,28 +1,29 @@
 import type { ToolRegistrySettings } from "./tools";
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort = "low" | "medium" | "high";
 export type AppearanceMode = "system" | "dark" | "light";
-export type ModelProviderId = "anthropic" | "deepseek" | "google" | "groq" | "lmstudio" | "mistral" | "ollama" | "openai" | "openrouter" | "vllm" | "xai";
+export type ModelProviderId = "9router" | "anthropic" | "deepseek" | "google" | "groq" | "lmstudio" | "mistral" | "ollama" | "openai" | "openrouter" | "vllm" | "xai";
+export type ProviderContextWindowMap = Partial<Record<ModelProviderId, number>>;
+export interface ProviderModelBudgetOverride {
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+}
+export type ProviderModelBudgetOverrideMap = Partial<Record<ModelProviderId, Record<string, ProviderModelBudgetOverride>>>;
+export type ProviderModelVisibilityMap = Partial<Record<ModelProviderId, string[]>>;
 export type ProviderSecretMap = Partial<Record<ModelProviderId, string>>;
-
-export const DEEP_RESEARCH_REASONING_EFFORT: ReasoningEffort = "xhigh";
 
 export interface ThinkingSettings {
   effort: ReasoningEffort;
   enabled: boolean;
 }
 
-export function isDeepResearchThinking(settings: ThinkingSettings) {
-  return settings.enabled && settings.effort === DEEP_RESEARCH_REASONING_EFFORT;
-}
-
 export function formatReasoningEffort(effort: ReasoningEffort | string) {
   if (effort === "xhigh") {
-    return "Deep Research";
+    return "High";
   }
 
   if (effort === "minimal") {
-    return "Minimal";
+    return "Low";
   }
 
   return effort.charAt(0).toUpperCase() + effort.slice(1);
@@ -97,12 +98,12 @@ export const DEFAULT_BRAVE_SEARCH_SETTINGS: BraveSearchSettings = {
   cacheControlNoCache: false,
   country: "US",
   enableAnswers: false,
-  enableImageSearch: true,
-  enableNewsSearch: true,
-  enablePlaceSearch: true,
+  enableImageSearch: false,
+  enableNewsSearch: false,
+  enablePlaceSearch: false,
   enableRichCallback: false,
   enableSemanticRerank: true,
-  enableVideoSearch: true,
+  enableVideoSearch: false,
   extraSnippets: true,
   freshness: "any",
   freshnessEndDate: "",
@@ -144,11 +145,18 @@ export interface WebSearchSettings {
   provider: WebSearchProvider;
 }
 
+export interface AppPersonalizationSettings {
+  locationServicesEnabled: boolean;
+}
+
 export interface ProviderSettings {
   apiKeys: ProviderSecretMap;
   baseUrls: ProviderSecretMap;
+  contextWindowTokens: ProviderContextWindowMap;
+  disabledModels: ProviderModelVisibilityMap;
   maxTokens: number;
   model: string;
+  modelBudgetOverrides?: ProviderModelBudgetOverrideMap;
   openRouterApiKey: string;
   provider: ModelProviderId;
   providerModels: ProviderSecretMap;

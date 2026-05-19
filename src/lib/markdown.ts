@@ -1,17 +1,20 @@
 const FENCE_LINE_PATTERN = /^\s{0,3}(`{3,}|~{3,})/;
+const WHOLE_MESSAGE_TEXT_FENCE_PATTERN = /^\s{0,3}(`{3,}|~{3,})[ \t]*(markdown|md|text|txt)?[ \t]*\r?\n([\s\S]*?)\r?\n\s{0,3}\1[ \t]*\s*$/i;
 
 interface FenceMatch {
   char: "`" | "~";
   length: number;
 }
 
-// Normalizes malformed pipe-table delimiter rows while leaving fenced code blocks untouched.
+// Normalizes display Markdown while leaving real code fences untouched.
 export function normalizeMarkdownForDisplay(content: string) {
-  if (!content.includes("|")) {
-    return content;
+  const displayContent = unwrapWholeMessageTextFence(content);
+
+  if (!displayContent.includes("|")) {
+    return displayContent;
   }
 
-  const lines = content.split(/\r\n|\n|\r/);
+  const lines = displayContent.split(/\r\n|\n|\r/);
   const normalizedLines: string[] = [];
   let openFence: FenceMatch | null = null;
 
@@ -41,6 +44,53 @@ export function normalizeMarkdownForDisplay(content: string) {
   }
 
   return normalizedLines.join("\n");
+}
+
+export function unwrapWholeMessageTextFence(content: string) {
+  const match = WHOLE_MESSAGE_TEXT_FENCE_PATTERN.exec(content);
+
+  if (!match) {
+    return content;
+  }
+
+  const language = (match[2] ?? "").toLowerCase();
+  const body = match[3];
+
+  if (language) {
+    return body;
+  }
+
+  return shouldUnwrapUnlabeledWholeMessageFence(body) ? body : content;
+}
+
+function shouldUnwrapUnlabeledWholeMessageFence(body: string) {
+  const trimmed = body.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  if (looksLikeStandaloneCode(trimmed)) {
+    return false;
+  }
+
+  return (
+    /^#{1,6}\s+\S/m.test(trimmed) ||
+    /(?:^|\n)\s*(?:[-*]|\d+\.)\s+\S/.test(trimmed) ||
+    /\b(?:answer|changed|fixed|goal|here is|implemented|summary|the issue|updated|verification|what changed)\b/i.test(trimmed) ||
+    trimmed.split(/\s+/).length >= 12
+  );
+}
+
+function looksLikeStandaloneCode(value: string) {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const codeLikeLines = lines.filter((line) =>
+    /^(?:import|export|const|let|var|function|class|interface|type|return|if|for|while|switch|try|catch)\b/.test(line) ||
+    /^(?:\{|\}|\[|\]|<\/?\w|[.#][\w-]+\s*\{)/.test(line) ||
+    /[;{}]\s*$/.test(line),
+  ).length;
+
+  return codeLikeLines >= Math.max(2, Math.ceil(lines.length * 0.45));
 }
 
 function matchFence(line: string): FenceMatch | null {

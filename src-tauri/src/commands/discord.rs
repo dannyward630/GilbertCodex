@@ -1357,7 +1357,7 @@ mod tests {
         let root = temp_ngrok_root("default");
         let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
 
-        let resolved = resolve_ngrok_executable_with_roots(None, &[root.clone()]);
+        let resolved = resolve_ngrok_executable_with_roots(None, std::slice::from_ref(&root));
 
         assert_eq!(PathBuf::from(resolved), executable);
         let _ = fs::remove_dir_all(root);
@@ -1368,7 +1368,8 @@ mod tests {
         let root = temp_ngrok_root("relative");
         let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
 
-        let resolved = resolve_ngrok_executable_with_roots(Some(".tools/ngrok"), &[root.clone()]);
+        let resolved =
+            resolve_ngrok_executable_with_roots(Some(".tools/ngrok"), std::slice::from_ref(&root));
 
         assert_eq!(PathBuf::from(resolved), executable);
         let _ = fs::remove_dir_all(root);
@@ -1379,8 +1380,10 @@ mod tests {
         let root = temp_ngrok_root("quoted");
         let executable = create_ngrok_executable(&root.join(".tools").join("ngrok"));
 
-        let resolved =
-            resolve_ngrok_executable_with_roots(Some("\".tools/ngrok\""), &[root.clone()]);
+        let resolved = resolve_ngrok_executable_with_roots(
+            Some("\".tools/ngrok\""),
+            std::slice::from_ref(&root),
+        );
 
         assert_eq!(PathBuf::from(resolved), executable);
         let _ = fs::remove_dir_all(root);
@@ -1390,7 +1393,7 @@ mod tests {
     fn leaves_ngrok_on_path_when_no_local_executable_exists() {
         let root = temp_ngrok_root("missing");
 
-        let resolved = resolve_ngrok_executable_with_roots(None, &[root.clone()]);
+        let resolved = resolve_ngrok_executable_with_roots(None, std::slice::from_ref(&root));
 
         assert_eq!(resolved, "ngrok");
         let _ = fs::remove_dir_all(root);

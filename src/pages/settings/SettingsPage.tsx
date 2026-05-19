@@ -1,6 +1,7 @@
-import { RotateCcw, Trash2 } from "lucide-react";
+import { CloudSun, Database, RotateCcw, ServerCog, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/dialogs/AppDialog";
+import "../../styles/settings.css";
 import {
   beginGithubDeviceLogin,
   disconnectGithub,
@@ -25,6 +26,7 @@ import {
 import { defaultProviderSettings, loadGithubOAuthClientId, saveGithubOAuthClientId } from "../../lib/appStorage";
 import {
   buildProviderModelOptions,
+  filterEnabledProviderModelOptions,
   getDefaultModelForProvider,
   getModelProvider,
   getProviderApiKey,
@@ -47,9 +49,13 @@ import { GeneralSettingsPage } from "./sections/GeneralSettingsPage";
 import { GithubSettingsPage } from "./sections/GithubSettingsPage";
 import { MapboxSettingsPage } from "./mapbox/MapboxSettingsPage";
 import { ModelSettingsPage } from "./sections/ModelSettingsPage";
+import { NineRouterSettingsPage } from "./nine-router/NineRouterSettingsPage";
 import { PersonalizationSettingsPage } from "./sections/PersonalizationSettingsPage";
 import { PdfSettingsPage } from "./sections/PdfSettingsPage";
 import { ProvidersSettingsPage } from "./sections/ProvidersSettingsPage";
+import { WeatherSourcesSettingsPage } from "./weather-sources/WeatherSourcesSettingsPage";
+import { SettingsSectionHeading } from "./components/SettingsSectionHeading";
+import { resolveSettingsNavSection } from "./settingsNavigation";
 import type { LiveModelCatalogStatus, SettingsPageProps, SettingsStatusMessage } from "./types";
 
 const GITHUB_FULL_ACCESS_SCOPES = getRequiredGithubOAuthScopes();
@@ -99,7 +105,9 @@ export function SettingsPage({
   onAppearanceModeChange,
   onDiscordBridgeChange,
   onLocalWorkspaceChange,
+  onPersonalizationChange,
   onSettingsChange,
+  personalization,
   projects,
   settings,
 }: SettingsPageProps) {
@@ -134,12 +142,15 @@ export function SettingsPage({
   const activeProviderBaseUrl = getProviderBaseUrl(settings);
   const activeProviderUsesLiveCatalog = usesLiveModelCatalog(settings.provider);
   const activeProviderPrefersLiveCatalog = prefersLiveModelCatalog(settings.provider);
-  const activeProviderModels = buildProviderModelOptions(settings.provider, activeProviderUsesLiveCatalog ? liveProviderModels : undefined, settings.model);
+  const activeProviderAllModels = buildProviderModelOptions(settings.provider, activeProviderUsesLiveCatalog ? liveProviderModels : undefined, settings.model);
+  const activeProviderDisabledModels = settings.disabledModels[settings.provider] ?? [];
+  const activeProviderModels = filterEnabledProviderModelOptions(activeProviderAllModels, activeProviderDisabledModels);
   const activeModelSupportsThinking = supportsProviderThinking(settings.provider, settings.thinking.effort, settings.model);
-  const liveProviderModelCount = liveProviderModels?.length ?? 0;
+  const liveProviderModelCount = settings.provider === "openrouter" ? activeProviderAllModels.length : (liveProviderModels?.length ?? 0);
   const githubRequestedScope = getDefaultGithubOAuthScope();
   const missingGithubScopes = getMissingGithubFullAccessScopes(githubConnection);
   const hasFullGithubAccess = githubConnection.connected && missingGithubScopes.length === 0;
+  const displaySection = resolveSettingsNavSection(activeSection);
   const githubStartingLogin = githubActionState === "login";
   const githubCheckingAccess = githubActionState === "refresh";
   const githubDisconnecting = githubActionState === "disconnect";
@@ -465,9 +476,20 @@ export function SettingsPage({
 
   function selectProvider(provider: ModelProviderId) {
     const rememberedModel = settings.providerModels[provider]?.trim();
-    const nextModel = rememberedModel || getDefaultModelForProvider(provider);
+    const providerDisabledModels = new Set(settings.disabledModels[provider] ?? []);
+    const nextModel = rememberedModel && !providerDisabledModels.has(rememberedModel) ? rememberedModel : getDefaultModelForProvider(provider);
+    providerDisabledModels.delete(nextModel);
+    const nextDisabledModels = {
+      ...settings.disabledModels,
+      [provider]: [...providerDisabledModels],
+    };
+
+    if (providerDisabledModels.size === 0) {
+      delete nextDisabledModels[provider];
+    }
 
     updateSettings({
+      disabledModels: nextDisabledModels,
       model: nextModel,
       provider,
       providerModels: {
@@ -499,11 +521,61 @@ export function SettingsPage({
   }
 
   function updateActiveProviderModel(model: string) {
+    const normalizedModel = model.trim();
+    const disabledValues = (settings.disabledModels[settings.provider] ?? []).filter((value) => value !== normalizedModel);
+    const disabledModels = {
+      ...settings.disabledModels,
+      [settings.provider]: disabledValues,
+    };
+
+    if (disabledValues.length === 0) {
+      delete disabledModels[settings.provider];
+    }
+
     updateSettings({
+      disabledModels,
       model,
       providerModels: {
         ...settings.providerModels,
         [settings.provider]: model,
+      },
+    });
+  }
+
+  function toggleActiveProviderModel(model: string, enabled: boolean) {
+    const normalizedModel = model.trim();
+
+    if (!normalizedModel) {
+      return;
+    }
+
+    const disabledValues = new Set(activeProviderDisabledModels);
+
+    if (enabled) {
+      disabledValues.delete(normalizedModel);
+    } else {
+      disabledValues.add(normalizedModel);
+    }
+
+    const nextDisabledValues = [...disabledValues];
+    const nextDisabledModels = {
+      ...settings.disabledModels,
+      [settings.provider]: nextDisabledValues,
+    };
+
+    if (nextDisabledValues.length === 0) {
+      delete nextDisabledModels[settings.provider];
+    }
+
+    const enabledOptions = filterEnabledProviderModelOptions(activeProviderAllModels, nextDisabledValues);
+    const nextModel = enabledOptions.some((option) => option.value === settings.model) ? settings.model : enabledOptions[0]?.value || getDefaultModelForProvider(settings.provider);
+
+    updateSettings({
+      disabledModels: nextDisabledModels,
+      model: nextModel,
+      providerModels: {
+        ...settings.providerModels,
+        [settings.provider]: nextModel,
       },
     });
   }
@@ -655,11 +727,25 @@ export function SettingsPage({
   }
 
   function renderActiveSection() {
-    if (activeSection === "appearance") {
-      return <AppearanceSettingsPage appearanceMode={appearanceMode} onAppearanceModeChange={onAppearanceModeChange} />;
+    if (displaySection === "general") {
+      return (
+        <>
+          <SettingsSectionHeading detail="App details, theme, user instructions, and reset controls." icon={Settings2} title="General" />
+          <GeneralSettingsPage
+            activeProviderLabel={activeProvider.label}
+            appInfo={appInfo}
+            localWorkspace={localWorkspace}
+            settings={settings}
+            showHeading={false}
+            onResetSettings={() => setResetConfirmOpen(true)}
+          />
+          <AppearanceSettingsPage appearanceMode={appearanceMode} showHeading={false} onAppearanceModeChange={onAppearanceModeChange} />
+          <PersonalizationSettingsPage settings={settings} showHeading={false} onSettingsPatch={updateSettings} />
+        </>
+      );
     }
 
-    if (activeSection === "configuration") {
+    if (displaySection === "configuration") {
       return (
         <ConfigurationSettingsPage
           configInfo={configInfo}
@@ -679,15 +765,21 @@ export function SettingsPage({
       );
     }
 
-    if (activeSection === "braveSearch") {
-      return <BraveSearchSettingsPage settings={settings} onSettingsPatch={updateSettings} />;
+    if (displaySection === "braveSearch") {
+      return <BraveSearchSettingsPage locationServicesEnabled={personalization.locationServicesEnabled} settings={settings} onSettingsPatch={updateSettings} />;
     }
 
-    if (activeSection === "database") {
-      return <DatabaseSettingsPage />;
+    if (displaySection === "database") {
+      return (
+        <>
+          <SettingsSectionHeading detail="PDF library, local storage, backups, and device data controls." icon={Database} title="Library & Data" />
+          <PdfSettingsPage projects={projects} showHeading={false} />
+          <DatabaseSettingsPage showHeading={false} />
+        </>
+      );
     }
 
-    if (activeSection === "github") {
+    if (displaySection === "github") {
       return (
         <GithubSettingsPage
           accountDetail={githubAccountDetail}
@@ -714,66 +806,72 @@ export function SettingsPage({
       );
     }
 
-    if (activeSection === "discord") {
+    if (displaySection === "discord") {
       return <DiscordSettingsPage settings={discordBridge} onSettingsChange={onDiscordBridgeChange} />;
     }
 
-    if (activeSection === "model") {
+    if (displaySection === "nineRouter") {
+      return <NineRouterSettingsPage settings={settings} onSettingsChange={onSettingsChange} />;
+    }
+
+    if (displaySection === "model") {
       return (
-        <ModelSettingsPage
-          activeModelSupportsThinking={activeModelSupportsThinking}
-          activeProvider={activeProvider}
-          activeProviderModels={activeProviderModels}
-          activeProviderPrefersLiveCatalog={activeProviderPrefersLiveCatalog}
-          activeProviderUsesLiveCatalog={activeProviderUsesLiveCatalog}
-          liveProviderModelStatus={liveProviderModelStatus}
-          liveProviderModelStatusText={liveProviderModelStatusText}
-          settings={settings}
-          onSettingsPatch={updateSettings}
-          onUpdateActiveProviderModel={updateActiveProviderModel}
-        />
+        <>
+          <SettingsSectionHeading detail="Provider credentials, model catalog, system prompt, generation, and thinking controls." icon={ServerCog} title="AI & Providers" />
+          <ProvidersSettingsPage
+            activeProvider={activeProvider}
+            activeProviderApiKey={activeProviderApiKey}
+            activeProviderBaseUrl={activeProviderBaseUrl}
+            settings={settings}
+            showHeading={false}
+            showKey={showKey}
+            testing={testing}
+            testStatus={testStatus}
+            onClearApiKey={() => setClearKeyConfirmOpen(true)}
+            onSelectProvider={selectProvider}
+            onTestConnection={testConnection}
+            onToggleShowKey={() => setShowKey((visible) => !visible)}
+            onUpdateActiveProviderApiKey={updateActiveProviderApiKey}
+            onUpdateActiveProviderBaseUrl={updateActiveProviderBaseUrl}
+          />
+          <ModelSettingsPage
+            activeModelSupportsThinking={activeModelSupportsThinking}
+            activeProvider={activeProvider}
+            activeProviderAllModels={activeProviderAllModels}
+            activeProviderDisabledModels={activeProviderDisabledModels}
+            activeProviderModels={activeProviderModels}
+            activeProviderPrefersLiveCatalog={activeProviderPrefersLiveCatalog}
+            activeProviderUsesLiveCatalog={activeProviderUsesLiveCatalog}
+            liveProviderModelStatus={liveProviderModelStatus}
+            liveProviderModelStatusText={liveProviderModelStatusText}
+            settings={settings}
+            showHeading={false}
+            onSelectProvider={selectProvider}
+            onSettingsPatch={updateSettings}
+            onToggleActiveProviderModel={toggleActiveProviderModel}
+            onUpdateActiveProviderModel={updateActiveProviderModel}
+          />
+        </>
       );
     }
 
-    if (activeSection === "mapbox") {
-      return <MapboxSettingsPage />;
-    }
-
-    if (activeSection === "personalization") {
-      return <PersonalizationSettingsPage settings={settings} onSettingsPatch={updateSettings} />;
-    }
-
-    if (activeSection === "pdf") {
-      return <PdfSettingsPage projects={projects} />;
-    }
-
-    if (activeSection === "providers") {
+    if (displaySection === "weatherSources") {
       return (
-        <ProvidersSettingsPage
-          activeProvider={activeProvider}
-          activeProviderApiKey={activeProviderApiKey}
-          activeProviderBaseUrl={activeProviderBaseUrl}
-          settings={settings}
-          showKey={showKey}
-          testing={testing}
-          testStatus={testStatus}
-          onClearApiKey={() => setClearKeyConfirmOpen(true)}
-          onSelectProvider={selectProvider}
-          onTestConnection={testConnection}
-          onToggleShowKey={() => setShowKey((visible) => !visible)}
-          onUpdateActiveProviderApiKey={updateActiveProviderApiKey}
-          onUpdateActiveProviderBaseUrl={updateActiveProviderBaseUrl}
-        />
+        <>
+          <SettingsSectionHeading detail="Weather source routing, location access, units, radar, and Mapbox rendering." icon={CloudSun} title="Weather & Maps" />
+          <WeatherSourcesSettingsPage personalization={personalization} showHeading={false} onPersonalizationChange={onPersonalizationChange} />
+          {personalization.locationServicesEnabled ? <MapboxSettingsPage showHeading={false} /> : null}
+        </>
       );
     }
 
-    return <GeneralSettingsPage activeProviderLabel={activeProvider.label} appInfo={appInfo} localWorkspace={localWorkspace} settings={settings} onResetSettings={() => setResetConfirmOpen(true)} />;
+    return null;
   }
 
   return (
     <div className="settings-page">
-      <section className="settings-shell" aria-labelledby="settings-section-title" data-section={activeSection}>
-        <div className="settings-section-panel" key={activeSection}>
+      <section className="settings-shell" aria-labelledby="settings-section-title" data-section={displaySection}>
+        <div className="settings-section-panel" key={displaySection}>
           {renderActiveSection()}
         </div>
       </section>

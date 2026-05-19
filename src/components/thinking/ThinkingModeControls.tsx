@@ -1,20 +1,20 @@
-import { Brain, ChevronDown, Eye, Gauge, Power, Sparkles } from "lucide-react";
+import { Brain, ChevronDown, Gauge, Power } from "lucide-react";
 import { useRef, useState } from "react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
-import { DEEP_RESEARCH_REASONING_EFFORT, formatReasoningEffort } from "../../types/settings";
+import { formatReasoningEffort } from "../../types/settings";
 import type { ReasoningEffort, ThinkingSettings } from "../../types/settings";
 
 interface ThinkingModeControlsProps {
+  disabledReason?: string;
   onChange: (settings: ThinkingSettings) => void;
   settings: ThinkingSettings;
   variant?: "chip" | "panel";
 }
 
 const effortOptions: Array<{ detail: string; label: string; value: ReasoningEffort }> = [
-  { detail: "Fast passes", label: "Low", value: "low" },
-  { detail: "Adaptive", label: "Medium", value: "medium" },
-  { detail: "Deep work", label: "High", value: "high" },
-  { detail: "Broad research", label: "Deep Research", value: "xhigh" },
+  { detail: "Quick", label: "Low", value: "low" },
+  { detail: "Balanced", label: "Medium", value: "medium" },
+  { detail: "Most careful", label: "High", value: "high" },
 ];
 
 function formatThinkingChipLabel(settings: ThinkingSettings) {
@@ -22,14 +22,10 @@ function formatThinkingChipLabel(settings: ThinkingSettings) {
     return "Think";
   }
 
-  if (settings.effort === DEEP_RESEARCH_REASONING_EFFORT) {
-    return "Research";
-  }
-
   return formatReasoningEffort(settings.effort);
 }
 
-export function ThinkingModeControls({ onChange, settings, variant = "chip" }: ThinkingModeControlsProps) {
+export function ThinkingModeControls({ disabledReason, onChange, settings, variant = "chip" }: ThinkingModeControlsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -40,6 +36,10 @@ export function ThinkingModeControls({ onChange, settings, variant = "chip" }: T
   });
 
   function updateSettings(nextSettings: Partial<ThinkingSettings>) {
+    if (disabledReason) {
+      return;
+    }
+
     onChange({
       ...settings,
       ...nextSettings,
@@ -49,7 +49,7 @@ export function ThinkingModeControls({ onChange, settings, variant = "chip" }: T
   if (variant === "panel") {
     return (
       <div className="thinking-panel">
-        <ThinkingOptions onChange={updateSettings} settings={settings} />
+        <ThinkingOptions disabledReason={disabledReason} onChange={updateSettings} settings={settings} />
       </div>
     );
   }
@@ -69,13 +69,14 @@ export function ThinkingModeControls({ onChange, settings, variant = "chip" }: T
         title={chipFullLabel}
         onClick={() => setOpen((current) => !current)}
       >
-        <Sparkles size={16} aria-hidden="true" />
+        <Brain size={16} aria-hidden="true" />
         <span>{chipLabel}</span>
         <ChevronDown size={15} aria-hidden="true" />
       </button>
       {open ? (
         <div className="composer-popover thinking-popover" role="menu" aria-label="Thinking mode">
           <ThinkingOptions
+            disabledReason={disabledReason}
             onChange={(nextSettings) => {
               updateSettings(nextSettings);
             }}
@@ -88,11 +89,14 @@ export function ThinkingModeControls({ onChange, settings, variant = "chip" }: T
 }
 
 interface ThinkingOptionsProps {
+  disabledReason?: string;
   onChange: (settings: Partial<ThinkingSettings>) => void;
   settings: ThinkingSettings;
 }
 
-function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
+function ThinkingOptions({ disabledReason, onChange, settings }: ThinkingOptionsProps) {
+  const disabled = Boolean(disabledReason);
+
   return (
     <div className="thinking-options">
       <div className="thinking-popover-header">
@@ -101,15 +105,16 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
         </span>
         <span>
           <strong>Thinking</strong>
-          <small>{settings.enabled ? `${formatReasoningEffort(settings.effort)} depth selected` : "Off for the next message"}</small>
+          <small>{settings.enabled ? `${formatReasoningEffort(settings.effort)} depth` : "Off"}</small>
         </span>
         <button
           className="thinking-power"
           type="button"
           role="switch"
           aria-checked={settings.enabled}
-          aria-label={settings.enabled ? "Turn thinking off" : "Turn thinking on"}
-          data-on={settings.enabled}
+          aria-label={disabledReason ?? (settings.enabled ? "Turn thinking off" : "Turn thinking on")}
+          data-on={settings.enabled && !disabled}
+          disabled={disabled}
           onClick={() => onChange({ enabled: !settings.enabled })}
         >
           <Power size={15} aria-hidden="true" />
@@ -121,7 +126,7 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
           <Gauge size={14} aria-hidden="true" />
           Depth
         </span>
-        <small>{settings.enabled ? "Adaptive depth" : "Paused"}</small>
+        <small>{disabledReason ?? (settings.enabled ? formatReasoningEffort(settings.effort) : "Paused")}</small>
       </div>
 
       <div className="thinking-effort-grid" role="radiogroup" aria-label="Reasoning effort">
@@ -135,6 +140,7 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
               role="radio"
               aria-checked={selected}
               data-selected={selected}
+              disabled={disabled}
               onClick={() => onChange({ enabled: true, effort: option.value })}
             >
               <strong>{option.label}</strong>
@@ -142,14 +148,6 @@ function ThinkingOptions({ onChange, settings }: ThinkingOptionsProps) {
             </button>
           );
         })}
-      </div>
-
-      <div className="thinking-trace-note" role="note">
-        <Eye size={18} aria-hidden="true" />
-        <span>
-          <strong>Trace when available</strong>
-          <small>Gilbert requests provider reasoning and shows it when the provider streams or returns it.</small>
-        </span>
       </div>
     </div>
   );

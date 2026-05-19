@@ -5,6 +5,22 @@ import { streamProviderMessage, sendProviderMessage, type ProviderUsage } from "
 
 const MAX_PLANNING_QUESTIONS = 3;
 const MAX_PLANNING_OPTIONS = 3;
+const GENERIC_CODEBASE_INVENTORY_QUESTION_PATTERNS = [
+  /\b(?:what|describe|tell me).{0,48}\b(?:project|app|site).{0,32}\b(?:main purpose|core functionality|purpose|do|does)\b/i,
+  /\b(?:main purpose|core functionality).{0,64}\b(?:project|app|site)\b/i,
+  /\b(?:what|which).{0,48}\b(?:ui components?|pages?|screens?|views?).{0,48}\b(?:currently exist|exist|already have|are present)\b/i,
+  /\b(?:what|which).{0,48}\b(?:key features?|user flows?|flows?).{0,48}\b(?:planned|intended|needed)\b/i,
+  /\b(?:list|describe).{0,48}\b(?:existing|current).{0,48}\b(?:components?|pages?|screens?|views?|features?)\b/i,
+];
+
+/**
+ * Floor for the plan-drafting call's output budget. The drafter has no tool
+ * access (see `disablePlanningExecutionTools` below), so the model must fit the
+ * entire plan into one response. Tying that budget to the chat-mode
+ * `settings.maxTokens` (typically 2-4K) produced the "3K-token plan on a big
+ * codebase" bug. Plan output gets its own headroom now.
+ */
+export const PLAN_DRAFT_MAX_TOKENS = 16000;
 
 export type PlanningPhase = "input" | "researching" | "drafting" | "complete";
 
@@ -86,7 +102,9 @@ export async function createPlanningInputRequest(
     return null;
   }
 
-  const questions = payload.questions.flatMap((question, index) => normalizePlanningQuestion(question, index)).slice(0, MAX_PLANNING_QUESTIONS);
+  const questions = filterPlanningInputQuestions(
+    payload.questions.flatMap((question, index) => normalizePlanningQuestion(question, index)),
+  ).slice(0, MAX_PLANNING_QUESTIONS);
 
   if (questions.length === 0) {
     return null;
@@ -99,6 +117,10 @@ export async function createPlanningInputRequest(
     requestedAt: new Date().toISOString(),
     title: normalizeShortText(payload.title) || "A few choices would help",
   };
+}
+
+export function filterPlanningInputQuestions(questions: ChatPlanningQuestion[]): ChatPlanningQuestion[] {
+  return questions.filter((question) => !isGenericCodebaseInventoryQuestion(question.question));
 }
 
 export async function runPlanningMode({ messages, onProviderRequest, onProviderUsage, onUpdate, researchFindings, signal, settings }: PlanningRunOptions): Promise<PlanningRunResult> {
@@ -143,7 +165,18 @@ export async function runPlanningMode({ messages, onProviderRequest, onProviderU
   };
 }
 
-export function createPlanningProgress(phase: PlanningPhase): ChatProgressItem[] {
+/**
+ * Live counters from the research phase. Optional — when present, the
+ * `Research codebase` progress item shows them so the user can see plan mode
+ * actually doing work rather than spinning. Derived from the tool-call ledger
+ * by `summarizeResearchEvidence` in `planResearchClient.ts`.
+ */
+export interface PlanningProgressEvidence {
+  filesRead: number;
+  searches: number;
+}
+
+export function createPlanningProgress(phase: PlanningPhase, evidence?: PlanningProgressEvidence): ChatProgressItem[] {
   return [
     {
       detail: "Plan mode",
@@ -158,12 +191,7 @@ export function createPlanningProgress(phase: PlanningPhase): ChatProgressItem[]
       status: phase === "input" ? "active" : "complete",
     },
     {
-      detail:
-        phase === "researching"
-          ? "Reviewing attached workspace context"
-          : phase === "drafting" || phase === "complete"
-            ? "Context gathered"
-            : "Waiting",
+      detail: createResearchProgressDetail(phase, evidence),
       id: "plan-research",
       label: "Research codebase",
       status: phase === "researching" ? "active" : phase === "drafting" || phase === "complete" ? "complete" : "pending",
@@ -180,6 +208,19 @@ export function createPlanningProgress(phase: PlanningPhase): ChatProgressItem[]
       status: phase === "drafting" ? "active" : phase === "complete" ? "complete" : "pending",
     },
   ];
+}
+
+function createResearchProgressDetail(phase: PlanningPhase, evidence?: PlanningProgressEvidence): string {
+  if (evidence && (evidence.filesRead > 0 || evidence.searches > 0)) {
+    const parts: string[] = [];
+    if (evidence.filesRead > 0) parts.push(`${evidence.filesRead} file${evidence.filesRead === 1 ? "" : "s"} read`);
+    if (evidence.searches > 0) parts.push(`${evidence.searches} search${evidence.searches === 1 ? "" : "es"}`);
+    return phase === "researching" ? `Inspecting code (${parts.join(", ")})` : `Inspected ${parts.join(", ")}`;
+  }
+
+  if (phase === "researching") return "Reading the codebase";
+  if (phase === "drafting" || phase === "complete") return "Context gathered";
+  return "Waiting";
 }
 
 function disablePlanningExecutionTools(tools: ProviderSettings["tools"]): ProviderSettings["tools"] {
@@ -223,7 +264,11 @@ function createPlanningInputSettings(settings: ProviderSettings): ProviderSettin
 function createFinalAnswerSettings(settings: ProviderSettings): ProviderSettings {
   return {
     ...settings,
-    maxTokens: Math.max(settings.maxTokens, 2400),
+    // Plan output gets its own token budget so a long, well-structured plan
+    // doesn't get truncated by the user's chat-mode `maxTokens`. We pick the
+    // *larger* of the user's setting and the plan-mode floor so users who
+    // already configured a high ceiling keep it.
+    maxTokens: Math.max(settings.maxTokens, PLAN_DRAFT_MAX_TOKENS),
     systemPrompt: createFinalAnswerSystemPrompt(settings.systemPrompt),
     temperature: Math.min(settings.temperature, 0.25),
     thinking: {
@@ -241,6 +286,8 @@ function createPlanningInputSystemPrompt(basePrompt: string) {
     "Plan mode is starting. Decide whether user input is needed before planning.",
     "Ask questions only when the answer would materially change scope, implementation order, target platform, constraints, or risk posture.",
     "Do not ask for routine preferences that can be handled by a sensible default.",
+    "For local codebase/workspace requests, do not ask the user to describe the project's purpose, current UI components/pages, or planned flows. Those are discoverable from workspace context or the research phase.",
+    "Generic inventory questions are invalid. If that is all you would ask, return no input and let codebase research continue.",
     "If previous clarification answers are present, do not repeat them. Ask a follow-up only if a new missing decision would materially change the plan.",
     "Return JSON only. No Markdown, no prose.",
     'Schema: {"needsInput": boolean, "title": string, "detail": string, "questions": [{"id": string, "question": string, "placeholder": string, "required": boolean, "options": [{"id": string, "label": string, "description": string}]}]}',
@@ -252,13 +299,15 @@ function createPlanningInputSystemPrompt(basePrompt: string) {
 function createFinalAnswerSystemPrompt(basePrompt: string) {
   return [
     basePrompt,
-    "Plan mode is active. Write a single, complete user-facing plan in one response. Do not split this into passes or stages.",
-    "TOOL CALLS ARE DISABLED. Do NOT emit native tool calls, strict tool envelopes, or raw protocol JSON. Any tool-call markup is malformed for this turn.",
-    "If research findings were attached, treat them as host-provided context. Reference only the file paths, symbols, functions, snippets, and sources shown there. Do not invent files or functions that were not provided.",
+    "Plan mode is active. You are the DRAFTER. The research phase that ran before you produced a tool-call ledger and a findings digest; build the plan from those.",
+    "TOOL CALLS ARE DISABLED for this turn. Do NOT emit native tool calls, strict tool envelopes, or raw protocol JSON. Any tool-call markup is malformed.",
+    "Reference only files, symbols, functions, snippets, and sources that appear in the research evidence. Do not invent files or functions that were not provided.",
+    "Length: write as much plan as the task warrants. For a bug fix in one file, a short plan is fine. For a multi-file refactor, the plan should be long and detailed — name every file touched, every helper extracted, every test added. Do NOT artificially shorten.",
     "If the user is asking for a bug fix, name each bug, the file and approximate line, and the exact change. If the user is asking for a feature, name the files to create or edit and the structure.",
     "Format the plan as Markdown with these sections, in order:",
-    "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change.\n## Risks and edge cases\nBullet list.\n## Verification\nHow to confirm it works (tests, manual checks, commands).",
-    "Be concrete. No generic advice like 'review the codebase' or 'investigate further'. The research is already done.",
+    "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each. Cite line numbers when known.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change. Group related steps under sub-headings if the plan is long.\n## Risks and edge cases\nBullet list. Be specific about which risk applies to which file/step.\n## Verification\nHow to confirm it works (tests to run, manual checks, commands).\n## Suggested PR breakdown\nOnly include this section if the plan spans more than one logical chunk. Otherwise omit.",
+    "Do not wrap the plan in a fenced code block. The headings and lists must be rendered as visible Markdown, not shown as literal text inside a code fence.",
+    "Be concrete. No generic advice like 'review the codebase' or 'investigate further' — the research is already done. If the evidence doesn't cover something, name it as an open question in Risks rather than guessing.",
     "If web sources were provided, use Markdown links for claims that rely on them.",
   ].join("\n\n");
 }
@@ -271,6 +320,7 @@ function createPlanningInputMessages(messages: ChatMessage[]): ChatMessage[] {
       [
         "Before planning, decide whether to ask me for clarifying input.",
         "If needed, ask focused questions that will influence the plan.",
+        "Do not ask broad project-inventory questions such as what the app does, which pages/components exist, or what user flows are planned; the codebase research phase must inspect that.",
         "If not needed, continue without asking.",
       ].join("\n"),
     ),
@@ -382,6 +432,12 @@ function normalizePlanningQuestion(value: unknown, index: number): ChatPlanningQ
       required: typeof payload.required === "boolean" ? payload.required : true,
     },
   ];
+}
+
+function isGenericCodebaseInventoryQuestion(question: string) {
+  const normalizedQuestion = question.replace(/\s+/g, " ").trim();
+
+  return GENERIC_CODEBASE_INVENTORY_QUESTION_PATTERNS.some((pattern) => pattern.test(normalizedQuestion));
 }
 
 function normalizePlanningOptions(value: unknown): ChatPlanningQuestionOption[] | undefined {

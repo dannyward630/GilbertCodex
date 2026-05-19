@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { fetchWeatherJson } from "../../app/tauriClient";
 import { MapboxWeatherMap } from "../weather/MapboxWeatherMap";
+import { loadOpenMeteoWeather, type OpenMeteoWeatherSnapshot } from "../../services/openMeteoWeather";
+import { resolveWeatherSourcePlan } from "../../services/weatherProviders";
+import { loadWeatherSourceSettings, subscribeWeatherSourceSettings } from "../../services/weatherSettings";
 import {
   createStoredWeatherLocation,
   isValidWeatherCoordinate,
   loadStoredWeatherLocation,
   normalizeCountryCode,
   requestAndRememberWeatherLocation,
+  resolveStoredWeatherLocationUnits,
   saveStoredWeatherLocation,
   type StoredWeatherLocation,
 } from "../../services/weatherLocation";
@@ -22,6 +26,8 @@ interface WeatherTopBarState {
   loading: boolean;
   longitude?: number;
   place: string;
+  sourceDetail: string;
+  sourceLabel: string;
   temperature: string;
   updatedAt?: string;
   unitLabel: "C" | "F";
@@ -50,6 +56,8 @@ const EMPTY_WEATHER_STATE: WeatherTopBarState = {
   label: "Weather unavailable",
   loading: false,
   place: "",
+  sourceDetail: "No weather source has returned data yet.",
+  sourceLabel: "Weather source",
   temperature: "--°",
   unitLabel: "F",
 };
@@ -98,13 +106,14 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
       if (!location) {
         setState({
           ...EMPTY_WEATHER_STATE,
-          error: "Add a weather location so the desktop app can fetch NOAA/NWS data.",
+          error: "Add a weather location so the desktop app can choose the right weather source.",
         });
         setOpen(true);
         return;
       }
 
-      const nextState = await loadCurrentWeather(location);
+      const sourceSettings = loadWeatherSourceSettings();
+      const nextState = await loadCurrentWeather(resolveStoredWeatherLocationUnits(location, sourceSettings.temperatureUnitMode), sourceSettings);
 
       if (mountedRef.current && requestId === requestIdRef.current) {
         setState(nextState);
@@ -138,11 +147,12 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
       latitude,
       longitude,
       source: "manual",
+      temperatureUnitMode: loadWeatherSourceSettings().temperatureUnitMode,
     });
 
     saveStoredWeatherLocation(location);
     setLocationDraft(createWeatherLocationDraft(location));
-    setLocationStatus("Location saved. Refreshing NOAA/NWS weather...");
+    setLocationStatus("Location saved. Refreshing weather...");
     lastRefreshStartedAtRef.current = 0;
     void refreshWeather();
   }, [locationDraft.countryCode, locationDraft.latitude, locationDraft.longitude, refreshWeather]);
@@ -198,6 +208,13 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
       document.removeEventListener("visibilitychange", handleVisibleAgain);
     };
   }, [refreshWeather, refreshWeatherIfStale]);
+
+  useEffect(() => {
+    return subscribeWeatherSourceSettings(() => {
+      lastRefreshStartedAtRef.current = 0;
+      void refreshWeather();
+    });
+  }, [refreshWeather]);
 
   useEffect(() => {
     if (!open) {
@@ -260,9 +277,52 @@ export function WeatherTopBarIndicator({ onOpenRadar }: WeatherTopBarIndicatorPr
   );
 }
 
-async function loadCurrentWeather(location: StoredWeatherLocation): Promise<WeatherTopBarState> {
+async function loadCurrentWeather(location: StoredWeatherLocation, sourceSettings = loadWeatherSourceSettings()): Promise<WeatherTopBarState> {
+  const plan = resolveWeatherSourcePlan(location, sourceSettings);
+
+  if (plan.forecastAdapterKind === "openMeteo") {
+    return createOpenMeteoWeatherState(await loadOpenMeteoWeather(location, plan));
+  }
+
+  if (plan.forecastAdapterKind === "none") {
+    return {
+      ...EMPTY_WEATHER_STATE,
+      error: plan.forecastStatus,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      place: `${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}`,
+      sourceDetail: plan.forecastStatus,
+      sourceLabel: plan.forecastProvider.label,
+      unitLabel: location.temperatureUnit,
+    };
+  }
+
   const pointUrl = `https://api.weather.gov/points/${formatCoordinate(location.latitude)},${formatCoordinate(location.longitude)}`;
-  const point = await fetchWeatherJson({ url: pointUrl });
+  const point = await fetchWeatherJson({ url: pointUrl }).catch(async (error) => {
+    if (!sourceSettings.allowGlobalFallback) {
+      throw error;
+    }
+
+    const fallbackPlan = resolveWeatherSourcePlan(location, {
+      allowGlobalFallback: true,
+      manualProviderId: "openMeteo",
+      mode: "manual",
+      preferOfficialAlerts: true,
+      showSourceBadges: true,
+      temperatureUnitMode: sourceSettings.temperatureUnitMode,
+    });
+    return {
+      contentType: "application/json",
+      payload: await loadOpenMeteoWeather(location, fallbackPlan),
+      status: 200,
+      url: "",
+    };
+  });
+
+  if (isOpenMeteoSnapshot(point.payload)) {
+    return createOpenMeteoWeatherState(point.payload);
+  }
+
   const pointProperties = asRecord(asRecord(point.payload).properties);
   const stationsUrl = stringValue(pointProperties.observationStations);
   const forecastUrl = stringValue(pointProperties.forecast);
@@ -300,6 +360,8 @@ async function loadCurrentWeather(location: StoredWeatherLocation): Promise<Weat
           forecast: sevenDayForecast,
           latitude: location.latitude,
           longitude: location.longitude,
+          sourceDetail: plan.forecastStatus,
+          sourceLabel: plan.forecastLabel,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -315,12 +377,45 @@ async function loadCurrentWeather(location: StoredWeatherLocation): Promise<Weat
           forecast: sevenDayForecast,
           latitude: location.latitude,
           longitude: location.longitude,
+          sourceDetail: plan.forecastStatus,
+          sourceLabel: plan.forecastLabel,
           updatedAt: new Date().toISOString(),
         };
     }
   }
 
   return EMPTY_WEATHER_STATE;
+}
+
+function createOpenMeteoWeatherState(snapshot: OpenMeteoWeatherSnapshot): WeatherTopBarState {
+  return {
+    condition: snapshot.condition,
+    emoji: emojiForCondition(snapshot.condition, !snapshot.isDay),
+    forecast: snapshot.dailyForecast.map((day) => ({
+      condition: day.condition,
+      dayLabel: day.dayLabel,
+      detail: day.detail,
+      emoji: emojiForCondition(day.condition, false),
+      high: day.high,
+      low: day.low,
+      wind: day.wind,
+    })),
+    label: [snapshot.place, `${snapshot.temperature}${snapshot.unitLabel}`, snapshot.condition].filter(Boolean).join(" / "),
+    latitude: snapshot.latitude,
+    loading: false,
+    longitude: snapshot.longitude,
+    place: snapshot.place,
+    sourceDetail: snapshot.sourceDetail,
+    sourceLabel: snapshot.sourceLabel,
+    temperature: snapshot.temperature,
+    unitLabel: snapshot.unitLabel,
+    updatedAt: snapshot.updatedAt,
+  };
+}
+
+function isOpenMeteoSnapshot(value: unknown): value is OpenMeteoWeatherSnapshot {
+  const record = asRecord(value);
+  return typeof record.sourceLabel === "string" && Array.isArray(record.dailyForecast) && Array.isArray(record.hourlyForecast);
 }
 
 function createWeatherLocationDraft(location: StoredWeatherLocation | null): WeatherLocationDraft {
@@ -350,6 +445,8 @@ function createObservationState(payload: unknown, location: StoredWeatherLocatio
     label: [place, `${temperature}${unitLabel}`, condition].filter(Boolean).join(" · "),
     loading: false,
     place,
+    sourceDetail: "",
+    sourceLabel: "",
     temperature,
     unitLabel,
   };
@@ -381,6 +478,8 @@ function createHourlyForecastState(payload: unknown, location: StoredWeatherLoca
     label: [place, `${temperature}${unitLabel}`, condition].filter(Boolean).join(" · "),
     loading: false,
     place,
+    sourceDetail: "",
+    sourceLabel: "",
     temperature,
     unitLabel,
   };
@@ -444,7 +543,7 @@ function WeatherForecastPopover({
             </article>
           ))
         ) : (
-          <div className="weather-forecast-empty">Forecast will appear after the next NOAA/NWS refresh.</div>
+          <div className="weather-forecast-empty">Forecast will appear after the next weather-source refresh.</div>
         )}
       </div>
 
@@ -458,7 +557,7 @@ function WeatherForecastPopover({
         >
           <div>
             <span>Desktop weather location</span>
-            <strong>{state.error || "Save a location to start NOAA/NWS weather."}</strong>
+            <strong>{state.error || "Save a location to start weather."}</strong>
           </div>
           <label>
             <span>Latitude</span>
@@ -480,7 +579,7 @@ function WeatherForecastPopover({
       <MapboxWeatherMap condition={state.condition} latitude={state.latitude} longitude={state.longitude} place={state.place} onOpenRadar={onOpenRadar} />
 
       <footer className="weather-popover-footer">
-        <span>NOAA/NWS data</span>
+        <span title={state.sourceDetail}>{state.sourceLabel}</span>
         <span>{state.updatedAt ? `Updated ${formatUpdatedTime(state.updatedAt)}` : "Updates on 5 minute marks"}</span>
       </footer>
     </section>

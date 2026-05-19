@@ -18,6 +18,14 @@ src-tauri\target\release\bundle\nsis\
 
 Use `npm.cmd run app:build` when you only need the normal Tauri bundle without regenerating installer artwork.
 
+The installer build also runs:
+
+```powershell
+npm.cmd run nine-router:bundle
+```
+
+That step installs the `9router` npm package into a repo-local staging folder, copies the current build machine's Node.js executable, and prepares `src-tauri\resources\9router` so Tauri bundles the subscription helper into the final setup executable. Set `GILBERT_9ROUTER_VERSION` before building when a release needs to pin a specific 9Router version instead of the latest npm package.
+
 ## Build An Auto-Update Release
 
 Automatic updates require a signed updater bundle and a `latest.json` release asset. The normal local installer script intentionally does not create those artifacts because Tauri requires the private updater signing key at build time.
@@ -43,13 +51,14 @@ The GitHub `Release` workflow builds the Windows NSIS installer with the same up
 - The compiled Gilbert Codex desktop executable.
 - The built React frontend from `dist`.
 - Bundled Rust-side runtime dependencies, including SQLite through `rusqlite`'s bundled feature.
+- A bundled 9Router Local runtime for subscription routing, prepared at installer build time from the public `9router` npm package.
 - App icons, Windows shortcut metadata, publisher metadata, homepage metadata, and the MIT license page.
 - A WebView2 runtime check. If WebView2 is missing or older than the configured minimum, the installer downloads and runs Microsoft's bootstrapper silently.
 - A selectable install scope so the user can install for the current account or system-wide.
 
 ## What Stays Local
 
-Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, and updater private keys are not bundled into public installers. Those are created or connected by the user after installation.
+Provider API keys, 9Router provider connections, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, and updater private keys are not bundled into public installers. Those are created or connected by the user after installation.
 
 ## Light And Dark Mode
 

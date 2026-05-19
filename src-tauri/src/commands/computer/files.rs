@@ -7,7 +7,7 @@ use std::{
     collections::{hash_map::DefaultHasher, HashMap, VecDeque},
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::{
@@ -25,16 +25,19 @@ use std::os::windows::process::CommandExt;
 const EMBEDDING_DIMS: usize = 64;
 const GIT_DEFAULT_COMMAND_TIMEOUT_MS: u64 = 60_000;
 const GIT_STATUS_COMMAND_TIMEOUT_MS: u64 = 3_000;
-const MAX_GIT_STATUS_CHANGED_FILES: usize = usize::MAX;
-const MAX_GIT_UNTRACKED_FILES_FOR_STATS: usize = usize::MAX;
-const MAX_GIT_UNTRACKED_FILE_BYTES: u64 = u64::MAX;
-const MAX_GIT_DIFF_PREVIEW_FILES: usize = usize::MAX;
-const MAX_GIT_DIFF_PREVIEW_LINES_PER_FILE: usize = usize::MAX;
-const MAX_GIT_DIFF_PREVIEW_LINE_CHARS: usize = usize::MAX;
-const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = u64::MAX;
+const MAX_GIT_DIFF_PREVIEW_FILES: usize = 500;
+const MAX_GIT_DIFF_PREVIEW_LINES_PER_FILE: usize = 200;
+const MAX_GIT_DIFF_PREVIEW_LINE_CHARS: usize = 2_000;
+const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = 524_288;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
+const DEFAULT_TEXT_SEARCH_EXTENSIONS: &[&str] = &[
+    "astro", "bat", "c", "cmd", "cpp", "cs", "css", "csv", "dart", "go", "graphql", "h", "html",
+    "java", "js", "json", "jsx", "kt", "kts", "lua", "md", "mdx", "php", "ps1", "py", "rb", "rs",
+    "scss", "sh", "sql", "svelte", "swift", "toml", "ts", "tsx", "txt", "vue", "xml", "yaml",
+    "yml",
+];
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const SKIPPED_INDEX_DIRECTORY_NAMES: &[&str] = &[
@@ -412,6 +415,31 @@ pub struct ComputerReadFileRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComputerReadFileRangeRequest {
+    pub end_line: usize,
+    pub path: String,
+    pub start_line: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTextSearchRequest {
+    pub case_sensitive: Option<bool>,
+    pub context_lines: Option<usize>,
+    pub exclude_directories: Option<Vec<String>>,
+    pub extensions: Option<Vec<String>>,
+    pub globs: Option<Vec<String>>,
+    pub include_content: Option<bool>,
+    pub include_generated: Option<bool>,
+    pub include_path: Option<bool>,
+    pub max_matches: Option<usize>,
+    pub max_matches_per_file: Option<usize>,
+    pub path: String,
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComputerWriteFileRequest {
     pub content: String,
     pub create_parent_dirs: Option<bool>,
@@ -422,6 +450,34 @@ pub struct ComputerWriteFileRequest {
     pub expected_sha256: Option<String>,
     /// Optional line-ending family; otherwise the writer preserves detected EOL or uses the platform default.
     pub force_eol: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerWriteFilesRequest {
+    pub files: Vec<ComputerWriteFilesItemRequest>,
+    pub roots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerWriteFilesItemRequest {
+    pub content: String,
+    pub create_parent_dirs: Option<bool>,
+    pub overwrite: Option<bool>,
+    pub path: String,
+    /// Lowercase hex SHA-256 of the last observed file; mismatches reject writes to protect user edits.
+    pub expected_sha256: Option<String>,
+    /// Optional line-ending family; otherwise the writer preserves detected EOL or uses the platform default.
+    pub force_eol: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerCreateDirectoryRequest {
+    pub path: String,
+    pub recursive: Option<bool>,
+    pub roots: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -456,6 +512,67 @@ pub struct ComputerReadFileResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComputerReadFileRangeResult {
+    pub content: String,
+    pub end_line: usize,
+    pub extension: Option<String>,
+    pub line_count: usize,
+    pub modified_at: Option<u64>,
+    pub name: String,
+    pub path: String,
+    pub requested_end_line: usize,
+    pub requested_start_line: usize,
+    pub size: u64,
+    pub start_line: usize,
+    pub total_lines: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTextSearchLineContext {
+    pub line: usize,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTextSearchMatch {
+    pub after: Option<Vec<ComputerTextSearchLineContext>>,
+    pub before: Option<Vec<ComputerTextSearchLineContext>>,
+    pub line: usize,
+    pub preview: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTextSearchFileResult {
+    pub content_matches: Vec<ComputerTextSearchMatch>,
+    pub extension: Option<String>,
+    pub name: String,
+    pub path: String,
+    pub path_matched: bool,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTextSearchResponse {
+    pub files_read: usize,
+    pub files_scanned: usize,
+    pub filtered_by_glob: usize,
+    pub inaccessible_entries: usize,
+    pub limited: bool,
+    pub matches: Vec<ComputerTextSearchFileResult>,
+    pub scanned_directories: usize,
+    pub skipped_directories: usize,
+    pub skipped_files: usize,
+    pub total_content_matches: usize,
+    pub unreadable_files: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComputerWriteFileResult {
     pub bytes_written: usize,
     pub created: bool,
@@ -465,6 +582,29 @@ pub struct ComputerWriteFileResult {
     pub sha256: Option<String>,
     /// Line-ending family applied to the written bytes ("crlf" or "lf").
     pub eol: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerWriteFilesResult {
+    pub files: Vec<ComputerWriteFilesItemResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerWriteFilesItemResult {
+    pub error: Option<String>,
+    pub ok: bool,
+    pub requested_path: String,
+    pub result: Option<ComputerWriteFileResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerCreateDirectoryResult {
+    pub created: bool,
+    pub modified_at: Option<u64>,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -596,7 +736,7 @@ fn build_file_index_blocking(
     request: ComputerIndexRequest,
 ) -> Result<ComputerFileIndexSummary, String> {
     let max_files = request.max_files.filter(|value| *value > 0);
-    let max_depth = request.max_depth.unwrap_or(usize::MAX);
+    let max_depth = request.max_depth.filter(|value| *value > 0);
     let request_id = request.request_id.unwrap_or_else(now_millis);
     let roots = normalize_roots(request.roots);
 
@@ -690,7 +830,9 @@ fn build_file_index_blocking(
                 preview.clone().unwrap_or_default()
             );
 
-            if matches!(kind, ComputerFileKind::Directory) && depth < max_depth {
+            if matches!(kind, ComputerFileKind::Directory)
+                && max_depth.map(|limit| depth < limit).unwrap_or(true)
+            {
                 queue.push_back(IndexDirectoryScan {
                     depth: depth + 1,
                     ignore_rules: ignore_rules.clone(),
@@ -1211,13 +1353,13 @@ fn git_diff_blocking(request: ComputerGitDiffRequest) -> Result<ComputerGitDiffR
     let raw_diff = sections.join("\n");
     let (diff, truncated) = limit_git_diff_output(raw_diff, request.max_bytes);
     let status = get_git_status_blocking(ComputerGitStatusRequest {
-        include_diff_preview: Some(true),
+        include_diff_preview: None,
         path: path_to_string(&repository_path),
     })?;
 
     Ok(ComputerGitDiffResult {
         diff,
-        path: path_to_string(&normalize_input_path(&request.path)),
+        path: path_to_string(normalize_input_path(&request.path)),
         repository_root: path_to_string(&repository_path),
         status,
         truncated,
@@ -1328,6 +1470,16 @@ pub fn computer_search_file_index(
     Ok(results)
 }
 
+/// Streams an exact literal text search through the filesystem without materializing every file.
+#[tauri::command]
+pub async fn computer_search_text_files(
+    request: ComputerTextSearchRequest,
+) -> Result<ComputerTextSearchResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || computer_search_text_files_blocking(request))
+        .await
+        .map_err(|error| format!("The text search worker stopped unexpectedly: {}", error))?
+}
+
 /// Reads one text file and honors byte limits only when the caller explicitly asks for them.
 #[tauri::command]
 pub async fn computer_read_text_file(
@@ -1336,6 +1488,16 @@ pub async fn computer_read_text_file(
     tauri::async_runtime::spawn_blocking(move || computer_read_text_file_blocking(request))
         .await
         .map_err(|error| format!("The file read worker stopped unexpectedly: {}", error))?
+}
+
+/// Reads a precise 1-based line range without loading the whole file into memory.
+#[tauri::command]
+pub async fn computer_read_text_file_range(
+    request: ComputerReadFileRangeRequest,
+) -> Result<ComputerReadFileRangeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || computer_read_text_file_range_blocking(request))
+        .await
+        .map_err(|error| format!("The file range read worker stopped unexpectedly: {}", error))?
 }
 
 fn computer_read_text_file_blocking(
@@ -1406,6 +1568,464 @@ fn computer_read_text_file_blocking(
     })
 }
 
+fn computer_read_text_file_range_blocking(
+    request: ComputerReadFileRangeRequest,
+) -> Result<ComputerReadFileRangeResult, String> {
+    let path = normalize_input_path(&request.path);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+
+    if !metadata.is_file() {
+        return Err("Choose a text file, not a folder.".to_string());
+    }
+
+    if request.start_line == 0 || request.end_line == 0 {
+        return Err("Line numbers must be positive integers.".to_string());
+    }
+
+    if request.end_line < request.start_line {
+        return Err("endLine must be greater than or equal to startLine.".to_string());
+    }
+
+    if metadata.len() == 0 {
+        if request.start_line > 1 {
+            return Err(format!(
+                "Requested startLine {} is beyond the end of `{}` (1 line).",
+                request.start_line,
+                path_to_string(&path)
+            ));
+        }
+
+        return Ok(ComputerReadFileRangeResult {
+            content: String::new(),
+            end_line: 1,
+            extension: file_extension(&path),
+            line_count: 1,
+            modified_at: modified_millis(&metadata),
+            name: path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| path_to_string(&path)),
+            path: path_to_string(&path),
+            requested_end_line: request.end_line,
+            requested_start_line: request.start_line,
+            size: metadata.len(),
+            start_line: 1,
+            total_lines: 1,
+            truncated: request.end_line > 1,
+        });
+    }
+
+    let file = File::open(&path)
+        .map_err(|error| format!("Could not open {}: {}", path_to_string(&path), error))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = String::new();
+    let mut line_number = 0usize;
+    let mut selected_lines = Vec::new();
+
+    loop {
+        buffer.clear();
+        let bytes_read = reader
+            .read_line(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {}", path_to_string(&path), error))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        if buffer.as_bytes().contains(&0) {
+            return Err("This file looks binary, so Gilbert did not load it as text.".to_string());
+        }
+
+        line_number += 1;
+
+        if line_number >= request.start_line && line_number <= request.end_line {
+            selected_lines.push(trim_line_end(&buffer).to_string());
+        }
+    }
+
+    let total_lines = line_number.max(1);
+
+    if request.start_line > total_lines {
+        return Err(format!(
+            "Requested startLine {} is beyond the end of `{}` ({} line{}).",
+            request.start_line,
+            path_to_string(&path),
+            total_lines,
+            if total_lines == 1 { "" } else { "s" }
+        ));
+    }
+
+    let actual_end_line = request.end_line.min(total_lines);
+    let line_count = selected_lines.len();
+
+    Ok(ComputerReadFileRangeResult {
+        content: selected_lines.join("\n"),
+        end_line: actual_end_line,
+        extension: file_extension(&path),
+        line_count,
+        modified_at: modified_millis(&metadata),
+        name: path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| path_to_string(&path)),
+        path: path_to_string(&path),
+        requested_end_line: request.end_line,
+        requested_start_line: request.start_line,
+        size: metadata.len(),
+        start_line: request.start_line,
+        total_lines,
+        truncated: request.start_line > 1 || request.end_line < total_lines,
+    })
+}
+
+fn computer_search_text_files_blocking(
+    request: ComputerTextSearchRequest,
+) -> Result<ComputerTextSearchResponse, String> {
+    let root = normalize_input_path(&request.path);
+    let query = request.query.trim().to_string();
+
+    if query.is_empty() {
+        return Ok(ComputerTextSearchResponse::default());
+    }
+
+    let metadata = fs::metadata(&root)
+        .map_err(|error| format!("Could not read {}: {}", path_to_string(&root), error))?;
+    if !metadata.is_dir() {
+        return Err("Choose a folder before searching text files.".to_string());
+    }
+
+    let case_sensitive = request.case_sensitive.unwrap_or(false);
+    let context_lines = request.context_lines.unwrap_or(0);
+    let include_content = request.include_content.unwrap_or(true);
+    let include_generated = request.include_generated.unwrap_or(false);
+    let include_path = request.include_path.unwrap_or(true);
+    let max_matches = request.max_matches.filter(|value| *value > 0);
+    let max_matches_per_file = request.max_matches_per_file.filter(|value| *value > 0);
+    let extensions = normalize_search_extensions(request.extensions.as_deref());
+    let exclude_directories = request
+        .exclude_directories
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let globs = request.globs.unwrap_or_default();
+    let query_cmp = if case_sensitive {
+        query.clone()
+    } else {
+        query.to_lowercase()
+    };
+    let mut response = ComputerTextSearchResponse::default();
+    let mut queue = VecDeque::from([root]);
+
+    'scan: while let Some(directory) = queue.pop_front() {
+        if max_matches.is_some_and(|limit| response.matches.len() >= limit) {
+            response.limited = true;
+            break;
+        }
+
+        let read_dir = match fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(_) => {
+                response.inaccessible_entries += 1;
+                continue;
+            }
+        };
+        response.scanned_directories += 1;
+
+        for entry_result in read_dir {
+            if max_matches.is_some_and(|limit| response.matches.len() >= limit) {
+                response.limited = true;
+                break 'scan;
+            }
+
+            let entry = match entry_result {
+                Ok(entry) => entry,
+                Err(_) => {
+                    response.inaccessible_entries += 1;
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    response.inaccessible_entries += 1;
+                    continue;
+                }
+            };
+            let kind = file_kind_from_metadata(&metadata);
+            let name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| path_to_string(&path));
+
+            if matches!(kind, ComputerFileKind::Directory) {
+                if should_skip_native_search_directory(
+                    &path,
+                    &name,
+                    include_generated,
+                    &exclude_directories,
+                ) {
+                    response.skipped_directories += 1;
+                } else {
+                    queue.push_back(path);
+                }
+                continue;
+            }
+
+            if !matches!(kind, ComputerFileKind::File) {
+                response.skipped_files += 1;
+                continue;
+            }
+
+            if !include_generated
+                && should_skip_index_entry(&path, &name, &ComputerFileKind::File, &[])
+            {
+                response.skipped_files += 1;
+                continue;
+            }
+
+            let path_text = path_to_string(&path);
+
+            if !globs.is_empty() && !native_matches_globs(&path_text, &name, &globs) {
+                response.filtered_by_glob += 1;
+                continue;
+            }
+
+            let extension = file_extension(&path).unwrap_or_default();
+            let path_matched = include_path
+                && (line_matches(&path_text, &query_cmp, case_sensitive)
+                    || line_matches(&name, &query_cmp, case_sensitive));
+            let should_read_content =
+                include_content && extensions.iter().any(|value| value == &extension);
+            let mut content_matches = Vec::new();
+
+            response.files_scanned += 1;
+
+            if should_read_content {
+                match search_file_for_matches(
+                    &path,
+                    &query_cmp,
+                    case_sensitive,
+                    context_lines,
+                    max_matches_per_file,
+                ) {
+                    Ok(matches) => {
+                        response.files_read += 1;
+                        response.total_content_matches += matches.len();
+                        content_matches = matches;
+                    }
+                    Err(_) => {
+                        response.unreadable_files += 1;
+                    }
+                }
+            }
+
+            if path_matched || !content_matches.is_empty() {
+                response.matches.push(ComputerTextSearchFileResult {
+                    content_matches,
+                    extension: if extension.is_empty() {
+                        None
+                    } else {
+                        Some(extension)
+                    },
+                    name,
+                    path: path_text,
+                    path_matched,
+                    size: Some(metadata.len()),
+                });
+            }
+        }
+    }
+
+    Ok(response)
+}
+
+fn search_file_for_matches(
+    path: &Path,
+    query: &str,
+    case_sensitive: bool,
+    context_lines: usize,
+    max_matches_per_file: Option<usize>,
+) -> Result<Vec<ComputerTextSearchMatch>, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let reader = BufReader::new(file);
+    let mut matches = Vec::new();
+    let mut previous = VecDeque::<ComputerTextSearchLineContext>::new();
+
+    for (index, line_result) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line_result.map_err(|error| error.to_string())?;
+
+        if line.as_bytes().contains(&0) {
+            return Err("binary file".to_string());
+        }
+
+        let preview = normalize_search_preview(&line);
+        if context_lines > 0 {
+            add_after_context(&mut matches, line_number, &preview, context_lines);
+        }
+
+        if max_matches_per_file.is_none_or(|limit| matches.len() < limit)
+            && line_matches(&line, query, case_sensitive)
+        {
+            matches.push(ComputerTextSearchMatch {
+                after: if context_lines > 0 {
+                    Some(Vec::new())
+                } else {
+                    None
+                },
+                before: if context_lines > 0 {
+                    Some(previous.iter().cloned().collect())
+                } else {
+                    None
+                },
+                line: line_number,
+                preview: preview.clone(),
+            });
+        }
+
+        if context_lines > 0 {
+            previous.push_back(ComputerTextSearchLineContext {
+                line: line_number,
+                preview,
+            });
+            while previous.len() > context_lines {
+                previous.pop_front();
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+fn add_after_context(
+    matches: &mut [ComputerTextSearchMatch],
+    line_number: usize,
+    preview: &str,
+    context_lines: usize,
+) {
+    for search_match in matches {
+        if line_number <= search_match.line || line_number > search_match.line + context_lines {
+            continue;
+        }
+
+        let after = search_match.after.get_or_insert_with(Vec::new);
+        if after.len() < context_lines {
+            after.push(ComputerTextSearchLineContext {
+                line: line_number,
+                preview: preview.to_string(),
+            });
+        }
+    }
+}
+
+fn should_skip_native_search_directory(
+    path: &Path,
+    name: &str,
+    include_generated: bool,
+    exclude_directories: &[String],
+) -> bool {
+    let lower_name = name.to_lowercase();
+
+    exclude_directories.iter().any(|value| value == &lower_name)
+        || (!include_generated
+            && should_skip_index_entry(path, name, &ComputerFileKind::Directory, &[]))
+}
+
+fn normalize_search_extensions(values: Option<&[String]>) -> Vec<String> {
+    let normalized = values
+        .unwrap_or(&[])
+        .iter()
+        .map(|value| value.trim().trim_start_matches('.').to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    if normalized.is_empty() {
+        DEFAULT_TEXT_SEARCH_EXTENSIONS
+            .iter()
+            .map(|value| value.to_string())
+            .collect()
+    } else {
+        normalized
+    }
+}
+
+fn line_matches(value: &str, query: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        value.contains(query)
+    } else {
+        value.to_lowercase().contains(query)
+    }
+}
+
+fn normalize_search_preview(line: &str) -> String {
+    line.trim().chars().take(360).collect()
+}
+
+fn trim_line_end(line: &str) -> &str {
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .or_else(|| line.strip_suffix('\r'))
+        .unwrap_or(line)
+}
+
+fn native_matches_globs(path: &str, name: &str, globs: &[String]) -> bool {
+    let normalized_path = path.replace('\\', "/").to_lowercase();
+    let normalized_name = name.to_lowercase();
+
+    globs.iter().any(|glob| {
+        let pattern = glob
+            .trim()
+            .trim_start_matches("./")
+            .replace('\\', "/")
+            .to_lowercase();
+
+        wildcard_match(&pattern, &normalized_path)
+            || wildcard_match(&format!("*{pattern}"), &normalized_path)
+            || wildcard_match(&pattern, &normalized_name)
+    })
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern_chars = pattern.chars().collect::<Vec<_>>();
+    let value_chars = value.chars().collect::<Vec<_>>();
+    wildcard_match_chars(&pattern_chars, &value_chars)
+}
+
+fn wildcard_match_chars(pattern: &[char], value: &[char]) -> bool {
+    let (mut pattern_index, mut value_index) = (0usize, 0usize);
+    let mut star_index: Option<usize> = None;
+    let mut star_value_index = 0usize;
+
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == '?' || pattern[pattern_index] == value[value_index])
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(star) = star_index {
+            pattern_index = star + 1;
+            star_value_index += 1;
+            value_index = star_value_index;
+        } else {
+            return false;
+        }
+    }
+
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern.len()
+}
+
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const ATOMIC_RENAME_BACKOFFS_MS: [u64; 5] = [50, 100, 200, 400, 800];
@@ -1417,13 +2037,6 @@ const WIN_ERROR_ACCESS_DENIED: i32 = 5;
 const WIN_ERROR_SHARING_VIOLATION: i32 = 32;
 #[cfg(windows)]
 const WIN_ERROR_LOCK_VIOLATION: i32 = 33;
-
-fn use_legacy_write() -> bool {
-    matches!(
-        std::env::var("GILBERT_CODEX_LEGACY_WRITE").ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE")
-    )
-}
 
 /// Detects the majority line-ending family in a byte sample.
 fn detect_eol_majority(bytes: &[u8]) -> Option<&'static str> {
@@ -1615,6 +2228,10 @@ pub fn computer_write_text_file(
     let mut preserve_bom = false;
     let mut detected_eol: Option<&'static str> = None;
 
+    if created && request.expected_sha256.is_some() {
+        return Err("expectedSha256 was provided, but the target file does not exist.".to_string());
+    }
+
     if !created {
         let metadata = fs::metadata(&path)
             .map_err(|error| format!("Could not inspect {}: {}", path_to_string(&path), error))?;
@@ -1693,18 +2310,13 @@ pub fn computer_write_text_file(
     }
     payload.extend_from_slice(normalized.as_bytes());
 
-    if use_legacy_write() {
-        fs::write(&path, &payload)
-            .map_err(|error| format!("Could not write {}: {}", path_to_string(&path), error))?;
-    } else {
-        atomic_write_with_retry(&path, &payload).map_err(|error| {
-            format!(
-                "Could not atomically write {}: {}",
-                path_to_string(&path),
-                error
-            )
-        })?;
-    }
+    atomic_write_with_retry(&path, &payload).map_err(|error| {
+        format!(
+            "Could not atomically write {}: {}",
+            path_to_string(&path),
+            error
+        )
+    })?;
 
     let metadata = fs::metadata(&path).map_err(|error| {
         format!(
@@ -1721,6 +2333,114 @@ pub fn computer_write_text_file(
         path: path_to_string(&path),
         sha256: Some(hex_sha256(&payload)),
         eol: Some(eol_label(target_eol).to_string()),
+    })
+}
+
+/// Writes many text files in one desktop command so batch write tools avoid per-file IPC.
+#[tauri::command]
+pub async fn computer_write_text_files(
+    request: ComputerWriteFilesRequest,
+) -> Result<ComputerWriteFilesResult, String> {
+    tauri::async_runtime::spawn_blocking(move || computer_write_text_files_blocking(request))
+        .await
+        .map_err(|error| {
+            format!(
+                "The batch file write worker stopped unexpectedly: {}",
+                error
+            )
+        })?
+}
+
+fn computer_write_text_files_blocking(
+    request: ComputerWriteFilesRequest,
+) -> Result<ComputerWriteFilesResult, String> {
+    let roots = request.roots;
+    let mut files = Vec::with_capacity(request.files.len());
+
+    for item in request.files {
+        let requested_path = item.path.clone();
+        let result = computer_write_text_file(ComputerWriteFileRequest {
+            content: item.content,
+            create_parent_dirs: item.create_parent_dirs,
+            expected_sha256: item.expected_sha256,
+            force_eol: item.force_eol,
+            overwrite: item.overwrite,
+            path: item.path,
+            roots: roots.clone(),
+        });
+
+        match result {
+            Ok(result) => files.push(ComputerWriteFilesItemResult {
+                error: None,
+                ok: true,
+                requested_path,
+                result: Some(result),
+            }),
+            Err(error) => files.push(ComputerWriteFilesItemResult {
+                error: Some(error),
+                ok: false,
+                requested_path,
+                result: None,
+            }),
+        }
+    }
+
+    Ok(ComputerWriteFilesResult { files })
+}
+
+/// Creates a directory after checking it stays inside enabled roots.
+#[tauri::command]
+pub fn computer_create_directory(
+    request: ComputerCreateDirectoryRequest,
+) -> Result<ComputerCreateDirectoryResult, String> {
+    let roots = normalize_roots(request.roots);
+
+    if roots.is_empty() {
+        return Err("Choose a folder workspace before creating folders.".to_string());
+    }
+
+    let path = normalize_workspace_path(&request.path, &roots)?;
+
+    if !path_is_inside_roots(&path, &roots) {
+        return Err(
+            "Folder creation is only allowed inside the selected or current workspace folder."
+                .to_string(),
+        );
+    }
+
+    if path.exists() {
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("Could not inspect {}: {}", path_to_string(&path), error))?;
+
+        if !metadata.is_dir() {
+            return Err(format!(
+                "A file already exists at {}.",
+                path_to_string(&path)
+            ));
+        }
+
+        return Ok(ComputerCreateDirectoryResult {
+            created: false,
+            modified_at: modified_millis(&metadata),
+            path: path_to_string(&path),
+        });
+    }
+
+    if request.recursive.unwrap_or(true) {
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("Could not create {}: {}", path_to_string(&path), error))?;
+    } else {
+        fs::create_dir(&path)
+            .map_err(|error| format!("Could not create {}: {}", path_to_string(&path), error))?;
+    }
+
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Could not inspect {}: {}", path_to_string(&path), error))?;
+
+    Ok(ComputerCreateDirectoryResult {
+        created: true,
+        modified_at: modified_millis(&metadata),
+        path: path_to_string(&path),
     })
 }
 
@@ -3494,7 +4214,6 @@ fn count_untracked_git_additions_by_path(
     output
         .split('\0')
         .filter(|path| !path.trim().is_empty())
-        .take(MAX_GIT_UNTRACKED_FILES_FOR_STATS)
         .map(|path| {
             (
                 git_status_path_key(path),
@@ -3517,7 +4236,6 @@ fn parse_git_changed_files(
 
     status_output
         .lines()
-        .take(MAX_GIT_STATUS_CHANGED_FILES)
         .filter_map(|line| {
             let trimmed = line.trim_end();
 
@@ -3575,7 +4293,7 @@ fn count_text_file_lines(path: &Path) -> usize {
         return 0;
     };
 
-    if !metadata.is_file() || metadata.len() > MAX_GIT_UNTRACKED_FILE_BYTES {
+    if !metadata.is_file() {
         return 0;
     }
 
@@ -3793,6 +4511,159 @@ mod tests {
 
         assert!(error.contains("Parent folder does not exist"));
         assert!(!path.exists());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn create_directory_creates_nested_workspace_folder() {
+        let base = temp_index_root("create-directory");
+        let path = base.join("src").join("features").join("chat");
+
+        let result = computer_create_directory(ComputerCreateDirectoryRequest {
+            path: path_to_string(&path),
+            recursive: None,
+            roots: vec![path_to_string(&base)],
+        })
+        .expect("create nested folder");
+
+        assert!(result.created);
+        assert_eq!(path_to_string(&path), result.path);
+        assert!(path.is_dir());
+
+        let second = computer_create_directory(ComputerCreateDirectoryRequest {
+            path: path_to_string(&path),
+            recursive: None,
+            roots: vec![path_to_string(&base)],
+        })
+        .expect("existing folder should be okay");
+
+        assert!(!second.created);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn write_text_files_reports_per_file_results() {
+        let base = temp_index_root("write-many");
+        let first = base.join("src").join("a.ts");
+        let second = base.join("src").join("b.ts");
+        let result = computer_write_text_files_blocking(ComputerWriteFilesRequest {
+            files: vec![
+                ComputerWriteFilesItemRequest {
+                    content: "export const a = 1;\n".to_string(),
+                    create_parent_dirs: None,
+                    expected_sha256: None,
+                    force_eol: Some("lf".to_string()),
+                    overwrite: None,
+                    path: path_to_string(&first),
+                },
+                ComputerWriteFilesItemRequest {
+                    content: "export const b = 2;\n".to_string(),
+                    create_parent_dirs: None,
+                    expected_sha256: None,
+                    force_eol: Some("lf".to_string()),
+                    overwrite: None,
+                    path: path_to_string(&second),
+                },
+            ],
+            roots: vec![path_to_string(&base)],
+        })
+        .expect("write batch");
+
+        assert_eq!(result.files.len(), 2);
+        assert!(result.files.iter().all(|file| file.ok));
+        assert_eq!(
+            fs::read_to_string(&first).expect("read first file"),
+            "export const a = 1;\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&second).expect("read second file"),
+            "export const b = 2;\n"
+        );
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn write_text_file_rejects_expected_sha_for_missing_target() {
+        let base = temp_index_root("write-missing-sha");
+        let path = base.join("src").join("App.jsx");
+
+        let error = computer_write_text_file(ComputerWriteFileRequest {
+            content: "export default null;\n".to_string(),
+            create_parent_dirs: None,
+            expected_sha256: Some("deadbeef".to_string()),
+            force_eol: Some("lf".to_string()),
+            overwrite: None,
+            path: path_to_string(&path),
+            roots: vec![path_to_string(&base)],
+        })
+        .expect_err("missing target with expected hash should be refused");
+
+        assert!(error.contains("expectedSha256 was provided"));
+        assert!(!path.exists());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn read_text_file_range_streams_requested_lines() {
+        let base = temp_index_root("read-range");
+        let path = base.join("src").join("App.jsx");
+        fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+        fs::write(&path, "one\ntwo\nthree\nfour\n").expect("write file");
+
+        let result = computer_read_text_file_range_blocking(ComputerReadFileRangeRequest {
+            end_line: 3,
+            path: path_to_string(&path),
+            start_line: 2,
+        })
+        .expect("read line range");
+
+        assert_eq!(result.content, "two\nthree");
+        assert_eq!(result.start_line, 2);
+        assert_eq!(result.end_line, 3);
+        assert_eq!(result.total_lines, 4);
+        assert!(result.truncated);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn text_search_streams_literal_matches_with_context_and_skips_generated_dirs() {
+        let base = temp_index_root("native-search");
+        let src = base.join("src");
+        let generated = base.join("node_modules");
+        fs::create_dir_all(&src).expect("create src");
+        fs::create_dir_all(&generated).expect("create generated");
+        fs::write(src.join("app.ts"), "before\nconst needle = true;\nafter\n")
+            .expect("write source");
+        fs::write(generated.join("ignored.ts"), "needle\n").expect("write generated");
+
+        let result = computer_search_text_files_blocking(ComputerTextSearchRequest {
+            case_sensitive: None,
+            context_lines: Some(1),
+            exclude_directories: None,
+            extensions: Some(vec!["ts".to_string()]),
+            globs: None,
+            include_content: None,
+            include_generated: None,
+            include_path: None,
+            max_matches: None,
+            max_matches_per_file: None,
+            path: path_to_string(&base),
+            query: "needle".to_string(),
+        })
+        .expect("search text");
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.skipped_directories, 1);
+        assert_eq!(result.total_content_matches, 1);
+        let search_match = &result.matches[0].content_matches[0];
+        assert_eq!(search_match.line, 2);
+        assert_eq!(search_match.before.as_ref().unwrap()[0].preview, "before");
+        assert_eq!(search_match.after.as_ref().unwrap()[0].preview, "after");
 
         let _ = fs::remove_dir_all(base);
     }

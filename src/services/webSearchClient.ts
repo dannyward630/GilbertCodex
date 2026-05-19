@@ -1,12 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { createId } from "../lib/chatUtils";
 import { isTauriDesktopRuntime } from "../app/tauriClient";
-import type { ChatMessage, ChatSource } from "../types/chat";
+import type { ChatSource } from "../types/chat";
 import { WEB_SEARCH_PROVIDER_LABELS, type BraveSearchSettings, type WebSearchProvider, type WebSearchSettings } from "../types/settings";
 
 /** Default source cap for ordinary web-enabled chat turns. */
 export const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
-/** Hard runtime ceiling for one web_search call, including Deep Research. */
+/** Hard runtime ceiling for one web_search call. */
 export const MAX_WEB_SEARCH_RESULTS = 6;
 const DESKTOP_WEB_SEARCH_TIMEOUT_MS = 22_000;
 const BROWSER_WEB_SEARCH_TIMEOUT_MS = 12_000;
@@ -43,7 +42,6 @@ interface SearchProviderOptions {
 
 interface BraveSearchCommandOptions {
   apiKey: string;
-  apiVersion?: string;
   answersMaxCompletionTokens?: number;
   answersModel?: string;
   cacheControlNoCache?: boolean;
@@ -198,9 +196,11 @@ export function shouldUseDuckDuckGoFallbackForBraveError(message: string) {
     return false;
   }
 
-  if (
-    /\b(?:api key|subscription token|HTTP 400|HTTP 401|HTTP 403|HTTP 422|HTTP 429|invalid Brave Search header|Could not build Brave Search URL|Could not parse Brave Search response)\b/i.test(normalized)
-  ) {
+  if (/\b(?:HTTP 429|rate limit|too many requests|quota|Could not parse Brave Search response)\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (/\b(?:api key|subscription token|HTTP 400|HTTP 401|HTTP 403|HTTP 422|invalid Brave Search header|Could not build Brave Search URL)\b/i.test(normalized)) {
     return false;
   }
 
@@ -304,8 +304,7 @@ export async function searchBrave(query: string, settings: BraveSearchSettings, 
   );
 
   throwIfAborted(options.signal);
-  const braveResultLimit = options.includeVisualResults === false ? maxResults : Math.max(maxResults, maxResults + settings.imageResultCount);
-  const normalizedResults = normalizeSearchResults(desktopResults, braveResultLimit);
+  const normalizedResults = normalizeSearchResults(desktopResults, maxResults);
 
   if (normalizedResults.length === 0) {
     throw new Error("Brave Search returned no usable sources.");
@@ -327,48 +326,11 @@ export function createChatSourcesFromWebResults(results: WebSearchResult[]): Cha
   }));
 }
 
-/** Creates a model-visible context message that constrains answers to live sources. */
-export function createWebSearchContextMessage(query: string, sources: ChatSource[], error?: string, provider: WebSearchProvider = "duckduckgo"): ChatMessage[] {
-  const normalizedQuery = normalizeQuery(query);
-  const providerLabel = formatWebSearchProviderLabel(provider);
-
-  if (sources.length === 0 && !error) {
-    return [];
-  }
-
-  const resultLines = sources.map((source, index) =>
-    [`${index + 1}. ${source.title}`, `URL: ${source.url}`, source.detail ? `Snippet: ${source.detail}` : ""].filter(Boolean).join("\n"),
-  );
-  const guidance = [
-    `WEB SEARCH CONTEXT - ${providerLabel} web search is enabled for the user's latest request.`,
-    normalizedQuery ? `Search query: ${normalizedQuery}` : "",
-    sources.length > 0
-      ? `Use the ${providerLabel} results below as the live web evidence for this answer. Do not fill gaps with memory. If the results are insufficient, say what could not be verified from the live results.`
-      : `${providerLabel} did not return usable sources. Do not answer current factual claims from memory; say the live web search did not return usable results.`,
-    sources.length > 0 ? "Cite web-supported claims with Markdown links using only the URLs listed below." : "",
-    error ? `Search note: ${error}` : "",
-    resultLines.length > 0 ? `${providerLabel} results:` : "",
-    resultLines.join("\n\n"),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  return [
-    {
-      content: guidance,
-      createdAt: new Date().toISOString(),
-      id: createId("web-context"),
-      role: "user",
-    },
-  ];
-}
-
 function createBraveSearchCommandOptions(settings: BraveSearchSettings): BraveSearchCommandOptions {
   const resultFilter = settings.resultFilter.length > 0 ? settings.resultFilter : undefined;
 
   return {
     apiKey: settings.apiKey.trim(),
-    apiVersion: normalizeOptionalApiVersion(settings.apiVersion),
     answersMaxCompletionTokens: clampInteger(settings.answersMaxCompletionTokens, 128, 4000),
     answersModel: settings.answersModel,
     cacheControlNoCache: settings.cacheControlNoCache,
@@ -446,11 +408,6 @@ function normalizeOptionalCode(value: string, kind: "country" | "language" | "ui
   }
 
   return normalized.replace(/[^a-zA-Z-]/g, "").slice(0, 12) || undefined;
-}
-
-function normalizeOptionalApiVersion(value: string) {
-  const normalized = value.trim();
-  return isIsoDate(normalized) ? normalized : undefined;
 }
 
 function normalizeGoggles(value: string) {

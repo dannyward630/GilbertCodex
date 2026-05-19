@@ -8,15 +8,16 @@ import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 interface GeneralSettingsPageProps {
   activeProviderLabel: string;
   appInfo: AppInfo;
+  showHeading?: boolean;
   localWorkspace: LocalWorkspaceSettings;
   onResetSettings: () => void;
   settings: ProviderSettings;
 }
 
-export function GeneralSettingsPage({ activeProviderLabel, appInfo, localWorkspace, onResetSettings, settings }: GeneralSettingsPageProps) {
+export function GeneralSettingsPage({ activeProviderLabel, appInfo, localWorkspace, onResetSettings, settings, showHeading = true }: GeneralSettingsPageProps) {
   return (
     <>
-      <SettingsSectionHeading detail="App defaults, current runtime, and quick reset controls." icon={Settings2} title="General" />
+      {showHeading ? <SettingsSectionHeading detail="App defaults, current runtime, and quick reset controls." icon={Settings2} title="General" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">

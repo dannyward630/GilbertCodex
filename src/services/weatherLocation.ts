@@ -1,7 +1,8 @@
-import { loadPersistentString, savePersistentString } from "../lib/appStorage";
+import { loadAppPersonalizationSettings, loadPersistentString, savePersistentString } from "../lib/appStorage";
+import type { WeatherTemperatureUnitMode } from "../types/weather";
 
 const WEATHER_LOCATION_KEY = "gilbert-codex.weather-location.v1";
-const FAHRENHEIT_COUNTRIES = new Set(["BS", "BZ", "FM", "KY", "LR", "MH", "PW", "US"]);
+const FAHRENHEIT_COUNTRIES = new Set(["AS", "BS", "BZ", "FM", "GU", "KY", "LR", "MH", "MP", "PR", "PW", "UM", "US", "VI"]);
 
 export interface StoredWeatherLocation {
   accuracyMeters?: number;
@@ -15,6 +16,14 @@ export interface StoredWeatherLocation {
   source: "browser-geolocation" | "manual";
   temperatureUnit: "C" | "F";
   timezone: string;
+}
+
+export interface WeatherUnitResolution {
+  countryCode: string;
+  mode: WeatherTemperatureUnitMode;
+  preferredUnits: StoredWeatherLocation["preferredUnits"];
+  source: "country" | "manual";
+  temperatureUnit: StoredWeatherLocation["temperatureUnit"];
 }
 
 export function loadStoredWeatherLocation(): StoredWeatherLocation | null {
@@ -36,6 +45,10 @@ export function saveStoredWeatherLocation(location: StoredWeatherLocation) {
 }
 
 export async function requestAndRememberWeatherLocation(): Promise<StoredWeatherLocation | null> {
+  if (!areLocationServicesEnabled()) {
+    return null;
+  }
+
   const existingLocation = loadStoredWeatherLocation();
 
   if (existingLocation) {
@@ -68,33 +81,40 @@ export async function requestAndRememberWeatherLocation(): Promise<StoredWeather
   });
 }
 
+export function areLocationServicesEnabled() {
+  return loadAppPersonalizationSettings().locationServicesEnabled;
+}
+
 export function createStoredWeatherLocation({
   accuracyMeters,
   countryCode,
   latitude,
   longitude,
   source = "manual",
+  temperatureUnitMode = "auto",
 }: {
   accuracyMeters?: number;
   countryCode?: string;
   latitude: number;
   longitude: number;
   source?: StoredWeatherLocation["source"];
+  temperatureUnitMode?: WeatherTemperatureUnitMode;
 }): StoredWeatherLocation {
   const locale = getPrimaryLocale();
   const timezone = getDeviceTimezone();
   const coordinateCountry = inferCountryCodeFromCoordinates(latitude, longitude);
   const manualCountry = normalizeCountryCode(countryCode);
   const localeCountry = inferCountryCodeFromLocale(locale);
-  const resolvedCountry = manualCountry || coordinateCountry || localeCountry;
+  const timezoneCountry = inferCountryCodeFromTimezone(timezone);
+  const resolvedCountry = manualCountry || coordinateCountry || localeCountry || timezoneCountry;
   const countrySource: StoredWeatherLocation["countrySource"] = manualCountry
     ? "manual"
     : coordinateCountry
       ? "coordinate"
-      : localeCountry
+      : localeCountry || timezoneCountry
         ? "locale"
         : "unknown";
-  const preferredUnits = getPreferredWeatherUnits(resolvedCountry);
+  const unitResolution = resolveWeatherUnitPreference(resolvedCountry, temperatureUnitMode);
 
   return {
     accuracyMeters: Number.isFinite(accuracyMeters) ? Math.max(0, Math.round(accuracyMeters ?? 0)) : undefined,
@@ -104,15 +124,42 @@ export function createStoredWeatherLocation({
     latitude,
     locale,
     longitude,
-    preferredUnits,
+    preferredUnits: unitResolution.preferredUnits,
     source,
-    temperatureUnit: preferredUnits === "us" ? "F" : "C",
+    temperatureUnit: unitResolution.temperatureUnit,
     timezone,
   };
 }
 
 export function getPreferredWeatherUnits(countryCode: string) {
   return FAHRENHEIT_COUNTRIES.has(normalizeCountryCode(countryCode)) ? "us" : "metric";
+}
+
+export function resolveWeatherUnitPreference(countryCode: string, mode: WeatherTemperatureUnitMode = "auto"): WeatherUnitResolution {
+  const normalizedCountryCode = normalizeCountryCode(countryCode) || "XX";
+  const preferredUnits = mode === "fahrenheit" ? "us" : mode === "celsius" ? "metric" : getPreferredWeatherUnits(normalizedCountryCode);
+
+  return {
+    countryCode: normalizedCountryCode,
+    mode,
+    preferredUnits,
+    source: mode === "auto" ? "country" : "manual",
+    temperatureUnit: preferredUnits === "us" ? "F" : "C",
+  };
+}
+
+export function resolveStoredWeatherLocationUnits(location: StoredWeatherLocation, mode: WeatherTemperatureUnitMode = "auto"): StoredWeatherLocation {
+  const unitResolution = resolveWeatherUnitPreference(location.countryCode, mode);
+
+  if (location.preferredUnits === unitResolution.preferredUnits && location.temperatureUnit === unitResolution.temperatureUnit) {
+    return location;
+  }
+
+  return {
+    ...location,
+    preferredUnits: unitResolution.preferredUnits,
+    temperatureUnit: unitResolution.temperatureUnit,
+  };
 }
 
 export function normalizeCountryCode(value: unknown) {
@@ -132,7 +179,8 @@ function normalizeStoredWeatherLocation(value: unknown): StoredWeatherLocation {
   const record = typeof value === "object" && value ? (value as Partial<StoredWeatherLocation>) : {};
   const latitude = normalizeCoordinate(record.latitude, -90, 90);
   const longitude = normalizeCoordinate(record.longitude, -180, 180);
-  const countryCode = normalizeCountryCode(record.countryCode) || inferCountryCodeFromCoordinates(latitude, longitude) || inferCountryCodeFromLocale(record.locale);
+  const timezone = typeof record.timezone === "string" && record.timezone.trim() ? record.timezone.trim() : getDeviceTimezone();
+  const countryCode = normalizeCountryCode(record.countryCode) || inferCountryCodeFromCoordinates(latitude, longitude) || inferCountryCodeFromLocale(record.locale) || inferCountryCodeFromTimezone(timezone);
   const preferredUnits = record.preferredUnits === "metric" || record.preferredUnits === "us" ? record.preferredUnits : getPreferredWeatherUnits(countryCode);
   const source = record.source === "browser-geolocation" || record.source === "manual" ? record.source : "manual";
   const countrySource =
@@ -151,7 +199,7 @@ function normalizeStoredWeatherLocation(value: unknown): StoredWeatherLocation {
     preferredUnits,
     source,
     temperatureUnit: preferredUnits === "us" ? "F" : "C",
-    timezone: typeof record.timezone === "string" && record.timezone.trim() ? record.timezone.trim() : getDeviceTimezone(),
+    timezone,
   };
 }
 
@@ -195,6 +243,39 @@ function inferCountryCodeFromLocale(locale: unknown) {
   }
 }
 
+function inferCountryCodeFromTimezone(timezone: unknown) {
+  if (typeof timezone !== "string" || !timezone.trim()) {
+    return "";
+  }
+
+  const normalized = timezone.trim();
+  const timezoneCountryMap: Record<string, string> = {
+    "Africa/Cairo": "EG",
+    "Africa/Johannesburg": "ZA",
+    "Africa/Lagos": "NG",
+    "Africa/Nairobi": "KE",
+    "America/Mexico_City": "MX",
+    "America/Tijuana": "MX",
+    "America/Toronto": "CA",
+    "America/Vancouver": "CA",
+    "Asia/Shanghai": "CN",
+    "Asia/Tokyo": "JP",
+    "Asia/Seoul": "KR",
+    "Australia/Brisbane": "AU",
+    "Australia/Melbourne": "AU",
+    "Australia/Perth": "AU",
+    "Australia/Sydney": "AU",
+    "Europe/Berlin": "DE",
+    "Europe/London": "GB",
+    "Europe/Madrid": "ES",
+    "Europe/Oslo": "NO",
+    "Europe/Paris": "FR",
+    "Europe/Rome": "IT",
+  };
+
+  return normalizeCountryCode(timezoneCountryMap[normalized]);
+}
+
 function inferCountryCodeFromCoordinates(latitude: number, longitude: number) {
   if (!isValidWeatherCoordinate(latitude, longitude)) {
     return "";
@@ -209,6 +290,33 @@ function inferCountryCodeFromCoordinates(latitude: number, longitude: number) {
     inBox(latitude, longitude, -15, -13, -172, -168)
   ) {
     return "US";
+  }
+
+  const countryBoxes: Array<[string, number, number, number, number]> = [
+    ["CA", 41, 84, -141, -52],
+    ["MX", 14, 33, -118, -86],
+    ["DE", 47, 56, 5, 16],
+    ["CN", 18, 54, 73, 135],
+    ["AU", -44, -10, 112, 154],
+    ["NO", 57, 72, 4, 32],
+    ["GB", 49, 61, -9, 2],
+    ["FR", 41, 52, -6, 10],
+    ["ES", 35, 44, -10, 5],
+    ["IT", 36, 48, 6, 19],
+    ["BR", -34, 6, -74, -34],
+    ["IN", 6, 36, 68, 98],
+    ["JP", 24, 46, 122, 146],
+    ["KR", 33, 39, 124, 132],
+    ["ZA", -35, -22, 16, 33],
+    ["NG", 4, 14, 2, 15],
+    ["KE", -5, 5, 33, 42],
+    ["EG", 22, 32, 24, 37],
+  ];
+
+  for (const [countryCode, south, north, west, east] of countryBoxes) {
+    if (inBox(latitude, longitude, south, north, west, east)) {
+      return countryCode;
+    }
   }
 
   return "";

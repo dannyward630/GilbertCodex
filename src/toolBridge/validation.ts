@@ -25,7 +25,8 @@ export function validateToolArguments(tool: ToolDefinition, args: unknown): Tool
     };
   }
 
-  const normalizedArgs = normalizeValueForSchema(args ?? {}, tool.inputSchema as BridgeJsonSchema);
+  const compatibleArgs = normalizeKnownToolArguments(tool.id, args ?? {});
+  const normalizedArgs = normalizeValueForSchema(compatibleArgs, tool.inputSchema as BridgeJsonSchema);
   const errors: string[] = [];
   validateValue(normalizedArgs, tool.inputSchema as BridgeJsonSchema, "arguments", errors);
 
@@ -40,6 +41,141 @@ export function validateToolArguments(tool: ToolDefinition, args: unknown): Tool
     error: errors.join("; "),
     ok: false,
   };
+}
+
+function normalizeKnownToolArguments(toolId: string, args: unknown): unknown {
+  if (!isObject(args)) {
+    return args;
+  }
+
+  if (toolId === "files_edit_many") {
+    return normalizeFilesEditManyArgs(args);
+  }
+
+  if (toolId === "files_write_many") {
+    return normalizeFilesWriteManyArgs(args);
+  }
+
+  if (toolId.startsWith("files_")) {
+    const next = { ...args };
+    stripEmptyExpectedSha256(next);
+    return next;
+  }
+
+  return args;
+}
+
+function normalizeFilesEditManyArgs(args: Record<string, unknown>) {
+  const next = { ...args };
+
+  stripEmptyExpectedSha256(next);
+  delete next.insertNewlineBeforeContent;
+
+  if (Array.isArray(next.edits)) {
+    next.edits = next.edits.map((item) => {
+      if (!isObject(item)) {
+        return item;
+      }
+
+      const edit = { ...item };
+      stripEmptyExpectedSha256(edit);
+
+      if (edit.insertNewlineBeforeContent !== undefined) {
+        if (edit.ensureNewline === undefined && edit.ensure_newline === undefined && typeof edit.insertNewlineBeforeContent === "boolean") {
+          edit.ensureNewline = edit.insertNewlineBeforeContent;
+        }
+        delete edit.insertNewlineBeforeContent;
+      }
+
+      stripBlankTextField(edit, "oldText");
+      stripBlankTextField(edit, "old_text");
+
+      return edit;
+    });
+  }
+
+  return next;
+}
+
+function normalizeFilesWriteManyArgs(args: Record<string, unknown>) {
+  const next = { ...args };
+
+  if (next.createParentDirectories !== undefined) {
+    if (next.createParentDirs === undefined && typeof next.createParentDirectories === "boolean") {
+      next.createParentDirs = next.createParentDirectories;
+    }
+    delete next.createParentDirectories;
+  }
+
+  if (next.allowOverwrite !== undefined) {
+    if (next.overwrite === undefined && typeof next.allowOverwrite === "boolean") {
+      next.overwrite = next.allowOverwrite;
+    }
+    delete next.allowOverwrite;
+  }
+
+  applyLineEndingAlias(next);
+
+  if (Array.isArray(next.files)) {
+    next.files = next.files.map((item) => {
+      if (!isObject(item)) {
+        return item;
+      }
+
+      const file = { ...item };
+      stripEmptyExpectedSha256(file);
+
+      if (file.createParentDirectories !== undefined) {
+        if (file.createParentDirs === undefined && typeof file.createParentDirectories === "boolean") {
+          file.createParentDirs = file.createParentDirectories;
+        }
+        delete file.createParentDirectories;
+      }
+
+      if (file.allowOverwrite !== undefined) {
+        if (file.overwrite === undefined && typeof file.allowOverwrite === "boolean") {
+          file.overwrite = file.allowOverwrite;
+        }
+        delete file.allowOverwrite;
+      }
+
+      applyLineEndingAlias(file);
+
+      return file;
+    });
+  }
+
+  return next;
+}
+
+function stripEmptyExpectedSha256(record: Record<string, unknown>) {
+  const value = record.expectedSha256 ?? record.expected_sha256;
+
+  if (typeof value !== "string") {
+    return;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+  if (normalizedValue === "" || normalizedValue === "unknown") {
+    delete record.expectedSha256;
+    delete record.expected_sha256;
+  }
+}
+
+function stripBlankTextField(record: Record<string, unknown>, key: string) {
+  if (typeof record[key] === "string" && record[key].trim().length === 0) {
+    delete record[key];
+  }
+}
+
+function applyLineEndingAlias(record: Record<string, unknown>) {
+  const lineEnding = typeof record.lineEnding === "string" ? record.lineEnding.trim().toLowerCase() : "";
+
+  if ((lineEnding === "lf" || lineEnding === "crlf") && record.forceEol === undefined) {
+    record.forceEol = lineEnding;
+  }
+
+  delete record.lineEnding;
 }
 
 function normalizeValueForSchema(value: unknown, schema: BridgeJsonSchema): unknown {

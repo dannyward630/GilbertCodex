@@ -13,8 +13,9 @@ const BRAVE_PLACE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/local/
 const BRAVE_ANSWERS_URL: &str = "https://api.search.brave.com/res/v1/chat/completions";
 const BRAVE_SEARCH_PAGE_URL: &str = "https://search.brave.com/search";
 const MAX_DUCKDUCKGO_RESULTS: usize = 6;
-const MAX_BRAVE_RESULTS: usize = 20;
+const MAX_BRAVE_RESULTS: usize = 6;
 const MAX_BRAVE_VERTICAL_RESULTS: usize = 50;
+const BRAVE_FOLLOWUP_REQUEST_DELAY_MS: u64 = 1100;
 const DUCKDUCKGO_CONNECT_TIMEOUT_SECS: u64 = 4;
 const DUCKDUCKGO_CLIENT_TIMEOUT_SECS: u64 = 8;
 const DUCKDUCKGO_API_TIMEOUT_SECS: u64 = 4;
@@ -43,7 +44,6 @@ pub struct DuckDuckGoSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct BraveSearchOptions {
     api_key: String,
-    api_version: Option<String>,
     answers_max_completion_tokens: Option<usize>,
     answers_model: Option<String>,
     cache_control_no_cache: Option<bool>,
@@ -225,73 +225,69 @@ pub async fn brave_search(
         .place_result_count
         .unwrap_or(6)
         .clamp(1, MAX_BRAVE_VERTICAL_RESULTS);
-    let web_future =
-        fetch_brave_web_results(&client, api_key, &trimmed_query, result_limit, &options);
-    let news_future = fetch_optional_brave_vertical(
-        &client,
-        api_key,
-        &trimmed_query,
-        news_count,
-        &options,
-        options.enable_news_search.unwrap_or(false),
-        BraveVertical::News,
-    );
-    let video_future = fetch_optional_brave_vertical(
-        &client,
-        api_key,
-        &trimmed_query,
-        video_count,
-        &options,
-        options.enable_video_search.unwrap_or(false),
-        BraveVertical::Videos,
-    );
-    let image_future = fetch_optional_brave_vertical(
-        &client,
-        api_key,
-        &trimmed_query,
-        image_count,
-        &options,
-        options.enable_image_search.unwrap_or(false),
-        BraveVertical::Images,
-    );
-    let place_future = fetch_optional_brave_vertical(
-        &client,
-        api_key,
-        &trimmed_query,
-        place_count,
-        &options,
-        options.enable_place_search.unwrap_or(false),
-        BraveVertical::Places,
-    );
-    let answer_future = fetch_optional_brave_answer(
-        &client,
-        api_key,
-        &trimmed_query,
-        &options,
-        options.enable_answers.unwrap_or(false),
-    );
-    let (web_results, news_results, video_results, image_results, place_results, answer_results) = tokio::join!(
-        web_future,
-        news_future,
-        video_future,
-        image_future,
-        place_future,
-        answer_future
-    );
     let mut results = Vec::new();
     let mut seen_urls = HashSet::new();
     let mut errors = Vec::new();
     let combined_limit = result_limit + news_count + video_count + image_count + place_count + 1;
 
-    for result_set in [
-        web_results,
-        news_results,
-        video_results,
-        place_results,
-        answer_results,
-        image_results,
+    let web_results =
+        fetch_brave_web_results(&client, api_key, &trimmed_query, result_limit, &options).await?;
+    extend_search_results(&mut results, &mut seen_urls, web_results, combined_limit);
+
+    if results.len() >= result_limit {
+        return Ok(results);
+    }
+
+    for (enabled, count, vertical) in [
+        (
+            options.enable_news_search.unwrap_or(false),
+            news_count,
+            BraveVertical::News,
+        ),
+        (
+            options.enable_video_search.unwrap_or(false),
+            video_count,
+            BraveVertical::Videos,
+        ),
+        (
+            options.enable_place_search.unwrap_or(false),
+            place_count,
+            BraveVertical::Places,
+        ),
+        (
+            options.enable_image_search.unwrap_or(false),
+            image_count,
+            BraveVertical::Images,
+        ),
     ] {
-        match result_set {
+        if !enabled || results.len() >= result_limit {
+            continue;
+        }
+
+        tokio::time::sleep(Duration::from_millis(BRAVE_FOLLOWUP_REQUEST_DELAY_MS)).await;
+
+        match fetch_optional_brave_vertical(
+            &client,
+            api_key,
+            &trimmed_query,
+            count,
+            &options,
+            true,
+            vertical,
+        )
+        .await
+        {
+            Ok(result_set) => {
+                extend_search_results(&mut results, &mut seen_urls, result_set, combined_limit);
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    if options.enable_answers.unwrap_or(false) && results.len() < result_limit {
+        tokio::time::sleep(Duration::from_millis(BRAVE_FOLLOWUP_REQUEST_DELAY_MS)).await;
+
+        match fetch_optional_brave_answer(&client, api_key, &trimmed_query, &options, true).await {
             Ok(result_set) => {
                 extend_search_results(&mut results, &mut seen_urls, result_set, combined_limit);
             }
@@ -556,17 +552,26 @@ async fn send_brave_request(
         .await
         .map_err(|error| format!("{label} request failed: {error}"))?;
     let status = response.status();
+    let headers = response.headers().clone();
     let response_text = response
         .text()
         .await
         .map_err(|error| format!("Could not read {label} response: {error}"))?;
 
     if !status.is_success() {
-        return Err(format_brave_error(status.as_u16(), &response_text));
+        return Err(format_brave_error(
+            status.as_u16(),
+            &response_text,
+            &headers,
+        ));
     }
 
-    serde_json::from_str::<serde_json::Value>(&response_text)
-        .map_err(|error| format!("Could not parse {label} response: {error}"))
+    serde_json::from_str::<serde_json::Value>(&response_text).map_err(|error| {
+        format!(
+            "Could not parse {label} response as JSON: {error}. {}",
+            format_brave_response_diagnostics(status.as_u16(), &headers, &response_text)
+        )
+    })
 }
 
 fn apply_brave_headers(
@@ -577,7 +582,6 @@ fn apply_brave_headers(
         request = request.header("Cache-Control", "no-cache");
     }
 
-    request = append_optional_header(request, "api-version", options.api_version.as_deref())?;
     request = append_optional_header(request, "x-loc-lat", options.location_latitude.as_deref())?;
     request = append_optional_header(request, "x-loc-long", options.location_longitude.as_deref())?;
     request = append_optional_header(
@@ -627,9 +631,10 @@ fn build_brave_search_params(
     options: &BraveSearchOptions,
     include_web_only_params: bool,
 ) -> Vec<(String, String)> {
+    let result_count = max_results.clamp(1, MAX_BRAVE_RESULTS);
     let mut params = vec![
         ("q".to_string(), query.to_string()),
-        ("count".to_string(), max_results.to_string()),
+        ("count".to_string(), result_count.to_string()),
     ];
 
     append_optional_param(&mut params, "country", options.country.as_deref());
@@ -974,7 +979,11 @@ fn create_brave_search_result_url(query: &str) -> Option<String> {
         .map(|url| url.to_string())
 }
 
-fn format_brave_error(status: u16, response_text: &str) -> String {
+fn format_brave_error(
+    status: u16,
+    response_text: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
     let detail = serde_json::from_str::<serde_json::Value>(response_text)
         .ok()
         .and_then(|payload| {
@@ -997,7 +1006,68 @@ fn format_brave_error(status: u16, response_text: &str) -> String {
             _ => "The Brave Search API returned an error.".to_string(),
         });
 
-    format!("Brave Search failed with HTTP {status}: {detail}")
+    format!(
+        "Brave Search failed with HTTP {status}: {detail}. {}",
+        format_brave_response_diagnostics(status, headers, response_text)
+    )
+}
+
+fn format_brave_response_diagnostics(
+    status: u16,
+    headers: &reqwest::header::HeaderMap,
+    response_text: &str,
+) -> String {
+    let content_type = header_text(headers, reqwest::header::CONTENT_TYPE)
+        .unwrap_or_else(|| "unknown content type".to_string());
+    let retry_after = header_text(headers, reqwest::header::RETRY_AFTER);
+    let rate_remaining = header_text(headers, "x-ratelimit-remaining");
+    let rate_reset = header_text(headers, "x-ratelimit-reset");
+    let rate_policy = header_text(headers, "x-ratelimit-policy");
+    let rate_limit = [rate_remaining, rate_reset, rate_policy]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body_preview = preview_response_text(response_text);
+
+    [
+        format!("HTTP {status}"),
+        format!("content-type: {content_type}"),
+        retry_after
+            .map(|value| format!("retry-after: {value}"))
+            .unwrap_or_default(),
+        if rate_limit.is_empty() {
+            String::new()
+        } else {
+            format!("rate-limit: {rate_limit}")
+        },
+        format!("body: {body_preview}"),
+    ]
+    .into_iter()
+    .filter(|item| !item.is_empty())
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+fn header_text<K>(headers: &reqwest::header::HeaderMap, key: K) -> Option<String>
+where
+    K: reqwest::header::AsHeaderName,
+{
+    headers
+        .get(key)
+        .and_then(|value| value.to_str().ok())
+        .map(collapse_whitespace)
+        .filter(|value| !value.is_empty())
+}
+
+fn preview_response_text(response_text: &str) -> String {
+    let normalized = collapse_whitespace(response_text);
+
+    if normalized.is_empty() {
+        return "empty".to_string();
+    }
+
+    normalized.chars().take(240).collect()
 }
 
 async fn fetch_duckduckgo_instant_answer(
@@ -1510,7 +1580,6 @@ mod tests {
     fn default_brave_options() -> BraveSearchOptions {
         BraveSearchOptions {
             api_key: "test-key".to_string(),
-            api_version: None,
             answers_max_completion_tokens: None,
             answers_model: None,
             cache_control_no_cache: None,
@@ -1653,7 +1722,7 @@ mod tests {
         let url = build_brave_search_url("brave api", 12, &options).expect("valid Brave URL");
         let query = url.query().unwrap_or_default();
 
-        assert!(query.contains("count=12"));
+        assert!(query.contains("count=6"));
         assert!(query.contains("offset=2"));
         assert!(query.contains("result_filter=web%2Cnews"));
         assert!(query.contains("enable_rich_callback=true"));

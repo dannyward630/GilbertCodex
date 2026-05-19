@@ -5,7 +5,7 @@ description: Use for current information, official docs, third-party APIs, libra
 
 # Research And Current Facts
 
-Use attached live web-search context when facts may have changed or when the user asks to research, verify, look up, cite, or use official documentation. When the `web_search` tool is attached and the current evidence is insufficient, call it with a focused query.
+Use the `web_search` tool when facts may have changed or when the user asks to research, verify, look up, cite, use sources, or use official documentation and current external evidence is insufficient. If both local code and external docs matter, inspect the workspace for local facts and use `web_search` for the outside evidence. Do not search the web for ordinary local codebase questions that should be answered with workspace tools.
 
 Research with discipline:
 - Prefer primary sources: official docs, standards, source repositories, release notes, or original papers.

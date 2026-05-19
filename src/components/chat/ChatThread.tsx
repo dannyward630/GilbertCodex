@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Globe2 } from "lucide-react";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Globe2, Hash, X } from "lucide-react";
 import { AssistantWorkTrace, createAssistantActivitySnapshot } from "./AssistantActivityIndicator";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageArtifacts, MessageAttachments } from "./MessageAttachments";
@@ -7,14 +7,13 @@ import { MessageActions } from "./MessageActions";
 import { MessageBlock } from "./MessageBlock";
 import { PlanReviewCard } from "./PlanReviewCard";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
+import { extractInlineThinking } from "../../lib/inlineThinkingExtractor";
+import { getSavedPlanContent, isPlanExecutionContent } from "../../lib/planReview";
+import { stripVisibleToolProtocol } from "../../lib/visibleToolProtocol";
 import type { AppInfo } from "../../types/app";
 import type { AgentApprovalDecision } from "../../types/agentRun";
-import type { ChatContextCompaction, ChatMessage, ChatMessageSource, ChatSource, ChatSummary } from "../../types/chat";
+import type { ChatContextCompaction, ChatMessage, ChatMessageSource, ChatResearchReference, ChatSource, ChatSummary } from "../../types/chat";
 
-const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
-const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
-const INLINE_THINKING_OPEN_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>`, "i");
-const INLINE_THINKING_CLOSE_PATTERN = new RegExp(`<\\/(${INLINE_THINKING_TAGS})>`, "gi");
 const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
   "Reading tool results...",
   "Using agent tools...",
@@ -22,26 +21,47 @@ const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
 ]);
 
 interface ChatThreadProps {
+  active?: boolean;
   appInfo: AppInfo;
   chat: ChatSummary;
+  chats: ChatSummary[];
   hasApiKey: boolean;
   onHeaderBlurChange?: (active: boolean) => void;
+  onOpenPlanReview?: (messageId: string) => void;
+  onEditUserMessage?: (messageId: string, content: string) => void | Promise<void>;
   onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
+  onSelectChat?: (chatId: string) => void;
   onStopGeneration?: (messageId: string) => void;
 }
 
-export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onRequestPlanRevision, onRegenerateResponse, onResolveToolApproval, onStopGeneration }: ChatThreadProps) {
+export function ChatThread({
+  active = true,
+  appInfo,
+  chat,
+  chats,
+  hasApiKey,
+  onHeaderBlurChange,
+  onEditUserMessage,
+  onOpenPlanReview,
+  onRequestPlanRevision,
+  onRegenerateResponse,
+  onResolveToolApproval,
+  onSelectChat,
+  onStopGeneration,
+}: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
   const headerBlurActiveRef = useRef(false);
   const programmaticScrollFrameRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState("");
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
   const streamMarker = scrollAnchorMessage
-    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.reasoning?.length ?? 0}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
     : `empty:${chat.messages.length}`;
 
   useEffect(() => {
@@ -57,18 +77,39 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
   }, []);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
+
     shouldStickToBottomRef.current = true;
     setHeaderBlurActive(false);
     scrollToThreadBottom();
-  }, [chat.id]);
+  }, [active, chat.id]);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
+
     if (!shouldStickToBottomRef.current) {
       return;
     }
 
     scrollToThreadBottom();
-  }, [streamMarker]);
+  }, [active, streamMarker]);
+
+  useEffect(() => {
+    if (!editingMessageId) {
+      return;
+    }
+
+    const editableMessageStillExists = chat.messages.some((message) => message.id === editingMessageId && message.role === "user" && message.status !== "queued");
+
+    if (!editableMessageStillExists) {
+      setEditingMessageId(null);
+      setEditingContent("");
+    }
+  }, [chat.id, chat.messages, editingMessageId]);
 
   function scrollToThreadBottom() {
     if (scrollFrameRef.current !== null) {
@@ -111,6 +152,10 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
   }
 
   function handleThreadScroll() {
+    if (!active) {
+      return;
+    }
+
     const thread = threadRef.current;
 
     if (!thread) {
@@ -124,6 +169,39 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
       const hasScrollableContent = thread.scrollHeight - thread.clientHeight > 8;
       setHeaderBlurActive(hasScrollableContent && thread.scrollTop > 8);
     }
+  }
+
+  function handleStartEditMessage(messageId: string) {
+    const message = chat.messages.find((candidate) => candidate.id === messageId && candidate.role === "user" && candidate.status !== "queued");
+
+    if (!message || !onEditUserMessage) {
+      return;
+    }
+
+    setEditingMessageId(message.id);
+    setEditingContent(message.content);
+  }
+
+  function handleCancelEditMessage() {
+    setEditingMessageId(null);
+    setEditingContent("");
+  }
+
+  function handleSubmitEditMessage(message: ChatMessage) {
+    if (!onEditUserMessage || message.role !== "user") {
+      return;
+    }
+
+    const hasAttachments = Boolean(message.attachments?.length);
+
+    if (!editingContent.trim() && !hasAttachments) {
+      return;
+    }
+
+    const nextContent = editingContent;
+    setEditingMessageId(null);
+    setEditingContent("");
+    void onEditUserMessage(message.id, nextContent);
   }
 
   if (chat.messages.length === 0) {
@@ -143,21 +221,25 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
           return null;
         }
 
-        const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, message.reasoning) : { content: message.content, reasoning: message.reasoning };
-        const responseThinking = message.role === "assistant" ? getVisibleResponseThinking(message.responseThinking, displayMessage.content) : "";
+        const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, Boolean(message.isStreaming)) : { content: message.content };
         const hasVisibleContent = displayMessage.content.trim().length > 0;
-        const hasVisibleResponseThinking = responseThinking.length > 0;
         const messageSources = message.role === "assistant" ? getMessageSources(message, displayMessage.content) : [];
         const showMessageSources = message.role === "assistant" && !message.isStreaming && hasVisibleContent && messageSources.length > 0;
         const hasVisibleAttachment = Boolean(message.attachments?.length);
         const hasVisibleArtifact = Boolean(message.artifacts?.length);
         const showPlanReview = shouldShowPlanReviewCard(message);
+        const savedPlanContent = message.role === "assistant" ? getSavedPlanContent(message) : "";
+        const showPlanExecutionContent = message.role === "assistant" && showPlanReview && isPlanExecutionContent(message, displayMessage.content);
+        const isEditingUserMessage = message.role === "user" && editingMessageId === message.id;
         const activitySnapshot = message.role === "assistant"
           ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
           : null;
-        const showAssistantWorkTrace = message.role === "assistant" && (hasVisibleResponseThinking || activitySnapshot || Boolean(message.isStreaming && !hasVisibleContent));
+        const hasWorkTrace = message.role === "assistant" && (Boolean(message.workTrace?.length) || Boolean(message.responseThinking?.trim()));
+        const showAssistantWorkTrace = message.role === "assistant" && (activitySnapshot || hasWorkTrace || Boolean(message.isStreaming && !hasVisibleContent));
+        const visibleContextCompactions = message.role === "assistant" ? getVisibleContextCompactions(message.contextCompactions) : [];
+        const showMessageBlock = message.role !== "assistant" || hasVisibleContent || hasVisibleAttachment || hasVisibleArtifact || showPlanReview || showAssistantWorkTrace;
 
-        if (message.role === "assistant" && !hasVisibleContent && !hasVisibleAttachment && !hasVisibleArtifact && !showPlanReview && !showAssistantWorkTrace) {
+        if (message.role === "assistant" && !showMessageBlock && visibleContextCompactions.length === 0) {
           return null;
         }
 
@@ -165,41 +247,65 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
 
         return (
           <Fragment key={message.id}>
-            {message.contextCompactions?.map((compaction) => (
+            {visibleContextCompactions.map((compaction) => (
               <ContextCompactionDivider key={`${message.id}-${compaction.compactedAt}`} compaction={compaction} />
             ))}
-            <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
-              <MessageAttachments attachments={message.attachments} />
-              <MessageArtifacts artifacts={message.artifacts} />
-              {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
-              {showAssistantWorkTrace ? (
-                <AssistantWorkTrace
-                  activitySnapshot={activitySnapshot}
-                  responseStarted={hasVisibleContent}
-                  thinkingContent={hasVisibleResponseThinking ? responseThinking : ""}
-                  thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
-                />
-              ) : null}
-              {showMessageSources ? <MessageSourcesRow sources={messageSources} /> : null}
-              {showPlanReview ? (
-                <PlanReviewCard
-                  content={displayMessage.content}
-                  isStreaming={message.isStreaming}
-                  message={actionMessage}
-                  onRequestRevision={onRequestPlanRevision}
-                  onResolvePlanApproval={onResolveToolApproval}
-                />
-              ) : displayMessage.content.trim() ? (
-                <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
-              ) : null}
-              <MessageActions
-                canRegenerate={canRegenerateMessage(chat, messageIndex)}
-                message={actionMessage}
-                onRegenerateResponse={onRegenerateResponse}
-                onStopGeneration={onStopGeneration}
-              />
-              {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
-            </MessageBlock>
+            {showMessageBlock ? (
+              <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
+                <MessageAttachments attachments={message.attachments} />
+                <MessageArtifacts artifacts={message.artifacts} />
+                {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
+                {message.role === "user" ? <MessageResearchReferences references={message.researchReferences} chats={chats} onSelectChat={onSelectChat} /> : null}
+                {showAssistantWorkTrace ? (
+                  <AssistantWorkTrace
+                    activitySnapshot={activitySnapshot}
+                    responseStarted={hasVisibleContent}
+                    thinking={message.role === "assistant" ? message.thinking : undefined}
+                    thinkingContent={message.role === "assistant" ? message.responseThinking ?? "" : ""}
+                    thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
+                    workTrace={message.role === "assistant" ? message.workTrace : undefined}
+                  />
+                ) : null}
+                {isEditingUserMessage ? (
+                  <MessageEditForm
+                    hasAttachments={hasVisibleAttachment}
+                    value={editingContent}
+                    onCancel={handleCancelEditMessage}
+                    onChange={setEditingContent}
+                    onSubmit={() => handleSubmitEditMessage(message)}
+                  />
+                ) : showPlanReview ? (
+                  <>
+                    <PlanReviewCard
+                      content={savedPlanContent || displayMessage.content}
+                      isStreaming={message.isStreaming}
+                      message={actionMessage}
+                      onOpenFullPlan={onOpenPlanReview}
+                      onRequestRevision={onRequestPlanRevision}
+                      onResolvePlanApproval={onResolveToolApproval}
+                    />
+                    {showPlanExecutionContent ? (
+                      <div className="plan-execution-response">
+                        <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
+                      </div>
+                    ) : null}
+                  </>
+                ) : displayMessage.content.trim() ? (
+                  <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
+                ) : null}
+                {showMessageSources ? <MessageSourcesRow sources={messageSources} /> : null}
+                {isEditingUserMessage ? null : (
+                  <MessageActions
+                    canRegenerate={canRegenerateMessage(chat, messageIndex)}
+                    message={actionMessage}
+                    onEditMessage={onEditUserMessage ? handleStartEditMessage : undefined}
+                    onRegenerateResponse={onRegenerateResponse}
+                    onStopGeneration={onStopGeneration}
+                  />
+                )}
+                {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
+              </MessageBlock>
+            ) : null}
           </Fragment>
         );
       })}
@@ -207,35 +313,123 @@ export function ChatThread({ appInfo, chat, hasApiKey, onHeaderBlurChange, onReq
   );
 }
 
+function MessageEditForm({
+  hasAttachments,
+  onCancel,
+  onChange,
+  onSubmit,
+  value,
+}: {
+  hasAttachments: boolean;
+  onCancel: () => void;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  value: string;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const canSubmit = value.trim().length > 0 || hasAttachments;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }, []);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 92), 260)}px`;
+  }, [value]);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (canSubmit) {
+      onSubmit();
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancel();
+      return;
+    }
+
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+
+      if (canSubmit) {
+        onSubmit();
+      }
+    }
+  }
+
+  return (
+    <form className="message-edit-form" onSubmit={handleSubmit}>
+      <textarea
+        ref={textareaRef}
+        className="message-edit-textarea"
+        value={value}
+        rows={3}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <div className="message-edit-actions">
+        <button className="message-edit-cancel" type="button" onClick={onCancel}>
+          <X size={14} aria-hidden="true" />
+          <span>Cancel</span>
+        </button>
+        <button className="message-edit-submit" type="submit" disabled={!canSubmit}>
+          <Check size={14} aria-hidden="true" />
+          <span>Send</span>
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function MessageSourcesRow({ sources }: { sources: ChatSource[] }) {
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const visibleSources = getUniqueMessageSources(sources);
   const hasSources = visibleSources.length > 0;
-  const hostPreview = getSourceHostPreview(visibleSources);
+  const inlineSources = visibleSources.slice(0, 4);
+  const remainingSourceCount = visibleSources.length - inlineSources.length;
 
   if (!hasSources) {
     return null;
   }
 
   return (
-    <section className="response-meta" data-has-sources={hasSources} aria-label="Response details">
-      <div className="response-meta-controls">
-        <button className="message-sources-toggle" type="button" aria-expanded={sourcesExpanded} onClick={() => setSourcesExpanded((current) => !current)}>
-          <span className="message-sources-title">
-            <Globe2 size={15} aria-hidden="true" />
-            <strong>Sources</strong>
-            <small>{visibleSources.length}</small>
-          </span>
-          <span className="message-sources-preview" aria-hidden="true">
-            {hostPreview.map((host) => (
-              <span key={host}>{host}</span>
-            ))}
-          </span>
-          <span className="message-sources-action">
-            {sourcesExpanded ? "Hide" : "Show"}
-            {sourcesExpanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-          </span>
-        </button>
+    <section className="response-meta response-sources" data-has-sources={hasSources} aria-label="Sources cited in this response">
+      <div className="response-sources-line">
+        <span className="message-sources-title" aria-label={`${visibleSources.length} sources`}>
+          <Globe2 size={13} aria-hidden="true" />
+          <span>Sources</span>
+          <strong>{visibleSources.length}</strong>
+        </span>
+        <div className="message-sources-preview">
+          {inlineSources.map((source, index) => (
+            <a className="message-source-chip" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank" title={cleanSourceTitle(source.title, source.url)}>
+              <span className="message-source-index" aria-hidden="true">{index + 1}</span>
+              <span>{formatMessageSourceHost(source.url)}</span>
+            </a>
+          ))}
+          <button className="message-sources-toggle" type="button" aria-expanded={sourcesExpanded} onClick={() => setSourcesExpanded((current) => !current)}>
+            <span>{sourcesExpanded ? "Hide" : remainingSourceCount > 0 ? `+${remainingSourceCount}` : "Details"}</span>
+            {sourcesExpanded ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+          </button>
+        </div>
       </div>
       {sourcesExpanded ? (
         <div className="message-sources-list">
@@ -255,34 +449,61 @@ function MessageSourcesRow({ sources }: { sources: ChatSource[] }) {
   );
 }
 
-function getMessageSources(message: ChatMessage, visibleContent: string) {
-  return getUniqueMessageSources([...(message.sources ?? []), ...extractMessageSources(visibleContent)]);
+function MessageResearchReferences({
+  chats,
+  onSelectChat,
+  references,
+}: {
+  chats: ChatSummary[];
+  onSelectChat?: (chatId: string) => void;
+  references?: ChatResearchReference[];
+}) {
+  if (!references?.length) {
+    return null;
+  }
+
+  const visibleReferences = references.map((reference) => {
+    const liveChat = chats.find((chat) => chat.id === reference.chatId && !chat.archived);
+
+    return {
+      ...reference,
+      missing: !liveChat,
+      project: liveChat?.project ?? reference.project,
+      title: liveChat?.title ?? reference.title,
+    };
+  });
+
+  return (
+    <div className="message-research-references" aria-label="Attached chat notes">
+      <span className="message-research-label">
+        <Hash size={13} aria-hidden="true" />
+        Notes
+      </span>
+      {visibleReferences.map((reference) => {
+        const label = `${reference.title}${reference.missing ? " unavailable" : ""}`;
+        const content = (
+          <>
+            <strong>{reference.title}</strong>
+            <small>{reference.missing ? "Deleted chat" : reference.project}</small>
+          </>
+        );
+
+        return onSelectChat && !reference.missing ? (
+          <button key={reference.chatId} type="button" className="message-research-chip" aria-label={`Open referenced chat ${label}`} onClick={() => onSelectChat(reference.chatId)}>
+            {content}
+          </button>
+        ) : (
+          <span key={reference.chatId} className="message-research-chip" data-missing={reference.missing}>
+            {content}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
-function getSourceHostPreview(sources: ChatSource[]) {
-  const hosts: string[] = [];
-  const seenHosts = new Set<string>();
-
-  for (const source of sources) {
-    const host = formatMessageSourceHost(source.url);
-
-    if (seenHosts.has(host)) {
-      continue;
-    }
-
-    seenHosts.add(host);
-    hosts.push(host);
-
-    if (hosts.length >= 3) {
-      break;
-    }
-  }
-
-  if (sources.length > hosts.length) {
-    hosts.push(`+${sources.length - hosts.length}`);
-  }
-
-  return hosts;
+function getMessageSources(message: ChatMessage, visibleContent: string) {
+  return getUniqueMessageSources([...(message.sources ?? []), ...extractMessageSources(visibleContent)]);
 }
 
 function getUniqueMessageSources(sources: ChatSource[]) {
@@ -432,23 +653,42 @@ function shouldShowPlanReviewCard(message: ChatSummary["messages"][number]) {
     return false;
   }
 
-  const hasAcceptedPlanningApproval = message.approvals?.some((approval) => approval.tool === "planning_handoff" && (approval.status === "approved" || approval.status === "edited"));
-
-  if (hasAcceptedPlanningApproval) {
-    return false;
-  }
-
-  return true;
+  return Boolean(getSavedPlanContent(message) || message.approvals?.some((approval) => approval.tool === "planning_handoff"));
 }
 
 function ContextCompactionDivider({ compaction }: { compaction: ChatContextCompaction }) {
   const detail = `${formatCompactTokenCount(compaction.beforeTokens)} -> ${formatCompactTokenCount(compaction.afterTokens)}`;
+  const compactedCount = `${compaction.compactedMessageCount} older message${compaction.compactedMessageCount === 1 ? "" : "s"}`;
+  const activeRequest = compaction.contextWindowTokens
+    ? `${formatCompactTokenCount(compaction.afterTokens)} / ${formatCompactTokenCount(compaction.contextWindowTokens)}`
+    : formatCompactTokenCount(compaction.afterTokens);
 
   return (
-    <div className="context-compaction-divider" title={`${detail}, ${compaction.compactedMessageCount} older messages compacted`}>
-      <span>Automatically compacting context</span>
+    <div className="context-compaction-divider" title={`${detail}, ${compactedCount} compacted`}>
+      <span className="context-compaction-divider-content">
+        <strong>Context compacted</strong>
+        <small>{compactedCount}. Active request {activeRequest}.</small>
+      </span>
     </div>
   );
+}
+
+function getVisibleContextCompactions(compactions: ChatContextCompaction[] | undefined) {
+  if (!compactions?.length) {
+    return [];
+  }
+
+  const latestByStrategy = new Map<string, ChatContextCompaction>();
+
+  for (const compaction of compactions) {
+    latestByStrategy.set(getContextCompactionStrategyKey(compaction), compaction);
+  }
+
+  return Array.from(latestByStrategy.values());
+}
+
+function getContextCompactionStrategyKey(compaction: ChatContextCompaction) {
+  return `${compaction.strategy ?? "context-compaction"}:${compaction.summaryVersion ?? "unknown"}`;
 }
 
 function formatCompactTokenCount(tokens: number) {
@@ -459,54 +699,21 @@ function formatCompactTokenCount(tokens: number) {
   return String(tokens);
 }
 
-function separateDisplayThinking(content: string, existingReasoning?: string) {
-  const reasoningParts: string[] = [];
-  let visibleContent = content.replace(INLINE_THINKING_BLOCK_PATTERN, (_match, _tag: string, thinking: string) => {
-    reasoningParts.push(thinking);
-    return "";
+function separateDisplayThinking(content: string, isStreaming = false) {
+  // Streaming messages still get the tail-prefix guard so a half-typed `<thi`
+  // never flashes into the public area. Hidden content is intentionally not
+  // returned to the UI.
+  const { content: visibleContent } = extractInlineThinking(content, {
+    final: !isStreaming,
   });
-  const openThinkingMatch = INLINE_THINKING_OPEN_PATTERN.exec(visibleContent);
-
-  if (openThinkingMatch && typeof openThinkingMatch.index === "number") {
-    const openThinkingIndex = openThinkingMatch.index;
-    const beforeThinking = visibleContent.slice(0, openThinkingIndex);
-    const afterThinking = visibleContent.slice(openThinkingIndex + openThinkingMatch[0].length);
-
-    reasoningParts.push(afterThinking.replace(INLINE_THINKING_CLOSE_PATTERN, ""));
-    visibleContent = beforeThinking;
-  }
-
-  const inlineReasoning = reasoningParts.join("").trim();
 
   return {
-    content: removeInternalAssistantStatusMessage(visibleContent.replace(INLINE_THINKING_CLOSE_PATTERN, "").trimStart()),
-    reasoning: [existingReasoning, inlineReasoning].filter(Boolean).join("\n\n"),
+    content: removeInternalAssistantStatusMessage(stripVisibleToolProtocol(visibleContent).trimStart()),
   };
 }
 
 function removeInternalAssistantStatusMessage(content: string) {
   return INTERNAL_ASSISTANT_STATUS_MESSAGES.has(content.trim()) ? "" : content;
-}
-
-function getVisibleResponseThinking(responseThinking: string | undefined, visibleContent: string) {
-  const thinking = responseThinking?.trim() ?? "";
-
-  if (!thinking || sameNormalizedVisibleText(thinking, visibleContent)) {
-    return "";
-  }
-
-  return thinking;
-}
-
-function sameNormalizedVisibleText(left: string, right: string) {
-  const normalizedLeft = normalizeVisibleText(left);
-  const normalizedRight = normalizeVisibleText(right);
-
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
-function normalizeVisibleText(value: string) {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function getScrollAnchorMessage(chat: ChatSummary) {
@@ -534,7 +741,6 @@ function createMessageActivityMarker(message: ChatMessage) {
       return `${toolCall.id}:${toolCall.status}:${toolCall.input?.length ?? 0}:${toolCall.output?.length ?? 0}:${fileMarker}`;
     })
     .join("|");
-
   return `${progressMarker}:${toolMarker}:${message.webSearch?.status ?? ""}:${message.thinking?.completedAt ?? ""}`;
 }
 

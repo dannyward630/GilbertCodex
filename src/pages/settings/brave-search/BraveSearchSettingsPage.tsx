@@ -1,6 +1,6 @@
 import { CheckCircle2, Database, ExternalLink, Eye, EyeOff, Filter, Globe2, Images, KeyRound, MapPin, Newspaper, Search, ShieldCheck, SlidersHorizontal, Trash2, Video } from "lucide-react";
 import { useState } from "react";
-import { formatWebSearchErrorMessage, searchBrave } from "../../../services/webSearchClient";
+import { formatWebSearchErrorMessage, MAX_WEB_SEARCH_RESULTS, searchWebWithProvider, shouldUseDuckDuckGoFallbackForBraveError } from "../../../services/webSearchClient";
 import {
   DEFAULT_BRAVE_SEARCH_SETTINGS,
   WEB_SEARCH_PROVIDER_LABELS,
@@ -16,6 +16,7 @@ import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
 
 interface BraveSearchSettingsPageProps {
+  locationServicesEnabled: boolean;
   onSettingsPatch: (settings: Partial<ProviderSettings>) => void;
   settings: ProviderSettings;
 }
@@ -52,12 +53,13 @@ const unitsOptions: Array<{ id: BraveSearchUnits; label: string }> = [
   { id: "metric", label: "Metric" },
 ];
 
-export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSearchSettingsPageProps) {
+export function BraveSearchSettingsPage({ locationServicesEnabled, onSettingsPatch, settings }: BraveSearchSettingsPageProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testStatus, setTestStatus] = useState<SettingsStatusMessage | null>(null);
   const webSearch = settings.webSearch;
   const brave = webSearch.brave;
+  const sourceLimit = Math.min(Math.max(webSearch.maxResults, 1), MAX_WEB_SEARCH_RESULTS);
 
   function updateWebSearch(patch: Partial<WebSearchSettings>) {
     onSettingsPatch({
@@ -94,18 +96,30 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
     setTestStatus(null);
 
     try {
-      const results = await searchBrave("Brave Search API documentation", brave, {
+      const response = await searchWebWithProvider("Brave Search API documentation", {
+        ...webSearch,
+        brave,
+        maxResults: Math.min(Math.max(webSearch.maxResults, 1), 3),
+        provider: "brave",
+      }, {
+        includeVisualResults: false,
         maxResults: Math.min(Math.max(webSearch.maxResults, 1), 3),
       });
+      const usedFallback = response.provider !== "brave";
 
       setTestStatus({
-        kind: "success",
-        text: `Brave Search returned ${results.length} source${results.length === 1 ? "" : "s"}.`,
+        kind: usedFallback ? "warning" : "success",
+        text: usedFallback
+          ? `Brave fell back to DuckDuckGo: ${response.fallbackError ?? "Brave was unavailable."}`
+          : `Brave Search returned ${response.results.length} source${response.results.length === 1 ? "" : "s"}.`,
       });
     } catch (error) {
+      const detail = formatWebSearchErrorMessage(error, "Brave Search test failed.");
+      const canFallback = shouldUseDuckDuckGoFallbackForBraveError(detail);
+
       setTestStatus({
-        kind: "error",
-        text: formatWebSearchErrorMessage(error, "Brave Search test failed."),
+        kind: canFallback ? "warning" : "error",
+        text: canFallback ? `${detail} Chat web search can still use DuckDuckGo fallback while Brave is unavailable.` : detail,
       });
     } finally {
       setTesting(false);
@@ -121,7 +135,7 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             <Globe2 size={19} aria-hidden="true" />
             <div>
               <h2>Web provider</h2>
-              <p>Brave is tried first when selected; DuckDuckGo fallback is limited to transient failures or no-source results so Brave setup errors stay visible.</p>
+              <p>Brave is tried first when selected; DuckDuckGo fallback covers rate limits, malformed responses, transient failures, and no-source results while setup errors stay visible.</p>
             </div>
           </div>
 
@@ -142,8 +156,8 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
 
           <div className="settings-row-list">
             <div className="settings-row">
-              <span>Default web search</span>
-              <strong>{webSearch.enabled ? "Enabled in the composer" : "Off until selected"}</strong>
+              <span>Web tool access</span>
+              <strong>{webSearch.enabled ? "Available to the model" : "Disabled for new turns"}</strong>
               <button
                 className="settings-switch"
                 type="button"
@@ -157,16 +171,16 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             </div>
             <div className="settings-row">
               <span>Sources per call</span>
-              <strong>{webSearch.maxResults}</strong>
+              <strong>{sourceLimit}</strong>
               <input
                 aria-label="Sources per web search"
-                max={12}
+                max={MAX_WEB_SEARCH_RESULTS}
                 min={1}
                 type="number"
-                value={webSearch.maxResults}
+                value={sourceLimit}
                 onChange={(event) =>
                   updateWebSearch({
-                    maxResults: Math.min(Math.max(Number.parseInt(event.target.value, 10) || 1, 1), 12),
+                    maxResults: Math.min(Math.max(Number.parseInt(event.target.value, 10) || 1, 1), MAX_WEB_SEARCH_RESULTS),
                   })
                 }
               />
@@ -365,13 +379,16 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             ].map((option) => {
               const Icon = option.icon;
               const countValue = brave[option.countKey as keyof BraveSearchSettings] as number;
+              const disabledByLocationServices = option.key === "enablePlaceSearch" && !locationServicesEnabled;
+              const optionEnabled = disabledByLocationServices ? false : option.value;
 
               return (
                 <div className="settings-row" key={option.key}>
                   <span><Icon size={15} aria-hidden="true" /> {option.label}</span>
-                  <strong>{option.value ? `${countValue} results` : "Off"}</strong>
+                  <strong>{disabledByLocationServices ? "Location services off" : optionEnabled ? `${countValue} results` : "Off"}</strong>
                   <input
                     aria-label={`${option.label} result count`}
+                    disabled={disabledByLocationServices}
                     max={24}
                     min={1}
                     type="number"
@@ -380,10 +397,11 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
                   />
                   <button
                     className="settings-switch"
+                    disabled={disabledByLocationServices}
                     type="button"
                     role="switch"
-                    aria-checked={option.value}
-                    data-on={option.value}
+                    aria-checked={optionEnabled}
+                    data-on={optionEnabled}
                     onClick={() => updateBraveSearch({ [option.key]: !option.value } as Partial<BraveSearchSettings>)}
                   >
                     <span />
@@ -441,11 +459,12 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             </label>
             <label className="settings-field">
               <span>Place location</span>
-              <input placeholder="Optional city, address, or area" value={brave.placeLocation} onChange={(event) => updateBraveSearch({ placeLocation: event.target.value })} />
+              <input disabled={!locationServicesEnabled} placeholder="Optional city, address, or area" value={brave.placeLocation} onChange={(event) => updateBraveSearch({ placeLocation: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>Place radius meters</span>
               <input
+                disabled={!locationServicesEnabled}
                 max={50000}
                 min={1}
                 type="number"
@@ -461,7 +480,7 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             <Database size={19} aria-hidden="true" />
             <div>
               <h2>Request controls</h2>
-              <p>Advanced Brave API query parameters and headers.</p>
+              <p>Advanced Brave API query parameters supported by the desktop search command.</p>
             </div>
           </div>
 
@@ -478,10 +497,6 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
                 })
               }
             />
-          </label>
-          <label className="settings-field">
-            <span>API version</span>
-            <input placeholder="YYYY-MM-DD" type="date" value={brave.apiVersion} onChange={(event) => updateBraveSearch({ apiVersion: event.target.value })} />
           </label>
           <div className="settings-segmented-control" role="radiogroup" aria-label="Brave request method">
             {(["get", "post"] as const).map((method) => (
@@ -524,38 +539,44 @@ export function BraveSearchSettingsPage({ onSettingsPatch, settings }: BraveSear
             </div>
           </div>
 
+          {!locationServicesEnabled ? (
+            <div className="settings-warning">
+              <span>Location services are off. Saved Brave location fields stay local and are not sent with search requests until location services are turned back on.</span>
+            </div>
+          ) : null}
+
           <div className="settings-section-grid">
             <label className="settings-field">
               <span>Latitude</span>
-              <input value={brave.locationLatitude} onChange={(event) => updateBraveSearch({ locationLatitude: event.target.value })} />
+              <input disabled={!locationServicesEnabled} value={brave.locationLatitude} onChange={(event) => updateBraveSearch({ locationLatitude: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>Longitude</span>
-              <input value={brave.locationLongitude} onChange={(event) => updateBraveSearch({ locationLongitude: event.target.value })} />
+              <input disabled={!locationServicesEnabled} value={brave.locationLongitude} onChange={(event) => updateBraveSearch({ locationLongitude: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>Timezone</span>
-              <input placeholder="America/New_York" value={brave.locationTimezone} onChange={(event) => updateBraveSearch({ locationTimezone: event.target.value })} />
+              <input disabled={!locationServicesEnabled} placeholder="America/New_York" value={brave.locationTimezone} onChange={(event) => updateBraveSearch({ locationTimezone: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>City</span>
-              <input value={brave.locationCity} onChange={(event) => updateBraveSearch({ locationCity: event.target.value })} />
+              <input disabled={!locationServicesEnabled} value={brave.locationCity} onChange={(event) => updateBraveSearch({ locationCity: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>State code</span>
-              <input maxLength={3} value={brave.locationState} onChange={(event) => updateBraveSearch({ locationState: event.target.value })} />
+              <input disabled={!locationServicesEnabled} maxLength={3} value={brave.locationState} onChange={(event) => updateBraveSearch({ locationState: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>State name</span>
-              <input value={brave.locationStateName} onChange={(event) => updateBraveSearch({ locationStateName: event.target.value })} />
+              <input disabled={!locationServicesEnabled} value={brave.locationStateName} onChange={(event) => updateBraveSearch({ locationStateName: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>Country</span>
-              <input maxLength={2} value={brave.locationCountry} onChange={(event) => updateBraveSearch({ locationCountry: event.target.value })} />
+              <input disabled={!locationServicesEnabled} maxLength={2} value={brave.locationCountry} onChange={(event) => updateBraveSearch({ locationCountry: event.target.value })} />
             </label>
             <label className="settings-field">
               <span>Postal code</span>
-              <input value={brave.locationPostalCode} onChange={(event) => updateBraveSearch({ locationPostalCode: event.target.value })} />
+              <input disabled={!locationServicesEnabled} value={brave.locationPostalCode} onChange={(event) => updateBraveSearch({ locationPostalCode: event.target.value })} />
             </label>
           </div>
         </article>

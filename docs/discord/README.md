@@ -21,10 +21,10 @@ For the default slash-command path, the desktop app can:
 - Turn `/gilbert prompt: ...` requests into ongoing Gilbert chat requests.
 - Turn `/gilbertnewchat prompt: ...` requests into a fresh Gilbert chat.
 - Edit the original Discord interaction response while Gilbert works, then replace it with the final answer.
-- Use the same host-managed web-search, project context, provider tool bridge, and permission settings that are enabled inside Gilbert Codex.
+- Use the same source context, project context, and permission settings that are enabled inside Gilbert Codex.
 - Convert Gilbert's richer Markdown into Discord-safe Markdown before posting back to Discord.
 
-Discord-initiated chats use the same alpha tool-bridge boundaries as in-app chats. Web search can attach host-managed source context when it is enabled, and local or remote actions remain subject to the selected provider, workspace scope, and review policy.
+Discord-initiated chats use the same review boundaries as in-app chats. Source context can attach when enabled, and local or remote actions remain subject to the selected provider, workspace scope, and review policy.
 
 A plain Discord incoming webhook cannot read user messages; it only posts messages into a channel. Use one of these paths:
 
@@ -92,7 +92,7 @@ Use this path when users should type a slash command and get a response from Gil
    - Select Slash chat.
    - Keep Tunnel provider set to `ngrok`.
    - Keep Local port on the app default unless that port is already in use on your machine (change it in Settings > Discord if it conflicts).
-   - Keep ngrok executable set to `ngrok`, paste the full path to the ngrok executable, or point it at a local folder such as `.tools/ngrok`.
+   - Keep ngrok executable set to `ngrok`, paste the full path to the ngrok executable, or point it at a local folder such as `local-bin/ngrok`.
    - Set Response style to Channel or Ephemeral. Thread is reserved for a later richer Discord workflow.
    - Add Allowed guild IDs and Allowed channel IDs if you want to restrict where the bridge responds.
 
@@ -264,7 +264,7 @@ Use this path when Gilbert or another system only needs to post into Discord.
 | Problem | Likely Cause | Fix |
 | --- | --- | --- |
 | Discord rejects the Interactions Endpoint URL | Endpoint does not answer `PING`, uses HTTP, ngrok stopped, or signature verification failed | Start the bridge in Settings > Discord, use the generated `https://.../discord/interactions` URL, then save again |
-| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, not in a known local helper folder, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, paste the full ngrok executable path, or place it under `.tools/ngrok/` |
+| Start bridge says ngrok could not start | ngrok is not installed, not on PATH, not in a known local helper folder, or not authenticated | Install ngrok, run `ngrok config add-authtoken YOUR_TOKEN`, paste the full ngrok executable path, or place it under a local helper folder |
 | Slash command does not appear | Command was not registered or app was not installed in the server | Register a guild command for fast testing, then reinstall the app if needed |
 | Slash command shows loading forever | Gilbert was closed, busy, or could not send the final edit to Discord | Keep Gilbert open, wait for the current run to finish, and try again |
 | Gateway bot connects but cannot read messages | Missing or unapproved `MESSAGE_CONTENT` privileged intent | Use slash commands or enable/request the privileged intent |
@@ -277,7 +277,7 @@ Use this path when Gilbert or another system only needs to post into Discord.
 - The desktop runtime includes the Discord slash-command receiver, signature verification, ngrok process management, and interaction response editing.
 - Auto-start starts the bridge when the app opens if Discord bridge is enabled, Slash chat is selected, and the Application ID/Public Key are present.
 - Discord responses stream by repeatedly editing the original interaction response, with throttling to avoid noisy Discord updates.
-- Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass app approval, workspace, or provider tool-bridge boundaries.
-- Discord requests use the same alpha tool bridge as in-app requests. Host-managed web search remains available when enabled, and high-impact actions remain review-gated.
+- Discord requests use the currently selected Gilbert project and local workspace permissions. They do not bypass app approval, workspace, or review boundaries.
+- Discord requests use the same review policy as in-app requests. Source context remains available when enabled, and high-impact actions remain review-gated.
 - Bot gateway mode is still future runtime work.
 - Incoming Discord webhooks are still one-way notification paths.

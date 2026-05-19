@@ -5,12 +5,13 @@ import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 interface PersonalizationSettingsPageProps {
   onSettingsPatch: (settings: Partial<ProviderSettings>) => void;
   settings: ProviderSettings;
+  showHeading?: boolean;
 }
 
-export function PersonalizationSettingsPage({ onSettingsPatch, settings }: PersonalizationSettingsPageProps) {
+export function PersonalizationSettingsPage({ onSettingsPatch, settings, showHeading = true }: PersonalizationSettingsPageProps) {
   return (
     <>
-      <SettingsSectionHeading detail="User instructions are added to the actual model-visible system prompt." icon={UserRoundCog} title="Personalization" />
+      {showHeading ? <SettingsSectionHeading detail="User instructions and user-controlled app personalization." icon={UserRoundCog} title="Personalization" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">

@@ -16,6 +16,7 @@ interface ProvidersSettingsPageProps {
   onUpdateActiveProviderBaseUrl: (baseUrl: string) => void;
   settings: ProviderSettings;
   showKey: boolean;
+  showHeading?: boolean;
   testing: boolean;
   testStatus: SettingsStatusMessage | null;
 }
@@ -32,12 +33,13 @@ export function ProvidersSettingsPage({
   onUpdateActiveProviderBaseUrl,
   settings,
   showKey,
+  showHeading = true,
   testing,
   testStatus,
 }: ProvidersSettingsPageProps) {
   return (
     <>
-      <SettingsSectionHeading detail="Keep all model provider API keys, base URLs, and live catalogs in one place." icon={KeyRound} title="Providers" />
+      {showHeading ? <SettingsSectionHeading detail="Keep all model provider API keys, base URLs, and live catalogs in one place." icon={KeyRound} title="Providers" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Radar, Search, Settings, Trash2, UserRound } from "lucide-react";
-import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
-import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { Folder, FolderOpen, FolderPlus, ListPlus, LogOut, MessageSquarePlus, Pin, Puzzle, Search, Settings, Trash2, UserRound } from "lucide-react";
+import { DEFAULT_PROJECT, formatChatAge, hasComposerDraftContent, isDiscardableEmptyChat, isEmptyChat, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
 import type { AuthUser } from "../../types/auth";
@@ -17,6 +16,7 @@ interface ShellSidebarProps {
   activeSettingsSection: SettingsSectionId;
   authUser: AuthUser;
   chats: ChatSummary[];
+  locationServicesEnabled: boolean;
   onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
@@ -26,19 +26,21 @@ interface ShellSidebarProps {
   onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onSelectChat: (chatId: string) => void;
-  onSelectProject: (project: string) => void;
   onSettingsSectionChange: (section: SettingsSectionId) => void;
   onTogglePin: (chatId: string) => void;
   open: boolean;
   projects: ProjectSummary[];
 }
 
-export function ShellSidebar({
+const PROJECT_CHAT_PREVIEW_LIMIT = 6;
+
+export const ShellSidebar = memo(function ShellSidebar({
   activeChatId,
   activeRoute,
   activeSettingsSection,
   authUser,
   chats,
+  locationServicesEnabled,
   onCreateProject,
   onDeleteChat,
   onDeleteProject,
@@ -48,23 +50,27 @@ export function ShellSidebar({
   onLogout,
   onRouteChange,
   onSelectChat,
-  onSelectProject,
   onSettingsSectionChange,
   onTogglePin,
   open,
   projects,
 }: ShellSidebarProps) {
-  const PROJECT_CHAT_PREVIEW_LIMIT = 6;
-  const visibleChats = useMemo(() => sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived)), [chats]);
-  const activeChat = visibleChats.find((chat) => chat.id === activeChatId);
-  const pinnedChats = visibleChats.filter((chat) => chat.pinned);
-  const recentChats = visibleChats.filter((chat) => isNoProjectName(chat.project) && !chat.pinned);
+  const visibleChats = useMemo(() => sortChatsByUpdatedAt(chats.filter((chat) => !chat.archived && !isDiscardableEmptyChat(chat))), [chats]);
+  const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId && !chat.archived), [activeChatId, chats]);
+  const pinnedChats = useMemo(() => visibleChats.filter((chat) => chat.pinned), [visibleChats]);
+  const recentChats = useMemo(() => visibleChats.filter((chat) => isNoProjectName(chat.project) && !chat.pinned), [visibleChats]);
   const chatsByProject = useMemo(() => {
     const groupedChats = new Map<string, ChatSummary[]>();
 
     for (const chat of visibleChats) {
       const projectKey = normalizeProjectName(chat.project).toLowerCase();
-      groupedChats.set(projectKey, [...(groupedChats.get(projectKey) ?? []), chat]);
+      const projectChats = groupedChats.get(projectKey);
+
+      if (projectChats) {
+        projectChats.push(chat);
+      } else {
+        groupedChats.set(projectKey, [chat]);
+      }
     }
 
     return groupedChats;
@@ -76,14 +82,6 @@ export function ShellSidebar({
   const initialExpandedProject = activeChat && !isNoProjectName(activeChat.project) ? normalizeProjectName(activeChat.project) : projectList[0]?.name;
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(initialExpandedProject ? [initialExpandedProject] : []));
   const [projectChatLimits, setProjectChatLimits] = useState<Record<string, number>>({});
-  const [newChatMenuOpen, setNewChatMenuOpen] = useState(false);
-  const newChatMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useDismissableLayer({
-    active: newChatMenuOpen,
-    onDismiss: () => setNewChatMenuOpen(false),
-    refs: [newChatMenuRef],
-  });
 
   useEffect(() => {
     if (!activeChat?.project) {
@@ -103,7 +101,7 @@ export function ShellSidebar({
     });
   }, [activeChat?.project, activeChatId]);
 
-  const chatOptions = (chat: ChatSummary) => [
+  const chatOptions = useCallback((chat: ChatSummary) => [
     {
       icon: Pin,
       label: chat.pinned ? "Unpin chat" : "Pin chat",
@@ -115,43 +113,29 @@ export function ShellSidebar({
       label: "Delete chat",
       onSelect: () => onDeleteChat(chat.id),
     },
-  ];
+  ], [onDeleteChat, onTogglePin]);
 
-  const projectOptions = (projectName: string) => [
+  const projectOptions = useCallback((projectName: string) => [
     {
       danger: true,
       icon: Trash2,
       label: "Delete project",
       onSelect: () => onDeleteProject(projectName),
     },
-  ];
-
-  if (activeRoute === "settings") {
-    return (
-      <SettingsSideMenu
-        activeSection={activeSettingsSection}
-        open={open}
-        onRouteChange={onRouteChange}
-        onSectionChange={onSettingsSectionChange}
-      />
-    );
-  }
+  ], [onDeleteProject]);
 
   function getProjectChatLimit(projectName: string) {
     return projectChatLimits[getProjectKey(projectName)] ?? PROJECT_CHAT_PREVIEW_LIMIT;
   }
 
-  function handleToggleProject(projectName: string) {
-    onSelectProject(projectName);
-
-    if (!chatsByProject.get(projectName.toLowerCase())?.length) {
-      return;
-    }
+  const handleSelectProject = useCallback((projectName: string) => {
+    const projectChats = chatsByProject.get(projectName.toLowerCase()) ?? [];
+    const expanded = expandedProjects.has(projectName);
 
     setExpandedProjects((currentProjects) => {
       const nextProjects = new Set(currentProjects);
 
-      if (nextProjects.has(projectName)) {
+      if (expanded) {
         nextProjects.delete(projectName);
       } else {
         nextProjects.add(projectName);
@@ -159,31 +143,42 @@ export function ShellSidebar({
 
       return nextProjects;
     });
-  }
 
-  async function handleCreateProject() {
-    const createdProjectName = await onCreateProject();
-
-    if (typeof createdProjectName === "string" && createdProjectName.trim()) {
-      onSelectProject(createdProjectName);
+    if (expanded) {
+      return;
     }
-  }
 
-  function handleStartFromScratchChat() {
-    setNewChatMenuOpen(false);
-    onNewChat(DEFAULT_PROJECT);
-  }
+    if (projectChats.length === 0) {
+      onNewChat(projectName);
+      return;
+    }
 
-  async function handleUseExistingFolderChat() {
-    setNewChatMenuOpen(false);
+    const targetChat = projectChats.find((chat) => chat.id === activeChatId) ?? projectChats[0];
+    const activeProjectSelected = activeRoute === "chat" && sameProjectName(activeChat?.project, projectName);
+
+    if (!activeProjectSelected || targetChat.id !== activeChatId) {
+      onSelectChat(targetChat.id);
+    }
+  }, [activeChat?.project, activeChatId, activeRoute, chatsByProject, expandedProjects, onNewChat, onSelectChat]);
+
+  const handleCreateProject = useCallback(async () => {
     const createdProjectName = await onCreateProject({ bindToActiveChat: false });
 
     if (typeof createdProjectName === "string" && createdProjectName.trim()) {
-      handleNewProjectChat(createdProjectName);
-    }
-  }
+      setExpandedProjects((currentProjects) => {
+        if (currentProjects.has(createdProjectName)) {
+          return currentProjects;
+        }
 
-  function handleNewProjectChat(projectName: string) {
+        const nextProjects = new Set(currentProjects);
+        nextProjects.add(createdProjectName);
+        return nextProjects;
+      });
+      onNewChat(createdProjectName);
+    }
+  }, [onCreateProject, onNewChat]);
+
+  const handleNewProjectChat = useCallback((projectName: string) => {
     setExpandedProjects((currentProjects) => {
       if (currentProjects.has(projectName)) {
         return currentProjects;
@@ -194,9 +189,9 @@ export function ShellSidebar({
       return nextProjects;
     });
     onNewChat(projectName);
-  }
+  }, [onNewChat]);
 
-  function handleLoadMoreProjectChats(projectName: string) {
+  const handleLoadMoreProjectChats = useCallback((projectName: string) => {
     setProjectChatLimits((currentLimits) => {
       const projectKey = getProjectKey(projectName);
       const currentLimit = currentLimits[projectKey] ?? PROJECT_CHAT_PREVIEW_LIMIT;
@@ -206,9 +201,11 @@ export function ShellSidebar({
         [projectKey]: currentLimit + PROJECT_CHAT_PREVIEW_LIMIT,
       };
     });
-  }
+  }, []);
+  const handleCreateProjectAction = useCallback(() => void handleCreateProject(), [handleCreateProject]);
+  const handleNewDefaultChat = useCallback(() => onNewChat(DEFAULT_PROJECT), [onNewChat]);
 
-  function createChatItem(chat: ChatSummary) {
+  const createChatItem = useCallback((chat: ChatSummary) => {
     const activity = getChatActivity(chat);
 
     return {
@@ -218,135 +215,150 @@ export function ShellSidebar({
       id: chat.id,
       label: chat.title,
       menuItems: chatOptions(chat),
-      meta: formatChatAge(chat.updatedAt),
+      meta: hasComposerDraftContent(chat.composerDraft) && isEmptyChat(chat) ? "Draft" : formatChatAge(chat.updatedAt),
       onSelect: onSelectChat,
     };
+  }, [activeChatId, activeRoute, chatOptions, onSelectChat]);
+
+  const projectItems = useMemo(
+    () =>
+      projectList.map((project) => {
+        const projectChats = chatsByProject.get(project.name.toLowerCase()) ?? [];
+        const expanded = expandedProjects.has(project.name);
+        const visibleChatLimit = getProjectChatLimit(project.name);
+        const visibleProjectChats = projectChats.slice(0, visibleChatLimit);
+        const hiddenChatCount = Math.max(projectChats.length - visibleProjectChats.length, 0);
+        const activity = getProjectActivity(projectChats);
+
+        return {
+          active: sameProjectName(activeChat?.project, project.name) && activeRoute === "chat",
+          activity,
+          activityLabel: activity ? `${formatActivityLabel(activity)} in ${project.name}` : undefined,
+          children: [
+            ...visibleProjectChats.map(createChatItem),
+            ...(hiddenChatCount > 0
+              ? [
+                  {
+                    icon: ListPlus,
+                    id: `${project.name}-load-more`,
+                    label: "Load more",
+                    meta: `${hiddenChatCount} more`,
+                    onSelect: () => handleLoadMoreProjectChats(project.name),
+                  },
+                ]
+              : []),
+          ],
+          expanded,
+          icon: expanded ? FolderOpen : Folder,
+          id: project.name,
+          label: project.name,
+          menuItems: projectOptions(project.name),
+          onQuickAction: handleNewProjectChat,
+          onSelect: handleSelectProject,
+          quickActionIcon: MessageSquarePlus,
+          quickActionLabel: `New chat in ${project.name}`,
+        };
+      }),
+    [
+      activeChat?.project,
+      activeRoute,
+      chatsByProject,
+      createChatItem,
+      expandedProjects,
+      handleLoadMoreProjectChats,
+      handleNewProjectChat,
+      handleSelectProject,
+      projectChatLimits,
+      projectList,
+      projectOptions,
+    ],
+  );
+
+  const chatItems = useMemo(
+    () => [
+      ...pinnedChats.map((chat) => ({
+        ...createChatItem(chat),
+        icon: Pin,
+      })),
+      ...recentChats.map(createChatItem),
+    ],
+    [createChatItem, pinnedChats, recentChats],
+  );
+
+  if (activeRoute === "settings") {
+    return (
+      <SettingsSideMenu
+        activeSection={activeSettingsSection}
+        locationServicesEnabled={locationServicesEnabled}
+        open={open}
+        onRouteChange={onRouteChange}
+        onSectionChange={onSettingsSectionChange}
+      />
+    );
   }
 
   return (
     <aside className="shell-sidebar" data-open={open}>
       <div className="sidebar-primary-actions">
-        <div className="sidebar-new-chat-anchor" ref={newChatMenuRef}>
-          <button
-            className="sidebar-action"
-            data-active={activeRoute === "chat"}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={newChatMenuOpen}
-            onClick={() => setNewChatMenuOpen((openMenu) => !openMenu)}
-          >
-            <MessageSquarePlus size={17} aria-hidden="true" />
-            <span>New chat</span>
-          </button>
-          {newChatMenuOpen ? (
-            <div className="sidebar-new-chat-menu" role="menu" aria-label="New chat">
-              <button type="button" role="menuitem" onClick={handleStartFromScratchChat}>
-                <MessageSquarePlus size={17} aria-hidden="true" />
-                <span>Start from scratch</span>
-              </button>
-              <button type="button" role="menuitem" onClick={() => void handleUseExistingFolderChat()}>
-                <FolderPlus size={17} aria-hidden="true" />
-                <span>Use an existing folder</span>
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <button className="sidebar-action" data-active={activeRoute === "chat"} type="button" onClick={handleNewDefaultChat}>
+          <MessageSquarePlus size={17} aria-hidden="true" />
+          <span>New chat</span>
+        </button>
         <button className="sidebar-action" type="button" onClick={onOpenSearch}>
           <Search size={17} aria-hidden="true" />
           <span>Search</span>
         </button>
-        <button className="sidebar-action" type="button" onClick={onOpenBulkDeleteChats}>
-          <Trash2 size={17} aria-hidden="true" />
-          <span>Delete chats</span>
-        </button>
-        <button className="sidebar-action" data-active={activeRoute === "radar"} type="button" onClick={() => onRouteChange("radar")}>
-          <Radar size={17} aria-hidden="true" />
-          <span>Radar</span>
+        <button className="sidebar-action" data-active={activeRoute === "apps"} type="button" onClick={() => onRouteChange("apps")}>
+          <Puzzle size={17} aria-hidden="true" />
+          <span>Apps</span>
         </button>
       </div>
 
       <div className="sidebar-scroll">
         <SidebarSection
-          title="Pinned chats"
-          items={pinnedChats.map((chat) => ({
-            ...createChatItem(chat),
-            icon: Pin,
-          }))}
-        />
-        <SidebarSection
           title="Projects"
           actionIcon={FolderPlus}
           actionLabel="Add project folder"
-          onAction={() => void handleCreateProject()}
-          items={projectList.map((project) => {
-            const projectChats = chatsByProject.get(project.name.toLowerCase()) ?? [];
-            const expanded = expandedProjects.has(project.name);
-            const visibleChatLimit = getProjectChatLimit(project.name);
-            const visibleProjectChats = projectChats.slice(0, visibleChatLimit);
-            const hiddenChatCount = Math.max(projectChats.length - visibleProjectChats.length, 0);
-            const activity = getProjectActivity(projectChats);
-
-            return {
-              active: sameProjectName(activeChat?.project, project.name) && activeRoute === "chat",
-              activity,
-              activityLabel: activity ? `${formatActivityLabel(activity)} in ${project.name}` : undefined,
-              children: [
-                ...visibleProjectChats.map(createChatItem),
-                ...(hiddenChatCount > 0
-                  ? [
-                      {
-                        icon: ListPlus,
-                        id: `${project.name}-load-more`,
-                        label: "Load more",
-                        meta: `${hiddenChatCount} more`,
-                        onSelect: () => handleLoadMoreProjectChats(project.name),
-                      },
-                    ]
-                  : []),
-              ],
-              expanded,
-              icon: expanded ? FolderOpen : Folder,
-              id: project.name,
-              label: project.name,
-              menuItems: projectOptions(project.name),
-              onQuickAction: handleNewProjectChat,
-              onSelect: handleToggleProject,
-              quickActionIcon: MessageSquarePlus,
-              quickActionLabel: `New chat in ${project.name}`,
-            };
-          })}
+          onAction={handleCreateProjectAction}
+          items={projectItems}
         />
         <SidebarSection
-          title="Recent chats"
+          title="Chats"
           actionIcon={MessageSquarePlus}
           actionLabel="New chat outside project"
-          onAction={() => onNewChat(DEFAULT_PROJECT)}
-          items={recentChats.map(createChatItem)}
+          emptyMessage="No chats"
+          secondaryIcon={visibleChats.length > 0 ? Trash2 : undefined}
+          secondaryActionLabel="Delete chats"
+          onAction={handleNewDefaultChat}
+          onSecondaryAction={visibleChats.length > 0 ? onOpenBulkDeleteChats : undefined}
+          items={chatItems}
         />
       </div>
 
       <div className="sidebar-footer">
-        <div className="sidebar-account">
-          <div className="sidebar-account-avatar" aria-hidden="true">
-            {getUserInitials(authUser)}
+        <section className="sidebar-account-card" aria-label="Local account">
+          <div className="sidebar-account">
+            <div className="sidebar-account-avatar" aria-hidden="true">
+              {getUserInitials(authUser)}
+            </div>
+            <div className="sidebar-account-copy">
+              <strong>{authUser.displayName}</strong>
+              <span>@{authUser.username} - local</span>
+            </div>
+            <button className="sidebar-account-signout" type="button" aria-label="Sign out" title="Sign out" onClick={onLogout}>
+              <LogOut size={16} aria-hidden="true" />
+            </button>
           </div>
-          <div className="sidebar-account-copy">
-            <strong>{authUser.displayName}</strong>
-            <span>@{authUser.username} - local</span>
-          </div>
-          <button className="sidebar-account-signout" type="button" aria-label="Sign out" title="Sign out" onClick={onLogout}>
-            <LogOut size={16} aria-hidden="true" />
-          </button>
-        </div>
 
-        <button className="sidebar-settings" data-active={false} type="button" onClick={() => onRouteChange("settings")}>
-          <Settings size={17} aria-hidden="true" />
-          <span>Settings</span>
-        </button>
+          <button className="sidebar-settings sidebar-account-settings" data-active={false} type="button" onClick={() => onRouteChange("settings")}>
+            <Settings size={16} aria-hidden="true" />
+            <span>Settings</span>
+          </button>
+        </section>
       </div>
     </aside>
   );
-}
+});
 
 function getUserInitials(user: AuthUser) {
   const initials = user.displayName
@@ -383,11 +395,31 @@ function parseProjectDate(value: string) {
 }
 
 function getProjectActivity(projectChats: ChatSummary[]): SidebarItemActivity | undefined {
-  return projectChats.reduce<SidebarItemActivity | undefined>((currentActivity, chat) => pickHigherActivity(currentActivity, getChatActivity(chat)), undefined);
+  let activity: SidebarItemActivity | undefined;
+
+  for (const chat of projectChats) {
+    activity = pickHigherActivity(activity, getChatActivity(chat));
+
+    if (activity === "waiting") {
+      break;
+    }
+  }
+
+  return activity;
 }
 
 function getChatActivity(chat: ChatSummary): SidebarItemActivity | undefined {
-  return chat.messages.reduce<SidebarItemActivity | undefined>((currentActivity, message) => pickHigherActivity(currentActivity, getMessageActivity(message)), undefined);
+  let activity: SidebarItemActivity | undefined;
+
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    activity = pickHigherActivity(activity, getMessageActivity(chat.messages[index]));
+
+    if (activity === "waiting") {
+      break;
+    }
+  }
+
+  return activity;
 }
 
 function getMessageActivity(message: ChatMessage): SidebarItemActivity | undefined {

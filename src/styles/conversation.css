@@ -199,6 +199,8 @@
 
 .conversation-body {
   --browser-preview-width: 560px;
+  --git-review-width: 760px;
+  --plan-review-width: 680px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   position: relative;
@@ -212,7 +214,8 @@
 }
 
 .desktop-root[data-runtime="desktop"] .conversation-body,
-.conversation-body[data-browser-resizing="true"] {
+.conversation-body[data-browser-resizing="true"],
+.conversation-body[data-git-review-resizing="true"] {
   transition: none;
 }
 
@@ -220,8 +223,12 @@
   grid-template-columns: minmax(0, 1fr) minmax(320px, 372px);
 }
 
+.conversation-body[data-side-layout="rail"][data-plan-review-open="true"] {
+  grid-template-columns: minmax(360px, 1fr) minmax(520px, min(var(--plan-review-width), calc(100% - 360px)));
+}
+
 .conversation-body[data-side-layout="review"] {
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 520px);
+  grid-template-columns: minmax(360px, 1fr) minmax(460px, min(var(--git-review-width), calc(100% - 360px)));
 }
 
 .conversation-body[data-side-layout="preview"] {
@@ -232,7 +239,8 @@
   grid-template-columns: minmax(320px, 1fr) minmax(240px, 300px) minmax(320px, min(var(--browser-preview-width), calc(100% - 560px)));
 }
 
-.conversation-body[data-browser-resizing="true"] {
+.conversation-body[data-browser-resizing="true"],
+.conversation-body[data-git-review-resizing="true"] {
   cursor: ew-resize;
   user-select: none;
 }
@@ -241,16 +249,45 @@
   pointer-events: none;
 }
 
-.conversation-body[data-browser-expanded="true"] .browser-preview-panel {
+.conversation-body[data-browser-expanded="true"] .browser-preview-panel,
+.conversation-body[data-git-review-expanded="true"] .side-panel-presence[data-panel="git-review"] {
   position: absolute;
   inset: calc(var(--conversation-header-height, 54px) + 10px) 10px 10px;
   z-index: 80;
+  min-width: 0;
+  min-height: 0;
+}
+
+.conversation-body[data-browser-expanded="true"] .browser-preview-panel,
+.conversation-body[data-git-review-expanded="true"] .git-review-panel {
   height: auto;
   margin: 0;
 }
 
-.conversation-body[data-browser-expanded="true"] .browser-preview-window {
+.conversation-body[data-browser-expanded="true"] .browser-preview-window,
+.conversation-body[data-git-review-expanded="true"] .git-review-window {
   box-shadow: 0 20px 52px rgba(0, 0, 0, 0.28);
+}
+
+.conversation-body[data-plan-review-expanded="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.conversation-body[data-plan-review-expanded="true"] .side-panel-presence[data-panel="right-rail"] {
+  position: absolute;
+  inset: calc(var(--conversation-header-height, 54px) + 10px) 10px 10px;
+  z-index: 82;
+  min-width: 0;
+  min-height: 0;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .right-rail {
+  height: 100%;
+  margin: 0;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel {
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.24);
 }
 
 .conversation-main {

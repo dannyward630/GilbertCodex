@@ -1,5 +1,5 @@
 export { createToolCallRequest, parseToolCallArguments, parseToolCallArgumentsDetailed, __resetToolCallIdCounterForTests } from "./common";
 export { parseAnthropicStreamToolCallDelta, parseAnthropicToolCalls, type AnthropicToolCallDelta } from "./anthropic";
 export { parseOpenAiCompatibleStreamToolCallDeltas, parseOpenAiCompatibleToolCalls, type OpenAiCompatibleToolCallDelta } from "./openAiCompatible";
-export { parseResponsesStreamToolCalls, parseResponsesToolCalls } from "./responses";
+export { parseResponsesStreamToolCallDeltas, parseResponsesStreamToolCalls, parseResponsesToolCalls, type ResponsesToolCallStreamDelta } from "./responses";
 export { parseVisibleTextToolCalls } from "./visibleTextToolCalls";

@@ -31,6 +31,8 @@ export function createBridgeChatToolCall(
   });
 
   return {
+    batchFileResults: extractBatchFileResults(result),
+    batchSummary: extractBatchSummary(result, toolId),
     detail: result.error || result.skippedReason || undefined,
     fileChanges: extractFileChanges(result),
     id: `${BRIDGE_TOOL_CALL_ID_PREFIX}${call.id}`,
@@ -91,29 +93,153 @@ function extractFileChanges(result: ToolExecutionResult): ChatToolCall["fileChan
     return undefined;
   }
 
-  return fileChanges.flatMap((change) => {
-    if (!change || typeof change !== "object" || Array.isArray(change)) {
+  return fileChanges.flatMap(normalizeFileChange);
+}
+
+function extractBatchSummary(result: ToolExecutionResult, toolId: string): ChatToolCall["batchSummary"] {
+  const operation = getBatchOperation(toolId);
+  const data = getResultDataRecord(result);
+
+  if (!operation || !data) {
+    return undefined;
+  }
+
+  const explicitSummary = extractExplicitBatchSummary(data, operation);
+  if (explicitSummary) {
+    return explicitSummary;
+  }
+
+  if (!Array.isArray(data.files)) {
+    return undefined;
+  }
+
+  const fileResults = extractBatchFileResults(result) ?? [];
+  const fileCount = fileResults.length;
+
+  if (fileCount === 0) {
+    return undefined;
+  }
+
+  return {
+    failureCount: fileResults.filter((item) => item.status === "error").length,
+    fileCount,
+    operation,
+    requestedCount: fileCount,
+    skippedCount: fileResults.filter((item) => item.status === "skipped").length,
+    successCount: fileResults.filter((item) => item.status === "ok").length,
+  };
+}
+
+function extractExplicitBatchSummary(
+  data: Record<string, unknown>,
+  fallbackOperation: NonNullable<ChatToolCall["batchSummary"]>["operation"],
+): ChatToolCall["batchSummary"] {
+  const value = data.batchSummary;
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const operation = record.operation === "write" || record.operation === "edit" ? record.operation : fallbackOperation;
+  const fileCount = countValue(record.fileCount);
+
+  if (fileCount <= 0) {
+    return undefined;
+  }
+
+  return {
+    failureCount: countValue(record.failureCount),
+    fileCount,
+    operation,
+    requestedCount: countValue(record.requestedCount) || fileCount,
+    skippedCount: countValue(record.skippedCount),
+    successCount: countValue(record.successCount),
+  };
+}
+
+function extractBatchFileResults(result: ToolExecutionResult): ChatToolCall["batchFileResults"] {
+  const data = getResultDataRecord(result);
+
+  if (!data || !Array.isArray(data.files)) {
+    return undefined;
+  }
+
+  const results = data.files.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
       return [];
     }
 
-    const record = change as Record<string, unknown>;
-    const path = typeof record.path === "string" ? record.path : "";
-    const additions = typeof record.additions === "number" ? record.additions : 0;
-    const deletions = typeof record.deletions === "number" ? record.deletions : 0;
+    const record = item as Record<string, unknown>;
+    const fileChanges = Array.isArray(record.fileChanges) ? record.fileChanges.flatMap(normalizeFileChange) : [];
+    const firstChange = fileChanges[0];
+    const path = stringValue(record.path) || firstChange?.path || stringValue(record.requestedPath);
 
     if (!path) {
       return [];
     }
 
     return [{
-      additions,
-      deletions,
-      diffPreview: normalizeDiffPreview(record.diffPreview),
-      diffTruncated: record.diffTruncated === true,
-      kind: normalizeFileChangeKind(record.kind),
+      additions: firstChange?.additions ?? 0,
+      deletions: firstChange?.deletions ?? 0,
+      detail: stringValue(record.error) || stringValue(record.skippedReason) || undefined,
+      kind: firstChange?.kind,
       path,
+      requestedPath: stringValue(record.requestedPath) || undefined,
+      status: record.skipped === true ? "skipped" as const : record.ok === false ? "error" as const : "ok" as const,
     }];
   });
+
+  return results.length > 0 ? results : undefined;
+}
+
+function normalizeFileChange(change: unknown): NonNullable<ChatToolCall["fileChanges"]> {
+  if (!change || typeof change !== "object" || Array.isArray(change)) {
+    return [];
+  }
+
+  const record = change as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : "";
+  const additions = typeof record.additions === "number" ? record.additions : 0;
+  const deletions = typeof record.deletions === "number" ? record.deletions : 0;
+
+  if (!path) {
+    return [];
+  }
+
+  return [{
+    additions,
+    deletions,
+    diffPreview: normalizeDiffPreview(record.diffPreview),
+    diffTruncated: record.diffTruncated === true,
+    kind: normalizeFileChangeKind(record.kind),
+    path,
+  }];
+}
+
+function getResultDataRecord(result: ToolExecutionResult): Record<string, unknown> | undefined {
+  const data = result.data;
+  return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+}
+
+function getBatchOperation(toolId: string): NonNullable<ChatToolCall["batchSummary"]>["operation"] | undefined {
+  if (toolId === "files_write_many") {
+    return "write";
+  }
+
+  if (toolId === "files_edit_many") {
+    return "edit";
+  }
+
+  return undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function countValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
 }
 
 function normalizeDiffPreview(value: unknown): NonNullable<ChatToolCall["fileChanges"]>[number]["diffPreview"] {

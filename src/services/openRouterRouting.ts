@@ -1,4 +1,4 @@
-import { isImageAttachment } from "../lib/chatAttachments";
+import { isMediaAttachment } from "../lib/chatAttachments";
 import { isOpenRouterFreeModel, OPENROUTER_FREE_AUTO_MODEL, OPENROUTER_SPEED_OPTIMIZED_FREE_MODELS } from "../lib/models";
 import type { ChatMessage } from "../types/chat";
 
@@ -43,7 +43,9 @@ const OPENROUTER_FAST_FREE_PROVIDER_PREFERENCES = {
     p50: 35,
     p90: 10,
   },
-  require_parameters: true,
+  // Free endpoint metadata can lag behind supported request shapes. Keep this
+  // permissive so a harmless parameter does not collapse routing entirely.
+  require_parameters: false,
 } satisfies Omit<OpenRouterProviderPreferences, "sort">;
 const MAX_OPENROUTER_MODELS_ROUTE_COUNT = 3;
 
@@ -54,7 +56,7 @@ export function applyOpenRouterFreeModelRouting(body: Record<string, unknown>, m
     return;
   }
 
-  const useSpeedOptimizedModelSet = normalizedModel === OPENROUTER_FREE_AUTO_MODEL && !hasImageAttachments(messages);
+  const useSpeedOptimizedModelSet = normalizedModel === OPENROUTER_FREE_AUTO_MODEL && !hasMediaAttachments(messages);
 
   if (useSpeedOptimizedModelSet) {
     body.models = OPENROUTER_SPEED_OPTIMIZED_FREE_MODELS.filter(isSpecificFreeModel).slice(0, MAX_OPENROUTER_MODELS_ROUTE_COUNT);
@@ -76,8 +78,8 @@ function createOpenRouterFastFreeProviderPreferences(useGlobalModelSorting: bool
   };
 }
 
-function hasImageAttachments(messages: ChatMessage[]) {
-  return messages.some((message) => message.attachments?.some(isImageAttachment));
+function hasMediaAttachments(messages: ChatMessage[]) {
+  return messages.some((message) => message.attachments?.some(isMediaAttachment));
 }
 
 function isSpecificFreeModel(model: string) {

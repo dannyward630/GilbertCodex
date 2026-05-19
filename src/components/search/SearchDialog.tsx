@@ -1,5 +1,6 @@
 import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { isEmptyChat } from "../../lib/chatUtils";
 import type { ChatSummary } from "../../types/chat";
 
 interface SearchDialogProps {
@@ -15,7 +16,7 @@ export function SearchDialog({ chats, onClose, onSelectChat, open }: SearchDialo
   const filteredChats = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const visibleChats = chats.filter((chat) => !chat.archived);
+    const visibleChats = chats.filter((chat) => !chat.archived && !isEmptyChat(chat));
 
     if (!normalizedQuery) {
       return visibleChats;

@@ -3,7 +3,7 @@ import type { AppInfo } from "../../types/app";
 import type { DiscordBridgeSettings } from "../../types/discord";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ProjectSummary } from "../../types/project";
-import type { AppearanceMode, ProviderSettings } from "../../types/settings";
+import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
 
 export type SettingsSectionId =
   | "appearance"
@@ -15,9 +15,11 @@ export type SettingsSectionId =
   | "github"
   | "mapbox"
   | "model"
+  | "nineRouter"
   | "pdf"
   | "personalization"
-  | "providers";
+  | "providers"
+  | "weatherSources";
 
 export interface SettingsNavItem {
   icon: LucideIcon;
@@ -35,7 +37,9 @@ export interface SettingsPageProps {
   onAppearanceModeChange: (mode: AppearanceMode) => void;
   onDiscordBridgeChange: (settings: DiscordBridgeSettings) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
+  onPersonalizationChange: (settings: AppPersonalizationSettings) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
+  personalization: AppPersonalizationSettings;
   projects: ProjectSummary[];
   settings: ProviderSettings;
 }

@@ -4,12 +4,12 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 14px 10px 12px;
+  padding: 12px 10px 10px;
   color: var(--text-muted);
-  border: 1px solid #25282e;
+  border: 1px solid color-mix(in srgb, var(--sidebar-border) 82%, transparent);
   border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(31, 39, 49, 0.72) 0%, rgba(36, 29, 24, 0.92) 100%),
+    linear-gradient(180deg, rgba(26, 30, 37, 0.94) 0%, rgba(21, 23, 27, 0.98) 58%, rgba(29, 24, 21, 0.72) 100%),
     var(--sidebar);
 }
 
@@ -40,25 +40,22 @@
 
 .sidebar-primary-actions {
   display: grid;
-  gap: 2px;
-  padding-bottom: 28px;
-}
-
-.sidebar-new-chat-anchor {
-  position: relative;
-  min-width: 0;
-  z-index: 40;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sidebar-border) 64%, transparent);
 }
 
 .sidebar-action,
 .sidebar-settings,
 .sidebar-list-row {
+  position: relative;
   display: flex;
   align-items: center;
   width: 100%;
   min-width: 0;
   min-height: 36px;
-  color: #f0f1ee;
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
   border-radius: 8px;
   background: transparent;
   text-align: left;
@@ -66,17 +63,17 @@
 
 .sidebar-action,
 .sidebar-settings {
-  gap: 11px;
+  gap: 10px;
   padding: 0 10px;
-  font-size: 15px;
-  font-weight: 560;
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .sidebar-action svg,
 .sidebar-settings svg,
 .sidebar-list-row svg {
   flex: 0 0 auto;
-  color: #d8dad8;
+  color: color-mix(in srgb, var(--text-muted) 78%, var(--text));
 }
 
 .sidebar-action:hover,
@@ -85,96 +82,65 @@
 .sidebar-action[data-active="true"],
 .sidebar-settings[data-active="true"],
 .sidebar-list-row[data-active="true"] {
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  background: color-mix(in srgb, var(--hover) 86%, transparent);
 }
 
-.sidebar-new-chat-menu {
-  position: absolute;
-  left: 0;
-  top: calc(100% + 6px);
-  z-index: 80;
-  display: grid;
-  width: min(330px, calc(100vw - 32px));
-  min-width: 246px;
-  padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 13px;
-  background: #292929;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
-}
-
-.sidebar-new-chat-menu button {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  min-height: 40px;
-  padding: 0 11px;
-  color: #f4f1ec;
-  border-radius: 7px;
-  background: transparent;
-  font-size: 15px;
-  font-weight: 560;
-  text-align: left;
-}
-
-.sidebar-new-chat-menu button:hover,
-.sidebar-new-chat-menu button:focus-visible {
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.sidebar-new-chat-menu svg {
-  color: #d9dad8;
+.sidebar-action[data-active="true"],
+.sidebar-settings[data-active="true"],
+.sidebar-list-row[data-active="true"] {
+  background: color-mix(in srgb, var(--hover-strong) 82%, transparent);
 }
 
 .sidebar-scroll {
   min-height: 0;
   overflow: auto;
-  padding-right: 2px;
+  padding: 2px 2px 6px 0;
 }
 
 .sidebar-section {
   display: grid;
-  gap: 7px;
-  margin-bottom: 30px;
+  gap: 6px;
+  margin-bottom: 18px;
 }
 
 .sidebar-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 22px;
+  padding: 0 7px;
 }
 
 .sidebar-section-header h2 {
   margin: 0;
-  color: #a5a3a3;
-  font-size: 14px;
-  font-weight: 700;
+  color: color-mix(in srgb, var(--text-dim) 82%, var(--text-muted));
+  font-size: 11.5px;
+  font-weight: 780;
   letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .section-actions {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  color: #a0a0a2;
+  gap: 6px;
+  color: color-mix(in srgb, var(--text-dim) 74%, var(--text-muted));
 }
 
 .section-actions button {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   color: inherit;
   border-radius: 7px;
   background: transparent;
 }
 
 .section-actions button:hover {
-  color: #f0f1ee;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  background: color-mix(in srgb, var(--hover) 84%, transparent);
 }
 
 .section-actions svg {
@@ -183,7 +149,16 @@
 
 .sidebar-list {
   display: grid;
-  gap: 2px;
+  gap: 3px;
+}
+
+.sidebar-empty-state {
+  min-height: 34px;
+  margin: 0;
+  padding: 8px 10px;
+  color: color-mix(in srgb, var(--text-muted) 82%, transparent);
+  font-size: 13px;
+  font-weight: 520;
 }
 
 .sidebar-list-group {
@@ -193,11 +168,10 @@
 }
 
 .sidebar-list-row {
-  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sidebar-list-row[data-menu-open="true"] {
@@ -217,11 +191,11 @@
   min-width: 0;
   min-height: 36px;
   padding: 0 10px;
-  color: #f0f1ee;
+  color: inherit;
   border-radius: 8px;
   background: transparent;
   font-size: 14px;
-  font-weight: 520;
+  font-weight: 560;
   text-align: left;
 }
 
@@ -230,6 +204,7 @@
   padding: 0 8px;
   font-size: 13px;
   font-weight: 500;
+  color: color-mix(in srgb, var(--text-muted) 82%, var(--text));
 }
 
 .sidebar-list-label {
@@ -302,8 +277,8 @@
 
 .sidebar-meta {
   flex: 0 0 auto;
-  color: #9ba7b7;
-  font-size: 13px;
+  color: color-mix(in srgb, var(--text-dim) 72%, var(--blue));
+  font-size: 12px;
   font-weight: 520;
 }
 
@@ -314,9 +289,9 @@
 .sidebar-sublist {
   display: grid;
   gap: 1px;
-  margin-left: 17px;
-  padding-left: 9px;
-  border-left: 1px solid var(--line-soft);
+  margin-left: 16px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--line-soft) 72%, transparent);
 }
 
 .sidebar-item-menu-wrap {
@@ -338,7 +313,7 @@
   place-items: center;
   width: 27px;
   height: 27px;
-  color: #d1d3d1;
+  color: color-mix(in srgb, var(--text-muted) 82%, var(--text));
   border-radius: 7px;
   background: transparent;
   opacity: 0;
@@ -356,7 +331,8 @@
 .sidebar-item-quick-action:hover,
 .sidebar-item-menu-button:hover,
 .sidebar-item-menu-button[aria-expanded="true"] {
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  background: color-mix(in srgb, var(--hover-strong) 82%, transparent);
 }
 
 .sidebar-item-menu {
@@ -399,36 +375,67 @@
 
 .sidebar-footer {
   display: grid;
-  gap: 2px;
-  margin-top: 10px;
-  padding-top: 9px;
+  margin-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid color-mix(in srgb, var(--sidebar-border) 72%, transparent);
+}
+
+.sidebar-account-card {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sidebar-border) 72%, transparent);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--sidebar-warm) 26%, transparent) 0%, transparent 48%),
+    linear-gradient(180deg, color-mix(in srgb, var(--hover) 58%, transparent) 0%, color-mix(in srgb, var(--sidebar) 84%, transparent) 100%);
+}
+
+.sidebar-account-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 48%, white 16%), transparent);
+  pointer-events: none;
+}
+
+.sidebar-account-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--sidebar-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--sidebar-warm) 32%, transparent) 0%, transparent 52%),
+    linear-gradient(180deg, color-mix(in srgb, var(--hover-strong) 64%, transparent) 0%, color-mix(in srgb, var(--sidebar) 82%, transparent) 100%);
 }
 
 .sidebar-account {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 30px;
+  grid-template-columns: 38px minmax(0, 1fr) 30px;
   align-items: center;
   gap: 9px;
-  min-height: 46px;
+  min-height: 40px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
   background: transparent;
 }
 
 .sidebar-account-avatar {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   color: var(--text);
-  border: 1px solid var(--sidebar-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--sidebar) 76%, var(--sidebar-warm) 24%);
-  font-size: 12px;
-  font-weight: 780;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--sidebar-border));
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--sidebar-warm) 34%, var(--sidebar) 66%)),
+    color-mix(in srgb, var(--sidebar) 72%, var(--sidebar-warm) 28%);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 820;
 }
 
 .sidebar-account-copy {
@@ -446,12 +453,13 @@
 
 .sidebar-account-copy strong {
   color: var(--text);
-  font-size: 13px;
-  font-weight: 740;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 780;
 }
 
 .sidebar-account-copy span {
-  color: var(--text-dim);
+  color: color-mix(in srgb, var(--text-muted) 82%, var(--accent));
   font-size: 12px;
   font-weight: 620;
 }
@@ -461,12 +469,39 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  color: var(--text-muted);
-  border-radius: 7px;
-  background: transparent;
+  color: color-mix(in srgb, var(--text-muted) 78%, var(--text));
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--sidebar) 64%, transparent);
 }
 
 .sidebar-account-signout:hover {
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.sidebar-account-settings {
+  justify-content: center;
+  min-height: 34px;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--sidebar-border) 76%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 5%, transparent), transparent),
+    color-mix(in srgb, var(--sidebar) 58%, transparent);
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+}
+
+.sidebar-account-settings:hover,
+.sidebar-account-settings:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--sidebar-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 15%, transparent), color-mix(in srgb, var(--accent-2) 10%, transparent)),
+    color-mix(in srgb, var(--hover-strong) 82%, transparent);
+}
+
+.sidebar-account-settings svg {
+  color: color-mix(in srgb, var(--accent) 52%, var(--text));
 }

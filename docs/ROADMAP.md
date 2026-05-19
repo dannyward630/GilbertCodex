@@ -6,12 +6,11 @@ Roadmap items are not release promises or fixed dates. They are the current area
 
 ## Near-Term Focus
 
-### Tool Bridge Hardening
+### Runtime Reliability
 
-The rebuilt tool bridge is the main v0.3.5 foundation. The next work is to make it boringly reliable across providers, permission modes, and real repositories.
+The main v0.3.5 foundation is making app-owned runtime behavior boringly reliable across providers, permission modes, and real repositories.
 
 - Expand provider compatibility tests for OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, local servers, and OpenRouter-routed models.
-- Keep tool schemas generated from one authoritative contract per tool family.
 - Improve malformed-call recovery so invalid arguments become clear retryable errors instead of silent wrong behavior.
 - Batch safe actions confidently while keeping terminal, destructive, credential, publish, and outside-scope actions behind review.
 - Persist action IDs/results cleanly so follow-up turns can synthesize from completed work without re-running it.
@@ -86,7 +85,7 @@ The navigation needs to scale better as users add more projects, chats, and inte
 - Durable scheduled or long-running jobs with restartable state.
 - Cleaner workflow cards that show branch paths, retries, evidence, and final outputs.
 - Integration hooks for GitHub, Discord, local terminal work, and future messaging channels.
-- Automation surfaces that reuse the same tool bridge, approval, and evidence model instead of introducing another hidden runtime.
+- Automation surfaces that reuse the same approval and evidence model instead of introducing another hidden runtime.
 
 ### Release And Platform Maturity
 
@@ -97,8 +96,8 @@ The navigation needs to scale better as users add more projects, chats, and inte
 
 ## Good First Contribution Areas
 
-- Improve docs and screenshots for setup, provider configuration, tool permissions, and local data safety.
-- Add focused tests around provider request creation, structured-output parsing, tool-result finalization, chat utilities, and storage normalization.
+- Improve docs and screenshots for setup, provider configuration, permission settings, and local data safety.
+- Add focused tests around provider request creation, structured-output parsing, result finalization, chat utilities, and storage normalization.
 - Help verify macOS or Linux source runs and packaging behavior.
 - Create small UI polish PRs for empty states, error states, activity cards, settings, and sidebar navigation.
 - Add provider compatibility notes when a model works well or fails reliably with structured outputs.

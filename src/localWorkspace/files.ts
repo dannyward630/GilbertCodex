@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauriDesktopRuntime } from "../app/tauriClient";
 import type {
+  ComputerCreateDirectoryResult,
   ComputerDirectoryListing,
   ComputerDrive,
   ComputerGitActionResult,
@@ -14,8 +15,12 @@ import type {
   ComputerDeleteFileResult,
   ComputerMovePathResult,
   ComputerReadFileResult,
+  ComputerReadFileRangeResult,
   ComputerSearchResult,
+  ComputerTextSearchRequest,
+  ComputerTextSearchResponse,
   ComputerWriteFileResult,
+  ComputerWriteFilesResult,
   LocalPermissionMode,
   LocalWorkspaceScope,
   LocalWorkspaceSettings,
@@ -39,6 +44,7 @@ const LOCAL_WORKSPACE_CONTEXT_MAX_CHARS = 24_000;
 const SEARCH_PREVIEW_MAX_CHARS = 360;
 const COMPUTER_LIST_DIRECTORY_TIMEOUT_MS = 8_000;
 const COMPUTER_READ_TEXT_FILE_TIMEOUT_MS = 12_000;
+const COMPUTER_SEARCH_TEXT_FILES_TIMEOUT_MS = 20_000;
 
 interface ComputerGitStatusOptions {
   force?: boolean;
@@ -474,6 +480,20 @@ export async function searchComputerFiles(query: string, limit?: number, roots: 
   return filterToRoots(results);
 }
 
+/** Streams exact text search through the native filesystem backend when desktop is available. */
+export async function searchComputerTextFiles(request: ComputerTextSearchRequest) {
+  if (isBrowserWorkspacePath(request.path) || !isTauriDesktopRuntime()) {
+    throw new Error("Native text search is available in the desktop app for real folders.");
+  }
+
+  return await invokeComputerCommand<ComputerTextSearchResponse>(
+    "computer_search_text_files",
+    { request },
+    COMPUTER_SEARCH_TEXT_FILES_TIMEOUT_MS,
+    `Search text files in ${request.path}`,
+  );
+}
+
 /** Reads a text file through the active desktop or browser workspace backend. */
 export async function readComputerTextFile(path: string, maxBytes?: number, offset?: number) {
   if (isBrowserWorkspacePath(path)) {
@@ -495,6 +515,26 @@ export async function readComputerTextFile(path: string, maxBytes?: number, offs
     },
     COMPUTER_READ_TEXT_FILE_TIMEOUT_MS,
     `Read file ${path}`,
+  );
+}
+
+/** Reads a 1-based line range through the native filesystem backend without loading the whole file into memory. */
+export async function readComputerTextFileRange(path: string, startLine: number, endLine: number) {
+  if (isBrowserWorkspacePath(path) || !isTauriDesktopRuntime()) {
+    throw new Error("Native line-range reads are available in the desktop app for real files.");
+  }
+
+  return await invokeComputerCommand<ComputerReadFileRangeResult>(
+    "computer_read_text_file_range",
+    {
+      request: {
+        endLine,
+        path,
+        startLine,
+      },
+    },
+    COMPUTER_READ_TEXT_FILE_TIMEOUT_MS,
+    `Read file range ${path}`,
   );
 }
 
@@ -544,6 +584,11 @@ export interface WriteComputerTextFileOptions {
   forceEol?: "crlf" | "lf";
 }
 
+export interface WriteComputerTextFileItem extends WriteComputerTextFileOptions {
+  content: string;
+  path: string;
+}
+
 /** Writes a text file after the caller has already resolved permission policy. */
 export async function writeComputerTextFile(
   path: string,
@@ -568,6 +613,74 @@ export async function writeComputerTextFile(
       roots,
       expectedSha256: options.expectedSha256,
       forceEol: options.forceEol,
+    },
+  });
+}
+
+/** Writes many text files with one desktop command where available. */
+export async function writeComputerTextFiles(
+  files: WriteComputerTextFileItem[],
+  roots: string[],
+): Promise<ComputerWriteFilesResult> {
+  if (files.length === 0) {
+    return { files: [] };
+  }
+
+  if (files.some((file) => isBrowserWorkspacePath(file.path)) || !isTauriDesktopRuntime()) {
+    const results = await Promise.all(files.map(async (file) => {
+      try {
+        const result = await writeComputerTextFile(file.path, file.content, roots, file);
+        return {
+          ok: true,
+          requestedPath: file.path,
+          result,
+        };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : typeof error === "string" ? error : "Could not write file.",
+          ok: false,
+          requestedPath: file.path,
+        };
+      }
+    }));
+
+    return { files: results };
+  }
+
+  return await invoke<ComputerWriteFilesResult>("computer_write_text_files", {
+    request: {
+      files: files.map((file) => ({
+        content: file.content,
+        createParentDirs: file.createParentDirs,
+        expectedSha256: file.expectedSha256,
+        forceEol: file.forceEol,
+        overwrite: file.overwrite,
+        path: file.path,
+      })),
+      roots,
+    },
+  });
+}
+
+/** Creates a directory through the active backend. */
+export async function createComputerDirectory(
+  path: string,
+  roots: string[],
+  options: { recursive?: boolean } = {},
+): Promise<ComputerCreateDirectoryResult> {
+  if (isBrowserWorkspacePath(path)) {
+    return await createBrowserDirectory(path, roots, options);
+  }
+
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Use the desktop app or open a browser folder before creating folders.");
+  }
+
+  return await invoke<ComputerCreateDirectoryResult>("computer_create_directory", {
+    request: {
+      path,
+      recursive: options.recursive ?? true,
+      roots,
     },
   });
 }
@@ -638,7 +751,7 @@ export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSetting
 }
 
 // Builds compact advisory workspace context without scanning entire trees or implying real tool work occurred.
-export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings) {
+export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettings, prompt: string, toolSettings?: ToolRegistrySettings, options: { maxContextChars?: number } = {}) {
   if (!settings.enabled) {
     return "";
   }
@@ -690,6 +803,7 @@ export async function createLocalWorkspaceContext(settings: LocalWorkspaceSettin
     ]
       .filter(Boolean)
       .join("\n\n"),
+    options.maxContextChars,
   );
 }
 
@@ -1082,6 +1196,57 @@ async function writeBrowserTextFile(
   };
 }
 
+async function createBrowserDirectory(
+  path: string,
+  roots: string[],
+  options: { recursive?: boolean },
+): Promise<ComputerCreateDirectoryResult> {
+  if (!roots.some((root) => isPathInsideRoot(path, root))) {
+    throw new Error("Folder creation is only allowed inside the selected browser folder.");
+  }
+
+  const { parts, root } = resolveBrowserRoot(path);
+
+  if (parts.length === 0) {
+    return {
+      created: false,
+      modifiedAt: Date.now(),
+      path: root.path,
+    };
+  }
+
+  let directoryHandle = root.handle;
+  let resolvedPath = root.path;
+  let created = false;
+
+  for (const [index, part] of parts.entries()) {
+    const getDirectoryHandle = directoryHandle.getDirectoryHandle?.bind(directoryHandle);
+
+    if (!getDirectoryHandle) {
+      throw new Error("This browser cannot create folders in that workspace.");
+    }
+
+    try {
+      directoryHandle = await getDirectoryHandle(part);
+    } catch {
+      if (options.recursive === false && index < parts.length - 1) {
+        throw new Error(`Parent folder does not exist: ${resolvedPath}`);
+      }
+
+      directoryHandle = await getDirectoryHandle(part, { create: true });
+      created = true;
+    }
+
+    resolvedPath = joinBrowserPath(resolvedPath, part);
+  }
+
+  return {
+    created,
+    modifiedAt: Date.now(),
+    path: resolvedPath,
+  };
+}
+
 async function hashTextSha256(content: string): Promise<string | undefined> {
   if (!globalThis.crypto?.subtle) {
     return undefined;
@@ -1150,7 +1315,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
   return [
     "LOCAL WORKSPACE CONTEXT",
     "This is bounded, host-attached project context. It is not proof that a provider tool read, edited, tested, or executed anything.",
-    `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like project memory for architecture notes, commands, style rules, and workflow preferences. @path imports are followed recursively with cycle protection.`,
+    `${GILBERT_PROJECT_MEMORY_FILE}: When present in a workspace root, Gilbert loads it like curated project memory for architecture notes, commands, decisions, style rules, lessons, and workflow preferences. It is not a raw tool-error log. @path imports are followed recursively with cycle protection.`,
     "Automatic workspace context may include root metadata, shallow listings, bounded project memory, and existing index hits. Treat it as helpful context, not proof of current file contents.",
     "Do not claim to have edited, read, listed, searched, tested, committed, or run terminal commands from this context alone. Ask the user for explicit evidence or use normal chat/web search where appropriate.",
     `Mode: ${localPermissionModeLabel(settings.permissionMode)}`,
@@ -1237,23 +1402,44 @@ function readErrorMessage(error: unknown, fallback: string) {
 
 export function createGilbertProjectMemoryTemplate() {
   return [
-    "# Gilbert Project Instructions",
+    "# Gilbert Project Memory",
     "",
-    "Use this file for project memory that Gilbert should load whenever this folder is selected.",
+    "Gilbert loads this file whenever this folder is selected. Keep it as curated project memory, not a raw error log.",
+    "",
+    "Write short notes that help future chats work correctly: architecture, important folders, commands, conventions, user preferences, decisions, and recovered lessons.",
+    "Do not paste provider reasoning, hidden tool syntax, stack traces, raw terminal dumps, or repeated tool errors here. If a failure teaches something, summarize the lesson and the working pattern.",
     "",
     "## Project Overview",
-    "- Describe what this project does.",
+    "- What this project does:",
+    "- Primary app/runtime:",
+    "- Important entry points:",
     "",
     "## Commands",
     "- Build:",
     "- Test:",
     "- Lint:",
+    "- Run/dev:",
     "",
-    "## Coding Standards",
-    "- Keep changes scoped and consistent with the existing codebase.",
+    "## Architecture Notes",
+    "- Important folders:",
+    "- Runtime boundaries:",
+    "- Data/storage notes:",
     "",
-    "## Notes",
-    "- Add architecture details, important folders, environment setup, or gotchas here.",
+    "## User Preferences",
+    "- Product/UX preferences:",
+    "- Code style preferences:",
+    "- Verification expectations:",
+    "",
+    "## Decisions",
+    "- Decision:",
+    "- Why:",
+    "",
+    "## Lessons Learned",
+    "- Lesson:",
+    "- Working pattern:",
+    "",
+    "## Imports",
+    "- Add @relative/path.md imports for larger project-memory files when needed.",
   ].join("\n");
 }
 
@@ -1881,10 +2067,10 @@ function isProbablyTextExtension(extension?: string) {
   ]).has(extension.toLowerCase());
 }
 
-function limitContext(content: string) {
+function limitContext(content: string, maxChars = LOCAL_WORKSPACE_CONTEXT_MAX_CHARS) {
   return limitInlineText(
     content,
-    LOCAL_WORKSPACE_CONTEXT_MAX_CHARS,
+    maxChars,
     "[Automatic workspace context truncated before sending to the model. Ask the user for exact omitted context if it matters.]",
   );
 }

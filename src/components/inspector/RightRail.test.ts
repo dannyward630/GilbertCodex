@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatHasPendingRightRailAction, chatHasRightRailContent } from "./RightRail";
+import { chatHasPendingRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "./RightRail";
 import type { ChatMessage, ChatSummary } from "../../types/chat";
 
 function chatWith(message: ChatMessage): ChatSummary {
@@ -96,5 +96,36 @@ describe("right rail visibility", () => {
 
     expect(chatHasRightRailContent(chat)).toBe(true);
     expect(chatHasPendingRightRailAction(chat)).toBe(true);
+  });
+
+  it("recognizes the selected plan message as rail content", () => {
+    const chat = chatWith(assistantMessage({
+      content: "## Goal\nReview this plan.",
+      id: "plan-message",
+      mode: "plan",
+    }));
+
+    expect(chatHasRightRailContent(chat)).toBe(false);
+    expect(chatHasPlanReviewContent(chat, "plan-message")).toBe(true);
+    expect(chatHasPlanReviewContent(chat, "other-message")).toBe(false);
+  });
+
+  it("recognizes planning handoff approvals as plan review content", () => {
+    const chat = chatWith(assistantMessage({
+      approvals: [
+        {
+          createdAt: "2026-05-14T00:00:00.000Z",
+          id: "approval-1",
+          kind: "other",
+          risk: "low",
+          status: "pending",
+          title: "Review plan",
+          tool: "planning_handoff",
+        },
+      ],
+      id: "plan-message",
+    }));
+
+    expect(chatHasPlanReviewContent(chat, "plan-message")).toBe(true);
   });
 });

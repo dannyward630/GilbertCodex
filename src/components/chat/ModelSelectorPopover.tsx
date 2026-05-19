@@ -1,28 +1,22 @@
-import { type CSSProperties, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type RefObject, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { BrainCircuit, Check, ChevronLeft, ChevronRight, Gauge, Route, Search, Sparkles, Zap } from "lucide-react";
 import {
-  BadgeDollarSign,
-  BrainCircuit,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Code2,
-  Gauge,
-  Image as ImageIcon,
-  Layers3,
-  Search,
-  Sparkles,
-  Zap,
-} from "lucide-react";
-import {
-  MODEL_CATALOG_CATEGORIES,
+  DEEPSEEK_V4_FLASH_FREE_MODEL,
+  GLM_45_AIR_FREE_MODEL,
+  GPT_OSS_120B_FREE_MODEL,
+  LAGUNA_M1_FREE_MODEL,
+  MINIMAX_M25_FREE_MODEL,
   MODEL_PROVIDERS,
+  NEMOTRON_3_SUPER_MODEL,
+  OPENROUTER_FREE_AUTO_MODEL,
+  OWL_ALPHA_MODEL,
+  TRINITY_LARGE_THINKING_FREE_MODEL,
   buildProviderModelOptions,
-  supportsProviderThinking,
+  filterEnabledProviderModelOptions,
+  formatModelPricingSummary,
+  formatModelPricingTitle,
   type ChatModelOption,
-  type ModelCatalogCategoryId,
-  type ModelPricing,
   type ProviderModelMetadata,
 } from "../../lib/models";
 import { formatTokenCount, getFallbackModelContextWindow, type ModelContextWindow, type ModelContextWindowMap } from "../../lib/contextWindow";
@@ -32,7 +26,6 @@ export type LiveModelCatalogStatus = "error" | "idle" | "loading" | "ready";
 
 interface ModelSelectorPopoverProps {
   anchorRef: RefObject<HTMLElement>;
-  liveModelCatalogErrors: Partial<Record<ModelProviderId, string>>;
   liveModelCatalogs: Partial<Record<ModelProviderId, ProviderModelMetadata[]>>;
   liveModelCatalogStatus: Partial<Record<ModelProviderId, LiveModelCatalogStatus>>;
   model: string;
@@ -50,38 +43,28 @@ interface ModelSelectorEntry {
   selected: boolean;
 }
 
-type ProviderFilter = "all" | ModelProviderId;
-type CategoryFilter = "all" | ModelCatalogCategoryId;
-type ModelCapabilityFilter = "cloud" | "free" | "image" | "local" | "long-context" | "paid" | "structured" | "thinking";
-type ModelSortMode = "context-desc" | "default" | "price-asc" | "price-desc";
-
-interface ModelCapabilityBadge {
+interface ModelSelectorEntryGroup {
+  entries: ModelSelectorEntry[];
+  id: string;
   label: string;
-  title: string;
-  tone: "accent" | "neutral" | "success";
 }
 
-const MODEL_CAPABILITY_FILTERS: Array<{ id: ModelCapabilityFilter; label: string; title: string }> = [
-  { id: "local", label: "Local", title: "Models served from LM Studio, Ollama, or vLLM" },
-  { id: "cloud", label: "Cloud", title: "Models served by a remote provider" },
-  { id: "free", label: "Free", title: "Models with free provider pricing or a free model suffix" },
-  { id: "paid", label: "Paid", title: "Models that are not marked free" },
-  { id: "image", label: "Image", title: "Models that mention image, vision, or multimodal input" },
-  { id: "thinking", label: "Thinking", title: "Models/providers that support reasoning or thinking mode" },
-  { id: "structured", label: "Structured", title: "Models that mention structured output or JSON support" },
-  { id: "long-context", label: "200K+ ctx", title: "Models with a context window of at least 200K tokens" },
-];
-
-const MODEL_SORT_OPTIONS: Array<{ id: ModelSortMode; label: string }> = [
-  { id: "default", label: "Default order" },
-  { id: "price-asc", label: "Cheapest first" },
-  { id: "price-desc", label: "Most expensive first" },
-  { id: "context-desc", label: "Largest context first" },
-];
+const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["lmstudio", "ollama", "vllm"]);
+const RECOMMENDED_HOSTED_MODEL_ORDER = [
+  OPENROUTER_FREE_AUTO_MODEL,
+  LAGUNA_M1_FREE_MODEL,
+  OWL_ALPHA_MODEL,
+  NEMOTRON_3_SUPER_MODEL,
+  DEEPSEEK_V4_FLASH_FREE_MODEL,
+  MINIMAX_M25_FREE_MODEL,
+  GLM_45_AIR_FREE_MODEL,
+  GPT_OSS_120B_FREE_MODEL,
+  TRINITY_LARGE_THINKING_FREE_MODEL,
+] as const;
+const RECOMMENDED_HOSTED_MODEL_SET = new Set<string>(RECOMMENDED_HOSTED_MODEL_ORDER);
 
 export function ModelSelectorPopover({
   anchorRef,
-  liveModelCatalogErrors,
   liveModelCatalogs,
   liveModelCatalogStatus,
   model,
@@ -92,58 +75,22 @@ export function ModelSelectorPopover({
   selectedModel,
 }: ModelSelectorPopoverProps) {
   const [query, setQuery] = useState("");
+  const [allModelsOpen, setAllModelsOpen] = useState(false);
   const [catalogReady, setCatalogReady] = useState(false);
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>("all");
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
-  const [capabilityFilters, setCapabilityFilters] = useState<Partial<Record<ModelCapabilityFilter, boolean>>>({});
-  const [sortMode, setSortMode] = useState<ModelSortMode>("default");
-  const [expandedCategories, setExpandedCategories] = useState<Record<ModelCatalogCategoryId, boolean>>(() => createInitialExpandedCategories(selectedModel));
-  const providerStripRef = useRef<HTMLDivElement | null>(null);
   const normalizedQuery = query.trim().toLowerCase();
-  const selectedFallbackContextWindow = useMemo(
-    () =>
-      modelContextWindows[selectedModel.value] ??
-      (selectedModel.contextWindowTokens
-        ? {
-            source: "provider" as const,
-            tokens: selectedModel.contextWindowTokens,
-          }
-        : getFallbackModelContextWindow(selectedModel.value)),
-    [modelContextWindows, selectedModel.contextWindowTokens, selectedModel.value],
-  );
   const selectorEntries = useMemo(
-    () => (catalogReady ? buildSelectorEntries(providerSettings, model, liveModelCatalogs, modelContextWindows) : []),
-    [catalogReady, liveModelCatalogs, model, modelContextWindows, providerSettings],
+    () => (catalogReady ? buildSelectorEntries(providerSettings, model, liveModelCatalogs, liveModelCatalogStatus, modelContextWindows) : []),
+    [catalogReady, liveModelCatalogs, liveModelCatalogStatus, model, modelContextWindows, providerSettings],
   );
   const selectedEntry = selectorEntries.find((entry) => entry.option.value === selectedModel.value && entry.option.provider === providerSettings.provider);
-  const selectedContextWindow = selectedEntry?.contextWindow ?? selectedFallbackContextWindow;
-  const activeFilterCount =
-    Object.values(capabilityFilters).filter(Boolean).length + (providerFilter === "all" ? 0 : 1) + (categoryFilter === "all" ? 0 : 1) + (sortMode === "default" ? 0 : 1);
-  const filteredEntries = catalogReady
-    ? selectorEntries.filter((entry) => {
-        if (providerFilter !== "all" && entry.provider.id !== providerFilter) {
-          return false;
-        }
-
-        if (categoryFilter !== "all" && resolveModelCategory(entry.option, entry.provider.id) !== categoryFilter) {
-          return false;
-        }
-
-        return matchesCapabilityFilters(entry, capabilityFilters) && matchesModelSearch(entry, normalizedQuery);
-      })
-    : [];
-  const sortedEntries = sortModelSelectorEntries(filteredEntries, sortMode);
-  const categoryGroups = catalogReady ? createVisibleCategoryGroups(sortedEntries, sortMode) : [];
-  const providerFilters = catalogReady
-    ? MODEL_PROVIDERS.map((provider) => ({
-        count: selectorEntries.filter((entry) => entry.provider.id === provider.id).length,
-        id: provider.id,
-        label: provider.label,
-        status: liveModelCatalogStatus[provider.id] ?? "idle",
-      })).filter((provider) => provider.count > 0)
-    : [];
-  const liveNotes = catalogReady ? createLiveCatalogNotes(providerSettings, liveModelCatalogs, liveModelCatalogErrors, liveModelCatalogStatus, providerFilter) : [];
-  const floatingPosition = useModelSelectorPosition(anchorRef);
+  const quickEntries = useMemo(
+    () => createQuickModelEntries(selectorEntries, selectedEntry, providerSettings.provider),
+    [providerSettings.provider, selectedEntry, selectorEntries],
+  );
+  const allEntries = useMemo(() => dedupeEntries(selectorEntries), [selectorEntries]);
+  const visibleAllEntries = normalizedQuery ? allEntries.filter((entry) => matchesModelSearch(entry, normalizedQuery)) : allEntries;
+  const visibleGroups = useMemo(() => createModelSelectorGroups(visibleAllEntries), [visibleAllEntries]);
+  const floatingPosition = useModelSelectorPosition(anchorRef, allModelsOpen);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setCatalogReady(true));
@@ -152,350 +99,171 @@ export function ModelSelectorPopover({
   }, []);
 
   useEffect(() => {
-    const selectedCategory = resolveModelCategory(selectedModel, providerSettings.provider);
-    setExpandedCategories((current) => ({
-      ...current,
-      [selectedCategory]: true,
-    }));
-  }, [providerSettings.provider, selectedModel]);
-
-  function toggleCategory(category: ModelCatalogCategoryId) {
-    setExpandedCategories((current) => ({
-      ...current,
-      [category]: !current[category],
-    }));
-  }
-
-  function setAllCategories(open: boolean) {
-    setExpandedCategories(
-      MODEL_CATALOG_CATEGORIES.reduce<Record<ModelCatalogCategoryId, boolean>>(
-        (nextCategories, category) => ({
-          ...nextCategories,
-          [category.id]: open,
-        }),
-        {} as Record<ModelCatalogCategoryId, boolean>,
-      ),
-    );
-  }
-
-  function toggleCapabilityFilter(filter: ModelCapabilityFilter) {
-    setCapabilityFilters((current) => {
-      const next = { ...current, [filter]: !current[filter] };
-
-      if (filter === "local" && next.local) {
-        next.cloud = false;
-      } else if (filter === "cloud" && next.cloud) {
-        next.local = false;
-      }
-
-      if (filter === "free" && next.free) {
-        next.paid = false;
-      } else if (filter === "paid" && next.paid) {
-        next.free = false;
-      }
-
-      return next;
-    });
-  }
-
-  function scrollProviderTabs(direction: -1 | 1) {
-    const strip = providerStripRef.current;
-
-    if (!strip) {
-      return;
-    }
-
-    strip.scrollLeft += direction * Math.max(160, strip.clientWidth * 0.72);
-  }
+    setAllModelsOpen(false);
+    setQuery("");
+  }, [providerSettings.provider]);
 
   const popover = (
-    <div className="composer-popover composer-popover-model model-selector-popover" role="dialog" aria-label="Model selector" data-placement={floatingPosition.placement} style={floatingPosition.style}>
-      <div className="model-selector-header">
-        <div>
-          <strong>{selectedEntry?.option.label ?? selectedModel.label}</strong>
-          <small>
-            {selectedEntry?.provider.label ?? providerSettings.provider} · {formatPricingSummary(selectedEntry?.option.pricing ?? selectedModel.pricing)}
-          </small>
-        </div>
-        <span title={modelContextWindowTitle(selectedContextWindow)}>
-          {formatModelContextWindow(selectedContextWindow)}
-        </span>
-      </div>
-
-      <label className="model-selector-search">
-        <Search size={15} aria-hidden="true" />
-        <input value={query} placeholder="Search models, providers, use cases" onChange={(event) => setQuery(event.target.value)} />
-      </label>
-
-      <div className="model-selector-provider-scroll">
-        <button className="model-selector-provider-scroll-button" type="button" aria-label="Scroll providers left" onClick={() => scrollProviderTabs(-1)}>
-          <ChevronLeft size={15} aria-hidden="true" />
-        </button>
-        <div ref={providerStripRef} className="model-selector-provider-strip" aria-label="Provider filter">
-          <button type="button" data-selected={providerFilter === "all"} onClick={() => setProviderFilter("all")}>
-            All
-            <small>{catalogReady ? selectorEntries.length : "..."}</small>
-          </button>
-          {providerFilters.map((provider) => (
-            <button key={provider.id} type="button" data-selected={providerFilter === provider.id} onClick={() => setProviderFilter(provider.id)}>
-              {provider.label}
-              <small data-status={provider.status}>{formatProviderCount(provider.count, provider.status)}</small>
+    <div
+      className="composer-popover composer-popover-model model-selector-popover"
+      role="dialog"
+      aria-label="Model selector"
+      data-layout={floatingPosition.layout}
+      data-mode={allModelsOpen ? "all" : "quick"}
+      data-placement={floatingPosition.placement}
+      style={floatingPosition.style}
+    >
+      {allModelsOpen ? (
+        <>
+          <div className="model-selector-all-head">
+            <button type="button" aria-label="Back to quick models" onClick={() => setAllModelsOpen(false)}>
+              <ChevronLeft size={17} aria-hidden="true" />
             </button>
-          ))}
-        </div>
-        <button className="model-selector-provider-scroll-button" type="button" aria-label="Scroll providers right" onClick={() => scrollProviderTabs(1)}>
-          <ChevronRight size={15} aria-hidden="true" />
-        </button>
-      </div>
-
-      <div className="model-selector-filter-chips" aria-label="Model capability filters">
-        {MODEL_CAPABILITY_FILTERS.map((filter) => (
-          <button
-            key={filter.id}
-            type="button"
-            title={filter.title}
-            data-selected={Boolean(capabilityFilters[filter.id])}
-            onClick={() => toggleCapabilityFilter(filter.id)}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="model-selector-filter-row" aria-label="Model category and sort filters">
-        <label>
-          <span>Category</span>
-          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as CategoryFilter)}>
-            <option value="all">All categories</option>
-            {MODEL_CATALOG_CATEGORIES.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Sort</span>
-          <select value={sortMode} onChange={(event) => setSortMode(event.target.value as ModelSortMode)}>
-            {MODEL_SORT_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      {liveNotes.length > 0 ? (
-        <div className="model-selector-live-notes" role="status" aria-live="polite">
-          {liveNotes.map((note) => (
-            <span key={note}>{note}</span>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="model-selector-toolbar">
-        <span>{catalogReady ? (filteredEntries.length === 1 ? "1 model" : `${filteredEntries.length} models`) : "Preparing models"}</span>
-        <div>
-          <button type="button" disabled={!catalogReady} onClick={() => setAllCategories(true)}>
-            Expand all
-          </button>
-          <button type="button" disabled={!catalogReady} onClick={() => setAllCategories(false)}>
-            Collapse all
-          </button>
-          <button
-            type="button"
-            disabled={!catalogReady || activeFilterCount === 0}
-            onClick={() => {
-              setCapabilityFilters({});
-              setProviderFilter("all");
-              setCategoryFilter("all");
-              setSortMode("default");
-            }}
-          >
-            Clear filters
-          </button>
-        </div>
-      </div>
-
-      <div className="model-selector-categories">
-        {!catalogReady ? (
-          <div className="model-selector-loading" role="status">
-            Preparing model list...
+            <div>
+              <strong>More models</strong>
+              <span>{catalogReady ? `${formatModelCount(allEntries.length)} across providers` : "Preparing model list"}</span>
+            </div>
           </div>
-        ) : categoryGroups.length > 0 ? (
-          categoryGroups.map((category) => {
-            const open = normalizedQuery || categoryFilter !== "all" || sortMode !== "default" ? true : expandedCategories[category.id];
-            const Icon = iconForCategory(category.id);
 
-            return (
-              <section className="model-selector-category" key={category.id}>
-                <button className="model-selector-category-toggle" type="button" aria-expanded={open} onClick={() => toggleCategory(category.id)}>
-                  {open ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
-                  <Icon size={16} aria-hidden="true" />
-                  <span>
-                    <strong>{category.label}</strong>
-                    <small>{category.description}</small>
-                  </span>
-                  <em>{category.entries.length}</em>
-                </button>
-                {open ? (
-                  <div className="model-selector-list">
-                    {category.entries.map((entry) => (
-                      <ModelSelectorRow
-                        entry={entry}
-                        key={`${entry.option.provider}:${entry.option.id}`}
-                        onSelect={() => {
-                          onModelChange(entry.option.value, entry.option.provider);
-                          onClose();
-                        }}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-              </section>
-            );
-          })
-        ) : (
-          <div className="model-selector-empty">No matching models.</div>
-        )}
-      </div>
+          <label className="model-selector-search">
+            <Search size={15} aria-hidden="true" />
+            <input value={query} placeholder="Search models or providers" onChange={(event) => setQuery(event.target.value)} />
+          </label>
+
+          <div className="model-selector-content-head">
+            <strong>{normalizedQuery ? "Matches" : "All providers"}</strong>
+            <span>{catalogReady ? formatModelCount(visibleAllEntries.length) : "Preparing"}</span>
+          </div>
+
+          <div className="model-selector-list">
+            {!catalogReady ? (
+              <div className="model-selector-loading" role="status">
+                Preparing model list...
+              </div>
+            ) : visibleGroups.length > 0 ? (
+              visibleGroups.map((group) => (
+                <ModelSelectorGroup
+                  group={group}
+                  key={group.id}
+                  onSelect={(entry) => {
+                    onModelChange(entry.option.value, entry.option.provider);
+                    onClose();
+                  }}
+                />
+              ))
+            ) : (
+              <div className="model-selector-empty">{normalizedQuery ? "No matching models." : "No models ready."}</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="model-selector-quick-head">
+            <span className="model-selector-quick-icon" aria-hidden="true">
+              <Sparkles size={18} />
+            </span>
+            <div>
+              <strong>Model</strong>
+              <span>{createQuickModelSubtitle(providerSettings.provider, quickEntries)}</span>
+            </div>
+          </div>
+
+          <div className="model-selector-quick-list">
+            {!catalogReady ? (
+              <div className="model-selector-loading" role="status">
+                Preparing model list...
+              </div>
+            ) : quickEntries.length > 0 ? (
+              quickEntries.map((entry) => (
+                <ModelSelectorQuickRow
+                  entry={entry}
+                  key={`${entry.option.provider}:${entry.option.id}`}
+                  onSelect={() => {
+                    onModelChange(entry.option.value, entry.option.provider);
+                    onClose();
+                  }}
+                />
+              ))
+            ) : (
+              <div className="model-selector-empty">No quick models ready.</div>
+            )}
+            <button
+              className="model-selector-more-button"
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setAllModelsOpen(true);
+              }}
+            >
+              <span>More models</span>
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 
   return createPortal(popover, document.body);
 }
 
-function createVisibleCategoryGroups(entries: ModelSelectorEntry[], sortMode: ModelSortMode) {
-  if (sortMode !== "default") {
-    return [
-      {
-        description: getSortModeDescription(sortMode),
-        entries,
-        id: "general" as ModelCatalogCategoryId,
-        label: getSortModeLabel(sortMode),
-      },
-    ].filter((category) => category.entries.length > 0);
-  }
-
-  return MODEL_CATALOG_CATEGORIES.map((category) => ({
-    ...category,
-    entries: entries.filter((entry) => resolveModelCategory(entry.option, entry.provider.id) === category.id),
-  })).filter((category) => category.entries.length > 0);
-}
-
-function sortModelSelectorEntries(entries: ModelSelectorEntry[], sortMode: ModelSortMode) {
-  if (sortMode === "default") {
-    return entries;
-  }
-
-  return entries
-    .map((entry, index) => ({ entry, index }))
-    .sort((left, right) => compareModelSelectorEntries(left.entry, right.entry, sortMode) || left.index - right.index)
-    .map((item) => item.entry);
-}
-
-function compareModelSelectorEntries(left: ModelSelectorEntry, right: ModelSelectorEntry, sortMode: ModelSortMode) {
-  if (sortMode === "context-desc") {
-    return right.contextWindow.tokens - left.contextWindow.tokens || compareModelLabels(left, right);
-  }
-
-  const leftPrice = getModelPriceSortValue(left.option);
-  const rightPrice = getModelPriceSortValue(right.option);
-  const priceComparison = compareNullableNumbers(leftPrice, rightPrice, sortMode === "price-desc" ? "desc" : "asc");
-
-  return priceComparison || compareModelLabels(left, right);
-}
-
-function compareNullableNumbers(left: number | null, right: number | null, direction: "asc" | "desc") {
-  if (left === null && right === null) {
-    return 0;
-  }
-
-  if (left === null) {
-    return 1;
-  }
-
-  if (right === null) {
-    return -1;
-  }
-
-  return direction === "asc" ? left - right : right - left;
-}
-
-function compareModelLabels(left: ModelSelectorEntry, right: ModelSelectorEntry) {
-  return left.option.label.localeCompare(right.option.label);
-}
-
-function getModelPriceSortValue(option: ChatModelOption) {
-  const text = getModelSearchText(option);
-
-  if (isFreeModel(option, text)) {
-    return 0;
-  }
-
-  const input = option.pricing?.inputPerMillionTokens;
-  const output = option.pricing?.outputPerMillionTokens;
-  const values = [input, output].filter((value): value is number => typeof value === "number");
-
-  return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
-}
-
-function getSortModeLabel(sortMode: ModelSortMode) {
-  return MODEL_SORT_OPTIONS.find((option) => option.id === sortMode)?.label ?? "Sorted models";
-}
-
-function getSortModeDescription(sortMode: ModelSortMode) {
-  if (sortMode === "context-desc") {
-    return "Visible models sorted by largest context window.";
-  }
-
-  if (sortMode === "price-desc") {
-    return "Visible models sorted by highest known input plus output price.";
-  }
-
-  return "Visible models sorted from cheapest to most expensive known price.";
-}
-
-function ModelSelectorRow({ entry, onSelect }: { entry: ModelSelectorEntry; onSelect: () => void }) {
-  const category = resolveModelCategory(entry.option, entry.provider.id);
-  const Icon = iconForCategory(category);
-  const useCase = entry.option.useCase || entry.option.detail;
-  const badges = createModelCapabilityBadges(entry);
-
+function ModelSelectorGroup({ group, onSelect }: { group: ModelSelectorEntryGroup; onSelect: (entry: ModelSelectorEntry) => void }) {
   return (
-    <button
-      className="model-selector-row"
-      type="button"
-      role="menuitemradio"
-      aria-checked={entry.selected}
-      data-selected={entry.selected}
-      onClick={onSelect}
-    >
-      <span className="model-selector-row-icon">
-        <Icon size={17} aria-hidden="true" />
-      </span>
-      <span className="model-selector-row-main">
-        <strong>
-          <span>{entry.option.label}</span>
-          <em>{entry.provider.label}</em>
-        </strong>
-        <small>{useCase}</small>
-        <span className="model-selector-badges">
-          {badges.map((badge) => (
-            <i key={badge.label} title={badge.title} data-tone={badge.tone}>
-              {badge.label}
-            </i>
-          ))}
-        </span>
+    <section className="model-selector-group" aria-label={group.label}>
+      <div className="model-selector-group-head">
+        <strong>{group.label}</strong>
+        <span>{formatModelCount(group.entries.length)}</span>
+      </div>
+      <div className="model-selector-group-list">
+        {group.entries.map((entry) => (
+          <ModelSelectorRow entry={entry} key={`${entry.option.provider}:${entry.option.id}`} onSelect={() => onSelect(entry)} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ModelSelectorQuickRow({ entry, onSelect }: { entry: ModelSelectorEntry; onSelect: () => void }) {
+  return (
+    <button className="model-selector-quick-row" type="button" aria-pressed={entry.selected} data-selected={entry.selected} onClick={onSelect}>
+      <span>
+        <strong>{entry.option.label}</strong>
+        <small>{createQuickModelDescription(entry)}</small>
       </span>
       {entry.selected ? <Check size={18} aria-hidden="true" /> : null}
     </button>
   );
 }
 
-function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>) {
-  const [position, setPosition] = useState<{ placement: "above" | "below"; style: CSSProperties }>(() => ({
+function ModelSelectorRow({ entry, onSelect }: { entry: ModelSelectorEntry; onSelect: () => void }) {
+  const Icon = iconForEntry(entry);
+  const useCase = formatModelEntryDescription(entry);
+  const sourceLabel = formatModelEntrySourceLabel(entry);
+
+  return (
+    <button className="model-selector-row" type="button" aria-pressed={entry.selected} data-selected={entry.selected} onClick={onSelect}>
+      <span className="model-selector-row-icon">
+        <Icon size={17} aria-hidden="true" />
+      </span>
+      <span className="model-selector-row-main">
+        <strong>
+          <span>{entry.option.label}</span>
+          <em>{sourceLabel}</em>
+        </strong>
+        <small>{useCase}</small>
+      </span>
+      <span className="model-selector-row-meta" title={formatModelPricingTitle(entry.option.pricing)}>
+        <strong>{formatModelPricingSummary(entry.option.pricing)}</strong>
+        <small>{formatModelContextWindow(entry.contextWindow)}</small>
+      </span>
+      {entry.selected ? <Check size={18} aria-hidden="true" /> : null}
+    </button>
+  );
+}
+
+function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>, expanded: boolean) {
+  const [position, setPosition] = useState<{ layout: "anchored" | "empty"; placement: "above" | "below" | "viewport"; style: CSSProperties }>(() => ({
+    layout: "anchored",
     placement: "above",
     style: {
       opacity: 0,
@@ -518,20 +286,48 @@ function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>) {
       const bounds = getModelSelectorBounds(anchor);
       const gap = 10;
       const availableWidth = Math.max(280, bounds.right - bounds.left);
-      const width = Math.min(760, availableWidth);
+      const emptyChatLayout = Boolean(anchor.closest('.conversation-main[data-empty="true"]'));
+      const preferredWidth = expanded ? (emptyChatLayout ? 760 : 720) : 368;
+      const width = Math.min(preferredWidth, availableWidth);
       const preferredLeft = anchorRect.right - width;
       const left = clamp(preferredLeft, bounds.left, bounds.right - width);
+      const viewportHeight = Math.max(320, bounds.bottom - bounds.top);
+
+      if (emptyChatLayout) {
+        const maxHeight = Math.min(expanded ? 720 : 430, viewportHeight);
+        const centeredLeft = clamp(anchorRect.left + anchorRect.width / 2 - width / 2, bounds.left, bounds.right - width);
+
+        setPosition({
+          layout: "empty",
+          placement: "viewport",
+          style: {
+            height: expanded ? `${maxHeight}px` : undefined,
+            left: `${centeredLeft}px`,
+            maxHeight: `${maxHeight}px`,
+            maxWidth: `${width}px`,
+            opacity: 1,
+            pointerEvents: "auto",
+            position: "fixed",
+            right: "auto",
+            top: `${bounds.top}px`,
+            width: `${width}px`,
+          },
+        });
+        return;
+      }
+
       const availableAbove = anchorRect.top - bounds.top - gap;
       const availableBelow = bounds.bottom - anchorRect.bottom - gap;
       const placeAbove = availableAbove >= 280 || availableAbove >= availableBelow;
       const availableHeight = Math.max(220, placeAbove ? availableAbove : availableBelow);
-      const maxHeight = Math.min(620, availableHeight);
+      const maxHeight = Math.min(expanded ? 640 : 430, availableHeight);
 
       setPosition({
+        layout: "anchored",
         placement: placeAbove ? "above" : "below",
         style: {
           bottom: placeAbove ? `${window.innerHeight - anchorRect.top + gap}px` : undefined,
-          height: `${maxHeight}px`,
+          height: expanded ? `${maxHeight}px` : undefined,
           left: `${left}px`,
           maxHeight: `${maxHeight}px`,
           maxWidth: `${width}px`,
@@ -568,7 +364,7 @@ function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>) {
       window.removeEventListener("resize", schedulePositionUpdate);
       window.removeEventListener("scroll", schedulePositionUpdate, true);
     };
-  }, [anchorRef]);
+  }, [anchorRef, expanded]);
 
   return position;
 }
@@ -625,11 +421,18 @@ function buildSelectorEntries(
   providerSettings: ProviderSettings,
   currentModel: string,
   liveModelCatalogs: Partial<Record<ModelProviderId, ProviderModelMetadata[]>>,
+  liveModelCatalogStatus: Partial<Record<ModelProviderId, LiveModelCatalogStatus>>,
   modelContextWindows: ModelContextWindowMap,
 ): ModelSelectorEntry[] {
   return MODEL_PROVIDERS.flatMap((provider) => {
+    const liveModels = liveModelCatalogs[provider.id];
+
+    if (isLocalRuntimeProvider(provider.id) && (liveModelCatalogStatus[provider.id] !== "ready" || !liveModels || liveModels.length === 0)) {
+      return [];
+    }
+
     const providerModel = provider.id === providerSettings.provider ? currentModel : providerSettings.providerModels[provider.id] || provider.defaultModel;
-    const providerOptions = buildProviderModelOptions(provider.id, liveModelCatalogs[provider.id], providerModel);
+    const providerOptions = filterEnabledProviderModelOptions(buildProviderModelOptions(provider.id, liveModels, providerModel), providerSettings.disabledModels[provider.id]);
 
     return providerOptions.map((option) => ({
       contextWindow:
@@ -647,12 +450,107 @@ function buildSelectorEntries(
   });
 }
 
-function clamp(value: number, min: number, max: number) {
-  if (max < min) {
-    return min;
+function sortRecommendedEntries(entries: ModelSelectorEntry[]) {
+  return entries
+    .map((entry, index) => ({
+      entry,
+      index,
+      order: RECOMMENDED_HOSTED_MODEL_ORDER.indexOf(entry.option.value as (typeof RECOMMENDED_HOSTED_MODEL_ORDER)[number]),
+    }))
+    .sort((left, right) => {
+      const leftOrder = left.order === -1 ? Number.MAX_SAFE_INTEGER : left.order;
+      const rightOrder = right.order === -1 ? Number.MAX_SAFE_INTEGER : right.order;
+
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map((item) => item.entry);
+}
+
+function createQuickModelEntries(entries: ModelSelectorEntry[], selectedEntry: ModelSelectorEntry | undefined, activeProvider: ModelProviderId) {
+  const providerEntries = entries.filter((entry) => entry.provider.id === activeProvider);
+  const recommendedEntries = sortRecommendedEntries(entries.filter(isRecommendedHostedEntry));
+  const primaryEntries = activeProvider === "openrouter" ? recommendedEntries : providerEntries.length > 0 ? providerEntries : recommendedEntries;
+  const selectedFirst = selectedEntry && selectedEntry.provider.id === activeProvider ? [selectedEntry, ...primaryEntries] : primaryEntries;
+  const quickEntries = dedupeEntries(selectedFirst).slice(0, 3);
+
+  if (quickEntries.length >= 3 || activeProvider === "openrouter") {
+    return quickEntries;
   }
 
-  return Math.min(Math.max(value, min), max);
+  return dedupeEntries([...quickEntries, ...recommendedEntries]).slice(0, 3);
+}
+
+function createQuickModelSubtitle(provider: ModelProviderId, entries: ModelSelectorEntry[]) {
+  if (entries.length === 0) {
+    return "No models ready";
+  }
+
+  if (provider === "openrouter") {
+    return "Free OpenRouter defaults";
+  }
+
+  if (provider === "9router") {
+    return "Subscription defaults";
+  }
+
+  if (isLocalRuntimeProvider(provider)) {
+    return "Live local runtime models";
+  }
+
+  return `${getProviderLabel(provider)} defaults`;
+}
+
+function createQuickModelDescription(entry: ModelSelectorEntry) {
+  return formatModelEntryDescription(entry);
+}
+
+function dedupeEntries(entries: ModelSelectorEntry[]) {
+  const seen = new Set<string>();
+  const dedupedEntries: ModelSelectorEntry[] = [];
+
+  for (const entry of entries) {
+    const key = `${entry.provider.id}:${entry.option.value}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    dedupedEntries.push(entry);
+  }
+
+  return dedupedEntries;
+}
+
+function createModelSelectorGroups(entries: ModelSelectorEntry[]): ModelSelectorEntryGroup[] {
+  const groups: ModelSelectorEntryGroup[] = [];
+  const groupByProvider = new Map<ModelProviderId, ModelSelectorEntryGroup>();
+
+  for (const entry of entries) {
+    let group = groupByProvider.get(entry.provider.id);
+
+    if (!group) {
+      group = {
+        entries: [],
+        id: entry.provider.id,
+        label: getModelSelectorGroupLabel(entry.provider.id),
+      };
+      groupByProvider.set(entry.provider.id, group);
+      groups.push(group);
+    }
+
+    group.entries.push(entry);
+  }
+
+  return groups;
+}
+
+function isRecommendedHostedEntry(entry: ModelSelectorEntry) {
+  if (isLocalRuntimeProvider(entry.provider.id)) {
+    return false;
+  }
+
+  return entry.provider.id === "openrouter" && RECOMMENDED_HOSTED_MODEL_SET.has(entry.option.value);
 }
 
 function matchesModelSearch(entry: ModelSelectorEntry, normalizedQuery: string) {
@@ -666,7 +564,8 @@ function matchesModelSearch(entry: ModelSelectorEntry, normalizedQuery: string) 
     entry.option.detail,
     entry.option.useCase,
     entry.provider.label,
-    ...createModelCapabilityBadges(entry).map((badge) => badge.label),
+    formatModelEntrySourceLabel(entry),
+    ...createModelSearchTags(entry),
     ...(entry.option.capabilities ?? []),
   ]
     .join(" ")
@@ -674,177 +573,64 @@ function matchesModelSearch(entry: ModelSelectorEntry, normalizedQuery: string) 
     .includes(normalizedQuery);
 }
 
-function matchesCapabilityFilters(entry: ModelSelectorEntry, filters: Partial<Record<ModelCapabilityFilter, boolean>>) {
-  return MODEL_CAPABILITY_FILTERS.every((filter) => {
-    if (!filters[filter.id]) {
-      return true;
-    }
-
-    return modelMatchesCapabilityFilter(entry, filter.id);
-  });
-}
-
-function modelMatchesCapabilityFilter(entry: ModelSelectorEntry, filter: ModelCapabilityFilter) {
-  const text = getModelSearchText(entry.option);
-
-  if (filter === "local") {
-    return isLocalProvider(entry.provider.id);
-  }
-
-  if (filter === "cloud") {
-    return !isLocalProvider(entry.provider.id);
-  }
-
-  if (filter === "free") {
-    return isFreeModel(entry.option, text);
-  }
-
-  if (filter === "paid") {
-    return !isFreeModel(entry.option, text);
-  }
-
-  if (filter === "image") {
-    return isImageModel(entry.option, text);
-  }
-
-  if (filter === "thinking") {
-    return isThinkingModel(entry.option, entry.provider.id, text);
-  }
-
-  if (filter === "structured") {
-    return isStructuredOutputModel(entry.option, text);
-  }
-
-  return entry.contextWindow.tokens >= 200_000;
-}
-
-function createModelCapabilityBadges(entry: ModelSelectorEntry): ModelCapabilityBadge[] {
+function createModelSearchTags(entry: ModelSelectorEntry) {
   const text = getModelSearchText(entry.option);
   const free = isFreeModel(entry.option, text);
-  const thinking = isThinkingModel(entry.option, entry.provider.id, text);
-  const image = isImageModel(entry.option, text);
-  const structured = isStructuredOutputModel(entry.option, text);
-  const local = isLocalProvider(entry.provider.id);
-  const badges: ModelCapabilityBadge[] = [
-    {
-      label: local ? "Local" : "Cloud",
-      title: local ? "Runs through a local provider" : "Runs through a hosted provider",
-      tone: local ? "success" : "neutral",
-    },
-    {
-      label: free ? "Free" : formatPricingSummary(entry.option.pricing),
-      title: formatPricingTitle(entry.option.pricing),
-      tone: free ? "success" : "neutral",
-    },
-    {
-      label: formatModelContextWindow(entry.contextWindow),
-      title: modelContextWindowTitle(entry.contextWindow),
-      tone: entry.contextWindow.tokens >= 200_000 ? "accent" : "neutral",
-    },
+  const local = isLocalRuntimeProvider(entry.provider.id);
+  const gateway = entry.provider.id === "9router";
+  const tags = [
+    local ? "Local" : gateway ? "Subscription" : "Provider",
+    free ? "Free" : formatModelPricingSummary(entry.option.pricing),
+    formatModelContextWindow(entry.contextWindow),
   ];
 
-  if (thinking) {
-    badges.push({ label: "Thinking", title: "Supports reasoning or thinking mode", tone: "accent" });
+  if (isThinkingModel(entry.option, text)) {
+    tags.push("Thinking");
   }
 
-  if (image) {
-    badges.push({ label: "Image", title: "Mentions image, vision, or multimodal support", tone: "accent" });
+  if (isToolModel(entry.option, text)) {
+    tags.push("Tools");
   }
 
-  if (structured) {
-    badges.push({ label: "Structured", title: "Mentions structured output or JSON support", tone: "accent" });
-  }
-
-  for (const capability of entry.option.capabilities ?? []) {
-    if (badges.length >= 7) {
-      break;
-    }
-
-    if (!badges.some((badge) => badge.label.toLowerCase() === capability.toLowerCase())) {
-      badges.push({ label: capability, title: capability, tone: "neutral" });
-    }
-  }
-
-  return badges;
+  return tags;
 }
 
 function getModelSearchText(option: ChatModelOption) {
   return `${option.label} ${option.value} ${option.detail} ${option.useCase ?? ""} ${(option.capabilities ?? []).join(" ")}`.toLowerCase();
 }
 
-function isLocalProvider(providerId: ModelProviderId) {
-  return providerId === "lmstudio" || providerId === "ollama" || providerId === "vllm";
+function iconForEntry(entry: ModelSelectorEntry) {
+  if (isLocalRuntimeProvider(entry.provider.id)) {
+    return Gauge;
+  }
+
+  if (entry.provider.id === "9router") {
+    return Route;
+  }
+
+  const text = getModelSearchText(entry.option);
+
+  if (/flash|fast|m2\.5|mini|maximize throughput/.test(text)) {
+    return Zap;
+  }
+
+  if (/reason|thinking|agent|tool|coding|software|laguna|gpt-oss|nemotron/.test(text)) {
+    return BrainCircuit;
+  }
+
+  return Sparkles;
 }
 
-function resolveModelCategory(option: ChatModelOption, providerId: ModelProviderId): ModelCatalogCategoryId {
-  if (option.category === "recommended") {
-    return option.category;
-  }
-
-  if (isLocalProvider(providerId)) {
-    return "local";
-  }
-
-  const text = getModelSearchText(option);
-
-  if (isFreeModel(option, text)) {
-    return "free";
-  }
-
-  if (isStructuredOutputModel(option, text)) {
-    return "structured-output";
-  }
-
-  if (option.category) {
-    return option.category;
-  }
-
-  if (/image|vision|audio|video|multimodal|omni/.test(text)) {
-    return "multimodal";
-  }
-
-  if (/code|coding|agent|software|devstral|laguna|cobuddy/.test(text)) {
-    return "coding";
-  }
-
-  if (/reason|thinking|opus|pro|ring|research/.test(text)) {
-    return "reasoning";
-  }
-
-  if (option.contextWindowTokens && option.contextWindowTokens >= 1_000_000) {
-    return "long-context";
-  }
-
-  if (/mini|nano|flash|lite|haiku|small|fast|free|20b|xs/.test(text)) {
-    return "fast";
-  }
-
-  return "general";
-}
-
-function isStructuredOutputModel(option: ChatModelOption, text: string) {
+function isToolModel(option: ChatModelOption, text: string) {
   const capabilityText = (option.capabilities ?? []).join(" ").toLowerCase();
 
-  return (
-    /\bstructured\b|json|schema|response_format|code execution|provider[-\s]?managed|wolfram|site visits?/.test(capabilityText) ||
-    /\bstructured\b|json|schema|response_format|code execution|provider[-\s]?managed|wolfram|site visits?/.test(text)
-  );
+  return /\btool|agent|coding|software|structured|json/.test(capabilityText) || /\btool|agent|coding|software|structured|json/.test(text);
 }
 
-function isImageModel(_option: ChatModelOption, text: string) {
-  return /\bimage\b|\bvision\b|multimodal|multi-modal|omni|visual input|image input|screenshots?/.test(text);
-}
+function isThinkingModel(option: ChatModelOption, text: string) {
+  const capabilityText = (option.capabilities ?? []).join(" ").toLowerCase();
 
-function isThinkingModel(option: ChatModelOption, providerId: ModelProviderId, text: string) {
-  if (/\breason(?:ing)?\b|thinking|chain[-\s]?of[-\s]?thought|deliberate|research|analysis/.test(text)) {
-    return true;
-  }
-
-  if (providerId === "openrouter" || isLocalProvider(providerId)) {
-    return false;
-  }
-
-  return supportsProviderThinking(providerId, "medium", option.value);
+  return /\breason(?:ing)?\b|thinking|planning|analysis/.test(capabilityText) || /\breason(?:ing)?\b|thinking|planning|analysis/.test(text);
 }
 
 function isFreeModel(option: ChatModelOption, text: string) {
@@ -854,199 +640,89 @@ function isFreeModel(option: ChatModelOption, text: string) {
   return Boolean(freePricing || option.value.endsWith(":free") || /\bfree\b|no-cost|cost-free/.test(text));
 }
 
-function createInitialExpandedCategories(selectedModel: ChatModelOption) {
-  const selectedCategory = resolveModelCategory(selectedModel, selectedModel.provider);
-
-  return MODEL_CATALOG_CATEGORIES.reduce<Record<ModelCatalogCategoryId, boolean>>(
-    (categories, category) => ({
-      ...categories,
-      [category.id]: category.id === "recommended" || category.id === selectedCategory,
-    }),
-    {} as Record<ModelCatalogCategoryId, boolean>,
-  );
+function isLocalRuntimeProvider(providerId: ModelProviderId) {
+  return LOCAL_RUNTIME_PROVIDER_IDS.has(providerId);
 }
 
-function iconForCategory(category: ModelCatalogCategoryId) {
-  if (category === "free") {
-    return BadgeDollarSign;
+function getProviderLabel(providerId: ModelProviderId) {
+  return MODEL_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? providerId;
+}
+
+function getModelSelectorGroupLabel(providerId: ModelProviderId) {
+  if (providerId === "9router") {
+    return "Subscription models";
   }
 
-  if (category === "structured-output") {
-    return Sparkles;
+  if (providerId === "lmstudio") {
+    return "LM Studio loaded models";
   }
 
-  if (category === "coding") {
-    return Code2;
+  if (providerId === "ollama") {
+    return "Ollama loaded models";
   }
 
-  if (category === "reasoning") {
-    return BrainCircuit;
+  if (providerId === "vllm") {
+    return "vLLM served models";
   }
 
-  if (category === "fast") {
-    return Zap;
+  return getProviderLabel(providerId);
+}
+
+function formatModelEntrySourceLabel(entry: ModelSelectorEntry) {
+  if (entry.provider.id === "9router") {
+    return "Subscription";
   }
 
-  if (category === "long-context") {
-    return Layers3;
+  if (entry.provider.id !== "openrouter") {
+    return entry.provider.label;
   }
 
-  if (category === "multimodal") {
-    return ImageIcon;
+  const sourceId = entry.option.value.split("/")[0];
+  const sourceLabels: Record<string, string> = {
+    "arcee-ai": "Arcee AI",
+    deepseek: "DeepSeek",
+    minimax: "MiniMax",
+    nvidia: "NVIDIA",
+    openai: "OpenAI",
+    openrouter: "OpenRouter",
+    poolside: "Poolside",
+    "z-ai": "Z.ai",
+  };
+
+  return sourceLabels[sourceId] ?? sourceId;
+}
+
+function formatModelEntryDescription(entry: ModelSelectorEntry) {
+  const description = entry.option.useCase || entry.option.detail || `${formatModelEntrySourceLabel(entry)} model`;
+
+  if (entry.provider.id !== "9router") {
+    return description;
   }
 
-  if (category === "local") {
-    return Gauge;
+  return description
+    .replace(/\bCodex-backed 9Router route\b/g, "Subscription-backed route")
+    .replace(/\b9Router Codex subscription route\b/g, "Subscription route")
+    .replace(/\b9Router Codex coding route\b/g, "Subscription coding route")
+    .replace(/\b9Router Codex route\b/g, "Subscription route")
+    .replace(/\bin 9Router\b/g, "through your subscription")
+    .replace(/\bthrough 9Router\b/g, "through your subscription")
+    .replace(/\b9Router\b/g, "subscription");
+}
+
+function clamp(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
   }
 
-  return Sparkles;
+  return Math.min(Math.max(value, min), max);
+}
+
+function formatModelCount(count: number) {
+  return count === 1 ? "1 model" : `${count} models`;
 }
 
 function formatModelContextWindow(contextWindow: ModelContextWindow) {
   const suffix = contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "" : " est.";
 
   return `${formatTokenCount(contextWindow.tokens)} ctx${suffix}`;
-}
-
-function modelContextWindowTitle(contextWindow: ModelContextWindow) {
-  return contextWindow.source === "openrouter" || contextWindow.source === "provider" ? "Context window reported by the selected provider" : "Estimated context window until provider metadata is available";
-}
-
-function formatPricingSummary(pricing: ModelPricing | undefined) {
-  if (!pricing) {
-    return "Price n/a";
-  }
-
-  const input = pricing.inputPerMillionTokens;
-  const output = pricing.outputPerMillionTokens;
-
-  if (input === 0 && output === 0) {
-    return "Free";
-  }
-
-  if (typeof input === "number" && typeof output === "number") {
-    return `${formatUsd(input)} in / ${formatUsd(output)} out`;
-  }
-
-  if (pricing.note) {
-    return "Variable";
-  }
-
-  if (typeof input === "number") {
-    return `${formatUsd(input)} in`;
-  }
-
-  if (typeof output === "number") {
-    return `${formatUsd(output)} out`;
-  }
-
-  return "Price n/a";
-}
-
-function formatPricingTitle(pricing: ModelPricing | undefined) {
-  if (!pricing) {
-    return "No provider pricing metadata available for this model.";
-  }
-
-  const parts = [
-    pricing.sourceLabel || (pricing.source === "openrouter" ? "OpenRouter" : "Provider"),
-    typeof pricing.inputPerMillionTokens === "number" ? `input ${formatUsd(pricing.inputPerMillionTokens)} per 1M tokens` : "",
-    typeof pricing.cachedInputPerMillionTokens === "number" ? `cached input ${formatUsd(pricing.cachedInputPerMillionTokens)} per 1M tokens` : "",
-    typeof pricing.outputPerMillionTokens === "number" ? `output ${formatUsd(pricing.outputPerMillionTokens)} per 1M tokens` : "",
-    typeof pricing.webSearchUsd === "number" ? `web search ${formatUsd(pricing.webSearchUsd)} per operation` : "",
-    pricing.note || "",
-  ].filter(Boolean);
-
-  return parts.join(" · ");
-}
-
-function formatUsd(value: number) {
-  const maximumFractionDigits = value < 0.01 && value > 0 ? 6 : value < 1 ? 3 : 2;
-
-  return `$${value.toLocaleString(undefined, {
-    maximumFractionDigits,
-    minimumFractionDigits: value >= 1 ? 2 : 0,
-  })}`;
-}
-
-function formatProviderCount(count: number, status: LiveModelCatalogStatus) {
-  if (status === "loading") {
-    return count > 0 ? `${count}` : "loading";
-  }
-
-  if (status === "error") {
-    return count > 0 ? `${count} cached` : "offline";
-  }
-
-  return `${count}`;
-}
-
-function createLiveCatalogNotes(
-  providerSettings: ProviderSettings,
-  liveModelCatalogs: Partial<Record<ModelProviderId, ProviderModelMetadata[]>>,
-  liveModelCatalogErrors: Partial<Record<ModelProviderId, string>>,
-  liveModelCatalogStatus: Partial<Record<ModelProviderId, LiveModelCatalogStatus>>,
-  providerFilter: ProviderFilter,
-) {
-  return MODEL_PROVIDERS.flatMap((provider) => {
-    if (providerFilter !== "all" && providerFilter !== provider.id) {
-      return [];
-    }
-
-    const status = liveModelCatalogStatus[provider.id] ?? "idle";
-
-    if (providerFilter === "all" && provider.id !== providerSettings.provider) {
-      return [];
-    }
-
-    if (status !== "loading" && status !== "error") {
-      return [];
-    }
-
-    const count = liveModelCatalogs[provider.id]?.length ?? 0;
-    const baseUrl = providerSettings.baseUrls[provider.id] || provider.defaultBaseUrl;
-    const note = createLiveCatalogNote(provider.label, baseUrl, status, liveModelCatalogErrors[provider.id], count);
-
-    return note ? [note] : [];
-  });
-}
-
-function createLiveCatalogNote(providerLabel: string, baseUrl: string, status: LiveModelCatalogStatus, error: string | undefined, modelCount: number) {
-  const modelsUrl = `${baseUrl.replace(/\/+$/, "")}/models`;
-
-  if (status === "loading") {
-    return modelCount > 0 ? "" : `Loading ${providerLabel} models from ${modelsUrl}`;
-  }
-
-  if (status === "error") {
-    return isOfflineCatalogError(error) ? formatOfflineCatalogNote(providerLabel, baseUrl) : error || `No model list from ${modelsUrl}.`;
-  }
-
-  if (status === "ready" && modelCount === 0) {
-    return `${providerLabel} is reachable but returned no loaded models.`;
-  }
-
-  return "";
-}
-
-function isOfflineCatalogError(error: string | null | undefined) {
-  const normalizedError = error?.toLowerCase().trim();
-
-  if (!normalizedError) {
-    return true;
-  }
-
-  return [
-    "failed to fetch",
-    "fetch failed",
-    "networkerror",
-    "load failed",
-    "connection refused",
-    "err_connection",
-    "err_network",
-  ].some((offlineSignal) => normalizedError.includes(offlineSignal));
-}
-
-function formatOfflineCatalogNote(providerLabel: string, baseUrl: string) {
-  return `Offline. Start ${providerLabel} and check ${baseUrl.replace(/\/+$/, "")}.`;
 }

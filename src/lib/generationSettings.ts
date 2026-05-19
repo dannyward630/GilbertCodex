@@ -1,12 +1,14 @@
 import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "./contextWindow";
-import { isDeepResearchThinking, type ModelProviderId, type ProviderSettings } from "../types/settings";
+import type { ModelProviderId, ProviderSettings } from "../types/settings";
 
 export const DEFAULT_LOCAL_MAX_TOKENS = 16_384;
+export const DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS = DEFAULT_CONTEXT_WINDOW_TOKENS;
+export const MAX_CONFIGURED_CONTEXT_WINDOW_TOKENS = 4_194_304;
 export const DEFAULT_LOCAL_TEMPERATURE = 0.7;
 export const DEFAULT_LOCAL_TOP_P = 0.95;
 export const DEFAULT_LOCAL_TOP_K = 40;
 
-const LOCAL_MODEL_PROVIDERS = new Set<ModelProviderId>(["lmstudio", "ollama", "vllm"]);
+const LOCAL_MODEL_PROVIDERS = new Set<ModelProviderId>(["9router", "lmstudio", "ollama", "vllm"]);
 const LOCAL_TOP_K_REQUEST_PROVIDERS = new Set<ModelProviderId>(["lmstudio", "vllm"]);
 
 export function isLocalModelProvider(provider: ModelProviderId) {
@@ -22,7 +24,7 @@ export function getEffectiveMaxOutputTokens(settings: ProviderSettings, contextW
 }
 
 export function getAutomaticHostedMaxOutputTokens(settings: Pick<ProviderSettings, "model" | "thinking">, contextWindowTokens = DEFAULT_CONTEXT_WINDOW_TOKENS) {
-  const contextBudget = isDeepResearchThinking(settings.thinking) ? getDeepResearchOutputBudget(contextWindowTokens) : getStandardOutputBudget(contextWindowTokens);
+  const contextBudget = getStandardOutputBudget(contextWindowTokens);
   const modelLimit = inferModelOutputLimit(settings.model);
 
   return Math.max(4_096, Math.min(contextBudget, modelLimit));
@@ -43,6 +45,10 @@ export function applyLocalSamplingParameters(settings: ProviderSettings, body: R
 
 export function normalizeMaxTokens(value: unknown, fallback = DEFAULT_LOCAL_MAX_TOKENS) {
   return clampInteger(value, 256, 131_072, fallback);
+}
+
+export function normalizeContextWindowTokens(value: unknown, fallback = DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS) {
+  return clampInteger(value, 4_096, MAX_CONFIGURED_CONTEXT_WINDOW_TOKENS, fallback);
 }
 
 export function normalizeTemperature(value: unknown, fallback = DEFAULT_LOCAL_TEMPERATURE) {
@@ -69,24 +75,6 @@ function getStandardOutputBudget(contextWindowTokens: number) {
   }
 
   return 8_192;
-}
-
-function getDeepResearchOutputBudget(contextWindowTokens: number) {
-  const boundedContext = Math.max(Math.round(contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS), 1);
-  const baseBudget =
-    boundedContext >= 1_000_000
-      ? 65_536
-      : boundedContext >= 256_000
-        ? 32_768
-        : boundedContext >= 128_000
-          ? 24_576
-          : boundedContext >= 64_000
-            ? 16_384
-            : 8_192;
-  const boostedBudget = Math.min(baseBudget * 2, 65_536);
-  const contextCap = Math.max(4_096, Math.floor(boundedContext * 0.35));
-
-  return Math.min(boostedBudget, contextCap);
 }
 
 function inferModelOutputLimit(model: string) {

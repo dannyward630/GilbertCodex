@@ -1,7 +1,7 @@
 .app-topbar {
   color: var(--chrome-text);
   border-bottom-color: transparent;
-  background: transparent;
+  background: var(--workspace-bg);
 }
 
 .workspace-shell {
@@ -19,10 +19,7 @@
 }
 
 .conversation-body {
-  background:
-    radial-gradient(circle at 50% 0%, var(--chat-page-glow), transparent 36%),
-    linear-gradient(180deg, color-mix(in srgb, var(--chat-page-bg) 96%, white 4%) 0%, var(--chat-page-bg-2) 100%),
-    var(--chat-page-bg);
+  background: var(--chat-page-bg);
 }
 
 .conversation-main {
@@ -164,12 +161,8 @@
   background: var(--hover);
 }
 
-.settings-page,
-.utility-page {
-  background:
-    radial-gradient(circle at 50% 0%, var(--chat-page-glow), transparent 36%),
-    linear-gradient(180deg, color-mix(in srgb, var(--chat-page-bg) 96%, white 4%) 0%, var(--chat-page-bg-2) 100%),
-    var(--chat-page-bg);
+.settings-page {
+  background: var(--chat-page-bg);
 }
 
 .settings-card {
@@ -191,9 +184,7 @@
 }
 
 .thinking-popover-header,
-.thinking-effort-grid button,
-.thinking-trace-toggle,
-.thinking-trace-note {
+.thinking-effort-grid button {
   color: var(--text);
   border-color: var(--popover-border);
   background: var(--composer-control-bg);
@@ -201,16 +192,12 @@
 
 .thinking-popover-header small,
 .thinking-effort-grid small,
-.thinking-trace-toggle small,
-.thinking-trace-note small,
 .thinking-field-row small,
 .thinking-summary-action {
   color: var(--text-dim);
 }
 
-.thinking-effort-grid button:hover,
-.thinking-trace-toggle:hover,
-.thinking-trace-toggle:focus-visible {
+.thinking-effort-grid button:hover {
   background: var(--hover);
 }
 
@@ -436,4 +423,560 @@
   color: #17202b;
   border-color: rgba(24, 34, 48, 0.13);
   background: rgba(255, 255, 255, 0.88);
+}
+
+/*
+ * Neutral gray dark-mode pass.
+ * The app chrome, workspace, and chat shell share one flat gray foundation so
+ * the desktop frame reads as a single surface instead of stacked gradients.
+ */
+.desktop-root {
+  color: var(--text);
+  background: var(--workspace-bg);
+}
+
+.workspace-shell {
+  background: var(--workspace-bg);
+}
+
+.conversation-frame,
+.settings-page,
+.apps-page,
+.plugin-page,
+.weather-radar-page,
+.auth-root,
+.app-startup-root {
+  background: var(--page-gradient);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent),
+    0 18px 54px color-mix(in srgb, black 20%, transparent);
+}
+
+.conversation-body,
+.settings-page {
+  background: var(--page-gradient-soft);
+}
+
+.conversation-frame,
+.conversation-body {
+  background: var(--chat-page-bg);
+}
+
+.conversation-header::before {
+  background: var(--chat-page-bg);
+  backdrop-filter: none;
+}
+
+.conversation-frame[data-header-blur="true"] .conversation-header::after {
+  opacity: 0;
+}
+
+.conversation-title h1,
+.empty-chat-start h2,
+.settings-section-heading h1,
+.settings-hero h1,
+.apps-hero-title h1,
+.plugin-hero-title strong,
+.weather-radar-header h1,
+.auth-brand-panel h1,
+.auth-form-heading h2 {
+  font-family: var(--font-display);
+}
+
+.empty-chat-start h2 {
+  color: color-mix(in srgb, var(--text) 92%, var(--gold) 8%);
+  font-weight: 640;
+}
+
+.message-block[data-role="assistant"] .message-content {
+  color: color-mix(in srgb, var(--text) 95%, var(--text-muted) 5%);
+}
+
+.message-block[data-role="user"] .message-content {
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+  box-shadow: var(--shadow-subtle);
+}
+
+.markdown-message {
+  color: color-mix(in srgb, var(--text) 94%, var(--text-muted) 6%);
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-weight: 760;
+}
+
+.markdown-message a {
+  color: color-mix(in srgb, var(--blue) 78%, var(--cyan) 22%);
+}
+
+.code-block,
+.markdown-table-scroll,
+.message-file-pill,
+.message-artifact-card {
+  border-color: color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 82%, transparent);
+  box-shadow: var(--shadow-subtle);
+}
+
+.code-block-header,
+.artifact-viewer-toolbar,
+.pdf-native-thumbnails {
+  background: var(--panel-gradient);
+}
+
+.composer-shell {
+  background: var(--composer-bg);
+  box-shadow:
+    0 16px 42px color-mix(in srgb, black 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
+}
+
+.composer-shell:focus-within {
+  box-shadow:
+    0 16px 42px color-mix(in srgb, black 18%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--blue) 28%, transparent);
+}
+
+.composer-tool-primary,
+.mode-chip {
+  border: 1px solid color-mix(in srgb, var(--composer-border) 64%, transparent);
+  background: color-mix(in srgb, var(--composer-control-bg) 86%, transparent);
+}
+
+.send-button,
+.settings-primary-button,
+.settings-action-button,
+.dialog-button-primary,
+.planning-input-submit {
+  color: color-mix(in srgb, var(--app-bg) 94%, black 6%);
+  border: 1px solid color-mix(in srgb, var(--blue) 46%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue) 84%, white 16%) 0%, color-mix(in srgb, var(--cyan) 58%, var(--blue) 42%) 54%, color-mix(in srgb, var(--gold) 42%, var(--blue) 58%) 100%);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--blue) 20%, transparent);
+}
+
+.send-button:hover,
+.settings-primary-button:hover,
+.settings-action-button:hover,
+.dialog-button-primary:hover,
+.planning-input-submit:hover:not(:disabled) {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue) 74%, white 26%) 0%, color-mix(in srgb, var(--cyan) 66%, var(--blue) 34%) 54%, color-mix(in srgb, var(--gold) 52%, var(--blue) 48%) 100%);
+}
+
+.settings-card,
+.settings-model-summary,
+.settings-row-list,
+.database-metric,
+.database-usage-list,
+.database-record-list,
+.database-legacy-list,
+.github-account-hero,
+.pdf-record-row,
+.weather-source-route-card,
+.weather-source-provider-card,
+.rail-card,
+.review-card,
+.git-review-panel,
+.browser-preview-window,
+.terminal-panel,
+.search-dialog,
+.app-dialog {
+  border-color: color-mix(in srgb, var(--line) 78%, transparent);
+  background: var(--panel-gradient);
+  box-shadow: var(--shadow-subtle);
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea,
+.dialog-form input,
+.project-search,
+.model-selector-search,
+.plugin-search,
+.terminal-shell-select select,
+.terminal-cwd-field input,
+.auth-input-wrap {
+  background: var(--field-gradient);
+}
+
+.theme-mode-control button,
+.provider-picker-grid button,
+.settings-segmented-control button,
+.settings-ghost-button,
+.settings-url-row button,
+.pdf-record-actions button,
+.weather-source-provider-grid button,
+.plugin-tabs button,
+.plugin-card-actions button,
+.plugin-card-actions a,
+.apps-back-button,
+.apps-card button {
+  border-color: color-mix(in srgb, var(--line) 82%, transparent);
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+}
+
+.theme-mode-control button:hover,
+.theme-mode-control button[data-selected="true"],
+.provider-picker-grid button:hover,
+.provider-picker-grid button[data-selected="true"],
+.settings-segmented-control button:hover,
+.settings-segmented-control button[data-selected="true"],
+.plugin-tabs button:hover,
+.plugin-tabs button[data-active="true"],
+.apps-back-button:hover,
+.apps-card button:hover {
+  border-color: color-mix(in srgb, var(--blue) 38%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 54%, transparent), color-mix(in srgb, var(--violet-soft) 28%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 78%, transparent);
+}
+
+.settings-section-icon,
+.apps-hero-icon,
+.apps-card-icon,
+.plugin-hero-icon,
+.plugin-card-icon,
+.auth-form-icon,
+.dialog-icon,
+.rail-heading > svg,
+.model-selector-row-icon {
+  color: color-mix(in srgb, var(--blue) 78%, var(--cyan) 22%);
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 68%, transparent), color-mix(in srgb, var(--violet-soft) 30%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 72%, transparent);
+}
+
+.search-backdrop,
+.dialog-backdrop,
+.sidebar-mobile-backdrop {
+  background: color-mix(in srgb, var(--modal-scrim) 88%, transparent);
+  backdrop-filter: blur(14px) saturate(1.05);
+}
+
+.search-input-row,
+.search-group h2,
+.search-result-meta,
+.route-loading {
+  color: var(--text-dim);
+}
+
+.search-input-row input::placeholder {
+  color: color-mix(in srgb, var(--text-dim) 82%, transparent);
+}
+
+.search-result {
+  color: var(--text-muted);
+}
+
+.search-result:hover,
+.search-result:focus-visible {
+  color: var(--text);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 44%, transparent), color-mix(in srgb, var(--gold) 8%, transparent)),
+    var(--hover);
+}
+
+.thinking-popover-header,
+.thinking-effort-grid button {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--popover-border) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-raised) 62%, transparent);
+}
+
+.thinking-effort-grid button[data-selected="true"],
+.mode-chip-thinking[data-active="true"] {
+  border-color: color-mix(in srgb, var(--blue) 48%, var(--violet) 16%);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 72%, transparent), color-mix(in srgb, var(--violet-soft) 44%, transparent), color-mix(in srgb, var(--gold) 10%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 70%, transparent);
+}
+
+:root:not([data-theme="light"]) .mode-chip-thinking,
+:root:not([data-theme="light"]) .thinking-popover-header,
+:root:not([data-theme="light"]) .thinking-popover-header strong,
+:root:not([data-theme="light"]) .thinking-popover-header small,
+:root:not([data-theme="light"]) .thinking-field-row,
+:root:not([data-theme="light"]) .thinking-field-row small,
+:root:not([data-theme="light"]) .thinking-effort-grid button,
+:root:not([data-theme="light"]) .thinking-effort-grid strong,
+:root:not([data-theme="light"]) .thinking-effort-grid small {
+  color: #ffffff;
+  font-weight: 800;
+}
+
+:root:not([data-theme="light"]) .thinking-popover-header small,
+:root:not([data-theme="light"]) .thinking-field-row small,
+:root:not([data-theme="light"]) .thinking-effort-grid small {
+  opacity: 0.92;
+}
+
+.sidebar-account-card {
+  border-color: color-mix(in srgb, var(--sidebar-border) 78%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 56%, transparent), color-mix(in srgb, var(--gold) 8%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 42%, var(--sidebar) 58%);
+}
+
+.sidebar-account-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--sidebar-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 72%, transparent), color-mix(in srgb, var(--gold) 13%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 54%, var(--sidebar) 46%);
+}
+
+.sidebar-account-settings,
+.sidebar-account-settings:hover,
+.sidebar-account-settings:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-account-settings {
+  border-color: color-mix(in srgb, var(--sidebar-border) 76%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--violet-soft) 44%, transparent), color-mix(in srgb, var(--cyan-soft) 22%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 34%, var(--sidebar) 66%);
+}
+
+.sidebar-account-settings:hover,
+.sidebar-account-settings:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--sidebar-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--violet-soft) 60%, transparent), color-mix(in srgb, var(--cyan-soft) 34%, transparent)),
+    color-mix(in srgb, var(--hover-strong) 82%, var(--sidebar) 18%);
+}
+
+.project-toggle,
+.local-toggle,
+.branch-toggle,
+.context-window-chip,
+.project-toggle:hover,
+.project-toggle:focus-visible,
+.project-toggle[data-active="true"],
+.local-toggle:hover,
+.local-toggle:focus-visible,
+.local-toggle[data-active="true"],
+.branch-toggle:hover,
+.branch-toggle:focus-visible,
+.branch-toggle[data-active="true"],
+.context-window-chip:hover,
+.context-window-chip:focus-visible,
+.context-window-chip[data-active="true"] {
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  box-shadow: none;
+}
+
+.project-toggle:hover,
+.project-toggle:focus-visible,
+.project-toggle[data-active="true"],
+.local-toggle:hover,
+.local-toggle:focus-visible,
+.local-toggle[data-active="true"],
+.branch-toggle:hover,
+.branch-toggle:focus-visible,
+.branch-toggle[data-active="true"],
+.context-window-chip:hover,
+.context-window-chip:focus-visible,
+.context-window-chip[data-active="true"] {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent) 12%);
+}
+
+:root:not([data-theme="light"]) .conversation-tools .icon-button,
+:root:not([data-theme="light"]) .conversation-options-button,
+:root:not([data-theme="light"]) .composer-tool,
+:root:not([data-theme="light"]) .mode-chip,
+:root:not([data-theme="light"]) .project-toggle,
+:root:not([data-theme="light"]) .local-toggle,
+:root:not([data-theme="light"]) .branch-toggle,
+:root:not([data-theme="light"]) .context-window-chip {
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+:root:not([data-theme="light"]) .conversation-options-button,
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Pin chat"],
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Unpin chat"] {
+  color: color-mix(in srgb, var(--gold) 82%, var(--text) 18%);
+}
+
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Open browser preview"],
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Close browser preview"],
+:root:not([data-theme="light"]) .composer-attach-toggle,
+:root:not([data-theme="light"]) .project-toggle {
+  color: color-mix(in srgb, var(--cyan) 78%, var(--text) 22%);
+}
+
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Open terminal"],
+:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Close terminal"],
+:root:not([data-theme="light"]) .mode-chip-model,
+:root:not([data-theme="light"]) .branch-toggle {
+  color: color-mix(in srgb, var(--violet) 78%, var(--text) 22%);
+}
+
+:root:not([data-theme="light"]) .composer-actions-right .composer-tool {
+  color: color-mix(in srgb, var(--blue) 76%, var(--text) 24%);
+}
+
+:root:not([data-theme="light"]) .local-toggle {
+  color: color-mix(in srgb, var(--green) 76%, var(--text) 24%);
+}
+
+:root:not([data-theme="light"]) .context-window-chip {
+  color: color-mix(in srgb, var(--rose) 72%, var(--text) 28%);
+}
+
+:root:not([data-theme="light"]) .conversation-tools .icon-button:hover,
+:root:not([data-theme="light"]) .conversation-tools .icon-button[data-pressed="true"],
+:root:not([data-theme="light"]) .conversation-options-button:hover,
+:root:not([data-theme="light"]) .conversation-menu-anchor[data-open="true"] .conversation-options-button,
+:root:not([data-theme="light"]) .composer-tool:hover,
+:root:not([data-theme="light"]) .composer-tool[data-active="true"],
+:root:not([data-theme="light"]) .mode-chip:hover,
+:root:not([data-theme="light"]) .mode-chip[data-active="true"],
+:root:not([data-theme="light"]) .project-toggle:hover,
+:root:not([data-theme="light"]) .project-toggle[data-active="true"],
+:root:not([data-theme="light"]) .local-toggle:hover,
+:root:not([data-theme="light"]) .local-toggle[data-active="true"],
+:root:not([data-theme="light"]) .branch-toggle:hover,
+:root:not([data-theme="light"]) .branch-toggle[data-active="true"],
+:root:not([data-theme="light"]) .context-window-chip:hover,
+:root:not([data-theme="light"]) .context-window-chip[data-active="true"] {
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, currentColor 18%, transparent), color-mix(in srgb, var(--surface-raised) 64%, transparent)),
+    color-mix(in srgb, currentColor 10%, transparent);
+}
+
+:root:not([data-theme="light"]) .composer-tool[data-warning="true"] {
+  color: color-mix(in srgb, var(--danger) 84%, var(--text) 16%);
+}
+
+:root:not([data-theme="light"]) .send-button {
+  color: #172028;
+  border-color: color-mix(in srgb, var(--blue) 36%, transparent);
+  background:
+    linear-gradient(135deg, #93d8ff 0%, #8be4d6 58%, #d8cffd 100%);
+}
+
+:root:not([data-theme="light"]) .send-button:hover {
+  background:
+    linear-gradient(135deg, #a8e1ff 0%, #9de9dd 58%, #e0d8ff 100%);
+}
+
+:root:not([data-theme="light"]) .mode-chip-thinking,
+:root:not([data-theme="light"]) .thinking-popover-header,
+:root:not([data-theme="light"]) .thinking-effort-grid button {
+  border-color: color-mix(in srgb, var(--violet) 30%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--violet-soft) 70%, transparent), color-mix(in srgb, var(--gold) 8%, transparent)),
+    color-mix(in srgb, var(--surface-raised) 56%, transparent);
+}
+
+:root[data-theme="light"] .conversation-tools .icon-button,
+:root[data-theme="light"] .conversation-options-button,
+:root[data-theme="light"] .composer-tool,
+:root[data-theme="light"] .mode-chip,
+:root[data-theme="light"] .project-toggle,
+:root[data-theme="light"] .local-toggle,
+:root[data-theme="light"] .branch-toggle,
+:root[data-theme="light"] .context-window-chip {
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, currentColor 10%, white 86%);
+}
+
+:root[data-theme="light"] .conversation-options-button,
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Pin chat"],
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Unpin chat"] {
+  color: #8a6a18;
+  background: #fff2c8;
+}
+
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Open browser preview"],
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Close browser preview"],
+:root[data-theme="light"] .composer-attach-toggle,
+:root[data-theme="light"] .project-toggle {
+  color: #167f7a;
+  background: #dff8f3;
+}
+
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Open terminal"],
+:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Close terminal"],
+:root[data-theme="light"] .mode-chip-model,
+:root[data-theme="light"] .branch-toggle {
+  color: #6652ba;
+  background: #ece8ff;
+}
+
+:root[data-theme="light"] .composer-actions-right .composer-tool {
+  color: #176fd4;
+  background: #e0f0ff;
+}
+
+:root[data-theme="light"] .local-toggle {
+  color: #1c7655;
+  background: #e1f7e9;
+}
+
+:root[data-theme="light"] .context-window-chip {
+  color: #b55270;
+  background: #ffe7ee;
+}
+
+:root[data-theme="light"] .project-toggle:hover,
+:root[data-theme="light"] .project-toggle:focus-visible,
+:root[data-theme="light"] .project-toggle[data-active="true"],
+:root[data-theme="light"] .local-toggle:hover,
+:root[data-theme="light"] .local-toggle:focus-visible,
+:root[data-theme="light"] .local-toggle[data-active="true"],
+:root[data-theme="light"] .branch-toggle:hover,
+:root[data-theme="light"] .branch-toggle:focus-visible,
+:root[data-theme="light"] .branch-toggle[data-active="true"],
+:root[data-theme="light"] .context-window-chip:hover,
+:root[data-theme="light"] .context-window-chip:focus-visible,
+:root[data-theme="light"] .context-window-chip[data-active="true"],
+:root[data-theme="light"] .conversation-tools .icon-button:hover,
+:root[data-theme="light"] .conversation-tools .icon-button[data-pressed="true"],
+:root[data-theme="light"] .conversation-options-button:hover,
+:root[data-theme="light"] .conversation-menu-anchor[data-open="true"] .conversation-options-button,
+:root[data-theme="light"] .composer-tool:hover,
+:root[data-theme="light"] .composer-tool[data-active="true"],
+:root[data-theme="light"] .mode-chip:hover,
+:root[data-theme="light"] .mode-chip[data-active="true"] {
+  border-color: color-mix(in srgb, currentColor 34%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, currentColor 14%, white 84%), color-mix(in srgb, currentColor 7%, white 91%));
+}
+
+:root[data-theme="light"] .conversation-frame,
+:root[data-theme="light"] .settings-page,
+:root[data-theme="light"] .apps-page,
+:root[data-theme="light"] .plugin-page,
+:root[data-theme="light"] .weather-radar-page {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--line) 74%, transparent),
+    0 18px 44px rgba(36, 52, 72, 0.12);
+}
+
+:root[data-theme="light"] .composer-shell {
+  box-shadow:
+    0 18px 48px rgba(36, 52, 72, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .send-button,
+:root[data-theme="light"] .settings-primary-button,
+:root[data-theme="light"] .settings-action-button,
+:root[data-theme="light"] .dialog-button-primary,
+:root[data-theme="light"] .planning-input-submit {
+  color: #f8fbfd;
 }

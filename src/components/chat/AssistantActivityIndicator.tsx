@@ -1,8 +1,6 @@
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, FileCode2, LoaderCircle } from "lucide-react";
-import type { ChatMessage, ChatProgressItem, ChatToolCall, ChatToolFileChange } from "../../types/chat";
-
-const MAX_INLINE_FILE_ROWS = 4;
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, CircleSlash2, Clock3, FileCode2, LoaderCircle, Sparkles } from "lucide-react";
+import type { ChatMessage, ChatProgressItem, ChatThinking, ChatToolCall, ChatToolFileChange, ChatWorkTraceItem, ChatWorkTraceStatus } from "../../types/chat";
 
 type AssistantActivityFileKind = NonNullable<ChatToolFileChange["kind"]> | "write" | "unknown";
 
@@ -37,10 +35,6 @@ interface AssistantActivityFileStats {
   writes: number;
 }
 
-interface AssistantActivityIndicatorProps {
-  snapshot: AssistantActivitySnapshot;
-}
-
 interface CreateAssistantActivitySnapshotOptions {
   responseStarted?: boolean;
 }
@@ -48,45 +42,48 @@ interface CreateAssistantActivitySnapshotOptions {
 interface AssistantWorkTraceProps {
   activitySnapshot: AssistantActivitySnapshot | null;
   responseStarted?: boolean;
+  thinking?: ChatThinking;
   thinkingContent: string;
   thinkingStreaming?: boolean;
+  workTrace?: ChatWorkTraceItem[];
 }
 
-interface AssistantThinkingNote {
-  label?: string;
-  text: string;
-}
-
-const MAX_THINKING_NOTES = 10;
-
+/**
+ * Safe assistant work display. It can show a generic live Thinking state and
+ * real tool/progress events, but it never renders provider reasoning text.
+ */
 export function AssistantWorkTrace({
   activitySnapshot,
   responseStarted = false,
+  thinking,
   thinkingContent,
   thinkingStreaming = false,
+  workTrace,
 }: AssistantWorkTraceProps) {
-  const thinkingNotes = createThinkingNotes(thinkingContent);
-  const hasThinking = thinkingNotes.length > 0;
-  const hasActivity = Boolean(activitySnapshot);
-  const live = Boolean(thinkingStreaming || activitySnapshot?.live);
-  const hasWaitingIndicator = Boolean(thinkingStreaming && !responseStarted);
-  const canExpand = hasThinking || hasActivity || hasWaitingIndicator;
-  const [expanded, setExpanded] = useState(() => !responseStarted || live || hasActivity);
+  void thinking;
+  const renderThinkingContent = thinkingStreaming ? thinkingContent : "";
+  const renderItems = useMemo(
+    () => createAssistantWorkRenderItems({ activitySnapshot, thinkingContent: renderThinkingContent, workTrace }),
+    [activitySnapshot, renderThinkingContent, workTrace],
+  );
+  const hasActivity = renderItems.some((item) => item.kind === "tool" || item.kind === "progress");
+  const live = Boolean(thinkingStreaming || activitySnapshot?.live || renderItems.some(isLiveWorkRenderItem));
+  const hasWaitingIndicator = Boolean(thinkingStreaming && !responseStarted && renderItems.length === 0);
+  const canRender = renderItems.length > 0 || hasWaitingIndicator;
+  const shouldAutoExpand = !responseStarted || live;
+
+  const [expanded, setExpanded] = useState(() => shouldAutoExpand);
   const [manuallyToggled, setManuallyToggled] = useState(false);
-  const detail = live ? "working" : hasThinking ? formatThinkingNoteCount(thinkingNotes.length) : activitySnapshot?.detail ?? "";
-  const activityInsertIndex = hasActivity && thinkingNotes.length > 1 ? Math.max(1, thinkingNotes.length - 1) : thinkingNotes.length;
-  const leadingThinkingNotes = hasActivity ? thinkingNotes.slice(0, activityInsertIndex) : thinkingNotes;
-  const trailingThinkingNotes = hasActivity ? thinkingNotes.slice(activityInsertIndex) : [];
 
   useEffect(() => {
     if (manuallyToggled) {
       return;
     }
 
-    setExpanded(!responseStarted || live || hasActivity);
-  }, [hasActivity, live, manuallyToggled, responseStarted]);
+    setExpanded(shouldAutoExpand);
+  }, [manuallyToggled, shouldAutoExpand]);
 
-  if (!canExpand) {
+  if (!canRender) {
     return null;
   }
 
@@ -95,228 +92,395 @@ export function AssistantWorkTrace({
     setExpanded((current) => !current);
   }
 
+  const headerLabel = live
+    ? hasActivity
+      ? "Tool progress"
+      : "Thinking"
+    : hasActivity
+        ? "Tool progress"
+        : "Thinking";
+
   return (
-    <section className="assistant-work-trace" data-live={live} data-expanded={expanded} aria-label="Assistant work trace">
-      <button className="assistant-work-header" type="button" aria-expanded={expanded} onClick={toggleExpanded}>
-        <span className="assistant-work-dot" aria-hidden="true" />
+    <section className="assistant-work-trace" data-live={live} data-expanded={expanded} aria-label="Assistant thinking">
+      <button
+        className="assistant-work-header"
+        type="button"
+        aria-expanded={expanded}
+        aria-label={live ? "Assistant work is in progress" : `Assistant work summary - ${headerLabel}`}
+        onClick={toggleExpanded}
+      >
+        <Sparkles className="assistant-work-icon" size={14} aria-hidden="true" />
         <span className="assistant-work-title">
-          <strong>Thinking</strong>
-          {detail ? <small>{detail}</small> : null}
+          <strong>{headerLabel}</strong>
         </span>
-        <span className="assistant-work-action">
-          {expanded ? "Hide" : "Show"}
-          {expanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+        <span className="assistant-work-chevron" aria-hidden="true">
+          {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </span>
       </button>
 
       {expanded ? (
-        <div className="assistant-work-body">
-          <div className="assistant-work-timeline" role="list" aria-label="Assistant thinking and live work">
-            {leadingThinkingNotes.map((note, index) => renderThinkingTimelineItem(note, index))}
+        <div className="assistant-work-body" role="region" aria-label="Assistant reasoning and tool progress">
+          <div className="assistant-work-stream">
+            {renderItems.map((item) => {
+              if (item.kind === "thinking") {
+                return <AssistantWorkThinkingLine key={item.id} content={item.content} status={item.status} />;
+              }
 
-            {activitySnapshot ? (
-              <div className="assistant-work-timeline-item" data-kind="activity" role="listitem">
-                <span className="assistant-work-marker" aria-hidden="true" />
-                <AssistantActivityIndicator snapshot={activitySnapshot} />
+              if (item.kind === "tool") {
+                return <AssistantWorkToolLine key={item.id} toolCall={item.toolCall} />;
+              }
+
+              return <AssistantWorkProgressLine key={item.id} progress={item.progress} />;
+            })}
+
+            {hasWaitingIndicator ? (
+              <div className="assistant-work-bars" aria-hidden="true">
+                <span />
+                <span />
+                <span />
               </div>
             ) : null}
-
-            {trailingThinkingNotes.map((note, index) => renderThinkingTimelineItem(note, index + leadingThinkingNotes.length))}
           </div>
-
-          {live && !activitySnapshot ? (
-            <div className="assistant-activity-bars" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-          ) : null}
         </div>
       ) : null}
     </section>
   );
 }
 
-function renderThinkingTimelineItem(note: AssistantThinkingNote, index: number) {
+type AssistantWorkRenderItem =
+  | { id: string; content: string; kind: "thinking"; status?: ChatWorkTraceStatus }
+  | { id: string; kind: "tool"; toolCall: ChatToolCall }
+  | { id: string; kind: "progress"; progress: ChatProgressItem };
+
+function createAssistantWorkRenderItems({
+  activitySnapshot,
+  thinkingContent,
+  workTrace,
+}: {
+  activitySnapshot: AssistantActivitySnapshot | null;
+  thinkingContent?: string;
+  workTrace?: ChatWorkTraceItem[];
+}): AssistantWorkRenderItem[] {
+  const items: AssistantWorkRenderItem[] = [];
+  const latestTools = new Map((activitySnapshot?.toolCalls ?? []).map((toolCall) => [toolCall.id, toolCall]));
+  const latestToolsByIdentity = new Map((activitySnapshot?.toolCalls ?? []).map((toolCall) => [getToolCallIdentity(toolCall), toolCall]));
+  const inlineThinking = cleanThinkingContent(thinkingContent);
+  const seenToolIdentities = new Set<string>();
+  let sawThinking = false;
+
+  if (workTrace?.length) {
+    for (const traceItem of workTrace) {
+      if (traceItem.kind === "thinking") {
+        const content = cleanThinkingContent(traceItem.content);
+        if (!content) {
+          continue;
+        }
+
+        sawThinking = true;
+        items.push({
+          content,
+          id: traceItem.id,
+          kind: "thinking",
+          status: traceItem.status,
+        });
+      } else if (traceItem.kind === "tool") {
+        const toolCall = latestTools.get(traceItem.toolCall.id) ?? latestToolsByIdentity.get(getToolCallIdentity(traceItem.toolCall)) ?? traceItem.toolCall;
+        const identity = getToolCallIdentity(toolCall);
+
+        if (seenToolIdentities.has(identity)) {
+          continue;
+        }
+
+        seenToolIdentities.add(identity);
+        items.push({
+          id: traceItem.id,
+          kind: "tool",
+          toolCall,
+        });
+      } else if (!isInternalOnlyProgressItem(traceItem.progress)) {
+        items.push({
+          id: traceItem.id,
+          kind: "progress",
+          progress: traceItem.progress,
+        });
+      }
+    }
+  }
+
+  if (inlineThinking && !sawThinking) {
+    items.push({
+      content: inlineThinking,
+      id: "thinking-current",
+      kind: "thinking",
+      status: "active",
+    });
+  }
+
+  for (const toolCall of activitySnapshot?.toolCalls ?? []) {
+    const identity = getToolCallIdentity(toolCall);
+
+    if (seenToolIdentities.has(identity)) {
+      continue;
+    }
+
+    seenToolIdentities.add(identity);
+    items.push({
+      id: `tool-${toolCall.id}`,
+      kind: "tool",
+      toolCall,
+    });
+  }
+
+  if (!activitySnapshot?.toolCalls.length) {
+    for (const progress of activitySnapshot?.progressItems ?? []) {
+      if (isInternalOnlyProgressItem(progress)) {
+        continue;
+      }
+
+      items.push({
+        id: `progress-${progress.id ?? progress.label}`,
+        kind: "progress",
+        progress,
+      });
+    }
+  }
+
+  return items;
+}
+
+function dedupeAssistantToolCalls(toolCalls: ChatToolCall[]) {
+  const deduped: ChatToolCall[] = [];
+  const indexByIdentity = new Map<string, number>();
+
+  for (const toolCall of toolCalls) {
+    const identity = getToolCallIdentity(toolCall);
+    const existingIndex = indexByIdentity.get(identity);
+
+    if (existingIndex === undefined) {
+      indexByIdentity.set(identity, deduped.length);
+      deduped.push(toolCall);
+      continue;
+    }
+
+    deduped[existingIndex] = choosePreferredToolCall(deduped[existingIndex]!, toolCall);
+  }
+
+  return deduped;
+}
+
+function choosePreferredToolCall(existing: ChatToolCall, next: ChatToolCall) {
+  const existingRank = getToolCallStatusRank(existing.status);
+  const nextRank = getToolCallStatusRank(next.status);
+
+  if (nextRank !== existingRank) {
+    return nextRank > existingRank ? next : existing;
+  }
+
+  return getToolCallDetailScore(next) >= getToolCallDetailScore(existing) ? next : existing;
+}
+
+function getToolCallStatusRank(status: ChatToolCall["status"]) {
+  if (status === "complete" || status === "error" || status === "skipped") {
+    return 3;
+  }
+
+  if (status === "waiting_approval") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function getToolCallDetailScore(toolCall: ChatToolCall) {
   return (
-    <div className="assistant-work-timeline-item" data-kind="thinking" key={`${note.label ?? "thinking"}-${index}-${note.text}`} role="listitem">
-      <span className="assistant-work-marker" aria-hidden="true" />
-      <p className="assistant-work-note">
-        {note.label ? <strong>{note.label}</strong> : null}
-        <span>{note.text}</span>
-      </p>
+    (toolCall.batchFileResults?.length ?? 0) * 8 +
+    (toolCall.fileChanges?.length ?? 0) * 6 +
+    (toolCall.output?.trim() ? 2 : 0) +
+    (toolCall.detail?.trim() ? 1 : 0)
+  );
+}
+
+function getToolCallIdentity(toolCall: ChatToolCall) {
+  const input = normalizeToolInputForIdentity(toolCall.input);
+  const toolKey = `${toolCall.toolId ?? ""}|${toolCall.label}`.toLowerCase();
+
+  return input ? `${toolKey}|${input}` : toolCall.id;
+}
+
+function normalizeToolInputForIdentity(input: string | undefined) {
+  const trimmed = input?.trim() ?? "";
+
+  return !trimmed || trimmed === "{}" || trimmed === "[]" ? "" : trimmed;
+}
+
+function isLiveWorkRenderItem(item: AssistantWorkRenderItem) {
+  if (item.kind === "thinking") {
+    return false;
+  }
+
+  if (item.kind === "progress") {
+    return item.progress.status === "active";
+  }
+
+  return item.toolCall.status === "active" || item.toolCall.status === "waiting_approval";
+}
+
+function AssistantWorkThinkingLine({ content, status }: { content: string; status?: ChatWorkTraceStatus }) {
+  const paragraphs = splitThinkingParagraphs(content);
+
+  if (paragraphs.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="assistant-work-thinking" data-status={status ?? "complete"}>
+      {paragraphs.map((paragraph, index) => (
+        <p className="assistant-work-paragraph" key={`${index}-${paragraph.slice(0, 16)}`}>
+          {paragraph}
+          {status === "active" && index === paragraphs.length - 1 ? <span className="assistant-work-cursor" aria-hidden="true" /> : null}
+        </p>
+      ))}
     </div>
   );
 }
 
-export function AssistantActivityIndicator({ snapshot }: AssistantActivityIndicatorProps) {
-  const visibleFileItems = snapshot.fileItems.slice(0, MAX_INLINE_FILE_ROWS);
-  const hiddenFileCount = Math.max(0, snapshot.fileItems.length - visibleFileItems.length);
-  const hasFiles = snapshot.fileItems.length > 0;
-  const hasToolDetails = snapshot.toolCalls.length > 0 || snapshot.progressItems.length > 0;
-  const canExpand = hasFiles || hasToolDetails;
-  const [expanded, setExpanded] = useState(() => hasFiles);
-  const [manuallyToggled, setManuallyToggled] = useState(false);
+function cleanThinkingContent(content: string | undefined) {
+  return (content ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:analysis|reasoning|thinking|thought|scratchpad|internal(?:\s+monologue)?|private\s+notes?)(?:\*\*)?\s*[:.-]\s*/i, "")
+    .replace(/<\/?(?:analysis|reasoning|thinking|thought|scratchpad)\b[^>]*>/gi, "")
+    .trim();
+}
 
-  useEffect(() => {
-    if (!manuallyToggled) {
-      setExpanded(hasFiles);
-    }
-  }, [hasFiles, manuallyToggled]);
+function splitThinkingParagraphs(content: string) {
+  return cleanThinkingContent(content)
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/[ \t]+\n/g, "\n").trim())
+    .filter(Boolean)
+    .slice(-6);
+}
 
-  function toggleExpanded() {
-    if (!canExpand) {
-      return;
-    }
+function AssistantWorkToolLine({ toolCall }: { toolCall: ChatToolCall }) {
+  const batchDisplay = createToolBatchDisplay(toolCall);
+  const detail = batchDisplay?.detail ?? formatToolActivityLine(toolCall);
+  const label = batchDisplay?.label ?? toolCall.label;
+  const batchFileResults = toolCall.batchFileResults ?? [];
+  const fileChanges = toolCall.fileChanges ?? [];
+  const inputDetail = getVisibleToolInput(toolCall.input);
+  const outputDetail = getVisibleToolOutput(toolCall.output);
+  const hasBatchFiles = batchFileResults.length > 0;
+  const hasFiles = hasBatchFiles || fileChanges.length > 0;
+  const hasDetails = hasFiles || Boolean(inputDetail) || Boolean(outputDetail);
+  const summary = (
+    <span className="assistant-work-tool-summary">
+      <span className="assistant-work-tool-status" data-status={toolCall.status}>
+        <ToolStatusIcon status={toolCall.status} />
+        <span>{formatToolStatusWord(toolCall.status)}</span>
+      </span>
+      <strong>{label}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </span>
+  );
 
-    setManuallyToggled(true);
-    setExpanded((current) => !current);
+  if (!hasDetails) {
+    return (
+      <div className="assistant-work-tool-line" data-status={toolCall.status}>
+        {summary}
+      </div>
+    );
   }
 
   return (
-    <section
-      className="assistant-activity"
-      data-expanded={expanded}
-      data-has-files={hasFiles}
-      data-live={snapshot.live}
-      aria-label="Assistant activity"
-      aria-live={snapshot.live ? "polite" : undefined}
-    >
-      <div className="assistant-activity-row">
-        <button className="assistant-activity-toggle" type="button" aria-expanded={expanded} disabled={!canExpand} onClick={toggleExpanded}>
-          {snapshot.live ? <LoaderCircle className="assistant-activity-spinner" size={14} aria-hidden="true" /> : null}
-          <span className="assistant-activity-title">
-            <strong>{snapshot.label}</strong>
-            {snapshot.detail ? <small>{snapshot.detail}</small> : null}
-          </span>
-          {canExpand ? (
-            <span className="assistant-activity-chevron" aria-hidden="true">
-              {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-            </span>
-          ) : null}
-        </button>
-      </div>
-
-      {expanded ? (
-        <div className="assistant-activity-details">
-          {hasFiles ? (
-            <div className="assistant-file-activity-list">
-              {visibleFileItems.map((item, index) => (
-                <div className="assistant-file-activity-row" data-kind={item.kind} data-status={item.status} key={`${item.path}-${index}`}>
-                  <span className="assistant-file-path" title={item.path}>
+    <details className="assistant-work-tool-line" data-status={toolCall.status} open={toolCall.status === "active" || toolCall.status === "waiting_approval"}>
+      <summary>{summary}</summary>
+      <div className="assistant-work-tool-details">
+        {hasFiles ? (
+          <div className="assistant-work-tool-files" aria-label="File changes">
+            {hasBatchFiles
+              ? batchFileResults.map((result, index) => (
+                  <div
+                    className="assistant-work-tool-file"
+                    data-kind={result.kind ?? "update"}
+                    data-status={result.status}
+                    key={`${result.path}-${index}`}
+                    title={result.detail}
+                  >
                     <FileCode2 size={13} aria-hidden="true" />
-                    <strong>{formatActivityPath(item.path)}</strong>
-                  </span>
-                  <span className="assistant-file-kind">{formatFileKindLabel(item.kind, item.estimated, item.status)}</span>
-                  <span className="assistant-file-diff-count" aria-label={`${item.additions} additions and ${item.deletions} deletions`}>
-                    <span data-tone="add">+{formatNumber(item.additions)}</span>
-                    <span data-tone="remove">-{formatNumber(item.deletions)}</span>
-                  </span>
-                </div>
-              ))}
-              {hiddenFileCount > 0 ? <span className="assistant-file-activity-more">+{hiddenFileCount} more {hiddenFileCount === 1 ? "file" : "files"}</span> : null}
-            </div>
-          ) : hasToolDetails ? (
-            <div className="assistant-tool-activity-list" aria-label="Tool progress details">
-              {snapshot.toolCalls.map((toolCall, index) => (
-                <div className="assistant-tool-activity-row" data-status={toolCall.status} key={`${toolCall.id}-${index}`}>
-                  <span>{formatToolStatusWord(toolCall.status)}</span>
-                  <strong>{formatToolActivityLine(toolCall)}</strong>
-                </div>
-              ))}
-              {snapshot.toolCalls.length === 0
-                ? snapshot.progressItems.map((item, index) => (
-                    <div className="assistant-tool-activity-row" data-status={item.status} key={`${item.id ?? item.label}-${index}`}>
-                      <span>{item.status === "active" ? "Running" : item.status === "complete" ? "Done" : "Pending"}</span>
-                      <strong>{formatProgressDetail(item)}</strong>
-                    </div>
-                  ))
-                : null}
-            </div>
-          ) : null}
-        </div>
-      ) : snapshot.live && !hasFiles ? (
-        <div className="assistant-activity-bars" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-      ) : null}
-    </section>
+                    <strong>{formatActivityPath(result.path)}</strong>
+                    <span className="assistant-work-tool-file-result" data-status={result.status}>
+                      {formatBatchFileResultMeta(result)}
+                    </span>
+                  </div>
+                ))
+              : fileChanges.map((change, index) => (
+                  <div className="assistant-work-tool-file" data-kind={change.kind ?? "update"} key={`${change.path}-${index}`}>
+                    <FileCode2 size={13} aria-hidden="true" />
+                    <strong>{formatActivityPath(change.path)}</strong>
+                    <span>+{formatNumber(change.additions)} -{formatNumber(change.deletions)}</span>
+                  </div>
+                ))}
+          </div>
+        ) : null}
+
+        {inputDetail ? <ToolDetailBlock label="Input" value={inputDetail} /> : null}
+        {outputDetail ? <ToolDetailBlock label="Output" value={outputDetail} /> : null}
+      </div>
+    </details>
   );
 }
 
-function createThinkingNotes(content: string): AssistantThinkingNote[] {
-  const segments = content
-    .split(/\n{2,}/)
-    .map((segment) => segment.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  const notes = segments.map(createThinkingNote).filter((note) => note.text.length > 0);
-
-  if (notes.length > 0) {
-    return notes.slice(0, MAX_THINKING_NOTES);
+function ToolStatusIcon({ status }: { status: ChatToolCall["status"] }) {
+  if (status === "active") {
+    return <LoaderCircle size={13} aria-hidden="true" />;
   }
 
-  const fallback = content.replace(/\s+/g, " ").trim();
-  return fallback ? [{ text: fallback }] : [];
+  if (status === "waiting_approval") {
+    return <Clock3 size={13} aria-hidden="true" />;
+  }
+
+  if (status === "error") {
+    return <AlertCircle size={13} aria-hidden="true" />;
+  }
+
+  if (status === "skipped") {
+    return <CircleSlash2 size={13} aria-hidden="true" />;
+  }
+
+  return <CheckCircle2 size={13} aria-hidden="true" />;
 }
 
-function createThinkingNote(segment: string): AssistantThinkingNote {
-  const explicitLabelMatch = /^(Scope|Context|Found|Weighing|Next|Check|Checking|Action|Inspecting|Preparing|Reading|Reviewing|Using|Summary|Note):\s*(.+)$/i.exec(segment);
-
-  if (explicitLabelMatch) {
-    const label = normalizeThinkingLabel(explicitLabelMatch[1]);
-
-    return {
-      label,
-      text: explicitLabelMatch[2].trim(),
-    };
-  }
-
-  if (/^Earlier thinking was summarized/i.test(segment)) {
-    return { label: "Summary", text: segment };
-  }
-
-  if (/^(Inspecting|Reviewing|Reading)\b/i.test(segment)) {
-    return { label: "Context", text: segment };
-  }
-
-  if (/^(Preparing|Using)\b/i.test(segment)) {
-    return { label: "Action", text: segment };
-  }
-
-  if (/^(Checking|Verifying|Running|Testing)\b/i.test(segment)) {
-    return { label: "Check", text: segment };
-  }
-
-  return { text: segment };
+function ToolDetailBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="assistant-work-tool-detail-block">
+      <span>{label}</span>
+      <pre>{value}</pre>
+    </div>
+  );
 }
 
-function normalizeThinkingLabel(label: string) {
-  const normalized = label.trim().toLowerCase();
+function getVisibleToolInput(input: string | undefined) {
+  const trimmed = input?.trim() ?? "";
 
-  if (normalized === "note") {
-    return undefined;
-  }
-
-  if (normalized === "checking") {
-    return "Check";
-  }
-
-  if (normalized === "inspecting" || normalized === "reading" || normalized === "reviewing") {
-    return "Context";
-  }
-
-  if (normalized === "preparing" || normalized === "using") {
-    return "Action";
-  }
-
-  return `${normalized.slice(0, 1).toUpperCase()}${normalized.slice(1)}`;
+  return !trimmed || trimmed === "{}" || trimmed === "[]" ? "" : trimmed;
 }
 
-function formatThinkingNoteCount(count: number) {
-  return count === 1 ? "1 thought" : `${count} thoughts`;
+function getVisibleToolOutput(output: string | undefined) {
+  const trimmed = output?.trim() ?? "";
+
+  if (!trimmed || /^preparing tool call\.?$/i.test(trimmed)) {
+    return "";
+  }
+
+  return trimmed;
+}
+
+function AssistantWorkProgressLine({ progress }: { progress: ChatProgressItem }) {
+  return (
+    <div className="assistant-work-progress-line" data-status={progress.status}>
+      <span>{progress.status === "active" ? "Running" : progress.status === "complete" ? "Done" : "Pending"}</span>
+      <strong>{formatProgressDetail(progress)}</strong>
+    </div>
+  );
 }
 
 export function createAssistantActivitySnapshot(
@@ -327,14 +491,14 @@ export function createAssistantActivitySnapshot(
     return null;
   }
 
-  const allToolCalls = message.toolCalls ?? [];
+  const allToolCalls = dedupeAssistantToolCalls(message.toolCalls ?? []);
   const progressItems = getInlineProgressItems(message.progress);
   const allActiveToolCount = allToolCalls.filter((toolCall) => toolCall.status === "active").length;
   const waitingToolCount = allToolCalls.filter((toolCall) => toolCall.status === "waiting_approval").length;
   const hasActiveProgress = progressItems.some((item) => item.status === "active");
   const hasWebSearchActivity = message.webSearch?.status === "active";
   const hasPlanningActivity = Boolean(message.planning && !message.planning.completedAt);
-  const live = Boolean(message.isStreaming && (allActiveToolCount > 0 || waitingToolCount > 0 || hasActiveProgress || hasWebSearchActivity || hasPlanningActivity || allToolCalls.length > 0 || progressItems.length > 0));
+  const live = Boolean(message.isStreaming && (allActiveToolCount > 0 || waitingToolCount > 0 || hasActiveProgress || hasWebSearchActivity || hasPlanningActivity));
   const toolCalls = live ? allToolCalls : allToolCalls.filter((toolCall) => toolCall.status !== "active");
   const activeToolCount = live ? allActiveToolCount : 0;
   const commandCount = countCommandToolCalls(toolCalls);
@@ -412,10 +576,20 @@ function createActivityLabel({
   }
 
   if (fileStats.fileCount > 0 && live) {
+    const batchLabel = createBatchActivityLabel(getLatestBatchToolCall(toolCalls), true);
+    if (batchLabel) {
+      return batchLabel;
+    }
+
     return formatLiveFileSummary(fileStats, commandCount);
   }
 
   if (fileStats.fileCount > 0) {
+    const batchLabel = createBatchActivityLabel(getLatestBatchToolCall(toolCalls), false);
+    if (batchLabel) {
+      return batchLabel;
+    }
+
     return formatCompletedFileSummary(fileStats, commandCount);
   }
 
@@ -467,12 +641,107 @@ function createActivityDetail({
   responseStarted: boolean;
   toolCalls: ChatToolCall[];
 }) {
+  const batchDetail = createBatchActivityDetail(getLatestBatchToolCall(toolCalls));
   const fileSummary = formatFileStats(fileStats);
   const progressSummary = latestProgress ? formatProgressDetail(latestProgress) : "";
   const toolSummary = latestTool ? formatToolDetail(latestTool) : "";
   const activityCount = toolCalls.length > 0 ? `${toolCalls.length} ${toolCalls.length === 1 ? "activity item" : "activity items"}` : "";
 
-  return [fileSummary, progressSummary, toolSummary, activityCount].filter(Boolean)[0] ?? (live ? (responseStarted ? "Continuing the response" : "Preparing response") : "");
+  return [batchDetail, fileSummary, progressSummary, toolSummary, activityCount].filter(Boolean)[0] ?? (live ? (responseStarted ? "Continuing the response" : "Preparing response") : "");
+}
+
+function getLatestBatchToolCall(toolCalls: ChatToolCall[]) {
+  return [...toolCalls].reverse().find((toolCall) => Boolean(inferBatchOperation(toolCall)));
+}
+
+function createBatchActivityLabel(toolCall: ChatToolCall | undefined, live: boolean) {
+  return toolCall ? createToolBatchDisplay(toolCall, { live })?.label ?? "" : "";
+}
+
+function createBatchActivityDetail(toolCall: ChatToolCall | undefined) {
+  return toolCall ? createToolBatchDisplay(toolCall)?.detail ?? "" : "";
+}
+
+function createToolBatchDisplay(toolCall: ChatToolCall, options: { live?: boolean } = {}) {
+  const operation = inferBatchOperation(toolCall);
+
+  if (!operation) {
+    return null;
+  }
+
+  const fileResults = toolCall.batchFileResults ?? [];
+  const estimatedFileCount = fileResults.length > 0 ? 0 : estimateFileItemsFromToolInput(toolCall).length;
+  const fileCount = toolCall.batchSummary?.fileCount || fileResults.length || estimatedFileCount;
+
+  if (fileCount <= 0) {
+    return null;
+  }
+
+  const live = options.live ?? (toolCall.status === "active" || toolCall.status === "waiting_approval");
+  const successCount = toolCall.batchSummary?.successCount ?? fileResults.filter((item) => item.status === "ok").length;
+  const failureCount = toolCall.batchSummary?.failureCount ?? fileResults.filter((item) => item.status === "error").length;
+  const skippedCount = toolCall.batchSummary?.skippedCount ?? fileResults.filter((item) => item.status === "skipped").length;
+  const processedCount = Math.min(fileCount, successCount + failureCount + skippedCount);
+  const hasPartialOutcome = !live && (failureCount > 0 || skippedCount > 0);
+  const label = live
+    ? processedCount > 0
+      ? `Batch ${operation === "write" ? "writing" : "editing"} ${formatFileRatio(processedCount, fileCount)}`
+      : `Batch ${operation === "write" ? "writing" : "editing"} ${formatFileCount(fileCount)}`
+    : hasPartialOutcome
+      ? `Batch ${operation === "write" ? "wrote" : "edited"} ${formatFileRatio(successCount, fileCount)}`
+      : `Batch ${operation === "write" ? "wrote" : "edited"} ${formatFileCount(successCount || fileCount)}`;
+
+  return {
+    detail: formatBatchOutcomeDetail({ failureCount, fileCount, live, skippedCount, status: toolCall.status, successCount }),
+    label,
+    operation,
+  };
+}
+
+function formatBatchOutcomeDetail({
+  failureCount,
+  fileCount,
+  live,
+  skippedCount,
+  status,
+  successCount,
+}: {
+  failureCount: number;
+  fileCount: number;
+  live: boolean;
+  skippedCount: number;
+  status: ChatToolCall["status"];
+  successCount: number;
+}) {
+  if (live) {
+    if (status === "waiting_approval") {
+      return "Waiting for approval";
+    }
+
+    const processedCount = Math.min(fileCount, successCount + failureCount + skippedCount);
+    const pendingCount = Math.max(0, fileCount - processedCount);
+
+    if (processedCount > 0) {
+      return [
+        successCount > 0 ? `${successCount} OK` : "",
+        failureCount > 0 ? `${failureCount} failed` : "",
+        skippedCount > 0 ? `${skippedCount} skipped` : "",
+        pendingCount > 0 ? `${pendingCount} pending` : "",
+      ].filter(Boolean).join(", ");
+    }
+
+    return `Preparing ${formatFileCount(fileCount)}`;
+  }
+
+  return [
+    successCount > 0 ? `${successCount} OK` : "",
+    failureCount > 0 ? `${failureCount} failed` : "",
+    skippedCount > 0 ? `${skippedCount} skipped` : "",
+  ].filter(Boolean).join(", ");
+}
+
+function formatFileRatio(count: number, total: number) {
+  return `${count} of ${formatFileCount(total)}`;
 }
 
 function getLatestPriorityToolCall(toolCalls: ChatToolCall[]) {
@@ -495,11 +764,29 @@ function isInternalOnlyProgressItem(item: ChatProgressItem) {
   const id = item.id ?? "";
   const label = cleanInlineText(item.label).toLowerCase();
 
-  return id === "provider-payload-guardrail" || label === "provider payload guardrail";
+  // Plan-mode phase items belong to the PlanReviewCard / PlanReviewPanel, not
+  // the generic "Tool progress" widget. They render the wrong way out here
+  // (showing all four phases as a phase list) and don't match the Claude Code
+  // UX where the plan card owns its own indicator.
+  const isPlanPhase = id === "plan-context" || id === "plan-input" || id === "plan-research" || id === "plan-write";
+
+  return isPlanPhase || id === "provider-payload-guardrail" || id === "final-answer-recovery" || id === "context-compaction" || label === "provider payload guardrail";
 }
 
 function getAssistantFileItems(toolCalls: ChatToolCall[], options: { includeEstimated?: boolean } = {}): AssistantActivityFileItem[] {
   return toolCalls.flatMap((toolCall) => {
+    if (toolCall.batchFileResults?.length) {
+      const batchOperation = inferBatchOperation(toolCall);
+      return toolCall.batchFileResults.map((result) => ({
+        additions: result.additions,
+        deletions: result.deletions,
+        estimated: false,
+        kind: result.kind ?? (batchOperation === "write" ? "write" : "update"),
+        path: result.path,
+        status: result.status === "error" ? "error" : result.status === "skipped" ? "skipped" : toolCall.status,
+      }));
+    }
+
     if (toolCall.fileChanges?.length) {
       return toolCall.fileChanges.map((change) => ({
         additions: change.additions,
@@ -525,6 +812,14 @@ function estimateFileItemsFromToolInput(toolCall: ChatToolCall): AssistantActivi
 
   if (!input) {
     return [];
+  }
+
+  if (isBatchWriteTool(toolCall)) {
+    return estimateBatchWriteFileItems(input, toolCall.status);
+  }
+
+  if (isBatchEditTool(toolCall)) {
+    return estimateBatchEditFileItems(input, toolCall.status);
   }
 
   if (label.includes("apply workspace patch") && typeof input.patch === "string") {
@@ -563,6 +858,86 @@ function estimateFileItemsFromToolInput(toolCall: ChatToolCall): AssistantActivi
   }
 
   return [];
+}
+
+function estimateBatchWriteFileItems(input: Record<string, unknown>, status: ChatToolCall["status"]): AssistantActivityFileItem[] {
+  const rawFiles = recordArrayValue(input.files) || parseJsonRecordArray(input.filesJson ?? input.files_json, "files");
+  const fallbackFiles: Record<string, unknown>[] = stringArrayValue(input.paths).map((path, index) => {
+    const contents = stringArrayValue(input.contents);
+    return {
+      content: contents[index] ?? stringValue(input.content),
+      overwrite: input.overwrite,
+      path,
+    };
+  });
+  const files = rawFiles?.length ? rawFiles : fallbackFiles;
+  const seenPaths = new Set<string>();
+
+  return files.flatMap((file) => {
+    const path = stringValue(file.path);
+
+    if (!path || seenPaths.has(path)) {
+      return [];
+    }
+
+    seenPaths.add(path);
+    return [
+      createEstimatedFileItem(
+        path,
+        countTextLines(stringValue(file.content)),
+        0,
+        file.overwrite === false ? "create" : "write",
+        status,
+      ),
+    ];
+  });
+}
+
+function estimateBatchEditFileItems(input: Record<string, unknown>, status: ChatToolCall["status"]): AssistantActivityFileItem[] {
+  const rawEdits = recordArrayValue(input.edits) || parseJsonRecordArray(input.editsJson ?? input.edits_json, "edits");
+  const fallbackEdits: Record<string, unknown>[] = stringArrayValue(input.paths).map((path, index) => {
+    const oldTexts = stringArrayValue(input.oldTexts ?? input.old_texts);
+    const newTexts = stringArrayValue(input.newTexts ?? input.new_texts);
+    return {
+      newText: newTexts[index] ?? stringValue(input.newText ?? input.new_text),
+      oldText: oldTexts[index] ?? stringValue(input.oldText ?? input.old_text),
+      operation: "exact_replace",
+      path,
+    };
+  });
+  const edits = rawEdits?.length ? rawEdits : fallbackEdits;
+  const byPath = new Map<string, { additions: number; deletions: number; path: string }>();
+
+  for (const edit of edits) {
+    const path = stringValue(edit.path);
+
+    if (!path) {
+      continue;
+    }
+
+    const current = byPath.get(path) ?? { additions: 0, deletions: 0, path };
+    const operation = stringValue(edit.operation ?? edit.type).toLowerCase();
+
+    if (operation === "replace_range" || edit.startLine !== undefined || edit.start_line !== undefined) {
+      const startLine = numberValue(edit.startLine ?? edit.start_line);
+      const endLine = numberValue(edit.endLine ?? edit.end_line);
+      current.additions += countTextLines(stringValue(edit.content));
+      current.deletions += startLine && endLine && endLine >= startLine ? endLine - startLine + 1 : 0;
+    } else if (operation === "insert_at_line" || operation === "insert" || edit.line !== undefined) {
+      current.additions += countTextLines(stringValue(edit.content));
+    } else if (operation === "append" || (edit.content !== undefined && edit.oldText === undefined && edit.old_text === undefined)) {
+      current.additions += countTextLines(stringValue(edit.content));
+    } else {
+      current.additions += countTextLines(stringValue(edit.newText ?? edit.new_text));
+      current.deletions += countTextLines(stringValue(edit.oldText ?? edit.old_text));
+    }
+
+    byPath.set(path, current);
+  }
+
+  return [...byPath.values()].map((item) =>
+    createEstimatedFileItem(item.path, item.additions, item.deletions, "update", status),
+  );
 }
 
 function createEstimatedFileItem(
@@ -755,11 +1130,11 @@ function createActiveToolSummary(toolCalls: ChatToolCall[]) {
 function getToolCallAction(toolCall: ChatToolCall) {
   const key = `${toolCall.toolId ?? ""} ${toolCall.label}`.toLowerCase();
 
-  if (/\b(files_write|write workspace file|write file)\b/.test(key)) {
+  if (isBatchWriteTool(toolCall) || /\b(files_write|write workspace file|write file)\b/.test(key)) {
     return "Writing";
   }
 
-  if (/\b(files_apply_patch|files_exact_replace|files_replace_range|files_insert_at_line|files_append)\b/.test(key) || /\b(apply workspace patch|edit file|replace file|insert text|append to workspace file)\b/.test(key)) {
+  if (isBatchEditTool(toolCall) || /\b(files_apply_patch|files_exact_replace|files_replace_range|files_insert_at_line|files_append)\b/.test(key) || /\b(apply workspace patch|edit file|replace file|insert text|append to workspace file)\b/.test(key)) {
     return "Editing";
   }
 
@@ -778,18 +1153,44 @@ function getToolCallAction(toolCall: ChatToolCall) {
   return "";
 }
 
+function inferBatchOperation(toolCall: ChatToolCall): NonNullable<ChatToolCall["batchSummary"]>["operation"] | undefined {
+  if (toolCall.batchSummary?.operation) {
+    return toolCall.batchSummary.operation;
+  }
+
+  if (isBatchWriteTool(toolCall)) {
+    return "write";
+  }
+
+  if (isBatchEditTool(toolCall)) {
+    return "edit";
+  }
+
+  return undefined;
+}
+
+function isBatchWriteTool(toolCall: ChatToolCall) {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label}`.toLowerCase();
+  return key.includes("files_write_many") || key.includes("write many workspace files") || key.includes("batch write");
+}
+
+function isBatchEditTool(toolCall: ChatToolCall) {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label}`.toLowerCase();
+  return key.includes("files_edit_many") || key.includes("edit many workspace files") || key.includes("batch edit");
+}
+
 function formatToolDetail(toolCall: ChatToolCall) {
   const detail = cleanInlineText(toolCall.detail ?? toolCall.output ?? "");
 
   if (toolCall.status === "active") {
-    return detail ? `${toolCall.label}: ${detail}` : toolCall.label;
+    return detail && detail !== toolCall.label ? `${toolCall.label}: ${detail}` : "";
   }
 
   if (toolCall.status === "waiting_approval") {
     return detail ? `Approval needed: ${detail}` : `Approval needed for ${toolCall.label}`;
   }
 
-  return detail || toolCall.label;
+  return detail && detail !== toolCall.label ? detail : "";
 }
 
 function formatProgressDetail(progress: ChatProgressItem) {
@@ -798,18 +1199,24 @@ function formatProgressDetail(progress: ChatProgressItem) {
 }
 
 function formatToolActivityLine(toolCall: ChatToolCall) {
+  const batchDisplay = createToolBatchDisplay(toolCall);
+  if (batchDisplay?.detail) {
+    return batchDisplay.detail;
+  }
+
   const command = toolCall.terminal?.command ?? readCommandFromInput(toolCall.input);
   const target = getToolTargetPath(toolCall);
 
   if (command) {
-    return `Ran ${limitInline(command, 150)}`;
+    return `${toolCall.status === "active" ? "Running" : "Ran"} ${limitInline(command, 150)}`;
   }
 
   if (target) {
     return `${toolCall.label}: ${target}`;
   }
 
-  return toolCall.detail ? `${toolCall.label}: ${cleanInlineText(toolCall.detail)}` : toolCall.label;
+  const detail = cleanInlineText(toolCall.detail ?? "");
+  return detail && detail !== toolCall.label ? `${toolCall.label}: ${detail}` : "";
 }
 
 function formatToolStatusWord(status: ChatToolCall["status"]) {
@@ -836,32 +1243,21 @@ function formatFileCount(count: number) {
   return count === 1 ? "1 file" : `${count} files`;
 }
 
-function formatFileKindLabel(kind: AssistantActivityFileKind, estimated: boolean, status: ChatToolCall["status"]) {
-  if (status === "waiting_approval") {
-    return "Pending";
+function formatBatchFileResultMeta(result: NonNullable<ChatToolCall["batchFileResults"]>[number]) {
+  const diff = result.additions > 0 || result.deletions > 0 ? ` +${formatNumber(result.additions)} -${formatNumber(result.deletions)}` : "";
+  return `${formatBatchFileStatus(result.status)}${diff}`;
+}
+
+function formatBatchFileStatus(status: NonNullable<ChatToolCall["batchFileResults"]>[number]["status"]) {
+  if (status === "error") {
+    return "Failed";
   }
 
-  if (estimated && status === "active") {
-    return kind === "create" ? "Creating" : kind === "move" ? "Moving" : "Editing";
+  if (status === "skipped") {
+    return "Skipped";
   }
 
-  if (kind === "create") {
-    return "New";
-  }
-
-  if (kind === "delete") {
-    return "Deleted";
-  }
-
-  if (kind === "move") {
-    return "Moved";
-  }
-
-  if (kind === "write") {
-    return estimated ? "Writing" : "Written";
-  }
-
-  return "Edited";
+  return "OK";
 }
 
 function formatActivityPath(path: string) {
@@ -899,6 +1295,40 @@ function parseToolInput(input: string | undefined): Record<string, unknown> | nu
   } catch {
     return null;
   }
+}
+
+function recordArrayValue(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const records = value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  return records.length > 0 ? records : undefined;
+}
+
+function parseJsonRecordArray(value: unknown, key: string): Record<string, unknown>[] | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return recordArrayValue(parsed);
+    }
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return recordArrayValue((parsed as Record<string, unknown>)[key]);
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function countCommandToolCalls(toolCalls: ChatToolCall[]) {

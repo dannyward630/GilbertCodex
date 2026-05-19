@@ -2,11 +2,23 @@ import { describe, expect, it } from "vitest";
 import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
 import {
   createCompletedToolFallbackSummary,
+  createNeutralToolSynthesisFailureMessage,
   isInterruptedAssistantMessage,
+  isFileReadSynthesisToolCall,
+  looksLikeInFlightToolPlanning,
   looksLikeOnlyToolPrelude,
   looksLikeInternalToolRecoveryAnswer,
   looksLikeToolProtocolNarration,
+  looksLikePrivateThinkingNarration,
+  stripLeadingToolPreludeForDisplay,
+  looksLikeUnnecessaryLocalActionConfirmation,
+  looksLikeUnappliedFileEditAnswer,
+  looksLikeUnexecutedToolActionPromise,
+  needsFreshLocalToolEvidence,
+  requiresWorkspaceToolCallForPrompt,
+  createWebSearchProgress,
   shouldSynthesizeEmptyFinalFromToolResults,
+  shouldHoldStreamingContentForToolCalls,
   withLocalComputerProgress,
 } from "./chatRuntime";
 
@@ -38,6 +50,43 @@ describe("tool protocol leak guards", () => {
     expect(looksLikeToolProtocolNarration(content)).toBe(true);
   });
 
+  it("detects direct XML-style bridge tool tags printed as visible text", () => {
+    const content = String.raw`<files_read_range> <path>src/App.jsx</path> <startLine>195</startLine> <endLine>280</endLine> </files_read_range>`;
+
+    expect(looksLikeToolProtocolNarration(content)).toBe(true);
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+    expect(sanitizeLocalToolCallsForDisplay(content)).toBe("");
+  });
+
+  it("detects and strips DSML bridge tool calls printed as visible text", () => {
+    const content = [
+      "I need to read the file.",
+      `< | DSML | tool_calls>`,
+      `< | DSML | invoke name="files_read_range">`,
+      `< | DSML | parameter name="path" string="true">src/App.jsx</ | DSML | parameter>`,
+      `< | DSML | parameter name="startLine" string="false">195</ | DSML | parameter>`,
+      `< | DSML | parameter name="endLine" string="false">280</ | DSML | parameter>`,
+      `</ | DSML | invoke>`,
+      `</ | DSML | tool_calls>`,
+    ].join("\n");
+
+    expect(looksLikeToolProtocolNarration(content)).toBe(true);
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+    expect(sanitizeLocalToolCallsForDisplay(content)).toBe("I need to read the file.");
+  });
+
+  it("strips unterminated DSML tool-call blocks while streaming", () => {
+    const content = [
+      "Thinking before the call.",
+      `< | DSML | tool_calls>`,
+      `< | DSML | invoke name="files_read_range">`,
+      `< | DSML | parameter name="path" string="true">src/App.jsx`,
+    ].join("\n");
+
+    expect(looksLikeToolProtocolNarration(content)).toBe(true);
+    expect(sanitizeLocalToolCallsForDisplay(content)).toBe("Thinking before the call.");
+  });
+
   it("strips unterminated XML-style tool call blocks from visible assistant content", () => {
     const content = [
       "Let me read that file.",
@@ -45,6 +94,257 @@ describe("tool protocol leak guards", () => {
     ].join("\n\n");
 
     expect(sanitizeLocalToolCallsForDisplay(content)).toBe("Let me read that file.");
+  });
+
+  it("holds streamed content attached to active provider tool calls out of the answer bubble", () => {
+    const content = "Looking at the tool results, I can see there are still UI issues that need fixing.";
+
+    expect(shouldHoldStreamingContentForToolCalls(content, true)).toBe(true);
+    expect(shouldHoldStreamingContentForToolCalls(content, false)).toBe(false);
+  });
+
+  it("detects screenshot-style in-flight tool planning as thinking, not a public answer", () => {
+    const content = [
+      "Looking at the tool results, I can see there are still UI issues that need fixing. Let me analyze the current state:",
+      "",
+      "Issues Found:",
+      "",
+      "1. favicon.svg - Already created",
+      "2. Gradient animation not optimized - The animation runs continuously",
+      "3. Missing type=\"button\" on theme toggle - The button element lacks this attribute",
+      "",
+      "Let me fix the remaining issues in `App.tsx`:",
+    ].join("\n");
+
+    expect(looksLikeInFlightToolPlanning(content)).toBe(true);
+  });
+
+  it("detects compact-composer narration after reads as in-flight tool planning", () => {
+    const content = [
+      "Now I can see the current CSS. The composer is the pill-shaped input box with `border-radius: 28px`, generous padding, and a tall context ring.",
+      "Let me make it more compact - reducing padding, rounding, and button sizes.",
+    ].join("\n\n");
+
+    expect(looksLikeInFlightToolPlanning(content)).toBe(true);
+  });
+
+  it("detects plain first-person coding promises as unfinished tool work", () => {
+    const content = "Now I need to update the database service to add message update/delete support:";
+
+    expect(looksLikeUnexecutedToolActionPromise(content)).toBe(true);
+    expect(looksLikeInFlightToolPlanning(content)).toBe(true);
+    expect(looksLikeOnlyToolPrelude(content)).toBe(true);
+  });
+
+  it("detects curly-apostrophe coding promises as unfinished tool work", () => {
+    const content = "To connect the chat into the app so you can see the UI, I\u2019ll update App.jsx to include a router and nav that reaches ChatPage.";
+
+    expect(looksLikeUnexecutedToolActionPromise(content)).toBe(true);
+  });
+
+  it("rejects confirmation questions for ordinary requested local edits", () => {
+    const content = [
+      "To connect the chat into the app so you can see the UI, I\u2019ll update App.jsx to include a router and nav that reaches the ChatPage already created at src/pages/Chat/ChatPage.tsx.",
+      "",
+      "Proposed change (verifiable edit to src/App.jsx):",
+      "",
+      "Before I apply this, please confirm:",
+      "",
+      "Do you want me to install react-router-dom and apply this edit to src/App.jsx now?",
+    ].join("\n");
+
+    expect(looksLikeUnnecessaryLocalActionConfirmation(content)).toBe(true);
+    expect(looksLikeOnlyToolPrelude(content)).toBe(true);
+  });
+
+  it("detects line-edit narration with bridge tool names as thinking, not visible response", () => {
+    const content = [
+      "You're right, the edits never took effect. Let me actually make them now with a proper targeted edit.",
+      "",
+      "First, here's what's currently on disk and what needs to change:",
+      "",
+      "Current `App.jsx` lines 212-213:",
+      "",
+      "```js",
+      "const size = 32;",
+      "const strokeWidth = 2.5;",
+      "```",
+      "",
+      "Let me apply that edit now.",
+      "",
+      "One precise change to `App.jsx` using `files_replace_range`:",
+      "",
+      "Replace lines 212-213 with:",
+      "",
+      "```js",
+      "const size = 28;",
+      "const strokeWidth = 2.2;",
+      "```",
+      "",
+      "Wait - I don't have files_replace_range available. Let me check what tools I do have attached.",
+    ].join("\n");
+
+    expect(looksLikeUnexecutedToolActionPromise(content)).toBe(true);
+    expect(looksLikeInFlightToolPlanning(content)).toBe(true);
+    expect(looksLikeOnlyToolPrelude(content)).toBe(true);
+  });
+
+  it("detects explicit private reasoning labels as non-public scratchpad", () => {
+    const content = [
+      "Analysis: The user is reporting thinking leakage in the app.",
+      "I need to inspect the streaming path before answering.",
+    ].join("\n");
+
+    expect(looksLikePrivateThinkingNarration(content)).toBe(true);
+  });
+
+  it("does not classify unlabeled answer-like project text as private thinking", () => {
+    const content = [
+      "The runtime orchestrates tool execution with:",
+      "",
+      "## Rust Backend Integration",
+      "",
+      "- Type safety: Rust provides compile-time guarantees",
+      "- Async execution: Tools run asynchronously",
+    ].join("\n");
+
+    expect(looksLikePrivateThinkingNarration(content)).toBe(false);
+  });
+
+  it("does not treat normal recommendation text as private thinking", () => {
+    const content = "We need to update the timeout to 30 seconds in Settings so slow providers do not fail early.";
+
+    expect(looksLikePrivateThinkingNarration(content)).toBe(false);
+  });
+
+  it("strips only a leading tool prelude when a substantive answer follows", () => {
+    const content = [
+      "Let me read the tool bridge files to explain how the system works.",
+      "",
+      "## Tool Bridge",
+      "",
+      "The tool bridge registers tools, validates arguments, and executes approved calls.",
+    ].join("\n");
+
+    expect(stripLeadingToolPreludeForDisplay(content)).toBe([
+      "## Tool Bridge",
+      "",
+      "The tool bridge registers tools, validates arguments, and executes approved calls.",
+    ].join("\n"));
+  });
+
+  it("requires fresh workspace evidence for provider configuration follow-ups", () => {
+    expect(needsFreshLocalToolEvidence("what providers does it work with", true)).toBe(true);
+    expect(needsFreshLocalToolEvidence("what providers does it work with", false)).toBe(false);
+    expect(needsFreshLocalToolEvidence("thanks", true)).toBe(false);
+  });
+
+  it("requires fresh workspace evidence for local change review follow-ups", () => {
+    const prompt = "Based on the files read, explain what changed and what the fixes appear to be.";
+
+    expect(needsFreshLocalToolEvidence(prompt, true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt(prompt, true)).toBe(true);
+    expect(needsFreshLocalToolEvidence(prompt, false)).toBe(false);
+    expect(requiresWorkspaceToolCallForPrompt(prompt, false)).toBe(false);
+  });
+
+  it("requires real workspace tools for short UI edit prompts", () => {
+    expect(requiresWorkspaceToolCallForPrompt("make it better more readable better design and more party like", true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt([
+      "do the job",
+      "Local-code conversation context for tool selection only:",
+      "user: make it better more readable better design and more party like",
+      "assistant: I see the files tool isn't attached.",
+    ].join("\n"), true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt("make it better more readable better design and more party like", false)).toBe(false);
+    expect(requiresWorkspaceToolCallForPrompt("thanks", true)).toBe(false);
+  });
+
+  it("rejects updated-file code dumps when no mutating edit tool succeeded", () => {
+    const content = [
+      "\u4e0b\u9762\u662f\u4e00\u6b21\u76f4\u63a5\u3001\u5b89\u5168\u5730\u5c06\u804a\u5929\u9875\u6574\u5408\u5230\u73b0\u6709\u5e94\u7528\u7684\u65b9\u6848\u3002\u6211\u53ea\u4fee\u6539 src/App.jsx \u548c src/App.css \u4e24\u4e2a\u6587\u4ef6\u3002",
+      "",
+      "\u66f4\u65b0\u540e\u7684 App.jsx",
+      "",
+      "import { useState } from 'react';",
+      "import ChatPage from './pages/Chat/ChatPage';",
+      "import './App.css';",
+      "",
+      "function App() {",
+      "  const [view, setView] = useState('home');",
+      "  return view === 'chat' ? <ChatPage /> : <main />;",
+      "}",
+      "",
+      "export default App;",
+      "",
+      "\u66f4\u65b0\u540e\u7684 App.css",
+      "",
+      ".app-nav { display: flex; gap: 8px; }",
+      "",
+      "\u6539\u52a8\u8bf4\u660e",
+      "App.jsx \u73b0\u5728\u5305\u542b\u4e00\u4e2a\u7b80\u5355\u7684\u9876\u90e8\u5bfc\u822a\u3002",
+    ].join("\n");
+
+    expect(looksLikeUnappliedFileEditAnswer(content, [
+      {
+        id: "read-app",
+        label: "Read workspace file",
+        status: "complete",
+        toolId: "files_read",
+      },
+      {
+        id: "read-css",
+        label: "Read workspace file",
+        status: "complete",
+        toolId: "files_read",
+      },
+    ])).toBe(true);
+  });
+
+  it("allows updated-file summaries after a mutating edit tool succeeds", () => {
+    const content = "Updated `src/App.jsx` and `src/App.css` to add the chat route.";
+
+    expect(looksLikeUnappliedFileEditAnswer(content, [
+      {
+        fileChanges: [{ additions: 1, deletions: 1, kind: "update", path: "src/App.jsx" }],
+        id: "edit-app",
+        label: "Edit many workspace files",
+        status: "complete",
+        toolId: "files_edit_many",
+      },
+    ])).toBe(false);
+  });
+
+  it("does not classify a completed edit summary as in-flight tool planning", () => {
+    const content = [
+      "Fixed. I changed `App.jsx` lines 212-213 to use `size = 28` and `strokeWidth = 2.2`.",
+      "",
+      "Verified the composer still renders cleanly after the change.",
+    ].join("\n");
+
+    expect(looksLikeUnexecutedToolActionPromise(content)).toBe(false);
+    expect(looksLikeInFlightToolPlanning(content)).toBe(false);
+  });
+
+});
+
+describe("createWebSearchProgress", () => {
+  it("names the actual fallback provider instead of claiming Brave worked", () => {
+    const progress = createWebSearchProgress({
+      enabled: true,
+      fallbackReason: "Brave Search failed with HTTP 429: Brave Search rate limit reached.",
+      maxResults: 6,
+      provider: "brave",
+      resultCount: 6,
+      resultProvider: "duckduckgo",
+      status: "complete",
+    });
+
+    expect(progress).toMatchObject({
+      detail: "Brave Search failed; 6 sources from DuckDuckGo",
+      label: "Search DuckDuckGo fallback",
+      status: "complete",
+    });
   });
 });
 
@@ -117,6 +417,16 @@ describe("final answer recovery guards", () => {
     expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
   });
 
+  it("rejects current file-read fallback summaries so they never become final answers", () => {
+    const content = [
+      "I read `C:\\Users\\Kobe Work\\Documents\\HelloWorld\\src\\services\\database.js` successfully.",
+      "It is 1,078 characters across 34 lines.",
+      "The full file body was kept out of the visible chat so the response stays readable.",
+    ].join("\n");
+
+    expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
+  });
+
   it("rejects result-finalizer fallback text so it cannot become the final answer", () => {
     const oldFallback = [
       "Read C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src\\toolBridge\\adapters\\index.ts.",
@@ -136,6 +446,26 @@ describe("final answer recovery guards", () => {
   it("rejects inline tool evidence if a weak model parrots it back", () => {
     expect(looksLikeInternalToolRecoveryAnswer("TOOL RESULT EVIDENCE\nTool: files_read\nCall id: call-read\nOutput:\nbody")).toBe(true);
     expect(looksLikeInternalToolRecoveryAnswer("Tool: files_search\nCall id: call-search\nStatus: complete")).toBe(true);
+  });
+
+  it("does not create a visible read summary for file-read tools that require synthesis", () => {
+    const toolCall = {
+      id: "tool-read",
+      input: JSON.stringify({ path: "src/services/database.js" }),
+      label: "Read workspace file",
+      output: "const rows = [];",
+      resultPolicy: {
+        mode: "synthesize" as const,
+        resultKind: "file_content" as const,
+        synthesizeAfterwards: true,
+      },
+      status: "complete" as const,
+      toolId: "files_read",
+    };
+
+    expect(isFileReadSynthesisToolCall(toolCall)).toBe(true);
+    expect(createCompletedToolFallbackSummary(toolCall, toolCall.output)).toBeNull();
+    expect(createNeutralToolSynthesisFailureMessage()).not.toContain("I read");
   });
 
   it("rejects provider excerpt markers if a weak model parrots them back", () => {

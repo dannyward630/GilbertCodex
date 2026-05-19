@@ -110,22 +110,7 @@ function createSeedState() {
             startedAt: new Date(now - 16 * 60_000).toISOString(),
             completedAt: new Date(now - 15 * 60_000).toISOString(),
           },
-          toolCalls: [
-            {
-              detail: "Read project docs and release notes",
-              id: "tool-read-docs",
-              label: "read_files",
-              output: "README.md, PROGRESS.md, SECURITY.md, docs/releases/v0.3.5.md",
-              status: "complete",
-            },
-            {
-              detail: "Checked source tree and ignored generated output",
-              id: "tool-health",
-              label: "codebase_health_scan",
-              output: "Source is grouped by app, components, services, toolBridge, types, and Rust commands.",
-              status: "complete",
-            },
-          ],
+          toolCalls: [],
           webSearch: {
             enabled: true,
             maxResults: demoWebSearchMaxResults,
@@ -137,7 +122,7 @@ function createSeedState() {
           },
         },
       ),
-      createMessage("msg-3", "user", "Now show live tool progress and keep the terminal visible.", 3),
+      createMessage("msg-3", "user", "Now show live progress and keep the release checklist visible.", 3),
       createMessage(
         "msg-4",
         "assistant",
@@ -147,7 +132,7 @@ function createSeedState() {
           isStreaming: true,
           progress: [
             { id: "progress-plan", label: "Plan README media section", status: "complete" },
-            { id: "progress-capture", label: "Capture app screenshots", status: "active", detail: "Overview, activity, tool bridge, and settings" },
+            { id: "progress-capture", label: "Capture app screenshots", status: "active", detail: "Overview, release notes, and settings" },
             { id: "progress-write", label: "Write README copy", status: "pending" },
           ],
           reasoning:
@@ -156,26 +141,7 @@ function createSeedState() {
             effort: "xhigh",
             startedAt: new Date(now - 95_000).toISOString(),
           },
-          toolCalls: [
-            {
-              detail: "Local screenshot capture",
-              id: "tool-terminal",
-              label: "run_terminal",
-              status: "active",
-              terminal: {
-                command: "npm.cmd run dev -- --host localhost --port 1420",
-                live: true,
-                shell: "powershell",
-                workingDirectory: demoWorkspacePath,
-              },
-            },
-            {
-              detail: "Writing README media assets",
-              id: "tool-write",
-              label: "write_file",
-              status: "waiting_approval",
-            },
-          ],
+          toolCalls: [],
           webSearch: {
             enabled: true,
             maxResults: demoWebSearchMaxResults,
@@ -183,6 +149,21 @@ function createSeedState() {
             query: "GitHub README animated GIF autoplay",
             status: "active",
           },
+          approvals: [
+            {
+              command: "npm.cmd run check",
+              createdAt: new Date(now - 55_000).toISOString(),
+              detail: "Run the local validation suite before publishing the release notes.",
+              id: "approval-readme-check",
+              kind: "terminal",
+              preview: "npm.cmd run check\nnpm.cmd run rust:check\ngit diff --check",
+              risk: "medium",
+              status: "pending",
+              title: "Run validation commands",
+              tool: "validation",
+              toolCallId: "validation-check",
+            },
+          ],
         },
       ),
     ],
@@ -307,6 +288,8 @@ try {
       window.localStorage.setItem(scoped("gilbert-codex.appearance.v1"), "dark");
       window.localStorage.setItem(scoped("gilbert-codex.chats.v1"), JSON.stringify([activeChat, emptyChat]));
       window.localStorage.setItem(scoped("gilbert-codex.local-workspace.v1"), JSON.stringify(workspace));
+      window.localStorage.setItem(scoped("gilbert-codex.onboarding.never-show.v1"), "true");
+      window.localStorage.setItem(scoped("gilbert-codex.personalization.v1"), JSON.stringify({ locationServicesEnabled: false }));
       window.localStorage.setItem(scoped("gilbert-codex.projects.v1"), JSON.stringify(projects));
       window.localStorage.setItem(scoped("gilbert-codex.tool-registry.v1"), JSON.stringify(toolDefaults));
     },
@@ -322,12 +305,13 @@ try {
 
   await page.goto(appUrl);
   await page.waitForSelector(".conversation-frame");
-  await page.getByLabel("Open inspector").click();
   await page.waitForSelector(".right-rail");
+  await page.locator(".message-sources-toggle").first().click();
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-activity.png");
 
   await page.locator(".sidebar-action").filter({ hasText: "New chat" }).first().click();
+  await page.getByRole("menuitem", { name: "Start from scratch" }).click();
   await page.waitForSelector(".empty-chat-start");
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-overview.png");
@@ -338,7 +322,7 @@ try {
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-toolbox.png");
 
-  await page.getByText("General", { exact: true }).click();
+  await page.getByText("Providers", { exact: true }).click();
   await page.waitForSelector(".settings-page");
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-settings.png");

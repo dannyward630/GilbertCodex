@@ -1,17 +1,15 @@
 import { estimatePromptTokens, clampPromptText } from "./promptBudget";
 import { PROMPT_CATALOG, createPromptChunkSearchText, type PromptChunk } from "./promptCatalog";
 import { cosineSimilarity, createPromptEmbedding, createPromptTermSet, type PromptEmbedding } from "./promptEmbedding";
-import { isDeepResearchThinking } from "../../types/settings";
 import { normalizeToolRegistrySettings } from "../../types/tools";
 import { getDetectedProjectTypes } from "../../localWorkspace/workspaceContext";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
+import type { ProviderToolBridgeOptions, ToolDefinition } from "../../toolBridge/types";
 
 const STANDARD_SKILL_TOKEN_BUDGET = 2200;
-const DEEP_RESEARCH_SKILL_TOKEN_BUDGET = 2900;
-const MAX_RETRIEVED_CHUNKS = 7;
+const MAX_RETRIEVED_CHUNKS = 2;
 const MIN_RELEVANCE_SCORE = 0.055;
-const HIGH_PRIORITY_FLOOR_EXEMPTION = 75;
 
 interface IndexedPromptChunk {
   chunk: PromptChunk;
@@ -39,18 +37,17 @@ const PROMPT_INDEX: IndexedPromptChunk[] = PROMPT_CATALOG.map((chunk) => ({
   embedding: createPromptEmbedding(createPromptChunkSearchText(chunk)),
 }));
 
-export function createAgentPromptRetrievalContext(settings: ProviderSettings, messages: ChatMessage[]): AgentPromptRetrievalContext {
+export function createAgentPromptRetrievalContext(settings: ProviderSettings, messages: ChatMessage[], toolBridge?: ProviderToolBridgeOptions): AgentPromptRetrievalContext {
   const tools = normalizeToolRegistrySettings(settings.tools);
-  const enabledToolNames = getEnabledToolNames(settings);
+  const enabledToolNames = getEnabledToolNames(settings, toolBridge);
   const recentMessages = messages.slice(-6);
   const latestUserPrompt = getLatestUserPrompt(messages);
   const mode = recentMessages.some((message) => message.mode === "plan" || message.planning || message.content.includes("Planning passes")) ? "planning" : "chat";
-  const hasLocalComputerContext = messages.some(hasLocalComputerContextMessage);
+  const hasLocalComputerContext = messages.some(hasLocalComputerContextMessage) || hasLocalWorkspaceTool(toolBridge?.tools);
   const hasWebContext = messages.some(hasWebContextMessage);
   const query = [
     latestUserPrompt,
     mode === "planning" ? "planning architecture tradeoffs requirements" : "chat implementation answer",
-    isDeepResearchThinking(settings.thinking) ? "deep research current facts official docs source backed" : "",
     tools.thinking ? "thinking enabled" : "",
     enabledToolNames.length > 0 ? `host capabilities ${enabledToolNames.join(" ")}` : "no runtime tools",
     hasLocalComputerContext ? "host workspace context filesystem code workspace" : "",
@@ -74,7 +71,7 @@ export function createAgentPromptRetrievalContext(settings: ProviderSettings, me
 export function selectPromptChunks(context: AgentPromptRetrievalContext): SelectedPromptChunk[] {
   const queryEmbedding = createPromptEmbedding(context.query);
   const queryTerms = createPromptTermSet(context.query);
-  const tokenBudget = isDeepResearchThinking(context.settings.thinking) ? DEEP_RESEARCH_SKILL_TOKEN_BUDGET : STANDARD_SKILL_TOKEN_BUDGET;
+  const tokenBudget = STANDARD_SKILL_TOKEN_BUDGET;
   const forcedChunkIds = getForcedChunkIds(context);
   const rankedChunks = PROMPT_INDEX.map(({ chunk, embedding }) => {
     const score = scorePromptChunk(chunk, embedding, queryEmbedding, queryTerms, context, forcedChunkIds.has(chunk.id));
@@ -93,11 +90,6 @@ export function selectPromptChunks(context: AgentPromptRetrievalContext): Select
 
       if (!isChunkAllowed(entry.chunk, context)) {
         return false;
-      }
-
-      // High-priority chunks skip the similarity floor because they carry load-bearing instructions.
-      if (entry.chunk.priority >= HIGH_PRIORITY_FLOOR_EXEMPTION) {
-        return true;
       }
 
       return entry.score >= MIN_RELEVANCE_SCORE;
@@ -177,27 +169,40 @@ function scoreKeywordOverlap(chunk: PromptChunk, queryTerms: Set<string>) {
 
 function getForcedChunkIds(context: AgentPromptRetrievalContext) {
   const forced = new Set<string>();
+  const promptText = context.latestUserPrompt;
+  const codingLike = isCodingLike(promptText);
+  const planningLike = context.mode === "planning" || isPlanningLike(promptText);
+  const reviewLike = isReviewLike(promptText);
+  const frontendLike = isFrontendLike(promptText);
+  const researchLike = isResearchLike(promptText, context.settings);
 
-  if (context.mode === "planning") {
+  if (planningLike) {
     forced.add("mode.planning");
   }
 
-  if (isResearchLike(context.latestUserPrompt, context.settings)) {
+  if (researchLike) {
     forced.add("skill.research-current-facts");
   }
 
-  if (isCodingLike(context.latestUserPrompt)) {
+  if (codingLike) {
     forced.add("skill.coding-agent-workflow");
   }
 
-  const detectedTypes = getDetectedProjectTypes();
-  const promptText = context.latestUserPrompt;
+  if (reviewLike) {
+    forced.add("skill.code-review");
+  }
 
-  if (detectedTypes.has("node") || detectedTypes.has("tauri") || isNodeLike(promptText)) {
+  if (frontendLike) {
+    forced.add("skill.frontend-product-quality");
+  }
+
+  const detectedTypes = getDetectedProjectTypes();
+
+  if (isNodeLike(promptText) || (codingLike && (detectedTypes.has("node") || detectedTypes.has("tauri")))) {
     forced.add("skill.language-node");
   }
 
-  if (detectedTypes.has("python") || isPythonLike(promptText)) {
+  if (isPythonLike(promptText) || (codingLike && detectedTypes.has("python"))) {
     forced.add("skill.language-python");
   }
 
@@ -213,6 +218,14 @@ function isPythonLike(prompt: string) {
 }
 
 function isChunkAllowed(chunk: PromptChunk, context: AgentPromptRetrievalContext) {
+  if (chunk.id === "skill.language-node") {
+    return isNodeLike(context.latestUserPrompt);
+  }
+
+  if (chunk.id === "skill.language-python") {
+    return isPythonLike(context.latestUserPrompt);
+  }
+
   return true;
 }
 
@@ -245,27 +258,45 @@ function getLatestUserPrompt(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === "user" && message.content.trim())?.content.trim() ?? "";
 }
 
-function getEnabledToolNames(settings: ProviderSettings) {
+function getEnabledToolNames(settings: ProviderSettings, toolBridge?: ProviderToolBridgeOptions) {
+  if (toolBridge?.tools) {
+    return toolBridge.tools.map((tool) => tool.id);
+  }
+
   const tools = normalizeToolRegistrySettings(settings.tools);
 
   return [
     tools.browserPreview ? "browser_preview_open" : "",
     tools.terminal ? "terminal_run" : "",
-    tools.webSearch ? "host_web_search_context" : "",
+    tools.webSearch ? "web_search" : "",
   ].filter(Boolean);
 }
 
-function hasAnyLocalTool(settings: ProviderSettings) {
-  const tools = normalizeToolRegistrySettings(settings.tools);
-  return tools.browserPreview || tools.terminal;
-}
-
-function isResearchLike(prompt: string, settings: ProviderSettings) {
-  return isDeepResearchThinking(settings.thinking) || /\b(deep research|research|latest|current|today|docs?|official|verify|look up|source|cite|api|changelog|standard)\b/i.test(prompt);
+function isResearchLike(prompt: string, _settings: ProviderSettings) {
+  return /\b(deep research|research|latest|current|today|docs?|official|verify|look up|source|cite|api|changelog|standard)\b/i.test(prompt);
 }
 
 function isCodingLike(prompt: string) {
   return /\b(code|coding|implement|fix|debug|refactor|repo|repository|folder|file|build|test|senior dev|senior engineer|typescript|react|tauri|rust|app)\b/i.test(prompt);
+}
+
+function isPlanningLike(prompt: string) {
+  return /\b(plan|planning|brainstorm|architecture|design|trade-?off|requirements|approach|proposal)\b/i.test(prompt);
+}
+
+function isReviewLike(prompt: string) {
+  return /\b(review|audit|production-ready|risk|bug hunt|findings|security|regression)\b/i.test(prompt);
+}
+
+function isFrontendLike(prompt: string) {
+  return /\b(ui|ux|frontend|screen|component|css|layout|responsive|visual|preview|browser|website|page)\b/i.test(prompt);
+}
+
+function hasLocalWorkspaceTool(tools: ToolDefinition[] | undefined) {
+  return (tools ?? []).some((tool) => {
+    const family = tool.executorMetadata?.family;
+    return family === "files" || family === "editing" || family === "terminal" || family === "git" || family === "browser";
+  });
 }
 
 function hasLocalComputerContextMessage(message: ChatMessage) {
@@ -273,5 +304,5 @@ function hasLocalComputerContextMessage(message: ChatMessage) {
 }
 
 function hasWebContextMessage(message: ChatMessage) {
-  return message.id.startsWith("web-context") || message.content.includes("WEB SEARCH CONTEXT - ") || message.content.includes("WEB TOOL RESULTS");
+  return message.id.startsWith("web-context") || message.content.includes("WEB SEARCH CONTEXT - ") || message.content.includes("WEB SEARCH TOOL RESULTS");
 }

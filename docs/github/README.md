@@ -1,6 +1,6 @@
 # GitHub Integration Setup
 
-This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, workflow automation, and app tool-bridge workflows.
+This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, and workflow automation.
 
 Last verified: May 14, 2026.
 
@@ -126,9 +126,9 @@ Important details:
 - `admin:repo_hook` and related hook scopes support webhook automation.
 - `delete_repo` is powerful and should only be authorized on accounts where repository deletion capability is acceptable.
 
-## Step 5: Current Chat Status
+## Step 5: Current App Status
 
-GitHub tool-bridge surfaces can be attached to chat when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, remote file reads, branch creation, API commits, draft pull requests, release helpers, workflow listing, workflow dispatch, and workflow-run inspection should all route through the Tauri command layer instead of the GitHub CLI.
+GitHub operations are available when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, branch reads, API commits, draft pull requests, release helpers, workflow listing, workflow dispatch, and workflow-run inspection should all route through the Tauri command layer instead of the GitHub CLI.
 
 For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.3.5 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 
@@ -187,4 +187,4 @@ GitHub says repository webhooks require repository owner or admin access. Use or
 - Keep requested scopes in `src/app/githubClient.ts`, Settings UI copy, and this document aligned.
 - Keep GitHub token storage notes in `SECURITY.md` current.
 - Prefer draft PR creation until richer review cards and diffs are available in the UI.
-- Keep GitHub tool-bridge actions aligned with visible approval, activity, and release-note flows.
+- Keep GitHub actions aligned with visible approval, activity, and release-note flows.

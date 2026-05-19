@@ -16,7 +16,9 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { DialogShell } from "../../../components/dialogs/AppDialog";
 import {
+  backupDeviceDatabase,
   cleanupLegacyDeviceStorage,
+  finalizeDeviceDatabaseMigration,
   getDeviceDatabaseOverview,
   isDeviceDatabaseAvailable,
   resetDeviceDatabase,
@@ -27,11 +29,17 @@ import type { SettingsStatusMessage } from "../types";
 
 const RESET_PHRASE = "DELETE GILBERT DATABASE";
 
-export function DatabaseSettingsPage() {
+interface DatabaseSettingsPageProps {
+  showHeading?: boolean;
+}
+
+export function DatabaseSettingsPage({ showHeading = true }: DatabaseSettingsPageProps = {}) {
   const [overview, setOverview] = useState<DeviceDatabaseOverview | null>(null);
   const [status, setStatus] = useState<SettingsStatusMessage | null>(null);
   const [loading, setLoading] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [finalizeBusy, setFinalizeBusy] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetPhrase, setResetPhrase] = useState("");
   const [resetting, setResetting] = useState(false);
@@ -101,6 +109,59 @@ export function DatabaseSettingsPage() {
     }
   }
 
+  async function handleBackupDatabase() {
+    if (!desktopAvailable) {
+      setStatus({ kind: "warning", text: "Open the desktop app to back up the database." });
+      return;
+    }
+
+    setBackupBusy(true);
+    setStatus(null);
+
+    try {
+      const backup = await backupDeviceDatabase();
+      setStatus({
+        kind: "success",
+        text: backup
+          ? `Database backup created: ${formatBytes(backup.fileSizeBytes)} at ${backup.backupPath}`
+          : "Database backup created.",
+      });
+      await refreshOverview({ quiet: true });
+    } catch (error) {
+      setStatus({ kind: "error", text: readErrorMessage(error, "Could not create a database backup.") });
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleFinalizeMigration() {
+    if (!desktopAvailable) {
+      setStatus({ kind: "warning", text: "Open the desktop app to finalize the database migration." });
+      return;
+    }
+
+    setFinalizeBusy(true);
+    setStatus(null);
+
+    try {
+      const result = await finalizeDeviceDatabaseMigration();
+      const removedCount = result?.removedStorageKeys.length ?? 0;
+      const removedPathCount = result?.removedLegacyPaths.length ?? 0;
+      const failedPathCount = result?.failedLegacyPaths.length ?? 0;
+      setStatus({
+        kind: failedPathCount > 0 ? "warning" : "success",
+        text: result
+          ? `Migration finalized after backup. Removed ${removedCount} legacy hot-path value${removedCount === 1 ? "" : "s"} and ${removedPathCount} legacy path${removedPathCount === 1 ? "" : "s"}; backup is ${formatBytes(result.backup.fileSizeBytes)}.${failedPathCount > 0 ? ` ${failedPathCount} legacy path${failedPathCount === 1 ? "" : "s"} will retry later.` : ""}`
+          : "Migration finalized.",
+      });
+      await refreshOverview({ quiet: true });
+    } catch (error) {
+      setStatus({ kind: "error", text: readErrorMessage(error, "Could not finalize the database migration.") });
+    } finally {
+      setFinalizeBusy(false);
+    }
+  }
+
   async function handleResetDatabase() {
     setResetting(true);
     setStatus(null);
@@ -128,7 +189,7 @@ export function DatabaseSettingsPage() {
 
   return (
     <>
-      <SettingsSectionHeading detail="Inspect this account's local SQL records, context footprint, legacy storage, and reset controls." icon={Database} title="Database" />
+      {showHeading ? <SettingsSectionHeading detail="Inspect this account's local SQL records, context footprint, legacy storage, and reset controls." icon={Database} title="Database" /> : null}
       <div className="settings-section-grid database-settings-grid">
         {status ? (
           <div className="settings-status-banner settings-card-wide" data-kind={status.kind}>
@@ -149,6 +210,43 @@ export function DatabaseSettingsPage() {
             <DatabaseMetric icon={ListTree} label="Records" value={formatNumber(overview?.recordCount ?? 0)} detail={`${formatNumber(overview?.namespaceCount ?? 0)} namespace${overview?.namespaceCount === 1 ? "" : "s"}`} />
             <DatabaseMetric icon={MessageSquareText} label="Estimated context" value={formatNumber(overview?.context.estimatedTokens ?? 0)} detail="tokens from saved message text" />
             <DatabaseMetric icon={Clock3} label="Last modified" value={formatTimestamp(overview?.lastModified ?? null)} detail={loading ? "Refreshing" : "Current snapshot"} />
+          </div>
+        </article>
+
+        <article className="settings-card settings-card-wide">
+          <div className="settings-card-heading">
+            <Database size={19} aria-hidden="true" />
+            <div>
+              <h2>Engine and migration</h2>
+              <p>SQLite v3 high-throughput status for this account.</p>
+            </div>
+          </div>
+          <div className="settings-row-list">
+            <div className="settings-row">
+              <span>Schema</span>
+              <strong>{overview?.migration.currentSchemaVersion || "Unknown"} / {overview?.migration.targetSchemaVersion || "3"}</strong>
+              <em>{overview?.migration.status ?? "Not inspected"}</em>
+            </div>
+            <div className="settings-row">
+              <span>Write mode</span>
+              <strong>{(overview?.engine.journalMode || "unknown").toUpperCase()}</strong>
+              <em>synchronous {overview?.engine.synchronous || "unknown"}</em>
+            </div>
+            <div className="settings-row">
+              <span>Integrity</span>
+              <strong>{overview?.engine.quickCheck || "Not run"}</strong>
+              <em>{formatBytes(overview?.engine.freeBytes ?? 0)} free pages</em>
+            </div>
+            <div className="settings-row">
+              <span>Typed hot path</span>
+              <strong>{formatNumber(overview?.migration.typedAgentRunCount ?? 0)} runs</strong>
+              <em>{formatNumber(overview?.migration.typedAgentRunEventCount ?? 0)} events, {formatNumber(overview?.migration.binaryVectorCount ?? 0)} binary vectors</em>
+            </div>
+            <div className="settings-row">
+              <span>Legacy blob left intact</span>
+              <strong>{formatBytes(overview?.migration.legacyAgentRunBlobBytes ?? 0)}</strong>
+              <em>kept until backup/export succeeds</em>
+            </div>
           </div>
         </article>
 
@@ -188,7 +286,7 @@ export function DatabaseSettingsPage() {
             <MessageSquareText size={19} aria-hidden="true" />
             <div>
               <h2>Context inventory</h2>
-              <p>Saved chat, source, image, tool, and reasoning counts.</p>
+              <p>Saved chat, source, image, and tool counts.</p>
             </div>
           </div>
           <div className="database-context-grid">
@@ -209,10 +307,6 @@ export function DatabaseSettingsPage() {
             <div className="settings-row">
               <span>Saved message text</span>
               <strong>{formatBytes(overview?.context.contentBytes ?? 0)}</strong>
-            </div>
-            <div className="settings-row">
-              <span>Thinking and reasoning</span>
-              <strong>{formatBytes((overview?.context.thinkingBytes ?? 0) + (overview?.context.reasoningBytes ?? 0))}</strong>
             </div>
             <div className="settings-row">
               <span>Largest chat</span>
@@ -272,6 +366,22 @@ export function DatabaseSettingsPage() {
               </button>
             </div>
             <div className="settings-row">
+              <span>Backup</span>
+              <strong>{formatBytes((overview?.fileSizeBytes ?? 0) + (overview?.engine.walSizeBytes ?? 0))}</strong>
+              <button className="settings-ghost-button" type="button" disabled={backupBusy || !overview?.exists} onClick={handleBackupDatabase}>
+                <Archive size={16} aria-hidden="true" />
+                {backupBusy ? "Backing up" : "Back up"}
+              </button>
+            </div>
+            <div className="settings-row">
+              <span>Finalize migration</span>
+              <strong>{overview?.migration.status ?? "Not inspected"}</strong>
+              <button className="settings-ghost-button" type="button" disabled={finalizeBusy || !overview?.exists} onClick={handleFinalizeMigration}>
+                <Archive size={16} aria-hidden="true" />
+                {finalizeBusy ? "Finalizing" : "Finalize"}
+              </button>
+            </div>
+            <div className="settings-row">
               <span>Legacy storage</span>
               <strong>{formatBytes(overview?.legacyStorage.totalBytes ?? 0)}</strong>
               <button className="settings-ghost-button" type="button" disabled={cleanupBusy} onClick={handleCleanupLegacyStorage}>
@@ -321,7 +431,7 @@ export function DatabaseSettingsPage() {
             </button>
           </>
         }
-        description="This deletes Gilbert Database for every local account and resets the app to a clean slate on this device."
+        description="This deletes Gilbert Database for every local account. Create a backup from Maintenance before continuing."
         icon={Trash2}
         open={resetConfirmOpen}
         title="Delete Gilbert Database?"
@@ -335,7 +445,7 @@ export function DatabaseSettingsPage() {
         <div className="database-reset-dialog">
           <div className="settings-warning">
             <AlertTriangle size={16} aria-hidden="true" />
-            <span>This cannot be undone unless the user kept their own backup of the database file.</span>
+            <span>This cannot be undone unless a database backup was created first.</span>
           </div>
           <label>
             <span>Type {RESET_PHRASE}</span>

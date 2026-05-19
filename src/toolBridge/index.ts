@@ -16,7 +16,21 @@ export {
   tryResolveAllowedPath,
 } from "./paths";
 export { BRIDGE_TOOL_CALL_ID_PREFIX, createBridgeChatToolCall, formatToolResultContent, safeStringify } from "./results";
+export { coalesceToolBridgeCalls, createToolExecutionSegments, getToolSchedulerMode } from "./scheduler";
 export { parseVisibleTextToolCalls } from "./parsers";
+export {
+  createProjectToolMemoryContext,
+  createProjectToolMemoryScope,
+  learnProjectToolMemoryFromBridgeRun,
+  learnProjectToolMemoryFromChatToolCalls,
+  loadProjectToolMemoryState,
+  projectToolMemoryStorageKey,
+  saveProjectToolMemoryState,
+  type ProjectToolMemoryEntry,
+  type ProjectToolMemoryScope,
+  type ProjectToolMemoryState,
+  type ProjectToolMemoryStorage,
+} from "./memory";
 export {
   createVisibleFallbackFromToolCall,
   finalizeToolResult,
@@ -26,7 +40,9 @@ export {
   type ToolResultKind,
   type VisibleToolResultMode,
 } from "./resultFinalizer";
+export { selectAdvertisedBridgeTools, shouldAttachWebSearch, type SelectAdvertisedBridgeToolsOptions } from "./selection";
 export {
+  createBrowserConsoleReadTool,
   createBrowserPreviewTool,
   createBrowserTools,
   browserTools,
@@ -48,9 +64,17 @@ export {
   type WebSearchToolBackend,
 } from "./tools/web";
 export {
+  createMemorySearchTool,
+  createMemoryTools,
+  memoryTools,
+} from "./tools/memory";
+export {
   createEditingTools,
+  createFilesCreateDirectoryTool,
+  createFilesEditManyTool,
   createFilesApplyPatchTool,
   createFilesExactReplaceTool,
+  createFilesWriteManyTool,
   createFilesWriteTool,
   defaultEditingBackend,
   editingTools,

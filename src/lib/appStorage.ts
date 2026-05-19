@@ -1,9 +1,10 @@
-import { createEmptyChat, DEFAULT_PROJECT, isNoProjectName, normalizeProjectName, titleFromMessage } from "./chatUtils";
+import { createEmptyChat, DEFAULT_PROJECT, isDiscardableEmptyChat, isEmptyChat, isNoProjectName, normalizeProjectName, titleFromMessage } from "./chatUtils";
 import {
   DEFAULT_LOCAL_MAX_TOKENS,
   DEFAULT_LOCAL_TEMPERATURE,
   DEFAULT_LOCAL_TOP_K,
   DEFAULT_LOCAL_TOP_P,
+  normalizeContextWindowTokens,
   normalizeMaxTokens,
   normalizeTemperature,
   normalizeTopK,
@@ -24,25 +25,35 @@ import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../servi
 import { normalizeToolBridgePermissionMode } from "../toolBridge/permissions";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
-import { cleanupLegacyDeviceStorage, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValue, type DeviceDatabaseSeed } from "./deviceDatabase";
+import { autoFinalizeDeviceDatabaseMigration, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValues, type DeviceDatabaseSeed } from "./deviceDatabase";
 import type {
   ChatAttachment,
   ChatArtifact,
   ChatContextCompaction,
+  ChatComposerDraft,
   ChatFileAttachment,
   ChatImageAttachment,
   ChatMessage,
+  ChatPlanning,
   ChatProgressItem,
+  ChatResearchReference,
+  ChatSource,
+  ChatThinking,
   ChatSummary,
   ChatToolCall,
+  ChatVideoAttachment,
+  ChatWebSearch,
+  ChatWorkTraceItem,
 } from "../types/chat";
 import type { AgentApproval } from "../types/agentRun";
 import type { LocalPermissionMode, LocalWorkspaceIndexStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
 import type { PdfLibraryOrigin, PdfLibraryRecord, PdfLibrarySourceFormat, PdfLibraryState, PdfProjectInstruction } from "../types/pdfLibrary";
+import { CHAT_MEMORY_STORAGE_PREFIX, PROJECT_MEMORY_STORAGE_PREFIX } from "../memory";
 import {
   DEFAULT_BRAVE_SEARCH_SETTINGS,
+  type AppPersonalizationSettings,
   type AppearanceMode,
   type BraveSearchFreshness,
   type BraveSearchRequestMethod,
@@ -50,6 +61,9 @@ import {
   type BraveSearchSafeSearch,
   type BraveSearchUnits,
   type BraveAnswersModel,
+  type ProviderContextWindowMap,
+  type ProviderModelBudgetOverrideMap,
+  type ProviderModelVisibilityMap,
   type ProviderSettings,
   type ReasoningEffort,
   type ThinkingSettings,
@@ -62,6 +76,7 @@ const PROJECTS_KEY = "gilbert-codex.projects.v1";
 const SETTINGS_KEY = "gilbert-codex.provider-settings.v1";
 const THINKING_KEY = "gilbert-codex.thinking-settings.v1";
 const APPEARANCE_KEY = "gilbert-codex.appearance.v1";
+const PERSONALIZATION_KEY = "gilbert-codex.personalization.v1";
 const ACTIVE_CHAT_KEY = "gilbert-codex.active-chat.v1";
 const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
 const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
@@ -74,12 +89,14 @@ const BROWSER_AGENT_RUNS_KEY = "gilbert-codex.agent-runs.v1";
 const PDF_LIBRARY_KEY = "gilbert-codex.pdf-library.v1";
 const MAPBOX_SETTINGS_KEY = "gilbert-codex.mapbox-settings.v1";
 const WEATHER_LOCATION_KEY = "gilbert-codex.weather-location.v1";
+const PROJECT_TOOL_MEMORY_STORAGE_PREFIX = "gilbert-codex.project-tool-memory.v1.";
 const PERSISTED_STORAGE_KEYS = [
   CHATS_KEY,
   PROJECTS_KEY,
   SETTINGS_KEY,
   THINKING_KEY,
   APPEARANCE_KEY,
+  PERSONALIZATION_KEY,
   ACTIVE_CHAT_KEY,
   LOCAL_WORKSPACE_KEY,
   TOOL_REGISTRY_KEY,
@@ -92,8 +109,10 @@ const PERSISTED_STORAGE_KEYS = [
   MAPBOX_SETTINGS_KEY,
   WEATHER_LOCATION_KEY,
 ];
+const PERSISTED_STORAGE_KEY_PREFIXES = [PROJECT_TOOL_MEMORY_STORAGE_PREFIX, CHAT_MEMORY_STORAGE_PREFIX, PROJECT_MEMORY_STORAGE_PREFIX];
 const LEGACY_BROWSER_ONLY_KEYS = [BROWSER_AUTH_DB_KEY];
 const PENDING_DEVICE_WRITE_PREFIX = "gilbert-codex.pending-device-write.v1.";
+const PENDING_DEVICE_RECOVERY_WRITE_DELAY_MS = 250;
 let storageNamespace = "legacy";
 let deviceDatabasePath: string | null = null;
 let deviceStorageInitialized = false;
@@ -101,6 +120,9 @@ let deviceStorageValues = new Map<string, string>();
 let storageInitializationToken = 0;
 const deviceStorageWriteQueues = new Map<string, Promise<void>>();
 const deviceStoragePendingWrites = new Map<string, { key: string; namespace: string; value: string }>();
+const deviceStoragePendingRecoveryWrites = new Map<string, PendingDeviceStorageWrite>();
+const deviceStoragePendingRecoveryTimers = new Map<string, number>();
+let deviceStorageRecoveryFlushRegistered = false;
 
 interface PendingDeviceStorageWrite {
   key: string;
@@ -112,8 +134,11 @@ interface PendingDeviceStorageWrite {
 export const defaultProviderSettings: ProviderSettings = {
   apiKeys: {},
   baseUrls: getDefaultProviderBaseUrls(),
+  contextWindowTokens: {},
+  disabledModels: {},
   maxTokens: DEFAULT_LOCAL_MAX_TOKENS,
   model: DEFAULT_CHAT_MODEL,
+  modelBudgetOverrides: {},
   openRouterApiKey: "",
   provider: DEFAULT_PROVIDER_ID,
   providerModels: getDefaultProviderModels(),
@@ -138,6 +163,10 @@ export const defaultProviderSettings: ProviderSettings = {
   },
 };
 
+export const defaultAppPersonalizationSettings: AppPersonalizationSettings = {
+  locationServicesEnabled: true,
+};
+
 export function setStorageNamespace(userId: string | null) {
   const nextNamespace = userId ? `user.${sanitizeStorageScope(userId)}` : "legacy";
 
@@ -145,6 +174,7 @@ export function setStorageNamespace(userId: string | null) {
     return;
   }
 
+  flushPendingDeviceStorageRecoveries();
   storageNamespace = nextNamespace;
   storageInitializationToken += 1;
   deviceDatabasePath = null;
@@ -182,7 +212,7 @@ export async function initializeDeviceStorage(userId: string | null) {
   }
 
   purgeLegacyBrowserStorage();
-  void cleanupLegacyDeviceStorage().catch(() => undefined);
+  void autoFinalizeDeviceDatabaseMigration().catch(() => undefined);
 }
 
 export function getDeviceDatabasePath() {
@@ -196,26 +226,37 @@ export function loadChats(): ChatSummary[] {
     return [createEmptyChat(DEFAULT_PROJECT)];
   }
 
-  return storedChats.map((chat) => {
+  const normalizedChats = storedChats.map((chat) => {
     const normalizedMessages = Array.isArray(chat.messages) ? chat.messages.map(normalizeChatMessage) : [];
     const messages = normalizedMessages;
+    const composerDraft = normalizeComposerDraft(chat.composerDraft);
     const project = normalizeProjectName(chat.project);
+    const provider = isModelProviderId(chat.provider) ? chat.provider : undefined;
+    const model = normalizeOptionalText(chat.model);
     const isLegacyDiscordChat = project.toLowerCase() === "discord" && messages.some((message) => message.source?.kind === "discord");
     const firstUserMessage = messages.find((message) => message.role === "user");
 
     return {
       ...chat,
+      composerDraft,
+      isDraft: isEmptyChat({ messages }) ? true : undefined,
       messages,
+      model,
       project: isLegacyDiscordChat ? DEFAULT_PROJECT : project,
+      provider,
       title: isLegacyDiscordChat && firstUserMessage ? titleFromMessage(firstUserMessage.content) : chat.title || "New chat",
       toolRuntimeVersion: 0,
       updatedAt: chat.updatedAt || new Date().toISOString(),
     };
   });
+
+  const durableChats = normalizedChats.filter((chat) => !isDiscardableEmptyChat(chat));
+
+  return durableChats.length > 0 ? durableChats : [createEmptyChat(DEFAULT_PROJECT)];
 }
 
 export function saveChats(chats: ChatSummary[]) {
-  writeJson(CHATS_KEY, chats);
+  writeJson(CHATS_KEY, chats.filter((chat) => !isDiscardableEmptyChat(chat)));
 }
 
 export function loadProjects(): ProjectSummary[] {
@@ -256,6 +297,9 @@ export function loadProviderSettings(): ProviderSettings {
   const provider = normalizeModelProvider(storedSettings?.provider);
   const apiKeys = normalizeProviderSecretMap(storedSettings?.apiKeys);
   const baseUrls = normalizeProviderBaseUrls(storedSettings?.baseUrls);
+  const contextWindowTokens = normalizeProviderContextWindowTokens(storedSettings?.contextWindowTokens);
+  const disabledModels = normalizeDisabledProviderModels(storedSettings?.disabledModels);
+  const modelBudgetOverrides = normalizeProviderModelBudgetOverrides(storedSettings?.modelBudgetOverrides);
   const providerModels = normalizeProviderModels(storedSettings?.providerModels);
   const legacyOpenRouterApiKey = typeof storedSettings?.openRouterApiKey === "string" ? storedSettings.openRouterApiKey : "";
   const tools = normalizeToolRegistrySettings(storedTools ?? storedSettings?.tools);
@@ -265,6 +309,7 @@ export function loadProviderSettings(): ProviderSettings {
   }
 
   const model = normalizeModel(storedSettings?.model, provider, providerModels);
+  removeDisabledProviderModelValue(disabledModels, provider, model);
   providerModels[provider] = model;
 
   return {
@@ -272,8 +317,11 @@ export function loadProviderSettings(): ProviderSettings {
     ...storedSettings,
     apiKeys,
     baseUrls,
+    contextWindowTokens,
+    disabledModels,
     maxTokens: normalizeMaxTokens(storedSettings?.maxTokens, defaultProviderSettings.maxTokens),
     model,
+    modelBudgetOverrides,
     openRouterApiKey: apiKeys.openrouter ?? "",
     provider,
     providerModels,
@@ -298,6 +346,9 @@ export function saveProviderSettings(settings: ProviderSettings) {
     openrouter: settings.apiKeys?.openrouter || settings.openRouterApiKey,
   });
   const baseUrls = normalizeProviderBaseUrls(settings.baseUrls);
+  const contextWindowTokens = normalizeProviderContextWindowTokens(settings.contextWindowTokens);
+  const disabledModels = normalizeDisabledProviderModels(settings.disabledModels);
+  const modelBudgetOverrides = normalizeProviderModelBudgetOverrides(settings.modelBudgetOverrides);
   const providerModels = normalizeProviderModels({
     ...settings.providerModels,
     [settings.provider]: settings.model,
@@ -306,6 +357,9 @@ export function saveProviderSettings(settings: ProviderSettings) {
     ...settings,
     apiKeys,
     baseUrls,
+    contextWindowTokens,
+    disabledModels,
+    modelBudgetOverrides,
     openRouterApiKey: apiKeys.openrouter ?? "",
     providerModels,
     thinking: normalizeThinkingSettings(settings.thinking),
@@ -333,6 +387,14 @@ export function loadAppearanceMode(): AppearanceMode {
 
 export function saveAppearanceMode(mode: AppearanceMode) {
   writeString(APPEARANCE_KEY, mode);
+}
+
+export function loadAppPersonalizationSettings(): AppPersonalizationSettings {
+  return normalizeAppPersonalizationSettings(readJson<Partial<AppPersonalizationSettings>>(PERSONALIZATION_KEY));
+}
+
+export function saveAppPersonalizationSettings(settings: AppPersonalizationSettings) {
+  writeJson(PERSONALIZATION_KEY, normalizeAppPersonalizationSettings(settings));
 }
 
 export function loadActiveChatId() {
@@ -410,7 +472,7 @@ function readString(key: string) {
 
 function writeString(key: string, value: string) {
   if (deviceStorageInitialized && isDeviceDatabaseAvailable()) {
-    writePendingDeviceStorageRecovery(storageNamespace, key, value);
+    queuePendingDeviceStorageRecovery(storageNamespace, key, value);
     deviceStorageValues.set(key, value);
     queueDeviceStorageWrite(storageNamespace, key, value);
     return;
@@ -424,41 +486,76 @@ function writeString(key: string, value: string) {
 }
 
 function queueDeviceStorageWrite(namespace: string, key: string, value: string) {
-  const queueKey = `${namespace}\0${key}`;
-  deviceStoragePendingWrites.set(queueKey, { key, namespace, value });
+  const pendingKey = `${namespace}\0${key}`;
+  deviceStoragePendingWrites.set(pendingKey, { key, namespace, value });
+  scheduleDeviceStorageWriteQueue(namespace);
+}
 
-  if (deviceStorageWriteQueues.has(queueKey)) {
+function scheduleDeviceStorageWriteQueue(namespace: string) {
+  if (deviceStorageWriteQueues.has(namespace)) {
     return;
   }
 
-  const queuedWrite = drainDeviceStorageWriteQueue(queueKey).finally(() => {
-    deviceStorageWriteQueues.delete(queueKey);
+  const queuedWrite = drainDeviceStorageWriteQueue(namespace).finally(() => {
+    deviceStorageWriteQueues.delete(namespace);
 
-    if (deviceStoragePendingWrites.has(queueKey)) {
-      queueDeviceStorageWrite(namespace, key, deviceStoragePendingWrites.get(queueKey)?.value ?? value);
+    if (hasPendingNamespaceWrites(namespace)) {
+      scheduleDeviceStorageWriteQueue(namespace);
     }
   });
 
-  deviceStorageWriteQueues.set(queueKey, queuedWrite);
+  deviceStorageWriteQueues.set(namespace, queuedWrite);
   void queuedWrite.catch(() => undefined);
 }
 
-async function drainDeviceStorageWriteQueue(queueKey: string) {
-  while (deviceStoragePendingWrites.has(queueKey)) {
-    const pendingWrite = deviceStoragePendingWrites.get(queueKey);
-    deviceStoragePendingWrites.delete(queueKey);
+async function drainDeviceStorageWriteQueue(namespace: string) {
+  while (hasPendingNamespaceWrites(namespace)) {
+    const pendingWrites = takePendingNamespaceWrites(namespace);
 
-    if (!pendingWrite) {
+    if (pendingWrites.length === 0) {
       return;
     }
 
     try {
-      await saveDeviceDatabaseValue(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
-      clearPendingDeviceStorageRecovery(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
+      await saveDeviceDatabaseValues(
+        namespace,
+        pendingWrites.map((pendingWrite) => ({ key: pendingWrite.key, value: pendingWrite.value })),
+      );
+      for (const pendingWrite of pendingWrites) {
+        clearPendingDeviceStorageRecovery(pendingWrite.namespace, pendingWrite.key, pendingWrite.value);
+      }
     } catch {
+      for (const pendingWrite of pendingWrites) {
+        deviceStoragePendingWrites.set(`${pendingWrite.namespace}\0${pendingWrite.key}`, pendingWrite);
+      }
       return;
     }
   }
+}
+
+function hasPendingNamespaceWrites(namespace: string) {
+  for (const pendingWrite of deviceStoragePendingWrites.values()) {
+    if (pendingWrite.namespace === namespace) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function takePendingNamespaceWrites(namespace: string) {
+  const pendingWrites: Array<{ key: string; namespace: string; value: string }> = [];
+
+  for (const [pendingKey, pendingWrite] of deviceStoragePendingWrites.entries()) {
+    if (pendingWrite.namespace !== namespace) {
+      continue;
+    }
+
+    deviceStoragePendingWrites.delete(pendingKey);
+    pendingWrites.push(pendingWrite);
+  }
+
+  return pendingWrites;
 }
 
 function recoverPendingDeviceStorageWrites(namespace: string, values: Record<string, string>) {
@@ -485,20 +582,43 @@ function recoverPendingDeviceStorageWrites(namespace: string, values: Record<str
   };
 }
 
-function writePendingDeviceStorageRecovery(namespace: string, key: string, value: string) {
+function queuePendingDeviceStorageRecovery(namespace: string, key: string, value: string) {
   if (typeof window === "undefined") {
     return;
   }
 
+  registerPendingDeviceStorageRecoveryFlush();
+
+  const storageKey = pendingDeviceStorageKey(namespace, key);
   const pendingWrite: PendingDeviceStorageWrite = {
     key,
     namespace,
     updatedAt: Date.now(),
     value,
   };
+  const pendingTimer = deviceStoragePendingRecoveryTimers.get(storageKey);
 
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+  }
+
+  deviceStoragePendingRecoveryWrites.set(storageKey, pendingWrite);
+  const recoveryTimer = window.setTimeout(() => {
+    deviceStoragePendingRecoveryTimers.delete(storageKey);
+    const latestPendingWrite = deviceStoragePendingRecoveryWrites.get(storageKey);
+
+    if (!latestPendingWrite) {
+      return;
+    }
+
+    writePendingDeviceStorageRecovery(latestPendingWrite);
+  }, PENDING_DEVICE_RECOVERY_WRITE_DELAY_MS);
+  deviceStoragePendingRecoveryTimers.set(storageKey, recoveryTimer);
+}
+
+function writePendingDeviceStorageRecovery(pendingWrite: PendingDeviceStorageWrite) {
   try {
-    window.localStorage.setItem(pendingDeviceStorageKey(namespace, key), JSON.stringify(pendingWrite));
+    window.localStorage.setItem(pendingDeviceStorageKey(pendingWrite.namespace, pendingWrite.key), JSON.stringify(pendingWrite));
   } catch {
     return;
   }
@@ -511,6 +631,18 @@ function clearPendingDeviceStorageRecovery(namespace: string, key: string, value
 
   try {
     const storageKey = pendingDeviceStorageKey(namespace, key);
+    const pendingTimer = deviceStoragePendingRecoveryTimers.get(storageKey);
+    const queuedPendingWrite = deviceStoragePendingRecoveryWrites.get(storageKey);
+
+    if (pendingTimer !== undefined && (!queuedPendingWrite || queuedPendingWrite.value === value)) {
+      window.clearTimeout(pendingTimer);
+      deviceStoragePendingRecoveryTimers.delete(storageKey);
+    }
+
+    if (!queuedPendingWrite || queuedPendingWrite.value === value) {
+      deviceStoragePendingRecoveryWrites.delete(storageKey);
+    }
+
     const pendingWrite = parsePendingDeviceStorageWrite(window.localStorage.getItem(storageKey));
 
     if (!pendingWrite || pendingWrite.value === value) {
@@ -519,6 +651,32 @@ function clearPendingDeviceStorageRecovery(namespace: string, key: string, value
   } catch {
     return;
   }
+}
+
+function flushPendingDeviceStorageRecoveries() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  for (const pendingTimer of deviceStoragePendingRecoveryTimers.values()) {
+    window.clearTimeout(pendingTimer);
+  }
+
+  deviceStoragePendingRecoveryTimers.clear();
+
+  for (const pendingWrite of deviceStoragePendingRecoveryWrites.values()) {
+    writePendingDeviceStorageRecovery(pendingWrite);
+  }
+}
+
+function registerPendingDeviceStorageRecoveryFlush() {
+  if (deviceStorageRecoveryFlushRegistered || typeof window === "undefined") {
+    return;
+  }
+
+  deviceStorageRecoveryFlushRegistered = true;
+  window.addEventListener?.("pagehide", flushPendingDeviceStorageRecoveries);
+  window.addEventListener?.("beforeunload", flushPendingDeviceStorageRecoveries);
 }
 
 function readPendingDeviceStorageRecoveries(namespace: string) {
@@ -610,11 +768,56 @@ function collectLocalStorageSeeds(): DeviceDatabaseSeed[] {
     return [];
   }
 
-  return PERSISTED_STORAGE_KEYS.flatMap((key) => {
+  const seeds = new Map<string, string>();
+
+  for (const key of PERSISTED_STORAGE_KEYS) {
     const value = readRawStorageValue(key);
 
-    return value === null ? [] : [{ key, value }];
-  });
+    if (value !== null) {
+      seeds.set(key, value);
+    }
+  }
+
+  for (const seed of collectPrefixedLocalStorageSeeds()) {
+    seeds.set(seed.key, seed.value);
+  }
+
+  return Array.from(seeds.entries()).map(([key, value]) => ({ key, value }));
+}
+
+function collectPrefixedLocalStorageSeeds(): DeviceDatabaseSeed[] {
+  const seeds: DeviceDatabaseSeed[] = [];
+  const namespaceSuffix = storageNamespace === "legacy" ? "" : `.${storageNamespace}`;
+
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const rawKey = window.localStorage.key(index);
+
+      if (!rawKey) {
+        continue;
+      }
+
+      const key = namespaceSuffix
+        ? rawKey.endsWith(namespaceSuffix)
+          ? rawKey.slice(0, -namespaceSuffix.length)
+          : ""
+        : rawKey;
+
+      if (!key || !PERSISTED_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        continue;
+      }
+
+      const value = window.localStorage.getItem(rawKey);
+
+      if (value !== null) {
+        seeds.push({ key, value });
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  return seeds;
 }
 
 function purgeLegacyBrowserStorage() {
@@ -634,7 +837,11 @@ function purgeLegacyBrowserStorage() {
         continue;
       }
 
-      if (allLegacyKeys.includes(key) || storageKeyPrefixes.some((prefix) => key.startsWith(prefix))) {
+      if (
+        allLegacyKeys.includes(key) ||
+        storageKeyPrefixes.some((prefix) => key.startsWith(prefix)) ||
+        PERSISTED_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))
+      ) {
         keysToRemove.push(key);
       }
     }
@@ -700,6 +907,61 @@ function normalizeProviderBaseUrls(value: unknown): ProviderSettings["baseUrls"]
   }, {});
 }
 
+function normalizeProviderContextWindowTokens(value: unknown): ProviderContextWindowMap {
+  const storedMap = typeof value === "object" && value ? (value as Partial<Record<string, unknown>>) : {};
+
+  return Object.entries(defaultProviderSettings.baseUrls).reduce<ProviderContextWindowMap>((contextWindows, [providerId]) => {
+    const provider = providerId as ProviderSettings["provider"];
+    const storedValue = storedMap[providerId];
+
+    if (typeof storedValue === "number" && Number.isFinite(storedValue) && storedValue > 0) {
+      contextWindows[provider] = normalizeContextWindowTokens(storedValue);
+    }
+
+    return contextWindows;
+  }, {});
+}
+
+function normalizeProviderModelBudgetOverrides(value: unknown): ProviderModelBudgetOverrideMap {
+  const storedMap = typeof value === "object" && value ? (value as Partial<Record<string, unknown>>) : {};
+  const overrides: ProviderModelBudgetOverrideMap = {};
+
+  for (const [providerId] of Object.entries(defaultProviderSettings.baseUrls)) {
+    const provider = providerId as ProviderSettings["provider"];
+    const providerOverrides = typeof storedMap[providerId] === "object" && storedMap[providerId]
+      ? (storedMap[providerId] as Partial<Record<string, unknown>>)
+      : {};
+    const normalizedProviderOverrides: NonNullable<ProviderModelBudgetOverrideMap[ProviderSettings["provider"]]> = {};
+
+    for (const [rawModel, rawOverride] of Object.entries(providerOverrides)) {
+      if (!rawModel.trim() || typeof rawOverride !== "object" || !rawOverride) {
+        continue;
+      }
+
+      const override = rawOverride as Partial<Record<string, unknown>>;
+      const contextWindowTokens = typeof override.contextWindowTokens === "number" && Number.isFinite(override.contextWindowTokens) && override.contextWindowTokens > 0
+        ? normalizeContextWindowTokens(override.contextWindowTokens)
+        : undefined;
+      const maxOutputTokens = typeof override.maxOutputTokens === "number" && Number.isFinite(override.maxOutputTokens) && override.maxOutputTokens > 0
+        ? normalizeMaxTokens(override.maxOutputTokens)
+        : undefined;
+
+      if (contextWindowTokens || maxOutputTokens) {
+        normalizedProviderOverrides[rawModel.trim()] = {
+          contextWindowTokens,
+          maxOutputTokens,
+        };
+      }
+    }
+
+    if (Object.keys(normalizedProviderOverrides).length > 0) {
+      overrides[provider] = normalizedProviderOverrides;
+    }
+  }
+
+  return overrides;
+}
+
 function normalizeProviderModels(value: unknown): ProviderSettings["providerModels"] {
   const storedMap = typeof value === "object" && value ? (value as Partial<Record<string, unknown>>) : {};
 
@@ -711,6 +973,53 @@ function normalizeProviderModels(value: unknown): ProviderSettings["providerMode
 
     return models;
   }, {});
+}
+
+function normalizeDisabledProviderModels(value: unknown): ProviderModelVisibilityMap {
+  const storedMap = typeof value === "object" && value ? (value as Partial<Record<string, unknown>>) : {};
+
+  return Object.entries(defaultProviderSettings.providerModels).reduce<ProviderModelVisibilityMap>((models, [providerId]) => {
+    const provider = providerId as ProviderSettings["provider"];
+    const values = Array.isArray(storedMap[providerId]) ? storedMap[providerId] : [];
+    const seen = new Set<string>();
+    const normalizedValues = values.flatMap((value) => {
+      if (typeof value !== "string" || !value.trim()) {
+        return [];
+      }
+
+      const normalizedValue = value.trim();
+
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return [];
+      }
+
+      seen.add(normalizedValue);
+      return [normalizedValue];
+    });
+
+    if (normalizedValues.length > 0) {
+      models[provider] = normalizedValues;
+    }
+
+    return models;
+  }, {});
+}
+
+function removeDisabledProviderModelValue(disabledModels: ProviderModelVisibilityMap, provider: ProviderSettings["provider"], model: string) {
+  const normalizedModel = normalizeProviderModelId(provider, model);
+  const disabledValues = disabledModels[provider];
+
+  if (!normalizedModel || !disabledValues?.length) {
+    return;
+  }
+
+  const nextValues = disabledValues.filter((value) => value !== normalizedModel);
+
+  if (nextValues.length > 0) {
+    disabledModels[provider] = nextValues;
+  } else {
+    delete disabledModels[provider];
+  }
 }
 
 function normalizeChatMessage(message: ChatMessage): ChatMessage {
@@ -728,13 +1037,305 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     createdAt: message.createdAt || new Date().toISOString(),
     id: message.id || `message-${Date.now()}`,
     isStreaming: false,
+    mode: normalizeChatMessageMode(message.mode),
+    planning: normalizeChatPlanning(message.planning),
     progress: normalizeProgressItems(message.progress),
+    reasoning: undefined,
     role: message.role === "assistant" ? "assistant" : "user",
-    responseThinking: normalizeOptionalText(message.responseThinking),
+    researchReferences: normalizeResearchReferences(message.researchReferences),
+    responseThinking: undefined,
     source: normalizeChatMessageSource(message.source) ?? legacyDiscordMessage?.source,
+    sources: normalizeChatSources(message.sources),
     status: message.status === "error" ? "error" : undefined,
+    thinking: normalizeChatThinking(message.thinking),
     toolCalls: normalizeToolCalls(message.toolCalls),
+    webSearch: normalizeChatWebSearch(message.webSearch),
+    workTrace: normalizeWorkTraceItems(message.workTrace),
   };
+}
+
+function normalizeComposerDraft(value: unknown): ChatComposerDraft | undefined {
+  if (typeof value !== "object" || !value) {
+    return undefined;
+  }
+
+  const draft = value as Partial<ChatComposerDraft>;
+  const content = typeof draft.content === "string" ? draft.content : "";
+  const attachments = normalizeAttachments(draft.attachments) ?? [];
+
+  if (!content.trim() && attachments.length === 0) {
+    return undefined;
+  }
+
+  return {
+    attachments,
+    content,
+  };
+}
+
+function normalizeResearchReferences(value: unknown): ChatResearchReference[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const references = value.flatMap((item): ChatResearchReference[] => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const chatId = normalizeOptionalText(item.chatId);
+
+    if (!chatId) {
+      return [];
+    }
+
+    return [
+      {
+        chatId,
+        project: normalizeProjectName(normalizeOptionalText(item.project)),
+        title: normalizeOptionalText(item.title) || "Untitled chat",
+        updatedAt: normalizeOptionalText(item.updatedAt) || new Date().toISOString(),
+      },
+    ];
+  });
+
+  return references.length > 0 ? references : undefined;
+}
+
+function normalizeChatMessageMode(value: unknown): ChatMessage["mode"] | undefined {
+  return value === "chat" || value === "plan" ? value : undefined;
+}
+
+function normalizeChatThinking(value: unknown): ChatThinking | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const startedAt = normalizeOptionalText(value.startedAt);
+  const completedAt = normalizeOptionalText(value.completedAt);
+
+  if (!startedAt && !completedAt) {
+    return undefined;
+  }
+
+  return {
+    completedAt,
+    effort: normalizeReasoningEffort(value.effort),
+    startedAt: startedAt ?? completedAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeChatPlanning(value: unknown): ChatPlanning | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const inputRequest = normalizePlanningInputRequest(value.inputRequest);
+  const inputRequests = normalizePlanningInputRequests(value.inputRequests);
+  const startedAt = normalizeOptionalText(value.startedAt);
+
+  if (!startedAt && !inputRequest && !inputRequests?.length) {
+    return undefined;
+  }
+
+  return {
+    completedAt: normalizeOptionalText(value.completedAt),
+    inputRequest,
+    inputRequests,
+    maxPasses: Math.max(normalizeNumber(value.maxPasses, 1), 1),
+    passCount: Math.max(normalizeNumber(value.passCount, 0), 0),
+    planContent: normalizeOptionalText(value.planContent),
+    startedAt: startedAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizePlanningInputRequests(value: unknown): ChatPlanning["inputRequests"] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const requests = value.flatMap((item) => {
+    const request = normalizePlanningInputRequest(item);
+    return request ? [request] : [];
+  });
+
+  return requests.length > 0 ? requests : undefined;
+}
+
+function normalizePlanningInputRequest(value: unknown): ChatPlanning["inputRequest"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const id = normalizeOptionalText(value.id);
+  const title = normalizeOptionalText(value.title);
+  const requestedAt = normalizeOptionalText(value.requestedAt);
+  const questions = normalizePlanningQuestions(value.questions);
+
+  if (!id || !title || !requestedAt || questions.length === 0) {
+    return undefined;
+  }
+
+  return {
+    answeredAt: normalizeOptionalText(value.answeredAt),
+    answers: normalizePlanningAnswers(value.answers),
+    detail: normalizeOptionalText(value.detail),
+    id,
+    questions,
+    requestedAt,
+    title,
+  };
+}
+
+function normalizePlanningQuestions(value: unknown): NonNullable<ChatPlanning["inputRequest"]>["questions"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const id = normalizeOptionalText(item.id);
+    const question = normalizeOptionalText(item.question);
+
+    if (!id || !question) {
+      return [];
+    }
+
+    return [
+      {
+        id,
+        options: normalizePlanningQuestionOptions(item.options),
+        placeholder: normalizeOptionalText(item.placeholder),
+        question,
+        required: typeof item.required === "boolean" ? item.required : undefined,
+      },
+    ];
+  });
+}
+
+function normalizePlanningQuestionOptions(value: unknown): NonNullable<NonNullable<ChatPlanning["inputRequest"]>["questions"][number]["options"]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const options = value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const id = normalizeOptionalText(item.id);
+    const label = normalizeOptionalText(item.label);
+
+    if (!id || !label) {
+      return [];
+    }
+
+    return [
+      {
+        description: normalizeOptionalText(item.description),
+        id,
+        label,
+      },
+    ];
+  });
+
+  return options.length > 0 ? options : undefined;
+}
+
+function normalizePlanningAnswers(value: unknown): NonNullable<ChatPlanning["inputRequest"]>["answers"] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const answers = value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const questionId = normalizeOptionalText(item.questionId);
+    const answerValue = typeof item.value === "string" ? item.value : undefined;
+
+    if (!questionId || answerValue === undefined) {
+      return [];
+    }
+
+    return [
+      {
+        optionId: normalizeOptionalText(item.optionId),
+        questionId,
+        value: answerValue,
+      },
+    ];
+  });
+
+  return answers.length > 0 ? answers : undefined;
+}
+
+function normalizeChatSources(value: unknown): ChatSource[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const sources = value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const title = normalizeOptionalText(item.title);
+    const url = normalizeOptionalText(item.url);
+
+    if (!title || !url) {
+      return [];
+    }
+
+    return [
+      {
+        detail: normalizeOptionalText(item.detail),
+        id: normalizeOptionalText(item.id),
+        imageUrl: normalizeOptionalText(item.imageUrl),
+        sourceType: normalizeChatSourceType(item.sourceType),
+        thumbnailUrl: normalizeOptionalText(item.thumbnailUrl),
+        title,
+        url,
+      },
+    ];
+  });
+
+  return sources.length > 0 ? sources : undefined;
+}
+
+function normalizeChatSourceType(value: unknown): ChatSource["sourceType"] | undefined {
+  return value === "answer" || value === "image" || value === "news" || value === "place" || value === "video" || value === "web" ? value : undefined;
+}
+
+function normalizeChatWebSearch(value: unknown): ChatWebSearch | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  return {
+    enabled: Boolean(value.enabled),
+    error: normalizeOptionalText(value.error),
+    fallbackReason: normalizeOptionalText(value.fallbackReason),
+    maxResults: typeof value.maxResults === "number" && Number.isFinite(value.maxResults) ? Math.max(1, Math.round(value.maxResults)) : undefined,
+    provider: normalizeWebSearchProvider(value.provider),
+    query: normalizeOptionalText(value.query),
+    resultCount: typeof value.resultCount === "number" && Number.isFinite(value.resultCount) ? Math.max(0, Math.round(value.resultCount)) : undefined,
+    resultProvider: normalizeOptionalWebSearchProvider(value.resultProvider),
+    searchedAt: normalizeOptionalText(value.searchedAt),
+    status: normalizeChatWebSearchStatus(value.status),
+  };
+}
+
+function normalizeChatWebSearchStatus(value: unknown): ChatWebSearch["status"] | undefined {
+  return value === "active" || value === "complete" || value === "error" ? value : undefined;
+}
+
+function normalizeOptionalWebSearchProvider(value: unknown): WebSearchProvider | undefined {
+  return value === "brave" || value === "duckduckgo" ? value : undefined;
 }
 
 function normalizeChatMessageSource(value: unknown): ChatMessage["source"] | undefined {
@@ -858,6 +1459,8 @@ function normalizeContextCompactions(value: unknown): ChatContextCompaction[] | 
         compactedMessageCount: normalizeNumber(compaction.compactedMessageCount, 0),
         contextWindowTokens: typeof compaction.contextWindowTokens === "number" ? compaction.contextWindowTokens : undefined,
         forcedByProviderUsage: Boolean(compaction.forcedByProviderUsage),
+        strategy: typeof compaction.strategy === "string" ? compaction.strategy : undefined,
+        summaryVersion: typeof compaction.summaryVersion === "number" ? Math.round(compaction.summaryVersion) : undefined,
         thresholdTokens: typeof compaction.thresholdTokens === "number" ? compaction.thresholdTokens : undefined,
       } satisfies ChatContextCompaction,
     ];
@@ -947,6 +1550,8 @@ function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
 
     return [
       {
+        batchFileResults: normalizeToolCallBatchFileResults(toolCall.batchFileResults),
+        batchSummary: normalizeToolCallBatchSummary(toolCall.batchSummary),
         detail: typeof toolCall.detail === "string" ? toolCall.detail : undefined,
         fileChanges: normalizeToolCallFileChanges(toolCall.fileChanges),
         id: typeof toolCall.id === "string" && toolCall.id ? toolCall.id : `tool-call-${Date.now()}`,
@@ -962,6 +1567,113 @@ function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
   });
 
   return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+function normalizeToolCallBatchFileResults(value: unknown): ChatToolCall["batchFileResults"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const fileResults = value.flatMap((item) => {
+    if (typeof item !== "object" || !item) {
+      return [];
+    }
+
+    const result = item as NonNullable<ChatToolCall["batchFileResults"]>[number];
+    if (typeof result.path !== "string" || !result.path.trim()) {
+      return [];
+    }
+
+    const status: NonNullable<ChatToolCall["batchFileResults"]>[number]["status"] = result.status === "error" || result.status === "skipped" ? result.status : "ok";
+
+    return [
+      {
+        additions: typeof result.additions === "number" && Number.isFinite(result.additions) ? Math.max(0, Math.round(result.additions)) : 0,
+        deletions: typeof result.deletions === "number" && Number.isFinite(result.deletions) ? Math.max(0, Math.round(result.deletions)) : 0,
+        detail: typeof result.detail === "string" && result.detail.trim() ? result.detail : undefined,
+        kind: result.kind === "create" || result.kind === "delete" || result.kind === "move" || result.kind === "update" ? result.kind : undefined,
+        path: result.path,
+        requestedPath: typeof result.requestedPath === "string" && result.requestedPath.trim() ? result.requestedPath : undefined,
+        status,
+      },
+    ];
+  });
+
+  return fileResults.length > 0 ? fileResults : undefined;
+}
+
+function normalizeToolCallBatchSummary(value: unknown): ChatToolCall["batchSummary"] {
+  if (typeof value !== "object" || !value) {
+    return undefined;
+  }
+
+  const summary = value as Partial<NonNullable<ChatToolCall["batchSummary"]>>;
+  const operation = summary.operation === "write" ? "write" : summary.operation === "edit" ? "edit" : undefined;
+
+  if (!operation) {
+    return undefined;
+  }
+
+  return {
+    failureCount: normalizeCount(summary.failureCount),
+    fileCount: normalizeCount(summary.fileCount),
+    operation,
+    requestedCount: normalizeCount(summary.requestedCount),
+    skippedCount: normalizeCount(summary.skippedCount),
+    successCount: normalizeCount(summary.successCount),
+  };
+}
+
+function normalizeCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
+function normalizeWorkTraceItems(value: unknown): ChatWorkTraceItem[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const items: ChatWorkTraceItem[] = [];
+
+  for (const item of value) {
+    if (typeof item !== "object" || !item) {
+      continue;
+    }
+
+    const traceItem = item as Record<string, unknown>;
+    const id = typeof traceItem.id === "string" && traceItem.id.trim() ? traceItem.id.trim() : `work-trace-${Date.now()}`;
+
+    if (traceItem.kind === "thinking") {
+      continue;
+    }
+
+    if (traceItem.kind === "tool") {
+      const [toolCall] = normalizeToolCalls([traceItem.toolCall]) ?? [];
+
+      if (toolCall) {
+        items.push({
+          id,
+          kind: "tool",
+          toolCall,
+        });
+      }
+      continue;
+    }
+
+    if (traceItem.kind === "progress") {
+      const [progress] = normalizeProgressItems([traceItem.progress]) ?? [];
+
+      if (progress) {
+        items.push({
+          id,
+          kind: "progress",
+          progress,
+        });
+      }
+    }
+  }
+
+  return items.length > 0 ? items : undefined;
 }
 
 function normalizeToolCallFileChanges(value: unknown): ChatToolCall["fileChanges"] {
@@ -1196,6 +1908,20 @@ function normalizeAttachment(value: unknown): ChatAttachment | null {
       height: normalizeOptionalNumber(image.height),
       kind: "image",
       width: normalizeOptionalNumber(image.width),
+    };
+  }
+
+  if (kind === "video") {
+    const video = attachment as Partial<ChatVideoAttachment>;
+
+    if (typeof video.dataUrl !== "string" || !video.dataUrl.startsWith("data:video/")) {
+      return null;
+    }
+
+    return {
+      ...base,
+      dataUrl: video.dataUrl,
+      kind: "video",
     };
   }
 
@@ -1544,8 +2270,27 @@ function normalizeWorkspaceDependencySettings(value: unknown) {
   };
 }
 
+function normalizeAppPersonalizationSettings(value: unknown): AppPersonalizationSettings {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<AppPersonalizationSettings>) : {};
+
+  return {
+    locationServicesEnabled:
+      typeof storedSettings.locationServicesEnabled === "boolean"
+        ? storedSettings.locationServicesEnabled
+        : defaultAppPersonalizationSettings.locationServicesEnabled,
+  };
+}
+
 function normalizeReasoningEffort(value: unknown): ReasoningEffort {
-  if (value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
+  if (value === "minimal") {
+    return "low";
+  }
+
+  if (value === "xhigh") {
+    return "high";
+  }
+
+  if (value === "low" || value === "medium" || value === "high") {
     return value;
   }
 

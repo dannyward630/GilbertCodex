@@ -1,5 +1,6 @@
-import { ArrowRight, Check, ChevronDown, ChevronUp, ClipboardList, LoaderCircle, PencilLine, ShieldOff, Sparkles, X } from "lucide-react";
+import { ArrowRight, Check, ClipboardList, LoaderCircle, PencilLine, ShieldOff, Sparkles, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { getSavedPlanContent } from "../../lib/planReview";
 import type { AgentApprovalDecision } from "../../types/agentRun";
 import type { ChatMessage } from "../../types/chat";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -8,26 +9,26 @@ interface PlanReviewCardProps {
   content: string;
   isStreaming?: boolean;
   message: ChatMessage;
+  onOpenFullPlan?: (messageId: string) => void;
   onRequestRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onResolvePlanApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
 }
 
-type PlanCardState = "streaming" | "pending" | "accepted" | "denied" | "superseded" | "error" | "ready";
+type PlanResponseState = "streaming" | "pending" | "accepted" | "denied" | "superseded" | "error" | "ready";
 
-interface PlanCardStateDescriptor {
+interface PlanResponseStateDescriptor {
   description: string;
   label: string;
-  state: PlanCardState;
+  state: PlanResponseState;
   tone: "info" | "warning" | "success" | "danger" | "muted";
 }
 
-export function PlanReviewCard({ content, isStreaming, message, onRequestRevision, onResolvePlanApproval }: PlanReviewCardProps) {
+export function PlanReviewCard({ content, isStreaming, message, onOpenFullPlan, onRequestRevision, onResolvePlanApproval }: PlanReviewCardProps) {
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionFeedback, setRevisionFeedback] = useState("");
   const [submittingRevision, setSubmittingRevision] = useState(false);
   const [acceptingPlan, setAcceptingPlan] = useState(false);
   const [decliningPlan, setDecliningPlan] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
 
   const planApproval = message.approvals?.find((approval) => approval.tool === "planning_handoff");
   const pendingPlanApproval = planApproval?.status === "pending" ? planApproval : undefined;
@@ -38,33 +39,26 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
   const completedToolCount = toolCalls.filter((toolCall) => toolCall.status === "complete").length;
   const activeToolCount = toolCalls.filter((toolCall) => toolCall.status === "active").length;
   const inResearchPhase = isStreaming && (toolCalls.length > 0 || activeToolCount > 0) && !content.trim();
+  const planContent = getSavedPlanContent(message) || content.trim();
+  const shouldRenderPlanResponse = Boolean(planContent || planApproval);
 
-  const descriptor = useMemo<PlanCardStateDescriptor>(() => {
+  const descriptor = useMemo<PlanResponseStateDescriptor>(() => {
     if (isStreaming) {
       if (inResearchPhase) {
+        const inspected = completedToolCount + activeToolCount;
         const detail = activeToolCount > 0
-          ? `Inspecting ${completedToolCount + activeToolCount} file${completedToolCount + activeToolCount === 1 ? "" : "s"}...`
+          ? `Inspecting ${inspected} file${inspected === 1 ? "" : "s"}...`
           : completedToolCount > 0
             ? `Read ${completedToolCount} file${completedToolCount === 1 ? "" : "s"} so far`
             : "Reading the codebase";
-        return {
-          description: detail,
-          label: "Researching codebase",
-          state: "streaming",
-          tone: "info",
-        };
+        return { description: detail, label: "Researching codebase", state: "streaming", tone: "info" };
       }
-      return {
-        description: "Writing the plan from research",
-        label: "Drafting plan",
-        state: "streaming",
-        tone: "info",
-      };
+      return { description: "Writing the plan from research", label: "Drafting plan", state: "streaming", tone: "info" };
     }
 
     if (pendingPlanApproval) {
       return {
-        description: "Approve to start coding, request changes, or decline.",
+        description: "Review it here, ask for changes, or approve it to start.",
         label: "Plan ready for review",
         state: "pending",
         tone: "warning",
@@ -72,61 +66,36 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
     }
 
     if (deniedPlan) {
-      return {
-        description: "You declined this plan. Send a new message to retry.",
-        label: "Plan declined",
-        state: "denied",
-        tone: "danger",
-      };
+      return { description: "You declined this plan. Send a new message to retry.", label: "Plan declined", state: "denied", tone: "danger" };
     }
 
     if (acceptedPlan) {
-      return {
-        description: "Approved. Plan mode is closed and the agent is executing it now.",
-        label: "Plan accepted",
-        state: "accepted",
-        tone: "success",
-      };
+      return { description: "Approved. The saved plan stays attached while execution continues.", label: "Plan accepted", state: "accepted", tone: "success" };
     }
 
     if (supersededPlan) {
-      return {
-        description: "Replaced by a newer plan revision.",
-        label: "Plan superseded",
-        state: "superseded",
-        tone: "muted",
-      };
+      return { description: "Replaced by a newer plan revision.", label: "Plan superseded", state: "superseded", tone: "muted" };
     }
 
     if (message.status === "error") {
-      return {
-        description: "Something went wrong while building this plan.",
-        label: "Plan failed",
-        state: "error",
-        tone: "danger",
-      };
+      return { description: "Something went wrong while building this plan.", label: "Plan failed", state: "error", tone: "danger" };
     }
 
-    return {
-      description: "Plan ready",
-      label: "Plan ready",
-      state: "ready",
-      tone: "info",
-    };
-  }, [acceptedPlan, activeToolCount, completedToolCount, content, deniedPlan, inResearchPhase, isStreaming, message.status, pendingPlanApproval, supersededPlan]);
+    return { description: "Plan ready", label: "Plan ready", state: "ready", tone: "info" };
+  }, [acceptedPlan, activeToolCount, completedToolCount, deniedPlan, inResearchPhase, isStreaming, message.status, pendingPlanApproval, supersededPlan]);
 
   const canAccept = Boolean(pendingPlanApproval && onResolvePlanApproval && !acceptingPlan && !submittingRevision && !decliningPlan);
-  const canDecline = Boolean(pendingPlanApproval && onResolvePlanApproval && !acceptingPlan && !submittingRevision && !decliningPlan);
+  const canDecline = canAccept;
   const canRequestRevision = Boolean(onRequestRevision && !isStreaming && !submittingRevision && !acceptingPlan && !decliningPlan && !acceptedPlan && !deniedPlan && !supersededPlan);
   const trimmedFeedback = revisionFeedback.trim();
-  const showActions = pendingPlanApproval || revisionOpen;
-  const showCollapseToggle = acceptedPlan && content.trim().length > 0;
+  const showActions = Boolean(pendingPlanApproval || revisionOpen);
+
+  if (!shouldRenderPlanResponse) {
+    return null;
+  }
 
   async function acceptPlan() {
-    if (!pendingPlanApproval || !onResolvePlanApproval || acceptingPlan || decliningPlan || submittingRevision) {
-      return;
-    }
-
+    if (!pendingPlanApproval || !onResolvePlanApproval || acceptingPlan || decliningPlan || submittingRevision) return;
     setAcceptingPlan(true);
     try {
       await onResolvePlanApproval(message.id, pendingPlanApproval.id, { status: "approved" });
@@ -136,10 +105,7 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
   }
 
   async function declinePlan() {
-    if (!pendingPlanApproval || !onResolvePlanApproval || decliningPlan || acceptingPlan || submittingRevision) {
-      return;
-    }
-
+    if (!pendingPlanApproval || !onResolvePlanApproval || decliningPlan || acceptingPlan || submittingRevision) return;
     setDecliningPlan(true);
     try {
       await onResolvePlanApproval(message.id, pendingPlanApproval.id, { status: "denied" });
@@ -149,10 +115,7 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
   }
 
   async function submitRevision() {
-    if (!onRequestRevision || !trimmedFeedback || submittingRevision || acceptingPlan || decliningPlan) {
-      return;
-    }
-
+    if (!onRequestRevision || !trimmedFeedback || submittingRevision || acceptingPlan || decliningPlan) return;
     setSubmittingRevision(true);
     try {
       await onRequestRevision(message.id, trimmedFeedback);
@@ -163,68 +126,57 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
     }
   }
 
+  function openFullPlan() {
+    onOpenFullPlan?.(message.id);
+  }
+
   const headerIcon = isStreaming ? (
-    <LoaderCircle size={18} aria-hidden="true" />
+    <LoaderCircle size={17} aria-hidden="true" />
   ) : descriptor.state === "accepted" ? (
-    <Check size={18} aria-hidden="true" />
+    <Check size={17} aria-hidden="true" />
   ) : descriptor.state === "denied" || descriptor.state === "superseded" || descriptor.state === "error" ? (
-    <X size={18} aria-hidden="true" />
+    <X size={17} aria-hidden="true" />
   ) : (
-    <ClipboardList size={18} aria-hidden="true" />
+    <ClipboardList size={17} aria-hidden="true" />
   );
 
-  const bodyVisible = !collapsed || !acceptedPlan;
-  const bodyContent = content.trim();
-
   return (
-    <section className="plan-review-card" data-state={descriptor.state} data-tone={descriptor.tone}>
-      <header className="plan-review-header">
-        <span className="plan-review-icon" aria-hidden="true">
-          {headerIcon}
+    <section className="plan-review-response" data-state={descriptor.state} data-tone={descriptor.tone}>
+      <header className="plan-response-header">
+        <span className="plan-response-badge">
+          <Sparkles size={12} aria-hidden="true" />
+          Plan mode
         </span>
-        <div className="plan-review-title">
-          <span className="plan-review-eyebrow">
-            <Sparkles size={11} aria-hidden="true" />
-            Plan mode
-          </span>
+        <span className="plan-response-status">
+          {headerIcon}
           <strong>{descriptor.label}</strong>
-          <small>{descriptor.description}</small>
-        </div>
-        <div className="plan-review-meta">
-          {showCollapseToggle ? (
-            <button
-              className="plan-review-collapse"
-              type="button"
-              aria-expanded={!collapsed}
-              aria-label={collapsed ? "Show approved plan" : "Hide approved plan"}
-              onClick={() => setCollapsed((current) => !current)}
-            >
-              {collapsed ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronUp size={14} aria-hidden="true" />}
-            </button>
-          ) : null}
-        </div>
+        </span>
+        <small>{descriptor.description}</small>
+        {onOpenFullPlan && planContent ? (
+          <button
+            className="plan-response-panel-button"
+            type="button"
+            aria-label="Open plan in side panel"
+            onClick={openFullPlan}
+          >
+            <span>Open plan</span>
+            <ArrowRight size={13} aria-hidden="true" />
+          </button>
+        ) : null}
       </header>
 
-      {bodyVisible ? (
-        <div className="plan-review-body">
-          {bodyContent ? (
-            <MarkdownMessage content={bodyContent} isStreaming={isStreaming} />
-          ) : (
-            <div className="plan-review-skeleton" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-          )}
+      {planContent ? (
+        <div className="plan-response-body">
+          <MarkdownMessage content={planContent} isStreaming={isStreaming} />
         </div>
       ) : null}
 
       {showActions ? (
-        <footer className="plan-review-actions" aria-label="Plan decisions">
+        <footer className="plan-response-actions" aria-label="Plan decisions">
           {pendingPlanApproval ? (
             <>
               <button
-                className="plan-review-decline"
+                className="plan-response-decline"
                 type="button"
                 data-loading={decliningPlan ? "true" : undefined}
                 disabled={!canDecline}
@@ -234,13 +186,13 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
                 <span>{decliningPlan ? "Cancelling" : "Decline"}</span>
               </button>
               {canRequestRevision ? (
-                <button className="plan-review-secondary" type="button" data-active={revisionOpen ? "true" : undefined} onClick={() => setRevisionOpen((open) => !open)}>
+                <button className="plan-response-secondary" type="button" data-active={revisionOpen ? "true" : undefined} onClick={() => setRevisionOpen((open) => !open)}>
                   <PencilLine size={15} aria-hidden="true" />
                   <span>{revisionOpen ? "Close feedback" : "Ask for changes"}</span>
                 </button>
               ) : null}
               <button
-                className="plan-review-primary"
+                className="plan-response-primary"
                 type="button"
                 data-loading={acceptingPlan ? "true" : undefined}
                 disabled={!canAccept}
@@ -252,7 +204,7 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
               </button>
             </>
           ) : canRequestRevision ? (
-            <button className="plan-review-secondary" type="button" data-active={revisionOpen ? "true" : undefined} onClick={() => setRevisionOpen((open) => !open)}>
+            <button className="plan-response-secondary" type="button" data-active={revisionOpen ? "true" : undefined} onClick={() => setRevisionOpen((open) => !open)}>
               <PencilLine size={15} aria-hidden="true" />
               <span>{revisionOpen ? "Close feedback" : "Ask for changes"}</span>
             </button>
@@ -261,7 +213,7 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
       ) : null}
 
       {revisionOpen ? (
-        <div className="plan-review-feedback">
+        <div className="plan-response-feedback">
           <textarea
             aria-label="Plan feedback"
             placeholder="Tell Gilbert Codex what to change. For example: drop the migration step, focus on the UI..."
@@ -269,8 +221,8 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
             value={revisionFeedback}
             onChange={(event) => setRevisionFeedback(event.currentTarget.value)}
           />
-          <div className="plan-review-feedback-actions">
-            <span className="plan-review-feedback-hint">A new plan will replace this one.</span>
+          <div className="plan-response-feedback-actions">
+            <span className="plan-response-feedback-hint">A new plan will replace this one.</span>
             <button type="button" data-loading={submittingRevision ? "true" : undefined} disabled={!trimmedFeedback || submittingRevision || acceptingPlan || decliningPlan} onClick={submitRevision}>
               {submittingRevision ? <LoaderCircle size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
               <span>{submittingRevision ? "Reworking" : "Rework plan"}</span>
@@ -280,4 +232,33 @@ export function PlanReviewCard({ content, isStreaming, message, onRequestRevisio
       ) : null}
     </section>
   );
+}
+
+export function truncatePreview(content: string, lineLimit: number): { preview: string; truncated: boolean } {
+  if (!content) return { preview: "", truncated: false };
+
+  const lines = content.split("\n");
+  if (lines.length <= lineLimit) return { preview: content, truncated: false };
+
+  let cut = lineLimit;
+  let inFence = false;
+  for (let index = 0; index < cut && index < lines.length; index += 1) {
+    if (/^```/.test(lines[index].trim())) inFence = !inFence;
+  }
+  if (inFence) {
+    const extraCap = Math.min(lines.length, cut + 12);
+    for (let index = cut; index < extraCap; index += 1) {
+      if (/^```/.test(lines[index].trim())) {
+        cut = index + 1;
+        inFence = false;
+        break;
+      }
+      cut = index + 1;
+    }
+  }
+
+  return {
+    preview: lines.slice(0, cut).join("\n"),
+    truncated: lines.length > cut,
+  };
 }

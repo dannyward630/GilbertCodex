@@ -1,10 +1,13 @@
 import {
+  type CSSProperties,
   type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,7 +21,6 @@ import {
   FileUp,
   FolderGit2,
   FolderOpen,
-  Gauge,
   GitBranch,
   Globe2,
   Hand,
@@ -35,13 +37,14 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Video,
   Wand2,
   X,
 } from "lucide-react";
 import { ThinkingModeControls } from "../thinking/ThinkingModeControls";
 import { ModelSelectorPopover, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
-import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment } from "../../lib/chatAttachments";
-import { DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
+import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment, isMediaAttachment, isVideoAttachment } from "../../lib/chatAttachments";
+import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, isPlainResearchChat, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
   AUTO_COMPACT_CONTEXT_THRESHOLD,
@@ -51,10 +54,12 @@ import {
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
-import { MODEL_PROVIDERS, buildProviderModelOptions, getModelProvider, prefersLiveModelCatalog, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
+import { MODEL_PROVIDERS, buildProviderModelOptions, prefersLiveModelCatalog, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
+import { SkillMentionPicker } from "../../features/plugins/SkillMentionPicker";
+import { getSkillMentionMatches, type PluginSkillOption } from "../../features/plugins/pluginCatalog";
 import {
   commitComputerGitChanges,
   createComputerGitBranch,
@@ -111,10 +116,14 @@ interface BuiltInSpeechRecognition extends EventTarget {
 type BuiltInSpeechRecognitionConstructor = new () => BuiltInSpeechRecognition;
 
 interface ChatComposerProps {
+  active?: boolean;
   chat: ChatSummary;
+  chats: ChatSummary[];
   contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
   draft?: ChatComposerDraft | null;
+  restoreDraft?: ChatComposerDraft | null;
+  restoreDraftId?: string | null;
   isGenerating: boolean;
   lastContextCompaction?: ContextCompactionNotice | null;
   layout?: "center" | "dock";
@@ -124,6 +133,7 @@ interface ChatComposerProps {
   modelContextWindows: ModelContextWindowMap;
   onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onDraftApplied?: () => void;
+  onDraftChange?: (draft: ChatComposerDraft | null) => void;
   onDeleteQueuedMessage: (messageId: string) => void;
   onHoldQueuedMessage: (messageId: string, held: boolean) => void;
   onUpdateQueuedMessage: (messageId: string, content: string) => void;
@@ -161,6 +171,36 @@ interface PlanningModeSettings {
   enabled: boolean;
 }
 
+interface SkillMentionState {
+  activeIndex: number;
+  open: boolean;
+  query: string;
+  rangeEnd: number;
+  rangeStart: number;
+  trigger: "$" | "@";
+}
+
+interface SkillMentionTrigger {
+  query: string;
+  rangeEnd: number;
+  rangeStart: number;
+  trigger: "$" | "@";
+}
+
+interface ChatResearchMentionState {
+  activeIndex: number;
+  open: boolean;
+  query: string;
+  rangeEnd: number;
+  rangeStart: number;
+}
+
+interface ChatResearchMentionTrigger {
+  query: string;
+  rangeEnd: number;
+  rangeStart: number;
+}
+
 type ModelProviderDefinition = (typeof MODEL_PROVIDERS)[number];
 type LiveModelCatalogCacheStatus = Extract<LiveModelCatalogStatus, "error" | "ready">;
 
@@ -173,8 +213,23 @@ interface LiveModelCatalogCacheEntry {
 const GIT_STATUS_REFRESH_INTERVAL_MS = 15_000;
 const LIVE_MODEL_CATALOG_READY_CACHE_MS = 5 * 60 * 1000;
 const LIVE_MODEL_CATALOG_ERROR_CACHE_MS = 60 * 1000;
-const LOCAL_MODEL_CATALOG_READY_CACHE_MS = 5_000;
-const LOCAL_MODEL_CATALOG_ERROR_CACHE_MS = 2_000;
+const LOCAL_MODEL_CATALOG_READY_CACHE_MS = 0;
+const LOCAL_MODEL_CATALOG_ERROR_CACHE_MS = 0;
+const CLOSED_SKILL_MENTION_STATE: SkillMentionState = {
+  activeIndex: 0,
+  open: false,
+  query: "",
+  rangeEnd: 0,
+  rangeStart: 0,
+  trigger: "$",
+};
+const CLOSED_CHAT_RESEARCH_MENTION_STATE: ChatResearchMentionState = {
+  activeIndex: 0,
+  open: false,
+  query: "",
+  rangeEnd: 0,
+  rangeStart: 0,
+};
 
 function modelFromValue(modelValue: string, providerId: ChatModelOption["provider"], discoveredModels?: ProviderModelMetadata[]): ChatModelOption {
   const normalizedValue = modelValue.trim();
@@ -248,10 +303,14 @@ function isFreshLiveModelCatalogCache(entry: LiveModelCatalogCacheEntry | undefi
 }
 
 export function ChatComposer({
+  active = true,
   chat,
+  chats,
   contextWindowSource,
   contextWindowTokens,
   draft,
+  restoreDraft,
+  restoreDraftId,
   isGenerating,
   lastContextCompaction,
   layout = "dock",
@@ -261,6 +320,7 @@ export function ChatComposer({
   modelContextWindows,
   onCreateProject,
   onDraftApplied,
+  onDraftChange,
   onDeleteQueuedMessage,
   onHoldQueuedMessage,
   onUpdateQueuedMessage,
@@ -285,20 +345,27 @@ export function ChatComposer({
   const composerRef = useRef<HTMLFormElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
+  const skipNextAttachmentDraftEmitRef = useRef(false);
   const providerSettingsRef = useRef(providerSettings);
   const visibleQueuedMessageCount = queuedMessageCount ?? queuedMessages.length;
+  const messageRef = useRef("");
+  const messageSyncFrameRef = useRef(0);
   const voiceBaseMessageRef = useRef("");
   const voiceRecognitionRef = useRef<BuiltInSpeechRecognition | null>(null);
   const voiceRequestRef = useRef(0);
   const [message, setMessage] = useState("");
+  const deferredMessage = useDeferredValue(message);
+  const [skillMention, setSkillMention] = useState<SkillMentionState>(CLOSED_SKILL_MENTION_STATE);
+  const [chatResearchMention, setChatResearchMention] = useState<ChatResearchMentionState>(CLOSED_CHAT_RESEARCH_MENTION_STATE);
+  const [selectedResearchChatIds, setSelectedResearchChatIds] = useState<string[]>([]);
   const [openMenu, setOpenMenu] = useState<ComposerMenu>(null);
   const [planMode, setPlanMode] = useState<PlanningModeSettings>({
     enabled: false,
   });
   const [attachments, setAttachments] = useState<ComposerAttachmentDraft[]>([]);
   const [liveModelCatalogs, setLiveModelCatalogs] = useState<Partial<Record<ProviderSettings["provider"], ProviderModelMetadata[]>>>({});
-  const [liveModelCatalogErrors, setLiveModelCatalogErrors] = useState<Partial<Record<ProviderSettings["provider"], string>>>({});
   const [liveModelCatalogStatus, setLiveModelCatalogStatus] = useState<Partial<Record<ProviderSettings["provider"], LiveModelCatalogStatus>>>({});
   const liveModelCatalogCache = useRef<Partial<Record<ProviderSettings["provider"], LiveModelCatalogCacheEntry>>>({});
   const [gitStatus, setGitStatus] = useState<ComputerGitStatus | null>(null);
@@ -314,38 +381,104 @@ export function ChatComposer({
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [queueMenuMessageId, setQueueMenuMessageId] = useState<string | null>(null);
   const [queuedEditDrafts, setQueuedEditDrafts] = useState<Record<string, string>>({});
-  const readyAttachments = attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : []));
-  const hasImageAttachment = readyAttachments.some(isImageAttachment);
-  const hasPendingAttachments = attachments.some((attachment) => attachment.status === "loading");
-  const hasFailedAttachments = attachments.some((attachment) => attachment.status === "error");
+  const readyAttachments = useMemo(() => attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : [])), [attachments]);
+  const hasMediaAttachment = useMemo(() => readyAttachments.some(isMediaAttachment), [readyAttachments]);
+  const hasPendingAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "loading"), [attachments]);
+  const hasFailedAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "error"), [attachments]);
   const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
-  const selectedProvider = getModelProvider(providerSettings.provider);
-  const selectedModel = modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]);
+  const selectedModel = useMemo(
+    () => modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]),
+    [liveModelCatalogs, model, providerSettings.provider],
+  );
   const webSearchProviderLabel = formatWebSearchProviderLabel(webSearch.provider);
-  const estimatedContextUsage = estimateModelProviderContextWindowUsage({
-    chat,
-    contextWindowTokens,
-    draftAttachments: readyAttachments,
-    draftContent: message,
-    settings: providerSettings,
-    source: contextWindowSource,
-  });
-  const hasDraftContext = Boolean(message.trim()) || readyAttachments.length > 0;
+  const estimatedContextUsage = useMemo(
+    () =>
+      estimateModelProviderContextWindowUsage({
+        chat,
+        contextWindowTokens,
+        draftAttachments: readyAttachments,
+        draftContent: deferredMessage,
+        settings: providerSettings,
+        source: contextWindowSource,
+      }),
+    [chat, contextWindowSource, contextWindowTokens, deferredMessage, providerSettings, readyAttachments],
+  );
+  const hasDraftContext = Boolean(deferredMessage.trim()) || readyAttachments.length > 0;
   const contextUsage = hasDraftContext && lastProviderContextUsage ? projectDraftOntoProviderUsage(lastProviderContextUsage, estimatedContextUsage) : lastProviderContextUsage ?? estimatedContextUsage;
-  const contextUsagePercent = Math.min(Math.round((contextUsage.inputTokens / contextUsage.contextWindowTokens) * 100), 100);
+  const contextUsageRatio = clampUnit(getContextRequestTokens(contextUsage) / Math.max(contextUsage.contextWindowTokens, 1));
+  const contextUsagePercent = Math.round(contextUsageRatio * 100);
+  const contextButtonLabel = `Context ${formatTokenCount(contextUsage.inputTokens)} input, ${formatTokenCount(getContextRequestTokens(contextUsage))} total request of ${formatTokenCount(contextUsage.contextWindowTokens)}. Auto-compacts at ${Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100)}%.`;
   const activeRoot = localWorkspace.roots[0] ?? "";
   const activeProjectName = normalizeProjectName(chat.project);
   const activeProject = projects.find((project) => project.name.toLowerCase() === activeProjectName.toLowerCase());
   const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
   const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
-  const heldQueuedMessageIdSet = new Set(heldQueuedMessageIds);
+  const heldQueuedMessageIdSet = useMemo(() => new Set(heldQueuedMessageIds), [heldQueuedMessageIds]);
+  const researchChatOptions = useMemo(() => sortChatsByUpdatedAt(chats.filter((candidate) => isPlainResearchChat(candidate, chat.id))), [chat.id, chats]);
+  const selectedResearchChats = useMemo(
+    () =>
+      selectedResearchChatIds
+        .map((chatId) => researchChatOptions.find((candidate) => candidate.id === chatId))
+        .filter((candidate): candidate is ChatSummary => Boolean(candidate)),
+    [researchChatOptions, selectedResearchChatIds],
+  );
+  const researchChatMatches = useMemo(
+    () => getChatResearchMentionMatches(researchChatOptions, chatResearchMention.query, selectedResearchChatIds),
+    [chatResearchMention.query, researchChatOptions, selectedResearchChatIds],
+  );
+
+  function setComposerMessage(nextMessage: string, options: { immediate?: boolean; notifyDraft?: boolean } = {}) {
+    messageRef.current = nextMessage;
+
+    const textarea = textareaRef.current;
+    if (textarea && textarea.value !== nextMessage) {
+      textarea.value = nextMessage;
+    }
+
+    if (options.immediate || typeof window === "undefined") {
+      if (messageSyncFrameRef.current) {
+        window.cancelAnimationFrame(messageSyncFrameRef.current);
+        messageSyncFrameRef.current = 0;
+      }
+      setMessage(nextMessage);
+      if (options.notifyDraft !== false) {
+        emitDraftChange(nextMessage, attachments);
+      }
+      return;
+    }
+
+    if (options.notifyDraft !== false) {
+      emitDraftChange(nextMessage, attachments);
+    }
+
+    if (messageSyncFrameRef.current) {
+      return;
+    }
+
+    messageSyncFrameRef.current = window.requestAnimationFrame(() => {
+      messageSyncFrameRef.current = 0;
+      setMessage(messageRef.current);
+    });
+  }
+
+  function canSubmitDraft(content: string) {
+    return (Boolean(content.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
+  }
+
+  function emitDraftChange(content: string, attachmentDrafts: ComposerAttachmentDraft[]) {
+    onDraftChange?.(createComposerDraft(content, attachmentDrafts));
+  }
 
   useEffect(() => {
     mountedRef.current = true;
 
     return () => {
       mountedRef.current = false;
+      if (messageSyncFrameRef.current) {
+        window.cancelAnimationFrame(messageSyncFrameRef.current);
+        messageSyncFrameRef.current = 0;
+      }
       cancelVoiceInput(false);
     };
   }, []);
@@ -364,6 +497,11 @@ export function ChatComposer({
   });
 
   useEffect(() => {
+    if (!active) {
+      setGitStatusLoading(false);
+      return;
+    }
+
     if (!activeRoot || localWorkspace.scope === "full-computer") {
       setGitStatus(null);
       setGitStatusLoading(false);
@@ -398,7 +536,9 @@ export function ChatComposer({
     void refreshGitStatus(true);
 
     const refreshTimer = window.setInterval(() => {
-      void refreshGitStatus(false);
+      if (document.visibilityState === "visible") {
+        void refreshGitStatus(false);
+      }
     }, GIT_STATUS_REFRESH_INTERVAL_MS);
     const refreshOnFocus = () => void refreshGitStatus(false);
     const refreshOnVisibility = () => {
@@ -416,7 +556,7 @@ export function ChatComposer({
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [activeRoot, localWorkspace.indexUpdatedAt, localWorkspace.scope]);
+  }, [active, activeRoot, localWorkspace.indexUpdatedAt, localWorkspace.scope]);
 
   useEffect(() => {
     setGitInitNotice(null);
@@ -428,31 +568,83 @@ export function ChatComposer({
   useEffect(() => {
     const composer = composerRef.current;
 
-    if (!composer || !onHeightChange) {
+    if (!active || !composer || !onHeightChange) {
       return;
     }
 
-    onHeightChange(composer.offsetHeight);
+    let pendingHeight = Math.round(composer.offsetHeight);
+    let lastReportedHeight = pendingHeight;
+    let animationFrame = 0;
+
+    onHeightChange(pendingHeight);
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      onHeightChange(entry.contentRect.height);
+      const nextHeight = Math.round(entry.contentRect.height);
+
+      if (nextHeight === lastReportedHeight) {
+        return;
+      }
+
+      pendingHeight = nextHeight;
+
+      if (animationFrame) {
+        return;
+      }
+
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        lastReportedHeight = pendingHeight;
+        onHeightChange(pendingHeight);
+      });
     });
 
     observer.observe(composer);
 
-    return () => observer.disconnect();
-  }, [onHeightChange]);
+    return () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+
+      observer.disconnect();
+    };
+  }, [active, onHeightChange]);
 
   useEffect(() => {
-    if (!draft) {
+    skipNextAttachmentDraftEmitRef.current = true;
+    setComposerMessage(draft?.content ?? "", { immediate: true, notifyDraft: false });
+    setAttachments(draft?.attachments.map(createDraftFromAttachment) ?? []);
+    closeSkillMentionPicker();
+    closeChatResearchMentionPicker();
+  }, [chat.id]);
+
+  useEffect(() => {
+    if (skipNextAttachmentDraftEmitRef.current) {
+      skipNextAttachmentDraftEmitRef.current = false;
       return;
     }
 
-    setMessage(draft.content);
-    setAttachments(draft.attachments.map(createDraftFromAttachment));
+    emitDraftChange(messageRef.current, attachments);
+  }, [attachments]);
+
+  useEffect(() => {
+    if (!restoreDraft || !restoreDraftId) {
+      return;
+    }
+
+    skipNextAttachmentDraftEmitRef.current = true;
+    setComposerMessage(restoreDraft.content, { immediate: true, notifyDraft: false });
+    setAttachments(restoreDraft.attachments.map(createDraftFromAttachment));
+    closeSkillMentionPicker();
+    closeChatResearchMentionPicker();
+    onDraftChange?.(restoreDraft);
     onDraftApplied?.();
-  }, [draft, onDraftApplied]);
+  }, [restoreDraftId]);
+
+  useEffect(() => {
+    setSelectedResearchChatIds([]);
+    closeChatResearchMentionPicker();
+  }, [chat.id]);
 
   const liveModelCatalogRequestKey = createLiveModelCatalogRequestKey(providerSettings);
   providerSettingsRef.current = providerSettings;
@@ -471,6 +663,9 @@ export function ChatComposer({
 
       if (cachedStatus && isFreshLiveModelCatalogCache(cachedCatalog, requestKey, provider.id)) {
         setLiveModelCatalogStatus((current) => (current[provider.id] === cachedStatus ? current : { ...current, [provider.id]: cachedStatus }));
+        if (prefersLiveModelCatalog(provider.id) && cachedStatus === "error") {
+          clearLiveModelCatalog(provider.id);
+        }
         return [];
       }
 
@@ -482,6 +677,9 @@ export function ChatComposer({
         ...current,
         [provider.id]: "loading",
       }));
+      if (prefersLiveModelCatalog(provider.id)) {
+        clearLiveModelCatalog(provider.id);
+      }
 
       const settingsForProvider: ProviderSettings = {
         ...latestProviderSettings,
@@ -504,24 +702,19 @@ export function ChatComposer({
             key: requestKey,
             status: "ready",
           };
-          setLiveModelCatalogErrors((current) => ({
-            ...current,
-            [provider.id]: undefined,
-          }));
           setLiveModelCatalogStatus((current) => ({
             ...current,
             [provider.id]: "ready",
           }));
         })
-        .catch((error) => {
+        .catch(() => {
           if (controller.signal.aborted) {
             return;
           }
 
-          setLiveModelCatalogErrors((current) => ({
-            ...current,
-            [provider.id]: readErrorMessage(error, `Could not load ${provider.label} models.`),
-          }));
+          if (prefersLiveModelCatalog(provider.id)) {
+            clearLiveModelCatalog(provider.id);
+          }
           liveModelCatalogCache.current[provider.id] = {
             checkedAt: Date.now(),
             key: requestKey,
@@ -537,8 +730,35 @@ export function ChatComposer({
     return () => controllers.forEach(({ controller }) => controller.abort());
   }, [liveModelCatalogRequestKey, openMenu]);
 
+  function clearLiveModelCatalog(provider: ProviderSettings["provider"]) {
+    setLiveModelCatalogs((current) => {
+      if (!current[provider]?.length) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [provider]: [],
+      };
+    });
+  }
+
   function toggleMenu(menu: Exclude<ComposerMenu, null>) {
     setOpenMenu((currentMenu) => (currentMenu === menu ? null : menu));
+  }
+
+  function handleComposerPointerDownCapture(event: ReactPointerEvent<HTMLFormElement>) {
+    if (openMenu !== "attach") {
+      return;
+    }
+
+    const target = event.target instanceof Element ? event.target : null;
+
+    if (target?.closest(".composer-popover-attach") || target?.closest(".composer-attach-toggle")) {
+      return;
+    }
+
+    setOpenMenu(null);
   }
 
   function handleModelMenuPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -738,20 +958,27 @@ export function ChatComposer({
   }
 
   function submitMessage() {
-    const content = message.trim();
+    const content = messageRef.current.trim();
 
-    if (!canSend) {
+    if (!canSubmitDraft(content)) {
       return;
     }
 
-    setMessage("");
+    const referencedChatIds = resolveComposerResearchChatIds(content, selectedResearchChatIds, researchChatOptions);
+
+    setComposerMessage("", { immediate: true, notifyDraft: false });
     setAttachments([]);
+    setSelectedResearchChatIds([]);
+    closeSkillMentionPicker();
+    closeChatResearchMentionPicker();
+    onDraftChange?.(null);
     void onSubmit({
       attachments: readyAttachments,
       content,
       localWorkspace,
       mode: planMode.enabled ? "plan" : "chat",
       planning: planMode.enabled ? {} : undefined,
+      referencedChatIds: referencedChatIds.length > 0 ? referencedChatIds : undefined,
       webSearch: {
         enabled: webSearch.enabled,
         maxResults: webSearch.maxResults,
@@ -841,10 +1068,198 @@ export function ChatComposer({
   }
 
   function handleTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (skillMention.open) {
+      const matches = getSkillMentionMatches(skillMention.query);
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSkillMention((currentState) => ({
+          ...currentState,
+          activeIndex: matches.length > 0 ? (currentState.activeIndex + 1) % matches.length : 0,
+        }));
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSkillMention((currentState) => ({
+          ...currentState,
+          activeIndex: matches.length > 0 ? (currentState.activeIndex - 1 + matches.length) % matches.length : 0,
+        }));
+        return;
+      }
+
+      if ((event.key === "Enter" || event.key === "Tab") && matches.length > 0) {
+        event.preventDefault();
+        insertSkillMention(matches[Math.min(skillMention.activeIndex, matches.length - 1)]);
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSkillMentionPicker();
+        return;
+      }
+    }
+
+    if (chatResearchMention.open) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setChatResearchMention((currentState) => ({
+          ...currentState,
+          activeIndex: researchChatMatches.length > 0 ? (currentState.activeIndex + 1) % researchChatMatches.length : 0,
+        }));
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setChatResearchMention((currentState) => ({
+          ...currentState,
+          activeIndex: researchChatMatches.length > 0 ? (currentState.activeIndex - 1 + researchChatMatches.length) % researchChatMatches.length : 0,
+        }));
+        return;
+      }
+
+      if ((event.key === "Enter" || event.key === "Tab") && researchChatMatches.length > 0) {
+        event.preventDefault();
+        insertChatResearchMention(researchChatMatches[Math.min(chatResearchMention.activeIndex, researchChatMatches.length - 1)]);
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeChatResearchMentionPicker();
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submitMessage();
     }
+  }
+
+  function handleMessageChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const nextMessage = event.target.value;
+
+    setComposerMessage(nextMessage);
+    syncComposerMentionPickers(nextMessage, event.target.selectionStart ?? nextMessage.length, event.target.selectionEnd ?? event.target.selectionStart ?? nextMessage.length);
+  }
+
+  function handleTextSelection(event: ReactMouseEvent<HTMLTextAreaElement> | KeyboardEvent<HTMLTextAreaElement>) {
+    const target = event.currentTarget;
+
+    syncComposerMentionPickers(target.value, target.selectionStart ?? target.value.length, target.selectionEnd ?? target.selectionStart ?? target.value.length);
+  }
+
+  function closeSkillMentionPicker() {
+    setSkillMention(CLOSED_SKILL_MENTION_STATE);
+  }
+
+  function closeChatResearchMentionPicker() {
+    setChatResearchMention(CLOSED_CHAT_RESEARCH_MENTION_STATE);
+  }
+
+  function syncComposerMentionPickers(nextMessage: string, selectionStart: number, selectionEnd: number) {
+    syncSkillMentionPicker(nextMessage, selectionStart, selectionEnd);
+    syncChatResearchMentionPicker(nextMessage, selectionStart, selectionEnd);
+  }
+
+  function syncSkillMentionPicker(nextMessage: string, selectionStart: number, selectionEnd: number) {
+    if (selectionStart !== selectionEnd) {
+      closeSkillMentionPicker();
+      return;
+    }
+
+    const trigger = findSkillMentionTrigger(nextMessage, selectionStart);
+
+    if (!trigger) {
+      closeSkillMentionPicker();
+      return;
+    }
+
+    setOpenMenu(null);
+    closeChatResearchMentionPicker();
+    setSkillMention({
+      activeIndex: 0,
+      open: true,
+      query: trigger.query,
+      rangeEnd: trigger.rangeEnd,
+      rangeStart: trigger.rangeStart,
+      trigger: trigger.trigger,
+    });
+  }
+
+  function syncChatResearchMentionPicker(nextMessage: string, selectionStart: number, selectionEnd: number) {
+    if (selectionStart !== selectionEnd) {
+      closeChatResearchMentionPicker();
+      return;
+    }
+
+    const trigger = findChatResearchMentionTrigger(nextMessage, selectionStart);
+
+    if (!trigger) {
+      closeChatResearchMentionPicker();
+      return;
+    }
+
+    setOpenMenu(null);
+    closeSkillMentionPicker();
+    setChatResearchMention({
+      activeIndex: 0,
+      open: true,
+      query: trigger.query,
+      rangeEnd: trigger.rangeEnd,
+      rangeStart: trigger.rangeStart,
+    });
+  }
+
+  function insertSkillMention(skill: PluginSkillOption) {
+    if (!skillMention.open) {
+      return;
+    }
+
+    const currentMessage = messageRef.current;
+    const beforeMention = currentMessage.slice(0, skillMention.rangeStart);
+    const afterMention = currentMessage.slice(skillMention.rangeEnd).replace(/^\s+/, "");
+    const insertion = `${skill.mention} `;
+    const nextMessage = `${beforeMention}${insertion}${afterMention}`;
+    const nextCursorPosition = beforeMention.length + insertion.length;
+
+    setComposerMessage(nextMessage, { immediate: true });
+    closeSkillMentionPicker();
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCursorPosition, nextCursorPosition);
+    });
+  }
+
+  function insertChatResearchMention(researchChat: ChatSummary) {
+    if (!chatResearchMention.open) {
+      return;
+    }
+
+    const currentMessage = messageRef.current;
+    const beforeMention = currentMessage.slice(0, chatResearchMention.rangeStart);
+    const afterMention = currentMessage.slice(chatResearchMention.rangeEnd).replace(/^\s+/, "");
+    const insertion = `#${researchChat.title} `;
+    const nextMessage = `${beforeMention}${insertion}${afterMention}`;
+    const nextCursorPosition = beforeMention.length + insertion.length;
+
+    setComposerMessage(nextMessage, { immediate: true });
+    setSelectedResearchChatIds((currentIds) => (currentIds.includes(researchChat.id) ? currentIds : [...currentIds, researchChat.id]));
+    closeChatResearchMentionPicker();
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCursorPosition, nextCursorPosition);
+    });
+  }
+
+  function removeSelectedResearchChat(chatId: string) {
+    setSelectedResearchChatIds((currentIds) => currentIds.filter((candidateId) => candidateId !== chatId));
   }
 
   function cancelVoiceInput(updateState = true) {
@@ -906,7 +1321,7 @@ export function ChatComposer({
       recognition.interimResults = true;
       recognition.lang = navigator.language || "en-US";
       recognition.maxAlternatives = 1;
-      voiceBaseMessageRef.current = message;
+      voiceBaseMessageRef.current = messageRef.current;
       voiceRecognitionRef.current = recognition;
 
       recognition.onresult = (event) => {
@@ -914,7 +1329,7 @@ export function ChatComposer({
           return;
         }
 
-        setMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results));
+        setComposerMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results), { immediate: true });
         setVoiceStatus("Listening");
       };
 
@@ -969,22 +1384,24 @@ export function ChatComposer({
   const voiceLabel = formatVoiceLabel(voiceState);
 
   return (
-    <form
-      className="composer-shell"
-      data-layout={layout}
-      ref={composerRef}
-      onSubmit={(event) => {
-        event.preventDefault();
-        submitMessage();
-      }}
-      onPaste={handleComposerPaste}
-    >
+    <>
+      <form
+        className="composer-shell"
+        data-layout={layout}
+        ref={composerRef}
+        onPointerDownCapture={handleComposerPointerDownCapture}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submitMessage();
+        }}
+        onPaste={handleComposerPaste}
+      >
       <input
         ref={fileInputRef}
         className="composer-file-input"
         type="file"
         multiple
-        accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.rs,.kt,.java,.py"
+        accept="image/*,video/mp4,video/mpeg,video/quicktime,video/webm,.mov,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.css,.html,.rs,.kt,.java,.py"
         onChange={handleFileSelect}
       />
       {hasGitChangeSummary ? (
@@ -1088,9 +1505,14 @@ export function ChatComposer({
           })}
         </div>
       ) : null}
-      <label className="composer-input-wrap">
-        <span className="sr-only">Message Gilbert Codex</span>
+      <div className="composer-input-wrap">
+        <label className="sr-only" htmlFor="composer-message-input">Message Gilbert Codex</label>
         <textarea
+          id="composer-message-input"
+          ref={textareaRef}
+          aria-autocomplete="list"
+          aria-controls={skillMention.open ? "composer-skill-mention-picker" : chatResearchMention.open ? "composer-chat-research-picker" : undefined}
+          aria-expanded={skillMention.open || chatResearchMention.open}
           placeholder={
             isGenerating
               ? "Add a follow-up or steer the next turn"
@@ -1103,11 +1525,50 @@ export function ChatComposer({
                   : "Ask Gilbert Codex to build, inspect, or change this project"
           }
           rows={2}
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
+          defaultValue=""
+          onChange={handleMessageChange}
+          onClick={handleTextSelection}
           onKeyDown={handleTextKeyDown}
         />
-      </label>
+        {skillMention.open ? (
+          <div id="composer-skill-mention-picker">
+            <SkillMentionPicker
+              activeIndex={skillMention.activeIndex}
+              onActiveIndexChange={(activeIndex) => setSkillMention((currentState) => ({ ...currentState, activeIndex }))}
+              onSelect={insertSkillMention}
+              query={skillMention.query}
+              trigger={skillMention.trigger}
+            />
+          </div>
+        ) : null}
+        {chatResearchMention.open ? (
+          <div id="composer-chat-research-picker" className="composer-chat-research-picker">
+            <ChatResearchMentionPicker
+              activeIndex={chatResearchMention.activeIndex}
+              matches={researchChatMatches}
+              onActiveIndexChange={(activeIndex) => setChatResearchMention((currentState) => ({ ...currentState, activeIndex }))}
+              onSelect={insertChatResearchMention}
+              query={chatResearchMention.query}
+            />
+          </div>
+        ) : null}
+      </div>
+      {selectedResearchChats.length > 0 ? (
+        <div className="composer-research-chats" aria-label="Attached research chats">
+          {selectedResearchChats.map((researchChat) => (
+            <span key={researchChat.id} className="research-chat-chip">
+              <CornerDownRight size={14} aria-hidden="true" />
+              <span>
+                <strong>{researchChat.title}</strong>
+                <small>{normalizeProjectName(researchChat.project)}</small>
+              </span>
+              <button type="button" aria-label={`Remove ${researchChat.title}`} onClick={() => removeSelectedResearchChat(researchChat.id)}>
+                <X size={13} aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <div className="composer-attachments" aria-label="Attached files">
           {attachments.map((attachment, index) => (
@@ -1128,7 +1589,7 @@ export function ChatComposer({
         <div className="composer-pinned-actions">
           <div className="composer-menu-anchor">
             <button
-              className="composer-tool composer-tool-primary"
+              className="composer-tool composer-tool-primary composer-attach-toggle"
               type="button"
               aria-label="Add files and tools"
               aria-haspopup="menu"
@@ -1155,7 +1616,7 @@ export function ChatComposer({
                   <Globe2 size={18} aria-hidden="true" />
                   <span>
                     <strong>Web search</strong>
-                    <small>{webSearch.enabled ? `${webSearchProviderLabel} up to ${webSearch.maxResults} sources` : `Use ${webSearchProviderLabel} when this message needs sources`}</small>
+                    <small>{webSearch.enabled ? `${webSearchProviderLabel} tool available, max ${webSearch.maxResults}` : `Model cannot call ${webSearchProviderLabel}`}</small>
                   </span>
                   <span className="composer-switch" data-on={webSearch.enabled}>
                     <span />
@@ -1204,7 +1665,6 @@ export function ChatComposer({
             {openMenu === "model" ? (
               <ModelSelectorPopover
                 anchorRef={modelButtonRef}
-                liveModelCatalogErrors={liveModelCatalogErrors}
                 liveModelCatalogs={liveModelCatalogs}
                 liveModelCatalogStatus={liveModelCatalogStatus}
                 model={model}
@@ -1342,16 +1802,17 @@ export function ChatComposer({
           <button
             className="context-window-chip"
             type="button"
+            aria-label={contextButtonLabel}
             aria-haspopup="dialog"
             aria-expanded={openMenu === "context"}
             data-active={openMenu === "context"}
+            data-context-level={getContextUsageLevel(contextUsageRatio)}
+            title={contextButtonLabel}
             onClick={() => toggleMenu("context")}
           >
-            <Gauge size={13} aria-hidden="true" />
-            <span>
-              Context {formatTokenCount(contextUsage.inputTokens)} / {formatTokenCount(contextUsage.contextWindowTokens)}
+            <span className="context-window-ring" style={createContextRingStyle(contextUsageRatio)} aria-hidden="true">
+              <span className="context-window-ring-threshold" />
             </span>
-            <ChevronDown size={13} aria-hidden="true" />
           </button>
           {openMenu === "context" ? <ContextWindowPopover compaction={lastContextCompaction} usage={contextUsage} usagePercent={contextUsagePercent} /> : null}
         </div>
@@ -1360,14 +1821,17 @@ export function ChatComposer({
         {voiceState === "error" && voiceStatus ? <span className="composer-status composer-status-warning">{voiceStatus}</span> : null}
         {voiceState !== "blocked" && voiceState !== "unsupported" && voiceState !== "error" && voiceStatus ? <span className="composer-status">{voiceStatus}</span> : null}
         {hasPendingAttachments ? <span className="composer-status">Preparing attachments</span> : null}
-        {hasImageAttachment ? <span className="composer-status">Image uploads use Nemotron Omni</span> : null}
+        {hasMediaAttachment ? <span className="composer-status">Media uploads use Nemotron Omni when needed</span> : null}
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
-        {isGenerating ? <span className="composer-status">Generating response</span> : null}
         {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
         {webSearch.enabled ? <span className="composer-status composer-status-web">{webSearchProviderLabel} web on</span> : null}
         {planMode.enabled ? <span className="composer-status">Plan mode</span> : null}
       </div>
-    </form>
+      </form>
+      <p className="composer-ai-disclaimer" data-layout={layout}>
+        Gilbert Codex is AI and can make mistakes. Please double-check responses.
+      </p>
+    </>
   );
 }
 
@@ -1448,6 +1912,63 @@ function ProjectPopover({
           <FolderOpen size={18} aria-hidden="true" />
           <span>Add project folder</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ChatResearchMentionPicker({
+  activeIndex,
+  matches,
+  onActiveIndexChange,
+  onSelect,
+  query,
+}: {
+  activeIndex: number;
+  matches: ChatSummary[];
+  onActiveIndexChange: (index: number) => void;
+  onSelect: (chat: ChatSummary) => void;
+  query: string;
+}) {
+  return (
+    <div className="skill-mention-picker chat-research-picker" role="listbox" aria-label="Chat research suggestions">
+      <div className="skill-mention-heading">
+        <Search size={15} aria-hidden="true" />
+        <span>Chat notes</span>
+        {query ? <small>#{query}</small> : <small>Regular chats</small>}
+      </div>
+      <div className="skill-mention-list">
+        {matches.length > 0 ? (
+          matches.map((researchChat, index) => (
+            <button
+              key={researchChat.id}
+              type="button"
+              role="option"
+              aria-selected={activeIndex === index}
+              data-active={activeIndex === index}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => onActiveIndexChange(index)}
+              onClick={() => onSelect(researchChat)}
+            >
+              <span className="skill-mention-icon">
+                <CornerDownRight size={16} aria-hidden="true" />
+              </span>
+              <span className="skill-mention-copy">
+                <strong>{researchChat.title}</strong>
+                <small>{normalizeProjectName(researchChat.project)} - {researchChat.messages.length} messages</small>
+              </span>
+              <span className="skill-mention-meta">
+                <strong>#{researchChat.title}</strong>
+                <small>{formatChatAge(researchChat.updatedAt)}</small>
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className="skill-mention-empty">
+            <Search size={16} aria-hidden="true" />
+            <span>No matching chats</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1672,102 +2193,76 @@ function LocalWorkspacePopover({
   );
 }
 
-function ContextWindowPopover({ compaction, usage, usagePercent }: { compaction?: ContextCompactionNotice | null; usage: ContextWindowUsage; usagePercent: number }) {
-  const reservePercent = Math.min(Math.round((usage.maxOutputTokens / usage.contextWindowTokens) * 100), 100);
-  const compactPercent = Math.round(AUTO_COMPACT_CONTEXT_THRESHOLD * 100);
-  const compactTokenLimit = Math.floor(usage.contextWindowTokens * AUTO_COMPACT_CONTEXT_THRESHOLD);
-  const isProviderUsage = usage.tokenSource === "openrouter" || usage.tokenSource === "provider";
-  const isProjectedUsage = usage.tokenSource === "projected";
+function ContextWindowPopover({ usage, usagePercent }: { compaction?: ContextCompactionNotice | null; usage: ContextWindowUsage; usagePercent: number }) {
+  const contextLabel = `${formatTokenCount(usage.inputTokens)} / ${formatTokenCount(usage.contextWindowTokens)}`;
+  const totalLabel = `${formatTokenCount(usage.totalTokens)} total`;
+  const fitDetail = usage.fitsContextWindow === false || (usage.overflowTokens ?? 0) > 0
+    ? `${formatTokenCount(usage.overflowTokens ?? 0)} over request budget`
+    : `${formatTokenCount(usage.availableTokens)} available after output reserve`;
+  const budgetItems = [
+    { label: "Input", value: usage.inputTokens },
+    { label: "Output cap", value: usage.maxOutputTokens },
+    { label: "Reasoning", value: usage.reasoningReserveTokens ?? 0 },
+    { label: "Safety", value: usage.safetyMarginTokens ?? 0 },
+  ].filter((item) => item.value > 0);
 
   return (
     <div className="composer-popover composer-popover-context" role="dialog" aria-label="Context window">
       <div className="context-window-header">
-        <span>
-          <strong>Context window</strong>
-          <small>
-            {isProjectedUsage
-              ? "Projected next request from last provider payload"
-              : isProviderUsage
-                ? "Provider usage from last request"
-                : usage.source === "openrouter" || usage.source === "provider"
-                  ? "Provider-visible payload estimate against model limit"
-                : "Provider-visible payload estimate against estimated limit"}
-          </small>
-        </span>
+        <strong>Context</strong>
         <strong>
-          {formatTokenCount(usage.inputTokens)} / {formatTokenCount(usage.contextWindowTokens)}
+          {contextLabel}
         </strong>
       </div>
-      <div className="context-window-meter" aria-hidden="true">
+      <div className="context-window-meter" aria-label={`Context usage ${contextLabel}`} role="meter" aria-valuemin={0} aria-valuemax={usage.contextWindowTokens} aria-valuenow={Math.round(usage.inputTokens)}>
         <span style={{ width: `${usagePercent}%` }} />
-        <em style={{ width: `${reservePercent}%` }} />
-        <i style={{ left: `${compactPercent}%` }} />
+        <i aria-hidden="true" style={{ left: `${AUTO_COMPACT_CONTEXT_THRESHOLD * 100}%` }} />
       </div>
-      <p className="context-window-note">
-        {isProjectedUsage
-          ? "Uses the last provider prompt as a baseline and adds the current draft estimate, so typing does not hide transient tool context."
-          : isProviderUsage
-            ? "Provider-reported prompt tokens replace the serialized estimate after a send."
-            : "Estimated from the exact serialized provider request body. The response cap is tracked separately."}{" "}
-        Auto compacts only after the prompt payload exceeds the selected input window ({formatTokenCount(compactTokenLimit)}).
-      </p>
-      <dl className="context-window-list">
-        {compaction ? (
-          <div className="context-window-compaction-row">
-            <dt>
-              Last auto compact
-              <small>
-                {compaction.forcedByProviderUsage ? "Provider usage crossed the limit" : "Payload crossed the limit"} - {compaction.compactedMessageCount} older messages
-              </small>
-            </dt>
-            <dd>
-              {formatTokenCount(compaction.afterTokens)} / {formatTokenCount(compaction.contextWindowTokens)}
-            </dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>{isProjectedUsage ? "Projected provider prompt" : isProviderUsage ? "Provider prompt" : "Provider payload estimate"}</dt>
-          <dd>{formatTokenCount(usage.inputTokens)}</dd>
-        </div>
-        {typeof usage.openRouterCompletionTokens === "number" ? (
-          <div>
-            <dt>Provider completion</dt>
-            <dd>{formatTokenCount(usage.openRouterCompletionTokens)}</dd>
-          </div>
-        ) : null}
-        {typeof usage.openRouterTotalTokens === "number" ? (
-          <div>
-            <dt>Provider actual total</dt>
-            <dd>{formatTokenCount(usage.openRouterTotalTokens)}</dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>{isProviderUsage ? "Chat, tools, sources split" : "Chat, tools, sources"}</dt>
-          <dd>{formatTokenCount(usage.messageTokens)}</dd>
-        </div>
-        <div>
-          <dt>Draft</dt>
-          <dd>{formatTokenCount(usage.draftTokens)}</dd>
-        </div>
-        <div>
-          <dt>{isProviderUsage ? "System, runtime split" : "System, runtime tools"}</dt>
-          <dd>{formatTokenCount(usage.systemTokens)}</dd>
-        </div>
-        <div>
-          <dt>{isProviderUsage ? "Provider envelope split" : "Provider envelope"}</dt>
-          <dd>{formatTokenCount(usage.requestOverheadTokens)}</dd>
-        </div>
-        <div>
-          <dt>Response cap</dt>
-          <dd>{formatTokenCount(usage.maxOutputTokens)}</dd>
-        </div>
-        <div>
-          <dt>Available if cap is used</dt>
-          <dd>{formatTokenCount(usage.availableTokens)}</dd>
-        </div>
-      </dl>
+      <div className="context-window-fit" data-overflow={usage.fitsContextWindow === false || (usage.overflowTokens ?? 0) > 0}>
+        <span>{totalLabel}</span>
+        <span>{fitDetail}</span>
+      </div>
+      <div className="context-window-breakdown" aria-label="Provider request budget lanes">
+        {budgetItems.map((item) => (
+          <span key={item.label}>
+            <small>{item.label}</small>
+            <strong>{formatTokenCount(item.value)}</strong>
+          </span>
+        ))}
+      </div>
     </div>
   );
+}
+
+function createContextRingStyle(usageRatio: number): CSSProperties {
+  return {
+    "--context-progress-angle": `${clampUnit(usageRatio) * 360}deg`,
+    "--context-threshold-angle": `${AUTO_COMPACT_CONTEXT_THRESHOLD * 360}deg`,
+  } as CSSProperties;
+}
+
+function getContextUsageLevel(usageRatio: number) {
+  if (usageRatio >= AUTO_COMPACT_CONTEXT_THRESHOLD) {
+    return "compact";
+  }
+
+  if (usageRatio >= AUTO_COMPACT_CONTEXT_THRESHOLD * 0.875) {
+    return "high";
+  }
+
+  return "normal";
+}
+
+function getContextRequestTokens(usage: ContextWindowUsage) {
+  return usage.requestedTotalTokens ?? usage.totalTokens;
+}
+
+function clampUnit(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(value, 0), 1);
 }
 
 function formatVoiceLabel(voiceState: VoiceState) {
@@ -1813,6 +2308,92 @@ function formatQueuedMessagePreview(message: ChatMessage) {
 function removeQueuedEditDraft(drafts: Record<string, string>, messageId: string) {
   const { [messageId]: _removed, ...nextDrafts } = drafts;
   return nextDrafts;
+}
+
+function findSkillMentionTrigger(message: string, cursorPosition: number): SkillMentionTrigger | null {
+  const beforeCursor = message.slice(0, cursorPosition);
+  const match = beforeCursor.match(/(^|\s)([$@])([a-z0-9._:-]{0,48})$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const trigger = match[2] === "@" ? "@" : "$";
+  const query = match[3] ?? "";
+  const rangeStart = beforeCursor.length - query.length - 1;
+
+  return {
+    query,
+    rangeEnd: cursorPosition,
+    rangeStart,
+    trigger,
+  };
+}
+
+function findChatResearchMentionTrigger(message: string, cursorPosition: number): ChatResearchMentionTrigger | null {
+  const beforeCursor = message.slice(0, cursorPosition);
+  const match = beforeCursor.match(/(^|\s)#([^\n#@$]{0,80})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const query = (match[2] ?? "").trimStart();
+  const rangeStart = beforeCursor.length - (match[2]?.length ?? 0) - 1;
+
+  return {
+    query,
+    rangeEnd: cursorPosition,
+    rangeStart,
+  };
+}
+
+function getChatResearchMentionMatches(chats: ChatSummary[], query: string, selectedChatIds: string[]) {
+  const selectedIds = new Set(selectedChatIds);
+  const normalizedQuery = normalizeMentionText(query);
+  const candidates = chats.filter((chat) => !selectedIds.has(chat.id));
+
+  if (!normalizedQuery) {
+    return candidates;
+  }
+
+  return candidates
+    .filter((chat) => {
+      const title = normalizeMentionText(chat.title);
+
+      return title.includes(normalizedQuery);
+    });
+}
+
+function resolveComposerResearchChatIds(content: string, selectedChatIds: string[], chats: ChatSummary[]) {
+  const referencedIds = new Set(selectedChatIds);
+
+  for (const chat of chats) {
+    if (contentReferencesComposerChatTitle(content, chat.title)) {
+      referencedIds.add(chat.id);
+    }
+  }
+
+  return [...referencedIds];
+}
+
+function contentReferencesComposerChatTitle(content: string, title: string) {
+  const cleanTitle = title.trim();
+
+  if (!cleanTitle || cleanTitle.toLowerCase() === "new chat") {
+    return false;
+  }
+
+  const escapedTitle = escapeMentionRegExp(cleanTitle).replace(/\s+/g, "\\s+");
+  return new RegExp(`(^|\\s)#${escapedTitle}(?=$|[\\s.,;:!?\\)])`, "i").test(content);
+}
+
+function normalizeMentionText(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function escapeMentionRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getBuiltInSpeechRecognition() {
@@ -1875,10 +2456,6 @@ function formatSpeechRecognitionError(error?: string) {
   return "Voice dictation could not complete.";
 }
 
-function formatCompactCount(value: number) {
-  return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? "compact" : "standard" }).format(value);
-}
-
 function formatCompactPath(path: string) {
   const trimmed = path.trim();
 
@@ -1931,8 +2508,16 @@ function AttachmentPreview({ attachment }: { attachment: ComposerAttachmentDraft
     return <img alt="" src={attachment.attachment.dataUrl} />;
   }
 
+  if (attachment.attachment && isVideoAttachment(attachment.attachment)) {
+    return <Video size={15} aria-hidden="true" />;
+  }
+
   if (attachment.mimeType.startsWith("image/")) {
     return <ImageIcon size={15} aria-hidden="true" />;
+  }
+
+  if (attachment.mimeType.startsWith("video/")) {
+    return <Video size={15} aria-hidden="true" />;
   }
 
   return <FileUp size={15} aria-hidden="true" />;
@@ -1954,6 +2539,19 @@ function createDraftFromAttachment(attachment: ChatAttachment, index: number): C
     name: attachment.name,
     size: attachment.size,
     status: "ready",
+  };
+}
+
+function createComposerDraft(content: string, attachmentDrafts: ComposerAttachmentDraft[]): ChatComposerDraft | null {
+  const attachments = attachmentDrafts.flatMap((attachmentDraft) => (attachmentDraft.attachment ? [attachmentDraft.attachment] : []));
+
+  if (!content.trim() && attachments.length === 0) {
+    return null;
+  }
+
+  return {
+    attachments,
+    content,
   };
 }
 

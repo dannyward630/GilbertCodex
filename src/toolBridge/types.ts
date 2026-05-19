@@ -1,5 +1,6 @@
 import type { ChatToolCall } from "../types/chat";
 import type { LocalPermissionMode } from "../types/localWorkspace";
+import type { ProviderReasoningState } from "../types/reasoning";
 import type { ModelProviderId, WebSearchSettings } from "../types/settings";
 
 export type ToolBridgeProviderFormat = "openai-compatible" | "anthropic-messages" | "openai-responses";
@@ -15,15 +16,36 @@ export type ToolBridgePermissionRequirement =
   | "credential"
   | "publish";
 export type ToolBridgeToolChoice = "auto" | "none" | "required";
+export type ToolBridgeSchedulerMode = "parallel" | "exclusive";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonSchema = Record<string, unknown>;
 
+export interface ToolMemorySearchRequest {
+  includeProjectMap?: boolean;
+  includeRecentEvents?: boolean;
+  includeToolLessons?: boolean;
+  maxChars?: number;
+  maxRecords?: number;
+  query: string;
+}
+
+export interface ToolMemorySearchResponse {
+  chatTitle?: string;
+  content: string;
+  projectName?: string;
+  projectRecordCount?: number;
+  storedRecordCount?: number;
+  toolLessonCount?: number;
+}
+
 export interface ToolExecutionContext {
+  memorySearch?: (request: ToolMemorySearchRequest) => Promise<ToolMemorySearchResponse> | ToolMemorySearchResponse;
   model: string;
   permissionMode: LocalPermissionMode;
   provider: ModelProviderId;
+  reportProgress?: ToolExecutionProgressReporter;
   signal?: AbortSignal;
   webSearchMaxResults?: number;
   webSearchSettings?: WebSearchSettings;
@@ -38,11 +60,13 @@ export interface ToolExecutionResult {
   skippedReason?: string;
 }
 
+export type ToolExecutionProgressReporter = (result: ToolExecutionResult) => void;
+
 export interface ToolDefinition {
   compatibleProviders?: ToolBridgeProviderFormat[];
   description: string;
   executorMetadata?: {
-    family: "diagnostic" | "files" | "editing" | "terminal" | "git" | "web" | "mcp" | "browser" | "workflow";
+    family: "diagnostic" | "files" | "editing" | "terminal" | "git" | "web" | "mcp" | "browser" | "workflow" | "memory";
     version: number;
   };
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<ToolExecutionResult> | ToolExecutionResult;
@@ -50,6 +74,14 @@ export interface ToolDefinition {
   inputSchema: JsonSchema;
   permission: ToolBridgePermissionRequirement;
   risk: ToolBridgeRisk;
+  scheduler?: {
+    /**
+     * Parallel tools may run in the same bounded worker segment. Exclusive
+     * tools flush pending parallel work and run alone, preserving safety for
+     * terminal sessions, writes, publishes, credentials, and destructive work.
+     */
+    mode?: ToolBridgeSchedulerMode;
+  };
   title: string;
 }
 
@@ -72,6 +104,8 @@ export interface ToolResultMessage {
 }
 
 export interface ProviderToolBridgeOptions {
+  // Enables provider-native multi-function-call output when the provider supports it.
+  parallelToolCalls?: boolean;
   // When true, adapters skip synthetic assistant tool-call turns because history already contains them.
   resultsHistoryAlreadyContainsAssistantTurns?: boolean;
   // Native provider tool-result turns are best for tool use, but weaker models often synthesize
@@ -79,8 +113,17 @@ export interface ProviderToolBridgeOptions {
   toolResultDelivery?: "native" | "inline-user-message";
   // Maximum completed tool output characters to include in the next provider request.
   maxToolResultContentChars?: number | null;
+  // Opaque provider-native reasoning state to replay only in native tool-result continuations.
+  reasoningState?: ProviderReasoningState;
   toolChoice?: ToolBridgeToolChoice;
   toolResultMessages?: ToolResultMessage[];
+  runtimeBudget?: {
+    maxExecutions?: number;
+    maxPasses?: number;
+    maxToolResultContentChars?: number | null;
+    remainingExecutions?: number;
+    remainingPasses?: number;
+  };
   tools?: ToolDefinition[];
 }
 
@@ -104,8 +147,10 @@ export interface ToolBridgeExecutionStep {
 }
 
 export interface ToolBridgeExecutionBatch {
+  coalescedCount?: number;
   executedCount: number;
   handledCount: number;
+  hostExecutionCount?: number;
   requestedCount: number;
   resultMessages: ToolResultMessage[];
   steps: ToolBridgeExecutionStep[];
@@ -114,7 +159,7 @@ export interface ToolBridgeExecutionBatch {
 
 export interface ToolBridgeProviderTurn {
   content: string;
-  reasoning?: string;
+  reasoningState?: ProviderReasoningState;
   toolCalls?: ToolCallRequest[];
 }
 
@@ -146,6 +191,8 @@ export type ToolBridgeTelemetryEvent =
   | { callId: string; error: string; toolId: string; type: "tool-validation-failed" }
   | { callId: string; reason?: string; toolId: string; type: "tool-approval-requested" }
   | { approved: boolean; callId: string; reason?: string; toolId: string; type: "tool-approval-resolved" }
+  | { coalescedCount: number; fromToolIds: string[]; requestedCount: number; toToolIds: string[]; type: "tool-batch-coalesced" }
+  | { exclusiveCount: number; parallelCount: number; segmentCount: number; type: "tool-batch-scheduled" }
   | { loopIndex: number; reason: "max-loops" | "signal"; type: "tool-loop-aborted" }
   | { callId: string; toolName: string; type: "tool-call-duplicate" };
 

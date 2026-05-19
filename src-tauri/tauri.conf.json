@@ -43,8 +43,11 @@
     "license": "MIT",
     "licenseFile": "../LICENSE",
     "publisher": "Gilbert Codex Contributors",
+    "resources": {
+      "resources/9router": "9router"
+    },
     "shortDescription": "GUI-first local desktop agent workspace.",
-    "longDescription": "Gilbert Codex is a local-first desktop agent workspace with multi-provider model streaming, planning mode, host-managed web search, provider tool bridge, project-scoped state, GitHub setup, and Discord bridge setup.",
+    "longDescription": "Gilbert Codex is a local-first desktop agent workspace with multi-provider model streaming, planning mode, source-backed context, project-scoped state, GitHub setup, and Discord bridge setup.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

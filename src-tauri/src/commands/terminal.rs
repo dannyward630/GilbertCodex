@@ -145,12 +145,12 @@ function global:which {
 }
 "#;
 
-const MAX_BUFFERED_CHUNKS: usize = usize::MAX;
+const MAX_BUFFERED_CHUNKS: usize = 512;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
 const STREAM_READ_BYTES: usize = 8 * 1024;
 const DEFAULT_RUN_TIMEOUT_MS: u64 = 45_000;
 const MAX_RUN_TIMEOUT_MS: u64 = 600_000;
-const MAX_RUN_OUTPUT_BYTES: usize = usize::MAX;
+const MAX_RUN_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const COMMAND_KILL_WAIT_MS: u64 = 1_500;
 const COMMAND_READER_DRAIN_WAIT_MS: u64 = 750;
 const SESSION_KILL_WAIT_MS: u64 = 750;
@@ -314,25 +314,17 @@ pub fn terminal_create_session(
     let working_directory = resolve_working_directory(request.working_directory)?;
     let output = Arc::new(Mutex::new(VecDeque::new()));
 
-    push_output(
-        &output,
-        TerminalOutputStream::System,
-        format!(
-            "Started {} {} in {}\n",
-            shell_label(&shell),
-            if mode == TerminalSessionMode::Interactive {
-                "terminal"
-            } else {
-                "command runner"
-            },
-            path_to_string(&working_directory)
-        ),
-    );
-    push_output(
-        &output,
-        TerminalOutputStream::System,
-        "Commands run as local child processes and can change files or install project dependencies.\n".to_string(),
-    );
+    if mode == TerminalSessionMode::Command {
+        push_output(
+            &output,
+            TerminalOutputStream::System,
+            format!(
+                "Started {} command runner in {}\n",
+                shell_label(&shell),
+                path_to_string(&working_directory)
+            ),
+        );
+    }
 
     let session_id = format!(
         "terminal-{}",

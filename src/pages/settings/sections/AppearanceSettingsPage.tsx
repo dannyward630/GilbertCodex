@@ -12,12 +12,13 @@ const appearanceOptions: Array<{ icon: LucideIcon; label: string; value: Appeara
 interface AppearanceSettingsPageProps {
   appearanceMode: AppearanceMode;
   onAppearanceModeChange: (mode: AppearanceMode) => void;
+  showHeading?: boolean;
 }
 
-export function AppearanceSettingsPage({ appearanceMode, onAppearanceModeChange }: AppearanceSettingsPageProps) {
+export function AppearanceSettingsPage({ appearanceMode, onAppearanceModeChange, showHeading = true }: AppearanceSettingsPageProps) {
   return (
     <>
-      <SettingsSectionHeading detail="Choose how GilbertCodex follows your display." icon={Monitor} title="Appearance" />
+      {showHeading ? <SettingsSectionHeading detail="Choose how GilbertCodex follows your display." icon={Monitor} title="Appearance" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">

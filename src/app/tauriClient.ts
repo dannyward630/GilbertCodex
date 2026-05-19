@@ -155,6 +155,98 @@ export type AppUpdateInstallEvent =
       data?: null;
     };
 
+export interface NineRouterLocalStatus {
+  baseUrl: string;
+  autoStartEnabled: boolean;
+  built: boolean;
+  dashboardUrl: string;
+  dataDir?: string | null;
+  dockerVersion?: string | null;
+  gitVersion?: string | null;
+  installDir?: string | null;
+  installed: boolean;
+  launchSupported: boolean;
+  launched: boolean;
+  message: string;
+  nodeVersion?: string | null;
+  npmVersion?: string | null;
+  pid?: number | null;
+  running: boolean;
+}
+
+export type NineRouterInstallEvent =
+  | {
+      event: "started";
+      data: {
+        message: string;
+      };
+    }
+  | {
+      event: "step";
+      data: {
+        message: string;
+      };
+    }
+  | {
+      event: "output";
+      data: {
+        label: string;
+        stderr: string;
+        stdout: string;
+      };
+    }
+  | {
+      event: "finished";
+      data: {
+        status: NineRouterLocalStatus;
+      };
+    };
+
+export interface NineRouterHttpRequest {
+  body?: string;
+  headers?: Record<string, string>;
+  method: "GET" | "POST";
+  timeoutMs?: number;
+  url: string;
+}
+
+export interface NineRouterHttpResponse {
+  body: string;
+  headers: Record<string, string>;
+  status: number;
+}
+
+export type NineRouterHttpStreamEvent =
+  | {
+      event: "started";
+      data: {
+        headers: Record<string, string>;
+        status: number;
+      };
+    }
+  | {
+      event: "chunk";
+      data: {
+        bytesBase64: string;
+      };
+    }
+  | {
+      event: "finished";
+      data?: null;
+    };
+
+export interface NineRouterOAuthCallbackStartResponse {
+  id: string;
+  redirectUri: string;
+}
+
+export interface NineRouterOAuthCallbackResponse {
+  code?: string | null;
+  error?: string | null;
+  errorDescription?: string | null;
+  state?: string | null;
+}
+
 /** Detects the desktop runtime before invoking Tauri-only commands. */
 export function isTauriDesktopRuntime() {
   return typeof window !== "undefined" && (Boolean(window.__TAURI_INTERNALS__) || Boolean(window.__TAURI__));
@@ -176,6 +268,143 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 
   await invoke<void>("open_external_url", { url });
+}
+
+export async function ensureNineRouterLocal(): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      baseUrl: "http://127.0.0.1:20128/v1",
+      autoStartEnabled: false,
+      built: false,
+      dashboardUrl: "http://127.0.0.1:20128",
+      dataDir: null,
+      dockerVersion: null,
+      gitVersion: null,
+      installDir: null,
+      installed: false,
+      launchSupported: false,
+      launched: false,
+      message: "9Router Local starts when you use subscription routing in the desktop app.",
+      nodeVersion: null,
+      npmVersion: null,
+      pid: null,
+      running: false,
+    };
+  }
+
+  return invoke<NineRouterLocalStatus>("nine_router_local_ensure");
+}
+
+export async function setNineRouterLocalAutoStart(enabled: boolean): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      baseUrl: "http://127.0.0.1:20128/v1",
+      autoStartEnabled: enabled,
+      built: false,
+      dashboardUrl: "http://127.0.0.1:20128",
+      dataDir: null,
+      dockerVersion: null,
+      gitVersion: null,
+      installDir: null,
+      installed: false,
+      launchSupported: false,
+      launched: false,
+      message: enabled ? "9Router Local auto-start is available in the desktop app." : "9Router Local auto-start is disabled.",
+      nodeVersion: null,
+      npmVersion: null,
+      pid: null,
+      running: false,
+    };
+  }
+
+  return invoke<NineRouterLocalStatus>("nine_router_local_set_auto_start", { enabled });
+}
+
+export async function getNineRouterLocalStatus(): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return ensureNineRouterLocal();
+  }
+
+  return invoke<NineRouterLocalStatus>("nine_router_local_status");
+}
+
+export async function stopNineRouterLocal(): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      baseUrl: "http://127.0.0.1:20128/v1",
+      autoStartEnabled: false,
+      built: false,
+      dashboardUrl: "http://127.0.0.1:20128",
+      dataDir: null,
+      dockerVersion: null,
+      gitVersion: null,
+      installDir: null,
+      installed: false,
+      launchSupported: false,
+      launched: false,
+      message: "9Router Local stop is available in the desktop app.",
+      nodeVersion: null,
+      npmVersion: null,
+      pid: null,
+      running: false,
+    };
+  }
+
+  return invoke<NineRouterLocalStatus>("nine_router_local_stop");
+}
+
+export async function installNineRouterLocal(onEvent: (event: NineRouterInstallEvent) => void): Promise<NineRouterLocalStatus> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("9Router Local install is available in the desktop app.");
+  }
+
+  const onEventChannel = new Channel<NineRouterInstallEvent>(onEvent);
+  return invoke<NineRouterLocalStatus>("nine_router_local_install", { onEvent: onEventChannel });
+}
+
+export async function nineRouterLocalHttp(request: NineRouterHttpRequest): Promise<NineRouterHttpResponse> {
+  if (!isTauriDesktopRuntime()) {
+    const response = await fetch(request.url, {
+      body: request.body,
+      headers: request.headers,
+      method: request.method,
+    });
+
+    return {
+      body: await response.text(),
+      headers: Object.fromEntries(response.headers.entries()),
+      status: response.status,
+    };
+  }
+
+  return invoke<NineRouterHttpResponse>("nine_router_local_http", { request });
+}
+
+export async function nineRouterLocalStream(request: NineRouterHttpRequest, onEvent: (event: NineRouterHttpStreamEvent) => void): Promise<void> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("9Router Local native streaming is available in the desktop app.");
+  }
+
+  const onEventChannel = new Channel<NineRouterHttpStreamEvent>(onEvent);
+  return invoke<void>("nine_router_local_stream", { request, onEvent: onEventChannel });
+}
+
+export async function startNineRouterOAuthCallback(): Promise<NineRouterOAuthCallbackStartResponse> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("9Router account sign-in is available in the desktop app.");
+  }
+
+  return invoke<NineRouterOAuthCallbackStartResponse>("nine_router_oauth_callback_start");
+}
+
+export async function finishNineRouterOAuthCallback(id: string, timeoutMs = 300_000): Promise<NineRouterOAuthCallbackResponse> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("9Router account sign-in is available in the desktop app.");
+  }
+
+  return invoke<NineRouterOAuthCallbackResponse>("nine_router_oauth_callback_finish", {
+    request: { id, timeoutMs },
+  });
 }
 
 export async function checkForAppUpdate(): Promise<AppUpdateCheckResponse> {
@@ -240,6 +469,8 @@ export async function fetchWeatherJson(request: WeatherFetchJsonRequest): Promis
 }
 
 const BROWSER_WEATHER_ALLOWED_HOSTS = [
+  "api.open-meteo.com",
+  "geocoding-api.open-meteo.com",
   "noaa.gov",
   "weather.gov",
   "api.weather.gov",
@@ -261,6 +492,30 @@ const BROWSER_WEATHER_ALLOWED_HOSTS = [
   "www.spc.noaa.gov",
   "www.cpc.ncep.noaa.gov",
   "www.swpc.noaa.gov",
+  "api.weather.gc.ca",
+  "dd.weather.gc.ca",
+  "weather.gc.ca",
+  "dwd.de",
+  "opendata.dwd.de",
+  "maps.dwd.de",
+  "api.meteoalarm.org",
+  "feeds.meteoalarm.org",
+  "meteoalarm.org",
+  "api.met.no",
+  "thredds.met.no",
+  "met.no",
+  "bom.gov.au",
+  "reg.bom.gov.au",
+  "sws-data.sws.bom.gov.au",
+  "cma.gov.cn",
+  "data.cma.cn",
+  "smn.conagua.gob.mx",
+  "conagua.gob.mx",
+  "www.gob.mx",
+  "alertingauthority.wmo.int",
+  "worldweather.wmo.int",
+  "severeweather.wmo.int",
+  "wmo.int",
 ];
 
 function validateBrowserWeatherFetchUrl(rawUrl: string) {
@@ -272,7 +527,7 @@ function validateBrowserWeatherFetchUrl(rawUrl: string) {
 
   const host = url.hostname.toLowerCase();
   if (!BROWSER_WEATHER_ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
-    throw new Error(`Weather requests are limited to official NOAA/NWS hosts. Blocked host: ${host}`);
+    throw new Error(`Weather requests are limited to registered weather provider hosts. Blocked host: ${host}`);
   }
 
   return url;

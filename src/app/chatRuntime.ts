@@ -71,6 +71,95 @@ export function looksLikeOnlyToolPrelude(content: string) {
   );
 }
 
+/** Holds provider/tool scratchpad text out of the public bubble during streaming. */
+export function shouldHoldStreamingContentForToolCalls(content: string, hasActiveToolCalls: boolean) {
+  return hasActiveToolCalls && content.trim().length > 0;
+}
+
+/**
+ * Detects transient "I looked at the tool results; next I will edit/run/read..."
+ * prose. It can be useful thinking context, but it is not a user-facing answer.
+ */
+export function looksLikeInFlightToolPlanning(content: string) {
+  const trimmed = content.trim();
+
+  if (!trimmed || trimmed.length > 4_000) {
+    return false;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const tail = normalized.slice(-900);
+  const hasToolResultFrame =
+    /\b(?:looking at|looking through|based on|from|after reviewing)\b[\s\S]{0,140}\b(?:tool results?|results?|current state|code)\b/i.test(trimmed) ||
+    /\b(?:now\s+)?i can see\b[\s\S]{0,180}\b(?:current\s+(?:css|code|file|component|state)|composer|input box|tool results?|results?)\b/i.test(trimmed) ||
+    /(?:^|\n)\s*(?:inspecting|checking|reading|opening)\s+`?[\w./\\ -]+`?\.?\s*$/i.test(trimmed);
+  const hasFindingList =
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:issues? found|findings?|remaining issues|problems? found)\b/i.test(trimmed) ||
+    /(?:^|\n)\s*\d+\.\s+(?:\[[ x]\]|\*\*|`|[A-Z][\w -]{2,})/i.test(trimmed);
+  const hasPendingActionTail =
+    /\b(?:let me|i(?:'ll| will)|we(?:'ll| will)|now i(?:'ll| will| need to)|next(?:,|:)?|so(?:,)?(?:\s+i)?)\b[\s\S]{0,280}\b(?:add|apply|change|check|compact|create|edit|fix|inspect|make|open|patch|read|reduce|refine|replace|resize|run|scan|search|shrink|tighten|update|write)\b/i.test(tail) ||
+    /(?:^|\n)\s*next:\s+[\s\S]{0,280}\b(?:add|apply|change|check|compact|create|edit|fix|inspect|make|open|patch|read|reduce|refine|replace|resize|run|scan|search|shrink|tighten|update|write)\b/i.test(trimmed);
+  const hasToolPlanningFrame =
+    looksLikeUnexecutedToolActionPromise(trimmed) ||
+    (
+      referencesAppToolName(trimmed) &&
+      /\b(?:available tools?|call|execute|try|use|using|with|without|attached|don't have|do not have|refused|exact old and new text)\b/i.test(trimmed)
+    ) ||
+    (
+      hasPendingActionTail &&
+      FILE_LINE_EDIT_FRAME_PATTERN.test(trimmed) &&
+      /\b(?:apply|edit|make|one precise change|replace lines?|shrink|tighten|change|patch)\b/i.test(trimmed)
+    );
+
+  return hasToolPlanningFrame || (hasPendingActionTail && (hasToolResultFrame || hasFindingList || looksLikeOnlyToolPrelude(content)));
+}
+
+/** Detects explicit private scratchpad markers before the tool parser has caught up. */
+export function looksLikePrivateThinkingNarration(content: string) {
+  const trimmed = content.trim();
+
+  if (!trimmed || trimmed.length > 6_000) {
+    return false;
+  }
+
+  if (/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:analysis|reasoning|thinking|thought|scratchpad|internal(?:\s+monologue)?|private\s+notes?)(?:\*\*)?\s*[:.-]/i.test(trimmed)) {
+    return true;
+  }
+
+  if (/^\s*<\s*(?:analysis|reasoning|thinking|thought|scratchpad)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
+export function looksLikeSubstantiveVisibleAnswer(content: string) {
+  return looksLikeSubstantiveAnswer(content.trim().toLowerCase());
+}
+
+export function stripLeadingToolPreludeForDisplay(content: string) {
+  const leadingWhitespace = content.match(/^\s*/)?.[0] ?? "";
+  const trimmedStart = content.slice(leadingWhitespace.length);
+  const firstBreak = trimmedStart.search(/\n\s*\n/);
+  const firstBlock = firstBreak >= 0 ? trimmedStart.slice(0, firstBreak) : trimmedStart;
+
+  if (firstBlock.length > 700 || !firstBlock.trim()) {
+    return content;
+  }
+
+  const rest = firstBreak >= 0 ? trimmedStart.slice(firstBreak).trimStart() : "";
+
+  if (!rest || (!looksLikeSubstantiveVisibleAnswer(rest) && !looksLikeAnswerSection(rest))) {
+    return content;
+  }
+
+  if (looksLikeOnlyToolPrelude(firstBlock) || looksLikeUnexecutedToolActionPromise(firstBlock) || looksLikeInFlightToolPlanning(firstBlock)) {
+    return rest;
+  }
+
+  return content;
+}
+
 function looksLikeSubstantiveAnswer(normalized: string) {
   return (
     /\b(?:i found|the issue is|root cause|fixed|changed|updated|implemented|verified|tests? passed|build passed|what changed|summary|findings?|next step)\b/.test(normalized) ||
@@ -78,9 +167,132 @@ function looksLikeSubstantiveAnswer(normalized: string) {
   );
 }
 
+function looksLikeAnswerSection(content: string) {
+  return /(?:^|\n)\s*#{1,4}\s+\S[\s\S]{40,}/.test(content);
+}
+
 /** Detects prose promises that should have been real tool calls. */
 export function looksLikeUnexecutedToolActionPromise(content: string) {
-  return false;
+  const trimmed = content.trim();
+
+  if (!trimmed || trimmed.length > 6_000) {
+    return false;
+  }
+
+  const hasActionPromise = TOOL_ACTION_PROMISE_PATTERN.test(trimmed);
+  const referencesTool = referencesAppToolName(trimmed);
+  const mentionsToolInventory = TOOL_INVENTORY_NARRATION_PATTERN.test(trimmed);
+  const hasLineEditFrame = FILE_LINE_EDIT_FRAME_PATTERN.test(trimmed);
+  const hasEditableFileMention = EDITABLE_FILE_MENTION_PATTERN.test(trimmed);
+  const hasEditInstructionFrame = EDIT_INSTRUCTION_FRAME_PATTERN.test(trimmed);
+  const hasStandaloneCodingActionPromise = STANDALONE_CODING_ACTION_PROMISE_PATTERN.test(trimmed);
+  const hasToolUseFrame =
+    referencesTool &&
+    /\b(?:using|use|with|call|try|available|attached|don't have|do not have|refused|exact old and new text|old and new text)\b/i.test(trimmed);
+
+  return (
+    (hasActionPromise && (referencesTool || mentionsToolInventory || hasLineEditFrame || hasEditableFileMention || hasEditInstructionFrame)) ||
+    hasStandaloneCodingActionPromise ||
+    (mentionsToolInventory && (referencesTool || hasActionPromise)) ||
+    (hasToolUseFrame && (hasActionPromise || hasLineEditFrame || hasEditInstructionFrame)) ||
+    (hasLineEditFrame && hasEditInstructionFrame && /\b(?:let me|i(?:'ll| will)|one precise change|replace lines?)\b/i.test(trimmed))
+  );
+}
+
+/** Detects "updated file" code dumps when no mutating file tool actually ran. */
+export function looksLikeUnappliedFileEditAnswer(content: string, toolCalls: ChatToolCall[] = []) {
+  const trimmed = content.trim();
+
+  if (!trimmed || trimmed.length > 30_000 || hasSuccessfulMutatingFileToolCall(toolCalls)) {
+    return false;
+  }
+
+  const hasWorkspaceToolEvidence = toolCalls.some((toolCall) => toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped");
+  if (!hasWorkspaceToolEvidence) {
+    return false;
+  }
+
+  const claimsFileChange =
+    /\b(?:updated|modified|changed|implemented|integrated|added|wired|created|replaced|refactored)\b[\s\S]{0,220}\b(?:file|app|component|page|css|jsx|tsx|js|ts|code)\b/i.test(trimmed) ||
+    /(?:\u66f4\u65b0\u540e\u7684|\u4fee\u6539\u540e\u7684|\u6539\u52a8\u8bf4\u660e|\u6211\u53ea\u4fee\u6539|\u5df2\u7ecf\u521b\u5efa|\u5df2\u7ecf\u5305\u542b|\u76f4\u63a5\u3001\u5b89\u5168\u5730.*\u6574\u5408|\u5df2.*(?:\u4fee\u6539|\u6574\u5408|\u66f4\u65b0|\u521b\u5efa))/iu.test(trimmed);
+  const namesEditableFile =
+    /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i.test(trimmed);
+  const hasUpdatedFileHeader =
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:updated|new|final|complete)\s+(?:version\s+of\s+)?`?[\w./\\ -]+\.(?:css|jsx?|tsx?|html|json|md)`?\b/i.test(trimmed) ||
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\u66f4\u65b0\u540e\u7684|\u4fee\u6539\u540e\u7684|\u65b0\u7684|\u6700\u7ec8\u7684)\s*`?[\w./\\ -]+\.(?:css|jsx?|tsx?|html|json|md)`?\b/iu.test(trimmed);
+  const hasCodeDump =
+    /```(?:[a-z0-9_-]+)?\s*[\s\S]{80,}?```/i.test(trimmed) ||
+    /\bimport\s+[\s\S]{0,800}\b(?:function|const)\s+[A-Z]\w*[\s\S]{0,2000}\bexport\s+default\b/.test(trimmed) ||
+    /(?:^|\n)\s*[.#][\w-]+\s*\{[\s\S]{80,}?\}/.test(trimmed);
+
+  return claimsFileChange && namesEditableFile && (hasUpdatedFileHeader || hasCodeDump);
+}
+
+/** Detects routine local execution requests that were turned into unnecessary confirmation questions. */
+export function looksLikeUnnecessaryLocalActionConfirmation(content: string, toolCalls: ChatToolCall[] = []) {
+  const trimmed = content.trim();
+
+  if (!trimmed || trimmed.length > 8_000 || hasSuccessfulMutatingFileToolCall(toolCalls)) {
+    return false;
+  }
+
+  const asksForPermission =
+    /\b(?:before\s+i\s+(?:apply|edit|install|run|make|change|update)|please\s+confirm|confirm\s+(?:first|before)|do\s+you\s+want\s+me\s+to|would\s+you\s+like\s+me\s+to|should\s+i|say\s+yes|with\s+your\s+confirmation)\b/i.test(trimmed);
+  const promisesLocalAction =
+    /\b(?:i(?:['\u2019]ll| will| can)|i(?:['\u2019]m| am)\s+going\s+to|let\s+me)\b[\s\S]{0,520}\b(?:add|apply|change|connect|create|edit|implement|install|modify|patch|replace|route|run|update|wire|write)\b/i.test(trimmed) ||
+    /\b(?:apply|install|edit|update|connect|wire|add|create)\s+(?:this|the)\s+(?:change|dependency|edit|file|route|router|ui|page|component)\b/i.test(trimmed);
+  const namesLocalTarget =
+    /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i.test(trimmed) ||
+    /\b(?:npm|pnpm|yarn|bun|react-router-dom|router|route|chatpage|localhost|src\/|src\\)\b/i.test(trimmed);
+
+  return asksForPermission && promisesLocalAction && namesLocalTarget;
+}
+
+const APP_TOOL_NAME_PATTERN =
+  /\b(?:files[._](?:append|apply_patch|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
+const FILE_LINE_EDIT_FRAME_PATTERN =
+  /\b(?:current\s+)?`?[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)`?\s+lines?\s+\d+(?:\s*-\s*\d+)?\b/i;
+const EDITABLE_FILE_MENTION_PATTERN =
+  /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i;
+const EDIT_INSTRUCTION_FRAME_PATTERN =
+  /(?:^|\n)\s*(?:one precise change|replace lines?\s+\d+(?:\s*-\s*\d+)?|old text|new text|with:|replace(?:\s+the)?\s+following)\b/i;
+const TOOL_ACTION_PROMISE_PATTERN =
+  /\b(?:let me|i(?:['\u2019]ll| will)|i am going to|i(?:['\u2019]m) going to|we(?:['\u2019]ll| will)|now\s+i(?:['\u2019]ll| will| need to)|next(?:,|:)?|wait\s*[-:])\b[\s\S]{0,320}\b(?:add|apply|change|check|compact|create|delete|do|edit|examine|execute|fix|implement|inspect|look|make|modify|patch|perform|reduce|refine|remove|replace|resize|retry|run|shrink|tighten|try|update|use|write)\b/i;
+const STANDALONE_CODING_ACTION_PROMISE_PATTERN =
+  /\b(?:now\s+)?i\s+need\s+to\s+(?:add|change|create|delete|edit|fix|implement|modify|patch|remove|replace|update|write)\b[\s\S]{0,360}\b(?:api|app|code|component|css|database|file|function|handler|hook|jsx|logic|module|route|screen|service|state|support|tsx|ui)\b[\s:;.,-]*$/i;
+const TOOL_INVENTORY_NARRATION_PATTERN =
+  /\b(?:available tools?|tools?\s+i\s+(?:do\s+)?have|tools?\s+available|what tools?\s+i\s+(?:do\s+)?have|i\s+(?:do\s+not|don't)\s+have\s+[\w.:-]+\s+available|tools?\s+attached|attached tools?)\b/i;
+const CONVERSATION_ONLY_PROMPT_PATTERN =
+  /^\s*(?:thanks?|thank you|ok(?:ay)?|cool|nice|got it|sounds good|perfect|great|continue|go on|tell me more|explain that|summarize(?: this)?(?: conversation| chat| thread)?)\s*[.!?]*\s*$/i;
+const LOCAL_FACT_QUESTION_PATTERN =
+  /\b(?:what|which|where|who|when|why|how|does|do|is|are|can|could|list|show|tell|explain|summari[sz]e|works?\s+with|supports?|available|configured|enabled)\b/i;
+const LOCAL_WORKSPACE_REFERENCE_PATTERN =
+  /\b(?:our|this|the)\s+(?:app|code|codebase|project|repo|repository|workspace)\b|\b(?:codebase|project|repo|repository|workspace|source\s+code)\b/i;
+const LOCAL_CODE_ENTITY_PATTERN =
+  /\b(?:adapter|api|backend|bridge|component|config(?:uration)?|database|frontend|integration|model|providers?|registry|route|runtime|service|settings?|tools?|tauri|vite|react|typescript|openrouter|anthropic|openai|gemini|ollama|mapbox|weather)\b/i;
+const LOCAL_EVIDENCE_VERIFICATION_PATTERN =
+  /\b(?:check|confirm|inspect|look(?:\s+at)?|read|search|verify)\b[\s\S]{0,180}\b(?:code|codebase|files?|project|repo|repository|source|workspace|config(?:uration)?|provider|settings?|tool|runtime)\b/i;
+const LOCAL_GIT_CHANGE_REVIEW_PATTERN =
+  /\b(?:what(?:'s| is| all)?|which|show|list|summari[sz]e|explain|review|audit|check|tell(?: me)?)\b[\s\S]{0,180}\b(?:changed|changes|modified|uncommitted|dirty\s+tree|working[-\s]?tree|worktree|diff|status|done\s+so\s+far|files?\s+changed)\b/i;
+
+function referencesAppToolName(content: string) {
+  return APP_TOOL_NAME_PATTERN.test(content);
+}
+
+function hasSuccessfulMutatingFileToolCall(toolCalls: ChatToolCall[]) {
+  return toolCalls.some((toolCall) => {
+    if (toolCall.status !== "complete") {
+      return false;
+    }
+
+    const toolId = toolCall.toolId ?? "";
+    return (
+      /^files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|write|write_many)\b/i.test(toolId) ||
+      (toolCall.fileChanges?.length ?? 0) > 0 ||
+      toolCall.batchSummary?.operation === "edit" ||
+      toolCall.batchSummary?.operation === "write"
+    );
+  });
 }
 
 /** Detects visible explanations of the hidden action protocol instead of real runtime evidence. */
@@ -93,7 +305,9 @@ export function looksLikeToolProtocolNarration(content: string) {
 
   return (
     /<<<\s*(?:END_)?TOOL_CALL\s*>>>/i.test(trimmed) ||
+    /<\s*\|\s*DSML\s*\|\s*(?:tool_calls|invoke|parameter)\b/i.test(trimmed) ||
     /<\s*\/?\s*tool_call\b/i.test(trimmed) ||
+    /<\s*\/?\s*(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+\b/i.test(trimmed) ||
     /<\s*\/?\s*arg_(?:key|value)\b/i.test(trimmed) ||
     /\barg_(?:key|value)\b[\s\S]{0,120}\b(?:path|command|cwd|old_text|new_text|files_read|edit_file|run_terminal)\b/i.test(trimmed) ||
     looksLikeProviderToolCallJson(trimmed) ||
@@ -129,11 +343,15 @@ export function isToolResultFallbackAnswer(content: string) {
   const looksLikeToolFailureFallback =
     /^read workspace file did not complete cleanly\b/i.test(trimmed) ||
     /^[\w\s]+did not complete cleanly\.\s*(?:status:\s*)?(?:error|skipped)?[\s\S]{0,500}\b(?:invalid argument shape|arguments\.[\w.]+\s+(?:must be|is not allowed|required|invalid)|tool call used an invalid)\b/i.test(trimmed);
+  const looksLikeReadSuccessFallback =
+    normalized.includes("the full file body was kept out of the visible chat") ||
+    /^i read\b[\s\S]{0,300}\bsuccessfully\.[\s\S]{0,160}\bit is [\d,]+ characters across [\d,]+ lines?\./i.test(trimmed);
 
   return (
     looksLikeRawBridgeError ||
     looksLikeRawReadFailure ||
     looksLikeToolFailureFallback ||
+    looksLikeReadSuccessFallback ||
     content.includes("## Answer From Completed Tool Results") ||
     content.includes("## Tool Run Needs Continuation") ||
     normalized.includes("final write-up did not come back cleanly") ||
@@ -251,8 +469,36 @@ export function createToolActionPromiseRecoveryInstruction(prompt: string, promi
     "LOCAL TOOL PROMISE REJECTED",
     `Original user request: ${prompt}`,
     "The previous visible answer promised a local tool action without a real app tool-call record.",
-    "Do not repeat the promise or emit text-only tool syntax. Answer normally from available evidence, or let the provider request an app-exposed tool call when one is attached to the request.",
+    "Do not repeat the promise or emit text-only tool syntax. If the same local action is still needed and an app tool is attached to the request, use the real provider tool-call channel now. If no tool is needed, answer normally in user-facing Markdown.",
     excerpt ? `Rejected promise excerpt: ${excerpt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+/** Creates a retry turn when the model pasted "updated" files instead of applying edits. */
+export function createUnappliedFileEditRecoveryInstruction(prompt: string, unappliedContent: string) {
+  const excerpt = unappliedContent.replace(/\s+/g, " ").trim().slice(0, 700);
+
+  return [
+    "UNAPPLIED FILE EDIT ANSWER REJECTED",
+    `Original user request: ${prompt}`,
+    "The previous visible answer described updated file contents or claimed code changes, but no successful mutating file/edit/write tool-call record exists for those changes.",
+    "Do not paste proposed replacement files as the final answer. Use the attached real edit/write tool now, preferably files_edit_many for precise same-pass edits or files_write_many for deliberate new/full-file writes.",
+    "After the real edit tool succeeds, summarize what changed in the same language as the user.",
+    excerpt ? `Rejected unapplied edit excerpt: ${excerpt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+/** Creates a retry turn when the model asks for confirmation instead of doing an ordinary attached-tool action. */
+export function createUnnecessaryLocalActionConfirmationRecoveryInstruction(prompt: string, confirmationContent: string) {
+  const excerpt = confirmationContent.replace(/\s+/g, " ").trim().slice(0, 700);
+
+  return [
+    "UNNECESSARY LOCAL ACTION CONFIRMATION REJECTED",
+    `Original user request: ${prompt}`,
+    "The previous visible answer asked for confirmation before doing an ordinary local edit/install/run action that the user had already requested.",
+    "Do not ask the user to confirm routine local workspace work. Use the attached real provider tool-call channel now. The app's approval UI will handle actions that need approval.",
+    "If the action is truly destructive, credential-sensitive, or impossible without user input, ask one concise blocker question; otherwise execute.",
+    excerpt ? `Rejected confirmation excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -279,6 +525,10 @@ export function createCompletedToolFallbackSummary(toolCall: ChatToolCall, outpu
     });
   }
 
+  if (isFileReadSynthesisToolCall(toolCall)) {
+    return null;
+  }
+
   const label = toolCall.label.toLowerCase();
 
   if (/list.*(?:directory|workspace)|(?:directory|workspace).*list/i.test(label)) {
@@ -290,6 +540,26 @@ export function createCompletedToolFallbackSummary(toolCall: ChatToolCall, outpu
   }
 
   return null;
+}
+
+export function isFileReadSynthesisToolCall(toolCall: Pick<ChatToolCall, "label" | "resultPolicy" | "toolId">) {
+  if (toolCall.resultPolicy?.synthesizeAfterwards !== true) {
+    return false;
+  }
+
+  const toolId = toolCall.toolId ?? "";
+  const label = toolCall.label.toLowerCase();
+
+  return (
+    toolId === "files_read" ||
+    toolId === "files_read_many" ||
+    toolId === "files_read_range" ||
+    (toolCall.resultPolicy.resultKind === "file_content" && /read.*(?:workspace\s+)?file|(?:workspace\s+)?file.*read/i.test(label))
+  );
+}
+
+export function createNeutralToolSynthesisFailureMessage() {
+  return "I couldn't finish a clean answer for that request. Please retry it.";
 }
 
 function createDirectoryListingFallbackSummary(output: string, input?: string) {
@@ -401,18 +671,62 @@ function formatFallbackNumber(value: number) {
 
 /** Detects local build/edit/project requests that should not be answered without fresh tools. */
 export function needsFreshLocalToolEvidence(prompt: string, hasWorkspaceRoots: boolean) {
-  return false;
+  if (!hasWorkspaceRoots) {
+    return false;
+  }
+
+  const trimmed = prompt.trim();
+
+  if (!trimmed || trimmed.length > 3_000 || CONVERSATION_ONLY_PROMPT_PATTERN.test(trimmed)) {
+    return false;
+  }
+
+  const asksForFacts = LOCAL_FACT_QUESTION_PATTERN.test(trimmed);
+  const referencesWorkspace = LOCAL_WORKSPACE_REFERENCE_PATTERN.test(trimmed);
+  const referencesCodeEntity = LOCAL_CODE_ENTITY_PATTERN.test(trimmed);
+  const requestsVerification = LOCAL_EVIDENCE_VERIFICATION_PATTERN.test(trimmed);
+  const requestsGitChangeReview = LOCAL_GIT_CHANGE_REVIEW_PATTERN.test(trimmed);
+
+  return requestsVerification || requestsGitChangeReview || (asksForFacts && (referencesWorkspace || referencesCodeEntity));
+}
+
+/** Detects prompts where answering without a real workspace tool call is worse than waiting. */
+export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceRoots: boolean) {
+  if (!hasWorkspaceRoots) {
+    return false;
+  }
+
+  const trimmed = prompt.trim();
+
+  if (!trimmed || trimmed.length > 4_000 || CONVERSATION_ONLY_PROMPT_PATTERN.test(trimmed)) {
+    return false;
+  }
+
+  const asksToContinueWork = /\b(?:do\s+(?:it|the\s+job)|continue|finish(?:\s+it)?|go\s+ahead|make\s+it\s+happen|apply\s+(?:it|that|the\s+change))\b/i.test(trimmed);
+  const asksForEdit =
+    /\b(?:add|append|change|create|delete|edit|fix|implement|improve|insert|make\s+(?:it|this|that)?\s*(?:look\s+|feel\s+|more\s+)?(?:better|cleaner|clearer|polished|readable)|patch|polish|refactor|remove|replace|restyle|revamp|style|update|upgrade|write)\b/i.test(trimmed);
+  const asksForInspection =
+    /\b(?:check|inspect|look(?:\s+at)?|read|review|search|verify)\b[\s\S]{0,180}\b(?:app|code|codebase|files?|project|repo|repository|source|workspace)\b/i.test(trimmed);
+  const asksForGitChangeReview = LOCAL_GIT_CHANGE_REVIEW_PATTERN.test(trimmed);
+  const referencesLocalTarget =
+    LOCAL_WORKSPACE_REFERENCE_PATTERN.test(trimmed) ||
+    LOCAL_CODE_ENTITY_PATTERN.test(trimmed) ||
+    /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i.test(trimmed) ||
+    /\b(?:component|css|design|layout|page|screen|theme|ui|visual|website|src[\\/]|hello\s*world|helloworld)\b/i.test(trimmed);
+
+  return asksForGitChangeReview || ((asksForEdit || asksForInspection || asksToContinueWork) && referencesLocalTarget);
 }
 
 export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string) {
   const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
 
   return [
-    "UNSUPPORTED TOOL CLAIM",
+    "FRESH LOCAL WORKSPACE EVIDENCE REQUIRED",
     `Original user request: ${prompt}`,
-    "No real app tool-call record supports the previous claim.",
-    "Do not claim filesystem changes, command output, or verification unless that evidence is already present in the conversation. Ask for the missing context or explain the limitation plainly.",
-    excerpt ? `Unsupported answer excerpt: ${excerpt}` : "",
+    "The previous visible response answered from chat context or promised inspection without a real current workspace tool-call record for this request.",
+    "Use the real provider tool-call channel now before writing the final answer. For Git/change-review requests, call git_status and git_diff when attached. Otherwise search and read the selected workspace with files_search, files_read_many, files_tree_summary, or files_read as appropriate.",
+    "Do not answer from memory, prior chat context, project summaries, or visible tool-call syntax alone. After at least one real current workspace tool succeeds, answer from that evidence.",
+    excerpt ? `Rejected unsupported answer excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -424,7 +738,7 @@ export interface SimpleLocalTaskCompletion {
   runCommand?: string;
 }
 
-export function isSimpleLocalScaffoldRequest(prompt: string) {
+export function isSimpleLocalScaffoldRequest(_prompt: string) {
   return false;
 }
 
@@ -539,7 +853,7 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "If more evidence is truly required, ask for it. Otherwise write the final answer now.",
     "Do not describe the tool loop, provider behavior, saved evidence, continuation state, recovery state, or why an answer was missing.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
-    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
+    "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Cite web sources with Markdown links when the tool results include URLs.",
     "Do not output hidden tool protocol text as prose.",
   ].join("\n\n");
@@ -554,7 +868,7 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     "Use the evidence already provided and write the best final answer now.",
     "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
-    "Format the visible answer as normal Markdown with headings, bullets, links, and fenced code blocks for code or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
+    "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
     "Do not emit hidden tool protocol text. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
 }
@@ -676,9 +990,10 @@ export function createActiveLocalToolCalls(content: string, passIndex: number, e
   ];
 }
 
-/** Uses hidden provider reasoning as tool-request input when thinking contains strict envelopes. */
+/** Tool requests must come from visible provider content, never hidden provider reasoning. */
 export function createAssistantToolRequestContent(content: string, reasoning?: string, executionPolicy?: LocalComputerToolExecutionPolicy) {
-  return createLocalComputerToolRequestContent(content, reasoning, executionPolicy);
+  void reasoning;
+  return createLocalComputerToolRequestContent(content, undefined, executionPolicy);
 }
 
 /** Merges source lists while preserving first-seen order and avoiding duplicate URLs. */
@@ -726,12 +1041,17 @@ export function createWebSearchProgress(webSearch: ChatWebSearch | undefined): C
   const isError = webSearch.status === "error";
   const isComplete = webSearch.status === "complete" || isError;
   const sourceLabel = webSearch.resultCount === 1 ? "1 source" : `${webSearch.resultCount ?? 0} sources`;
-  const detail = isError ? "Search failed; continuing with a note" : isComplete ? (webSearch.resultProvider ? `${sourceLabel} via ${resultProviderLabel} fallback` : sourceLabel) : "Searching the web";
+  const usedFallback = Boolean(webSearch.resultProvider);
+  const detail = isError
+    ? "Search failed; continuing with a note"
+    : isComplete
+      ? (usedFallback ? `${providerLabel} failed; ${sourceLabel} from ${resultProviderLabel}` : sourceLabel)
+      : "Searching the web";
 
   return {
     detail,
     id: "web-search",
-    label: `Search ${providerLabel}`,
+    label: usedFallback ? `Search ${resultProviderLabel} fallback` : `Search ${providerLabel}`,
     status: isComplete ? "complete" : "active",
   };
 }

@@ -21,7 +21,6 @@ import { useState } from "react";
 import { loadMapboxSettings, saveMapboxSettings } from "../../../services/mapboxSettings";
 import {
   DEFAULT_MAPBOX_SETTINGS,
-  MAPBOX_STYLE_PRESETS,
   normalizeMapboxSettings,
   resolveMapboxStyleUrl,
   type MapboxProjection,
@@ -78,7 +77,11 @@ const scaleOptions: Array<{ id: MapboxScaleUnit; label: string }> = [
   { id: "nautical", label: "Nautical" },
 ];
 
-export function MapboxSettingsPage() {
+interface MapboxSettingsPageProps {
+  showHeading?: boolean;
+}
+
+export function MapboxSettingsPage({ showHeading = true }: MapboxSettingsPageProps = {}) {
   const [settings, setSettings] = useState<MapboxSettings>(() => loadMapboxSettings());
   const [showToken, setShowToken] = useState(false);
   const [status, setStatus] = useState<SettingsStatusMessage | null>(null);
@@ -127,7 +130,7 @@ export function MapboxSettingsPage() {
 
   return (
     <>
-      <SettingsSectionHeading detail="Configure the Mapbox GL JS map used by weather, radar, and future geospatial views." icon={MapIcon} title="Mapbox" />
+      {showHeading ? <SettingsSectionHeading detail="Configure the Mapbox GL JS map used by weather, radar, and future geospatial views." icon={MapIcon} title="Mapbox" /> : null}
 
       <div className="mapbox-settings-layout">
         <article className="settings-card settings-card-wide mapbox-token-card">
@@ -381,7 +384,7 @@ export function MapboxSettingsPage() {
             <Radar size={19} aria-hidden="true" />
             <div>
               <h2>Weather layers</h2>
-              <p>Reserved controls for the full radar workspace coming next.</p>
+              <p>Reserved controls for the provider-routed weather workspace.</p>
             </div>
           </div>
           <div className="settings-row-list">
@@ -410,7 +413,7 @@ export function MapboxSettingsPage() {
                 <li>Map constructor options: token, style, camera, projection, interaction handlers, terrain performance, and attribution.</li>
                 <li>Standard style configuration: light preset, theme, label visibility, pedestrian roads, and 3D objects.</li>
                 <li>Controls: attribution, navigation, fullscreen, scale, and geolocation controls.</li>
-                <li>Weather layer slots: preserved now so NOAA radar and alert overlays can drop into the same Mapbox surface later.</li>
+                <li>Weather layer slots: provider-routed so NOAA/NWS, national services, and fallback forecast overlays can share the same Mapbox surface.</li>
               </ol>
             </section>
             <section className="integration-doc-section">

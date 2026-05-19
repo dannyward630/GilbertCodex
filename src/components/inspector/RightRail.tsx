@@ -10,6 +10,7 @@ import type {
   ChatPlanningQuestion,
   ChatSummary,
 } from "../../types/chat";
+import { PlanReviewPanel } from "./PlanReviewPanel";
 
 const MAX_RAIL_ITEMS = Number.POSITIVE_INFINITY;
 
@@ -22,18 +23,53 @@ interface RailItem {
 }
 
 interface RightRailProps {
+  /** When set, the rail renders the plan-review panel for this message. */
+  activePlanReviewMessageId?: string | null;
   chat: ChatSummary;
+  planReviewExpanded?: boolean;
   onClose?: () => void;
+  onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onSubmitPlanningInput?: (messageId: string, answers: ChatPlanningInputAnswer[]) => void | Promise<void>;
+  onTogglePlanReviewExpanded?: () => void;
 }
 
-export function RightRail({ chat, onClose, onResolveToolApproval, onSubmitPlanningInput }: RightRailProps) {
+export function RightRail({
+  activePlanReviewMessageId,
+  chat,
+  planReviewExpanded = false,
+  onClose,
+  onRequestPlanRevision,
+  onResolveToolApproval,
+  onSubmitPlanningInput,
+  onTogglePlanReviewExpanded,
+}: RightRailProps) {
   const { artifactItems, reviewMessage } = useMemo(() => getRightRailContent(chat), [chat]);
+  const planReviewMessage = useMemo(() => {
+    if (!activePlanReviewMessageId) return undefined;
+    return chat.messages.find((message) => message.id === activePlanReviewMessageId && message.role === "assistant");
+  }, [activePlanReviewMessageId, chat.messages]);
+
+  // Plan-review mode wins over review/inspector when an explicit message is
+  // selected. This preserves the inline "Open full plan" → side-panel flow.
+  const railMode: "plan-review" | "review" | "inspector" = planReviewMessage
+    ? "plan-review"
+    : reviewMessage
+      ? "review"
+      : "inspector";
 
   return (
-    <aside className="right-rail" data-mode={reviewMessage ? "review" : "inspector"} aria-label="Conversation details">
-      {reviewMessage ? (
+    <aside className="right-rail" data-mode={railMode} aria-label="Conversation details">
+      {planReviewMessage ? (
+        <PlanReviewPanel
+          expanded={planReviewExpanded}
+          message={planReviewMessage}
+          onClose={onClose}
+          onRequestRevision={onRequestPlanRevision}
+          onResolvePlanApproval={onResolveToolApproval}
+          onToggleExpanded={onTogglePlanReviewExpanded}
+        />
+      ) : reviewMessage ? (
         <ReviewRailCard
           message={reviewMessage}
           onClose={onClose}
@@ -41,7 +77,7 @@ export function RightRail({ chat, onClose, onResolveToolApproval, onSubmitPlanni
           onSubmitPlanningInput={onSubmitPlanningInput}
         />
       ) : null}
-      <RailSection items={artifactItems} title="Artifacts" />
+      {!planReviewMessage ? <RailSection items={artifactItems} title="Artifacts" /> : null}
     </aside>
   );
 }
@@ -50,6 +86,15 @@ export function chatHasRightRailContent(chat: ChatSummary) {
   const { artifactItems, reviewMessage } = getRightRailContent(chat);
 
   return Boolean(reviewMessage || artifactItems.length > 0);
+}
+
+export function chatHasPlanReviewContent(chat: ChatSummary, messageId?: string | null) {
+  if (messageId) {
+    const message = chat.messages.find((candidate) => candidate.id === messageId);
+    return Boolean(message && isPlanReviewMessage(message));
+  }
+
+  return chat.messages.some(isPlanReviewMessage);
 }
 
 export function chatHasPendingRightRailAction(chat: ChatSummary) {
@@ -380,6 +425,15 @@ function hasPendingReviewAction(message: ChatMessage) {
   return Boolean(
     message.approvals?.some((approval) => approval.status === "pending") ||
       getPlanningInputRequests(message).some((request) => !request.answeredAt),
+  );
+}
+
+function isPlanReviewMessage(message: ChatMessage) {
+  return Boolean(
+    message.role === "assistant" &&
+      (message.mode === "plan" ||
+        message.planning ||
+        message.approvals?.some((approval) => approval.tool === "planning_handoff")),
   );
 }
 

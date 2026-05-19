@@ -3,6 +3,7 @@ import type { ChatArtifact, ChatProgressItem, ChatSource, ChatToolCall } from ".
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { WebSearchSettings } from "../types/settings";
 import type { ToolRegistrySettings } from "../types/tools";
+import { stripVisibleToolProtocol } from "../lib/visibleToolProtocol";
 
 export interface LocalComputerToolExecutionPolicy {
   allowedTools?: string[];
@@ -39,7 +40,6 @@ export interface LocalComputerToolRunResult {
 }
 
 export const STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY: LocalComputerToolExecutionPolicy = {};
-export const DEEP_RESEARCH_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY: LocalComputerToolExecutionPolicy = {};
 
 export function createApprovalSessionDecisionKey(approval: AgentApproval) {
   return `${approval.tool}:${approval.risk}:${approval.title}`;
@@ -106,12 +106,5 @@ export async function runLocalComputerToolCalls(_options: {
 }
 
 function stripToolProtocol(content: string) {
-  if (!content) {
-    return "";
-  }
-
-  return content
-    .replace(/<<<TOOL_CALL>>>[\s\S]*?(?:<<<END_TOOL_CALL>>>|$)/g, "")
-    .replace(/<tool_call\b[\s\S]*?(?:<\/tool_call>|$)/gi, "")
-    .trim();
+  return stripVisibleToolProtocol(content);
 }

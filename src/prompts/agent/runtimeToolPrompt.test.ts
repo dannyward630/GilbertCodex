@@ -1,54 +1,247 @@
 import { describe, expect, it } from "vitest";
 
 import { defaultProviderSettings } from "../../lib/appStorage";
-import { DEEP_RESEARCH_REASONING_EFFORT } from "../../types/settings";
 import { createRuntimeToolPrompt } from "./runtimeToolPrompt";
+import type { ToolDefinition } from "../../toolBridge/types";
+
+function attachedTool(id: string, family: NonNullable<ToolDefinition["executorMetadata"]>["family"]): ToolDefinition {
+  return {
+    description: `${id} test tool`,
+    execute: () => ({ content: "ok", ok: true }),
+    executorMetadata: { family, version: 1 },
+    id,
+    inputSchema: { type: "object" },
+    permission: family === "terminal" ? "terminal" : "read-only",
+    risk: family === "terminal" ? "terminal" : family === "web" ? "network" : "read",
+    title: id,
+  };
+}
 
 describe("createRuntimeToolPrompt", () => {
-  it("lets Deep Research use focused web_search calls when web search is enabled", () => {
+  it("keeps research guidance focused when web search is enabled", () => {
     const prompt = createRuntimeToolPrompt({
       hasLocalComputerContext: true,
       hasWebContext: false,
-      latestUserPrompt: "deep research the latest Brave Search API docs",
+      latestUserPrompt: "research the latest Brave Search API docs",
       selectedChunkIds: new Set(),
       settings: {
         ...defaultProviderSettings,
         thinking: {
           enabled: true,
-          effort: DEEP_RESEARCH_REASONING_EFFORT,
+          effort: "high",
         },
         tools: {
           ...defaultProviderSettings.tools,
           webSearch: true,
         },
       },
+      toolBridge: {
+        tools: [attachedTool("web_search", "web")],
+      },
     });
 
-    expect(prompt).toContain("Deep Research may run multiple focused web_search calls");
-    expect(prompt).toContain("Use separate searches for distinct subquestions");
+    expect(prompt).toContain("For research requests, use focused web_search calls");
+    expect(prompt).toContain("callable live-web tool");
+    expect(prompt).toContain("call web_search before making those claims");
+    expect(prompt).toContain("use workspace tools for local evidence and web_search for outside evidence");
+    expect(prompt).toContain("Prefer primary sources");
+    expect(prompt).not.toContain(["Deep", "Research"].join(" "));
     expect(prompt).not.toContain("do not attempt iterative tool loops");
   });
 
-  it("keeps Deep Research honest when web_search is disabled", () => {
+  it("keeps research honest when web_search is disabled", () => {
     const prompt = createRuntimeToolPrompt({
       hasLocalComputerContext: true,
       hasWebContext: false,
-      latestUserPrompt: "deep research the latest Brave Search API docs",
+      latestUserPrompt: "research the latest Brave Search API docs",
       selectedChunkIds: new Set(),
       settings: {
         ...defaultProviderSettings,
         thinking: {
           enabled: true,
-          effort: DEEP_RESEARCH_REASONING_EFFORT,
+          effort: "high",
         },
         tools: {
           ...defaultProviderSettings.tools,
           webSearch: false,
         },
       },
+      toolBridge: {
+        tools: [],
+      },
     });
 
-    expect(prompt).toContain("If web_search is disabled and attached web context is insufficient");
+    expect(prompt).not.toContain(["Deep", "Research"].join(" "));
     expect(prompt).toContain("say what could not be verified");
+    expect(prompt).not.toContain("web_search tool only");
+  });
+
+  it("nudges attached web_search for release-date questions even without explicit search wording", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: false,
+      hasWebContext: false,
+      latestUserPrompt: "GTA 6 release daye",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [attachedTool("web_search", "web")],
+      },
+    });
+
+    expect(prompt).toContain("web_search");
+    expect(prompt).toContain("call web_search before making those claims");
+  });
+
+  it("tells the model to prefer batch file tools for multi-file workspace work", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "update these related files",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("memory_search", "memory"),
+          attachedTool("files_read_many", "files"),
+          attachedTool("files_write_many", "editing"),
+          attachedTool("files_edit_many", "editing"),
+          attachedTool("files_apply_patch", "editing"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("prefer batch tools by default");
+    expect(prompt).toContain("memory_search");
+    expect(prompt).toContain("Do not assume memory was preloaded");
+    expect(prompt).toContain("files_read_many");
+    expect(prompt).toContain("files_write_many");
+    expect(prompt).toContain("files_edit_many");
+    expect(prompt).toContain("files_apply_patch");
+    expect(prompt).toContain("including several changes in a single file");
+    expect(prompt).toContain("Use files_edit_many as the default");
+    expect(prompt).toContain("Use replace_range only with line numbers from a fresh read");
+    expect(prompt).toContain("deliberate full-file rewrites");
+    expect(prompt).not.toContain("files_exact_replace");
+    expect(prompt).not.toContain("files_replace_range");
+    expect(prompt).not.toContain("create_files");
+    expect(prompt).not.toContain("edit_files");
+  });
+
+  it("tells the model to actually open browser previews for UI verification", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "preview the localhost app and verify the browser UI",
+      selectedChunkIds: new Set(),
+      settings: {
+        ...defaultProviderSettings,
+        tools: {
+          ...defaultProviderSettings.tools,
+          browserPreview: true,
+        },
+      },
+      toolBridge: {
+        runtimeBudget: {
+          maxExecutions: 48,
+          maxPasses: 12,
+          maxToolResultContentChars: 24000,
+          remainingExecutions: 47,
+          remainingPasses: 11,
+        },
+        tools: [
+          attachedTool("browser_preview_open", "browser"),
+          attachedTool("browser_console_read", "browser"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("browser_preview_open");
+    expect(prompt).toContain("browser_console_read");
+    expect(prompt).toContain("open the preview with the tool");
+    expect(prompt).toContain("read the browser console");
+    expect(prompt).toContain("instead of merely saying it could be opened");
+    expect(prompt).toContain("budget: passes 11/12; executions 47/48");
+  });
+
+  it("tells the model to use attached local Git tools for change reviews", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "explain what changed in the current status",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("git_status", "git"),
+          attachedTool("git_diff", "git"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("git_status");
+    expect(prompt).toContain("git_diff");
+    expect(prompt).toContain("call git_status before git_diff");
+    expect(prompt).toContain("instead of asking the user to attach a diff");
+  });
+
+  it("does not name unavailable tool ids when the exact bridge has no tools", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: false,
+      hasWebContext: false,
+      latestUserPrompt: "answer normally",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [],
+      },
+    });
+
+    expect(prompt).toContain("- none");
+    expect(prompt).not.toContain("terminal_run");
+    expect(prompt).not.toContain("browser_preview_open");
+    expect(prompt).not.toContain("web_search tool only");
+    expect(prompt).not.toContain("memory_search");
+  });
+
+  it("does not advertise globally enabled tools when no provider tools are attached", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "make it better",
+      selectedChunkIds: new Set(),
+      settings: {
+        ...defaultProviderSettings,
+        tools: {
+          ...defaultProviderSettings.tools,
+          codeEdit: true,
+          fileCreation: true,
+          terminal: true,
+          webSearch: true,
+        },
+      },
+    });
+
+    expect(prompt).toContain("- none");
+    expect(prompt).not.toContain("files_edit_many");
+    expect(prompt).not.toContain("files_apply_patch");
+    expect(prompt).not.toContain("terminal_run");
+    expect(prompt).not.toContain("web_search tool only");
+  });
+
+  it("tells the model not to wrap ordinary answers in code fences", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: false,
+      hasWebContext: false,
+      latestUserPrompt: "answer normally",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [],
+      },
+    });
+
+    expect(prompt).toContain("Do not wrap the whole answer in a fenced code block");
+    expect(prompt).toContain("Use fenced code blocks only for actual code snippets");
+    expect(prompt).toContain("ordinary summaries, plans, bullets, tables, or explanations");
   });
 });

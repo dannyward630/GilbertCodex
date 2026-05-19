@@ -1,25 +1,40 @@
-import { attachmentSummary, isImageAttachment } from "../lib/chatAttachments";
-import { createMessageContextSurface } from "../lib/contextWindow";
+import { attachmentSummary, isImageAttachment, isMediaAttachment, isVideoAttachment } from "../lib/chatAttachments";
+import {
+  createMessageContextSurface,
+  estimateTextTokens,
+  getContextWindowSafetyMarginTokens,
+  getFallbackMaxOutputTokens,
+  type ContextSurfaceOptions,
+} from "../lib/contextWindow";
 import { applyLocalSamplingParameters } from "../lib/generationSettings";
-import { createActivityReasoningSnapshot } from "../lib/thinkingActivity";
+import { extractInlineThinking } from "../lib/inlineThinkingExtractor";
 import {
   getDefaultModelForProvider,
   getModelProvider,
   getProviderApiKey,
   getProviderBaseUrl,
+  IMAGE_REASONING_MODEL,
   isOpenRouterRouterModel,
+  NINE_ROUTER_GITHUB_COPILOT_FALLBACK_MODEL,
+  normalizeNineRouterDiscoveredModelId,
   normalizeProviderModelId,
+  supportsModelInputModality,
   supportsProviderThinking,
 } from "../lib/models";
 import type { ModelPricing, ProviderModelMetadata } from "../lib/models";
 import { buildAgentSystemPrompt } from "../prompts/agent";
-import type { ChatMessage } from "../types/chat";
+import { ensureNineRouterLocal, isTauriDesktopRuntime, nineRouterLocalHttp, nineRouterLocalStream } from "../app/tauriClient";
+import type { NineRouterHttpStreamEvent } from "../app/tauriClient";
+import type { ChatAttachment, ChatMessage } from "../types/chat";
+import { createProviderReasoningState, type ProviderReasoningEntry, type ProviderReasoningState } from "../types/reasoning";
 import type { ModelProviderId, ProviderSettings, ReasoningEffort } from "../types/settings";
+import { DEFAULT_TOOL_REGISTRY_SETTINGS, type ToolRegistryId, type ToolRegistrySettings } from "../types/tools";
 import { applyToolBridgeToProviderRequest } from "../toolBridge/adapters";
 import {
   parseAnthropicStreamToolCallDelta,
   parseAnthropicToolCalls,
   parseOpenAiCompatibleStreamToolCallDeltas,
+  parseResponsesStreamToolCallDeltas,
   parseOpenAiCompatibleToolCalls,
   parseResponsesStreamToolCalls,
   parseResponsesToolCalls,
@@ -27,17 +42,26 @@ import {
 } from "../toolBridge/parsers";
 import type { ProviderToolBridgeOptions, ToolCallRequest } from "../toolBridge/types";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
+import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "./nativeHttp";
 
 const STREAM_FLUSH_MS = 80;
-const MAX_STREAM_REASONING_CHARS = Number.POSITIVE_INFINITY;
+const MAX_STREAM_REASONING_CHARS = 500_000;
 const PROVIDER_RESPONSE_START_TIMEOUT_MS = 120_000;
 const PROVIDER_STREAM_READ_TIMEOUT_MS = 90_000;
 const PROVIDER_STREAM_PROGRESS_TIMEOUT_MS = 120_000;
+const OPENROUTER_APP_REFERER = "https://github.com/UrbanWafflezz/GilbertCodex";
+const OPENROUTER_APP_TITLE = "Gilbert Codex";
+const OPENROUTER_APP_CATEGORIES = "programming-app,personal-agent";
 const STREAM_OPTIONS_PROVIDER_IDS = new Set<ModelProviderId>(["deepseek", "groq", "openai", "openrouter", "xai"]);
-const INLINE_THINKING_TAGS = "think|thinking|thought|reasoning";
-const INLINE_THINKING_BLOCK_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
-const INLINE_THINKING_OPEN_PATTERN = new RegExp(`<(${INLINE_THINKING_TAGS})\\b[^>]*>`, "i");
-const INLINE_THINKING_CLOSE_PATTERN = new RegExp(`<\\/(${INLINE_THINKING_TAGS})>`, "gi");
+const MEDIA_FALLBACK_CONTEXT_LABEL = "Media analysis";
+const mediaFallbackCache = new Map<string, string>();
+const DISABLED_MEDIA_FALLBACK_TOOLS = Object.fromEntries(
+  (Object.keys(DEFAULT_TOOL_REGISTRY_SETTINGS) as ToolRegistryId[]).map((toolId) => [toolId, false]),
+) as ToolRegistrySettings;
+// Inline <think>-style tag extraction lives in src/lib/inlineThinkingExtractor.ts
+// (shared with src/components/chat/ChatThread.tsx). See `extractInlineThinking`
+// for the tail-prefix guard that prevents partial tags from leaking into the
+// visible response area while streaming.
 
 interface ProviderChatResponse {
   choices?: Array<{
@@ -93,6 +117,7 @@ interface AnthropicMessageResponse {
     id?: string;
     input?: unknown;
     name?: string;
+    signature?: string;
     text?: string;
     thinking?: string;
     type?: string;
@@ -122,6 +147,7 @@ interface ResponsesApiResponse {
   output?: Array<{
     arguments?: string;
     call_id?: string;
+    encrypted_content?: string;
     id?: string;
     name?: string;
     content?: Array<{
@@ -181,6 +207,7 @@ interface AnthropicStreamChunk {
   };
   delta?: {
     partial_json?: string;
+    signature?: string;
     text?: string;
     thinking?: string;
     type?: string;
@@ -237,13 +264,23 @@ interface ProviderModelsResponse {
     };
   }>;
   error?: {
+    code?: string;
     message?: string;
+    type?: string;
+  };
+}
+
+interface ProviderErrorPayload {
+  error?: {
+    code?: string;
+    message?: string;
+    type?: string;
   };
 }
 
 interface StreamSnapshot {
   content: string;
-  reasoning?: string;
+  reasoningState?: ProviderReasoningState;
   toolCalls?: ToolCallRequest[];
   usage?: ProviderUsage;
 }
@@ -253,6 +290,8 @@ interface ProviderStreamDelta {
   contentSnapshot?: string;
   reasoningDelta: string;
   reasoningSnapshot?: string;
+  reasoningState?: ProviderReasoningState;
+  reasoningStateEntries?: ProviderReasoningEntry[];
   toolCallDeltas?: ProviderToolCallStreamDelta[];
   toolCallsSnapshot?: ToolCallRequest[];
   usage?: ProviderUsage;
@@ -265,9 +304,27 @@ export interface ProviderUsage {
   total_tokens?: number;
 }
 
+export interface ProviderStructuredOutputOptions {
+  description?: string;
+  name: string;
+  schema: Record<string, unknown>;
+  strict?: boolean;
+}
+
 interface ProviderRequestOptions {
+  allowMediaFallback?: boolean;
+  contextWindowTokens?: number;
+  retriedNineRouterGithubFallback?: boolean;
   signal?: AbortSignal;
+  structuredOutput?: ProviderStructuredOutputOptions;
   toolBridge?: ProviderToolBridgeOptions;
+}
+
+interface ProviderMessageResult {
+  content: string;
+  reasoningState?: ProviderReasoningState;
+  toolCalls?: ToolCallRequest[];
+  usage?: ProviderUsage;
 }
 
 interface ProviderToolCallStreamDelta {
@@ -302,6 +359,12 @@ type ProviderMessageContent =
           };
           type: "image_url";
         }
+      | {
+          type: "video_url";
+          videoUrl: {
+            url: string;
+          };
+        }
     >;
 
 export class ProviderEmptyResponseError extends Error {
@@ -326,7 +389,7 @@ function createProviderTimeout(parentSignal: AbortSignal | undefined, timeoutMs:
   const controller = new AbortController();
   let timedOut = false;
   const abortFromParent = () => controller.abort(parentSignal?.reason);
-  const timeoutId = window.setTimeout(() => {
+  const timeoutId = globalThis.setTimeout(() => {
     timedOut = true;
     controller.abort(new ProviderTimeoutError(message));
   }, timeoutMs);
@@ -339,7 +402,7 @@ function createProviderTimeout(parentSignal: AbortSignal | undefined, timeoutMs:
 
   return {
     clear: () => {
-      window.clearTimeout(timeoutId);
+      globalThis.clearTimeout(timeoutId);
       parentSignal?.removeEventListener("abort", abortFromParent);
     },
     signal: controller.signal,
@@ -362,7 +425,7 @@ function readProviderStreamChunk(
     let timeoutId: number | null = null;
     const cleanup = () => {
       if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
+        globalThis.clearTimeout(timeoutId);
         timeoutId = null;
       }
       signal?.removeEventListener("abort", abortFromSignal);
@@ -390,7 +453,7 @@ function readProviderStreamChunk(
       return;
     }
 
-    timeoutId = window.setTimeout(() => {
+    timeoutId = globalThis.setTimeout(() => {
       const timeoutError = new ProviderTimeoutError(message);
       cancelReader(timeoutError);
       settle(() => reject(timeoutError));
@@ -404,24 +467,452 @@ function readProviderStreamChunk(
   });
 }
 
-export async function sendProviderMessage(settings: ProviderSettings, messages: ChatMessage[], options: ProviderRequestOptions = {}) {
+async function fetchProviderJson<T>(
+  providerLabel: string,
+  url: string,
+  init: RequestInit,
+  parentSignal: AbortSignal | undefined,
+): Promise<{ payload: T; response: Response }> {
+  const requestTimeout = createProviderTimeout(
+    parentSignal,
+    PROVIDER_RESPONSE_START_TIMEOUT_MS,
+    `${providerLabel} timed out before returning a response within ${formatTimeoutSeconds(PROVIDER_RESPONSE_START_TIMEOUT_MS)} seconds.`,
+  );
+
+  try {
+    const response = await fetchProviderResponse(providerLabel, url, init, requestTimeout.signal, PROVIDER_RESPONSE_START_TIMEOUT_MS);
+    const payload = (await readJson(response)) as T;
+    requestTimeout.throwIfTimedOut();
+    return { payload, response };
+  } catch (error) {
+    requestTimeout.throwIfTimedOut();
+    throw createProviderFetchError(providerLabel, url, error);
+  } finally {
+    requestTimeout.clear();
+  }
+}
+
+async function fetchProviderResponse(
+  providerLabel: string,
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  options: { stream?: boolean } = {},
+) {
+  if (providerLabel === "9Router Local" && isTauriDesktopRuntime()) {
+    if (options.stream) {
+      return fetchNineRouterNativeStreamResponse(url, init, signal, timeoutMs);
+    }
+
+    return fetchNineRouterNativeResponse(url, init, signal, timeoutMs);
+  }
+
+  return fetch(url, {
+    ...init,
+    signal,
+  });
+}
+
+async function fetchNineRouterNativeResponse(url: string, init: RequestInit, signal: AbortSignal | undefined, timeoutMs: number) {
+  throwIfSignalAborted(signal);
+
+  const nativeResponse = await nineRouterLocalHttp({
+    body: normalizeNativeRequestBody(init.body, "9Router Local native bridge"),
+    headers: headersToRecord(init.headers),
+    method: normalizeNativeRequestMethod(init.method, "9Router Local native bridge"),
+    timeoutMs,
+    url,
+  });
+
+  throwIfSignalAborted(signal);
+
+  return new Response(nativeResponse.body, {
+    headers: nativeResponse.headers,
+    status: nativeResponse.status,
+  });
+}
+
+async function fetchNineRouterNativeStreamResponse(url: string, init: RequestInit, signal: AbortSignal | undefined, timeoutMs: number) {
+  throwIfSignalAborted(signal);
+
+  let responseStarted = false;
+  let streamClosed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let resolveResponse: ((response: Response) => void) | null = null;
+  let rejectResponse: ((error: unknown) => void) | null = null;
+  const responseReady = new Promise<Response>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+    },
+    cancel() {
+      streamClosed = true;
+      streamController = null;
+    },
+  });
+
+  const fail = (error: unknown) => {
+    if (!responseStarted) {
+      rejectResponse?.(error);
+      return;
+    }
+
+    if (!streamClosed) {
+      streamClosed = true;
+      streamController?.error(error);
+    }
+  };
+
+  const handleEvent = (event: NineRouterHttpStreamEvent) => {
+    if (signal?.aborted) {
+      fail(signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+
+    if (event.event === "started") {
+      responseStarted = true;
+      resolveResponse?.(new Response(stream, {
+        headers: event.data.headers,
+        status: event.data.status,
+      }));
+      return;
+    }
+
+    if (event.event === "chunk") {
+      if (!streamController || streamClosed) {
+        return;
+      }
+
+      try {
+        streamController.enqueue(base64ToBytes(event.data.bytesBase64));
+      } catch (error) {
+        fail(error);
+      }
+      return;
+    }
+
+    if (!streamClosed) {
+      streamClosed = true;
+      streamController?.close();
+    }
+  };
+
+  const abortFromSignal = () => {
+    fail(signal?.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError"));
+  };
+  signal?.addEventListener("abort", abortFromSignal, { once: true });
+
+  void nineRouterLocalStream({
+    body: normalizeNativeRequestBody(init.body, "9Router Local native bridge"),
+    headers: headersToRecord(init.headers),
+    method: normalizeNativeRequestMethod(init.method, "9Router Local native bridge"),
+    timeoutMs,
+    url,
+  }, handleEvent).then(
+    () => {
+      signal?.removeEventListener("abort", abortFromSignal);
+      if (!responseStarted) {
+        rejectResponse?.(new Error("9Router Local stream ended before returning headers."));
+        return;
+      }
+
+      if (!streamClosed) {
+        streamClosed = true;
+        streamController?.close();
+      }
+    },
+    (error) => {
+      signal?.removeEventListener("abort", abortFromSignal);
+      fail(error);
+    },
+  );
+
+  return responseReady;
+}
+
+function base64ToBytes(value: string) {
+  const binary = globalThis.atob(value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined) {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
+}
+
+function createProviderFetchError(providerLabel: string, url: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (providerLabel === "9Router Local" && /failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
+    return new Error(`Could not reach 9Router Local at ${url}. Start 9Router in Settings, then retry.`);
+  }
+
+  return error;
+}
+
+async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: AbortSignal | undefined) {
+  if (settings.provider !== "9router" || !isTauriDesktopRuntime()) {
+    return;
+  }
+
+  throwIfSignalAborted(signal);
+  const status = await ensureNineRouterLocal();
+  throwIfSignalAborted(signal);
+
+  if (!status.running) {
+    throw new Error(status.message || "9Router Local is not running. Open Subscriptions and start it, then retry.");
+  }
+}
+
+function createProviderHttpError(settings: ProviderSettings, providerLabel: string, model: string, payload: ProviderErrorPayload, response: Response) {
+  const providerMessage = payload.error?.message?.trim();
+  const nineRouterMessage = settings.provider === "9router" ? formatNineRouterRequestError(model, providerMessage, response.status) : "";
+
+  return new Error(nineRouterMessage || providerMessage || `${providerLabel} request failed with HTTP ${response.status}.`);
+}
+
+function shouldRetryNineRouterGithubFallback(settings: ProviderSettings, model: string, payload: ProviderErrorPayload, response: Response, options: ProviderRequestOptions) {
+  if (options.retriedNineRouterGithubFallback || settings.provider !== "9router" || model === NINE_ROUTER_GITHUB_COPILOT_FALLBACK_MODEL || !model.trim().toLowerCase().startsWith("gh/")) {
+    return false;
+  }
+
+  const errorMessage = [payload.error?.code, payload.error?.type, payload.error?.message].filter(Boolean).join(" ").toLowerCase();
+
+  return response.status === 400 && /model_not_supported|not available for integrator|requested model is not (?:available|supported)|integrator\s+"vscode-chat"/i.test(errorMessage);
+}
+
+function createNineRouterGithubFallbackSettings(settings: ProviderSettings): ProviderSettings {
+  return {
+    ...settings,
+    model: NINE_ROUTER_GITHUB_COPILOT_FALLBACK_MODEL,
+    providerModels: {
+      ...settings.providerModels,
+      "9router": NINE_ROUTER_GITHUB_COPILOT_FALLBACK_MODEL,
+    },
+  };
+}
+
+function createNineRouterGithubFallbackOptions(options: ProviderRequestOptions): ProviderRequestOptions {
+  return {
+    ...options,
+    retriedNineRouterGithubFallback: true,
+  };
+}
+
+function formatNineRouterRequestError(model: string, providerMessage: string | undefined, status: number) {
+  const credentialMatch = providerMessage?.match(/No active credentials for provider:\s*([a-z0-9_-]+)/i);
+
+  if (credentialMatch) {
+    const providerId = credentialMatch[1];
+    const providerName = formatNineRouterProviderName(providerId);
+
+    if (model === "free-combo") {
+      return `9Router is running, but the selected free-combo route is not ready. It fell through to ${providerName} with no active credentials. Open the 9Router dashboard, connect a provider or create the free-combo, then choose a live 9Router model.`;
+    }
+
+    return `9Router is running, but ${providerName} is not connected for ${model}. Open the 9Router dashboard, connect ${providerName}, then retry or choose a connected model from the 9Router model list.`;
+  }
+
+  if (status === 404 && model === "free-combo") {
+    return "9Router is running, but free-combo is not available in the local model catalog. Create that combo in 9Router or switch Gilbert to a live 9Router model.";
+  }
+
+  return "";
+}
+
+function formatNineRouterProviderName(providerId: string) {
+  const labels: Record<string, string> = {
+    bazaarlink: "BazaarLink",
+    claude: "Claude Code",
+    codex: "Codex",
+    freetheai: "FreeTheAI",
+    github: "GitHub Copilot",
+    kiro: "Kiro",
+    openai: "OpenAI",
+    opencode: "OpenCode Free",
+    vertex: "Vertex AI",
+  };
+
+  return labels[providerId.toLowerCase()] ?? providerId;
+}
+
+async function prepareMessagesForMediaFallback(settings: ProviderSettings, messages: ChatMessage[], options: ProviderRequestOptions): Promise<ChatMessage[]> {
+  if (options.allowMediaFallback === false) {
+    return messages;
+  }
+
+  const model = modelForMessages(settings, messages);
+  const fallbackEntries = messages
+    .map((message) => ({
+      attachments: (message.attachments ?? []).filter((attachment) => shouldUseMediaFallback(settings, model, attachment)),
+      message,
+    }))
+    .filter((entry) => entry.attachments.length > 0);
+
+  if (fallbackEntries.length === 0) {
+    return messages;
+  }
+
+  const fallbackSettings = createMediaFallbackProviderSettings(settings);
+  assertUsableSettings("openrouter", getProviderApiKey(fallbackSettings), IMAGE_REASONING_MODEL);
+
+  const contexts: Array<{ attachmentIds: Set<string>; content: string; messageId: string }> = await Promise.all(
+    fallbackEntries.map(async (entry) => ({
+      attachmentIds: new Set(entry.attachments.map((attachment) => attachment.id)),
+      content: await createMediaFallbackContext(fallbackSettings, entry.message, entry.attachments, options.signal),
+      messageId: entry.message.id,
+    })),
+  );
+  const contextsByMessageId = new Map(contexts.map((context) => [context.messageId, context]));
+
+  return messages.map((message) => {
+    const context = contextsByMessageId.get(message.id);
+
+    if (!context) {
+      return message;
+    }
+
+    const remainingAttachments = (message.attachments ?? []).filter((attachment) => !context.attachmentIds.has(attachment.id));
+
+    return {
+      ...message,
+      attachments: remainingAttachments.length > 0 ? remainingAttachments : undefined,
+      content: appendMediaFallbackContext(message.content, context.content),
+    };
+  });
+}
+
+function shouldUseMediaFallback(settings: ProviderSettings, model: string, attachment: ChatAttachment) {
+  if (!isMediaAttachment(attachment)) {
+    return false;
+  }
+
+  return !supportsModelInputModality(settings.provider, model, isVideoAttachment(attachment) ? "video" : "image");
+}
+
+function createMediaFallbackProviderSettings(settings: ProviderSettings): ProviderSettings {
+  return {
+    ...settings,
+    maxTokens: Math.max(settings.maxTokens, 2048),
+    model: IMAGE_REASONING_MODEL,
+    provider: "openrouter",
+    systemPrompt: [
+      "You analyze attached images and videos for a downstream AI model that cannot inspect media directly.",
+      "Return concise, factual media notes only. Include visible text, objects, UI layout, scene details, actions, and anything needed to answer the user's request.",
+      "Do not answer the user's request except where needed to explain what is visible in the media.",
+    ].join(" "),
+    temperature: Math.min(settings.temperature, 0.2),
+    thinking: {
+      enabled: false,
+      effort: "low",
+    },
+    tools: { ...DISABLED_MEDIA_FALLBACK_TOOLS },
+    userInstructions: "",
+    webSearch: {
+      ...settings.webSearch,
+      enabled: false,
+    },
+    workspaceDependencies: {
+      enabled: false,
+    },
+  };
+}
+
+async function createMediaFallbackContext(settings: ProviderSettings, message: ChatMessage, attachments: ChatAttachment[], signal: AbortSignal | undefined): Promise<string> {
+  const cacheKey = createMediaFallbackCacheKey(message, attachments);
+  const cached = mediaFallbackCache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  const response = await sendProviderMessage(settings, [createMediaFallbackMessage(message, attachments)], {
+    allowMediaFallback: false,
+    signal,
+  });
+  const content = response.content.trim();
+  const context = [
+    attachmentSummary(attachments),
+    content || "No media details were returned.",
+  ].filter(Boolean).join("\n\n");
+
+  mediaFallbackCache.set(cacheKey, context);
+  return context;
+}
+
+function createMediaFallbackMessage(message: ChatMessage, attachments: ChatAttachment[]): ChatMessage {
+  const prompt = [
+    "Analyze the attached media for another AI model that will receive only your text notes.",
+    "",
+    "User message:",
+    message.content.trim() || "(no text)",
+    "",
+    "Attached media:",
+    attachmentSummary(attachments),
+  ].join("\n");
+
+  return {
+    ...message,
+    attachments,
+    content: prompt,
+    role: "user",
+  };
+}
+
+function createMediaFallbackCacheKey(message: ChatMessage, attachments: ChatAttachment[]) {
+  return [
+    "media-fallback-v1",
+    IMAGE_REASONING_MODEL,
+    message.id,
+    message.content,
+    ...attachments.map((attachment) => [attachment.id, attachment.name, attachment.mimeType, attachment.size].join(":")),
+  ].join("|");
+}
+
+function appendMediaFallbackContext(content: string, context: string) {
+  const body = content.trim();
+  const mediaContext = `[${MEDIA_FALLBACK_CONTEXT_LABEL}]\n${context}`;
+
+  return body ? `${body}\n\n${mediaContext}` : mediaContext;
+}
+
+export async function sendProviderMessage(settings: ProviderSettings, messages: ChatMessage[], options: ProviderRequestOptions = {}): Promise<ProviderMessageResult> {
   const provider = getModelProvider(settings.provider);
   const apiKey = getProviderApiKey(settings);
-  const model = modelForMessages(settings, messages);
+  const preparedMessages = await prepareMessagesForMediaFallback(settings, messages, options);
+  const model = modelForMessages(settings, preparedMessages);
 
   assertUsableSettings(settings.provider, apiKey, model);
+  await ensureProviderRuntimeReady(settings, options.signal);
 
   if (provider.apiStyle === "anthropic-messages") {
-    const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/messages"), {
-      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
-      headers: createProviderHeaders(settings.provider, apiKey),
-      method: "POST",
-      signal: options.signal,
-    });
-    const payload = (await readJson(response)) as AnthropicMessageResponse;
+    const { payload, response } = await fetchProviderJson<AnthropicMessageResponse>(
+      provider.label,
+      joinUrl(getProviderBaseUrl(settings), "/messages"),
+      {
+        body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
+        headers: createProviderHeaders(settings.provider, apiKey),
+        method: "POST",
+      },
+      options.signal,
+    );
 
     if (!response.ok) {
-      throw new Error(payload.error?.message || `${provider.label} request failed with HTTP ${response.status}.`);
+      throw createProviderHttpError(settings, provider.label, model, payload, response);
     }
 
     const content = extractAnthropicText(payload).trim();
@@ -433,65 +924,74 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
     return {
       content,
-      reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(extractAnthropicReasoning(payload)) : undefined,
+      reasoningState: settings.thinking.enabled ? extractAnthropicReasoningState(payload, settings.provider) : undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: normalizeAnthropicUsage(payload.usage),
     };
   }
 
   if (usesResponsesApi(settings, model)) {
-    const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/responses"), {
-      body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
-      headers: createProviderHeaders(settings.provider, apiKey),
-      method: "POST",
-      signal: options.signal,
-    });
-    const payload = (await readJson(response)) as ResponsesApiResponse;
+    const { payload, response } = await fetchProviderJson<ResponsesApiResponse>(
+      provider.label,
+      joinUrl(getProviderBaseUrl(settings), "/responses"),
+      {
+        body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
+        headers: createProviderHeaders(settings.provider, apiKey),
+        method: "POST",
+      },
+      options.signal,
+    );
 
     if (!response.ok) {
-      throw new Error(payload.error?.message || `${provider.label} request failed with HTTP ${response.status}.`);
+      throw createProviderHttpError(settings, provider.label, model, payload, response);
     }
 
-    const { content, reasoning } = extractResponsesOutput(payload);
+    const { content } = extractResponsesOutput(payload);
     const toolCalls = parseResponsesToolCalls(payload, settings.provider);
 
     if (!content.trim() && toolCalls.length === 0) {
-      throw new ProviderEmptyResponseError(reasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
+      throw new ProviderEmptyResponseError(`${provider.label} returned no final answer.`);
     }
 
     return {
       content: content.trim(),
-      reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(reasoning) : undefined,
+      reasoningState: settings.thinking.enabled ? extractResponsesReasoningState(payload, settings.provider) : undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: normalizeResponsesUsage(payload.usage),
     };
   }
 
-  const response = await fetch(joinUrl(getProviderBaseUrl(settings), "/chat/completions"), {
-    body: JSON.stringify(createProviderRequestBody(settings, messages, model, false, options.toolBridge)),
-    headers: createProviderHeaders(settings.provider, apiKey),
-    method: "POST",
-    signal: options.signal,
-  });
-  const payload = (await readJson(response)) as ProviderChatResponse;
+  const { payload, response } = await fetchProviderJson<ProviderChatResponse>(
+    provider.label,
+    joinUrl(getProviderBaseUrl(settings), "/chat/completions"),
+    {
+      body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
+      headers: createProviderHeaders(settings.provider, apiKey),
+      method: "POST",
+    },
+    options.signal,
+  );
 
   if (!response.ok) {
-    throw new Error(payload.error?.message || `${provider.label} request failed with HTTP ${response.status}.`);
+    if (shouldRetryNineRouterGithubFallback(settings, model, payload, response, options)) {
+      return sendProviderMessage(createNineRouterGithubFallbackSettings(settings), messages, createNineRouterGithubFallbackOptions(options));
+    }
+
+    throw createProviderHttpError(settings, provider.label, model, payload, response);
   }
 
   const message = payload.choices?.[0]?.message;
   const extractedMessage = extractProviderMessageOutput(message);
   const content = extractedMessage.content.trim();
-  const reasoning = [extractReasoningText(message), extractedMessage.reasoning].filter(Boolean).join("");
   const toolCalls = parseOpenAiCompatibleToolCalls(message, settings.provider);
 
   if (!content && toolCalls.length === 0) {
-    throw new ProviderEmptyResponseError(reasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
+    throw new ProviderEmptyResponseError(`${provider.label} returned no final answer.`);
   }
 
   return {
     content,
-    reasoning: settings.thinking.enabled ? createReasoningSnapshotFromRaw(reasoning) : undefined,
+    reasoningState: settings.thinking.enabled ? extractProviderMessageReasoningState(message, settings.provider, extractedMessage.reasoning) : undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage: normalizeProviderUsage(payload.usage),
   };
@@ -502,13 +1002,15 @@ export async function streamProviderMessage(
   messages: ChatMessage[],
   onUpdate: (snapshot: StreamSnapshot) => void,
   options: ProviderRequestOptions = {},
-) {
+): Promise<ProviderMessageResult> {
   const provider = getModelProvider(settings.provider);
   const apiKey = getProviderApiKey(settings);
-  const model = modelForMessages(settings, messages);
+  const preparedMessages = await prepareMessagesForMediaFallback(settings, messages, options);
+  const model = modelForMessages(settings, preparedMessages);
   const useResponsesApi = usesResponsesApi(settings, model);
 
   assertUsableSettings(settings.provider, apiKey, model);
+  await ensureProviderRuntimeReady(settings, options.signal);
 
   const requestTimeout = createProviderTimeout(
     options.signal,
@@ -517,26 +1019,35 @@ export async function streamProviderMessage(
   );
   let response: Response;
 
+  const requestUrl = joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions");
+
   try {
-    response = await fetch(
-      joinUrl(getProviderBaseUrl(settings), provider.apiStyle === "anthropic-messages" ? "/messages" : useResponsesApi ? "/responses" : "/chat/completions"),
+    response = await fetchProviderResponse(
+      provider.label,
+      requestUrl,
       {
-        body: JSON.stringify(createProviderRequestBody(settings, messages, model, true, options.toolBridge)),
+        body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, true, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
         headers: createProviderHeaders(settings.provider, apiKey),
         method: "POST",
-        signal: requestTimeout.signal,
       },
+      requestTimeout.signal,
+      PROVIDER_RESPONSE_START_TIMEOUT_MS,
+      { stream: true },
     );
   } catch (error) {
     requestTimeout.throwIfTimedOut();
-    throw error;
+    throw createProviderFetchError(provider.label, requestUrl, error);
   } finally {
     requestTimeout.clear();
   }
 
   if (!response.ok) {
     const payload = (await readJson(response)) as ProviderChatResponse | AnthropicMessageResponse;
-    throw new Error(payload.error?.message || `${provider.label} request failed with HTTP ${response.status}.`);
+    if (shouldRetryNineRouterGithubFallback(settings, model, payload, response, options)) {
+      return streamProviderMessage(createNineRouterGithubFallbackSettings(settings), messages, onUpdate, createNineRouterGithubFallbackOptions(options));
+    }
+
+    throw createProviderHttpError(settings, provider.label, model, payload, response);
   }
 
   if (!response.body) {
@@ -548,6 +1059,8 @@ export async function streamProviderMessage(
   let buffer = "";
   let content = "";
   let reasoning = "";
+  let reasoningStateEntries: ProviderReasoningEntry[] = [];
+  let snapshotReasoningState: ProviderReasoningState | undefined;
   let reasoningTrimmed = false;
   let usage: ProviderUsage | undefined;
   let flushTimer: number | null = null;
@@ -565,20 +1078,22 @@ export async function streamProviderMessage(
 
     const separatedContent = separateInlineThinking(content);
     const nextContent = separatedContent.content;
-    const nextReasoning = settings.thinking.enabled ? createReasoningSnapshot([reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningTrimmed) : undefined;
+    const nextReasoningState = settings.thinking.enabled
+      ? snapshotReasoningState ?? createStreamProviderReasoningState(settings.provider, [reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningStateEntries)
+      : undefined;
     const nextToolCalls = finalizeStreamToolCalls(settings.provider, toolCallAccumulator);
     const nextToolCallsKey = JSON.stringify(nextToolCalls.map((call) => [call.id, call.name, call.arguments]));
 
-    if (!force && nextContent === lastFlushedContent && (nextReasoning ?? "") === lastFlushedReasoning && nextToolCallsKey === lastFlushedToolCalls) {
+    if (!force && nextContent === lastFlushedContent && getReasoningStateKey(nextReasoningState) === lastFlushedReasoning && nextToolCallsKey === lastFlushedToolCalls) {
       return;
     }
 
     lastFlushedContent = nextContent;
-    lastFlushedReasoning = nextReasoning ?? "";
+    lastFlushedReasoning = getReasoningStateKey(nextReasoningState);
     lastFlushedToolCalls = nextToolCallsKey;
     onUpdate({
       content: nextContent,
-      reasoning: nextReasoning,
+      reasoningState: nextReasoningState,
       toolCalls: nextToolCalls.length > 0 ? nextToolCalls : undefined,
       usage,
     });
@@ -608,11 +1123,17 @@ export async function streamProviderMessage(
     const snapshotReasoning = settings.thinking.enabled ? delta.reasoningSnapshot : undefined;
     const rawNextReasoning = shouldUseStreamSnapshot(appendedReasoning, snapshotReasoning) ? snapshotReasoning! : appendedReasoning;
     const nextReasoning = limitReasoningText(rawNextReasoning);
+    const previousReasoningEntryCount = reasoningStateEntries.length;
+
+    if (settings.thinking.enabled) {
+      reasoningStateEntries = mergeReasoningStateEntries(reasoningStateEntries, delta.reasoningStateEntries);
+      snapshotReasoningState = delta.reasoningState ?? snapshotReasoningState;
+    }
 
     usage = delta.usage ?? usage;
     reasoningTrimmed = reasoningTrimmed || rawNextReasoning.length > MAX_STREAM_REASONING_CHARS;
 
-    if (nextContent !== content || nextReasoning !== reasoning || toolCallsChanged) {
+    if (nextContent !== content || nextReasoning !== reasoning || toolCallsChanged || reasoningStateEntries.length !== previousReasoningEntryCount || delta.reasoningState) {
       content = nextContent;
       reasoning = nextReasoning;
       scheduleSnapshot();
@@ -646,7 +1167,7 @@ export async function streamProviderMessage(
       }
 
       if (Date.now() - lastMeaningfulStreamEventAt > PROVIDER_STREAM_PROGRESS_TIMEOUT_MS) {
-        throw new ProviderTimeoutError(`${provider.label} timed out after keeping the stream open without answer text or reasoning for ${formatTimeoutSeconds(PROVIDER_STREAM_PROGRESS_TIMEOUT_MS)} seconds.`);
+        throw new ProviderTimeoutError(`${provider.label} timed out after keeping the stream open without answer text, tool calls, or provider activity for ${formatTimeoutSeconds(PROVIDER_STREAM_PROGRESS_TIMEOUT_MS)} seconds.`);
       }
     }
 
@@ -664,18 +1185,20 @@ export async function streamProviderMessage(
     }
   }
 
-  const separatedFinalContent = separateInlineThinking(content);
+  const separatedFinalContent = separateInlineThinking(content, { final: true });
   const finalContent = separatedFinalContent.content.trim();
   const finalReasoning = [reasoning, separatedFinalContent.reasoning].filter(Boolean).join("");
   const finalToolCalls = finalizeStreamToolCalls(settings.provider, toolCallAccumulator);
 
   if (!finalContent && finalToolCalls.length === 0) {
-    throw new ProviderEmptyResponseError(finalReasoning.trim() ? `${provider.label} returned reasoning but no final answer.` : undefined);
+    throw new ProviderEmptyResponseError(`${provider.label} returned no final answer.`);
   }
 
   return {
     content: finalContent,
-    reasoning: settings.thinking.enabled ? createReasoningSnapshot(finalReasoning, reasoningTrimmed) : undefined,
+    reasoningState: settings.thinking.enabled
+      ? snapshotReasoningState ?? createStreamProviderReasoningState(settings.provider, finalReasoning, reasoningStateEntries, reasoningTrimmed)
+      : undefined,
     toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
     usage,
   };
@@ -688,11 +1211,15 @@ export async function validateProviderSettings(settings: ProviderSettings) {
 
   assertUsableSettings(settings.provider, apiKey, model);
 
-  const response = await fetch(joinUrl(getProviderBaseUrl(settings), provider.listModelsPath), {
-    headers: createProviderHeaders(settings.provider, apiKey),
-    method: "GET",
-  });
-  const payload = (await readJson(response)) as ProviderModelsResponse;
+  const { payload, response } = await fetchProviderJson<ProviderModelsResponse>(
+    provider.label,
+    joinUrl(getProviderBaseUrl(settings), provider.listModelsPath),
+    {
+      headers: createProviderHeaders(settings.provider, apiKey),
+      method: "GET",
+    },
+    undefined,
+  );
 
   if (!response.ok) {
     throw new Error(payload.error?.message || `${provider.label} models check failed with HTTP ${response.status}.`);
@@ -713,12 +1240,15 @@ export async function fetchProviderModels(settings: ProviderSettings, options: P
     assertProviderApiKey(settings.provider, apiKey);
   }
 
-  const response = await fetch(joinUrl(getProviderBaseUrl(settings), provider.listModelsPath), {
-    headers: createProviderHeaders(settings.provider, apiKey),
-    method: "GET",
-    signal: options.signal,
-  });
-  const payload = (await readJson(response)) as ProviderModelsResponse;
+  const { payload, response } = await fetchProviderJson<ProviderModelsResponse>(
+    provider.label,
+    joinUrl(getProviderBaseUrl(settings), provider.listModelsPath),
+    {
+      headers: createProviderHeaders(settings.provider, apiKey),
+      method: "GET",
+    },
+    options.signal,
+  );
 
   if (!response.ok) {
     throw new Error(payload.error?.message || `${provider.label} models check failed with HTTP ${response.status}.`);
@@ -745,13 +1275,20 @@ export async function fetchProviderModelContextLengths(settings: ProviderSetting
   }, {});
 }
 
-export function createProviderChatRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), toolBridge?: ProviderToolBridgeOptions) {
+export function createProviderChatRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model = modelForMessages(settings, messages),
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
   const body: Record<string, unknown> = {
     messages: [
-      { role: "system", content: createProviderSystemPrompt(settings, messages) },
+      { role: "system", content: createProviderSystemPrompt(settings, messages, toolBridge) },
       ...messages.map((message) => ({
         role: message.role,
-        content: createProviderMessageContent(message),
+        content: createProviderMessageContent(message, { contextWindowTokens }),
       })),
     ],
     model,
@@ -759,6 +1296,7 @@ export function createProviderChatRequestBody(settings: ProviderSettings, messag
 
   applyChatMaxTokens(settings, body);
   applyLocalSamplingParameters(settings, body);
+  applyChatStructuredOutput(body, structuredOutput);
 
   if (settings.provider === "openrouter") {
     applyOpenRouterFreeModelRouting(body, model, messages);
@@ -768,9 +1306,16 @@ export function createProviderChatRequestBody(settings: ProviderSettings, messag
   return applyToolBridgeToProviderRequest(body, "openai-compatible", toolBridge);
 }
 
-export function createProviderStreamRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), toolBridge?: ProviderToolBridgeOptions) {
+export function createProviderStreamRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model = modelForMessages(settings, messages),
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
   const body: Record<string, unknown> = {
-    ...createProviderChatRequestBody(settings, messages, model, toolBridge),
+    ...createProviderChatRequestBody(settings, messages, model, toolBridge, contextWindowTokens, structuredOutput),
     stream: true,
   };
 
@@ -787,13 +1332,21 @@ export function modelForMessages(settings: ProviderSettings, _messages: ChatMess
   return normalizeProviderModelId(settings.provider, settings.model.trim() || getDefaultModelForProvider(settings.provider));
 }
 
-export function createResponsesRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = false, toolBridge?: ProviderToolBridgeOptions) {
+export function createResponsesRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model = modelForMessages(settings, messages),
+  stream = false,
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
   const body: Record<string, unknown> = {
     input: messages.map((message) => ({
-      content: createResponsesMessageContent(message),
+      content: createResponsesMessageContent(message, { contextWindowTokens }),
       role: message.role,
     })),
-    instructions: createProviderSystemPrompt(settings, messages),
+    instructions: createProviderSystemPrompt(settings, messages, toolBridge),
     max_output_tokens: settings.maxTokens,
     model,
     stream,
@@ -801,39 +1354,201 @@ export function createResponsesRequestBody(settings: ProviderSettings, messages:
 
   applyLocalSamplingParameters(settings, body);
   applyResponsesReasoningToRequestBody(settings, body);
+  applyResponsesStructuredOutput(body, structuredOutput);
 
   return applyToolBridgeToProviderRequest(body, "openai-responses", toolBridge);
 }
 
-export function createProviderRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true, toolBridge?: ProviderToolBridgeOptions) {
+export function createProviderRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model = modelForMessages(settings, messages),
+  stream = true,
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
   const provider = getModelProvider(settings.provider);
+  let body: Record<string, unknown>;
 
   if (provider.apiStyle === "anthropic-messages") {
-    return createAnthropicRequestBody(settings, messages, model, stream, toolBridge);
+    body = createAnthropicRequestBody(settings, messages, model, stream, toolBridge, contextWindowTokens, structuredOutput);
+    return applyContextWindowPreflightToBody(settings, body, contextWindowTokens);
   }
 
   if (usesResponsesApi(settings, model)) {
-    return createResponsesRequestBody(settings, messages, model, stream, toolBridge);
+    body = createResponsesRequestBody(settings, messages, model, stream, toolBridge, contextWindowTokens, structuredOutput);
+    return applyContextWindowPreflightToBody(settings, body, contextWindowTokens);
   }
 
-  return stream ? createProviderStreamRequestBody(settings, messages, model, toolBridge) : createProviderChatRequestBody(settings, messages, model, toolBridge);
+  body = stream
+    ? createProviderStreamRequestBody(settings, messages, model, toolBridge, contextWindowTokens, structuredOutput)
+    : createProviderChatRequestBody(settings, messages, model, toolBridge, contextWindowTokens, structuredOutput);
+  return applyContextWindowPreflightToBody(settings, body, contextWindowTokens);
 }
 
-export function createProviderUsageRequestBody(settings: ProviderSettings, messages: ChatMessage[], model = modelForMessages(settings, messages), stream = true, toolBridge?: ProviderToolBridgeOptions) {
-  return createProviderRequestBody(settings, messages, model, stream, toolBridge);
+export function createProviderUsageRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model = modelForMessages(settings, messages),
+  stream = true,
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
+  return createProviderRequestBody(settings, messages, model, stream, toolBridge, contextWindowTokens, structuredOutput);
 }
 
-export function createProviderMessageContent(message: ChatMessage): ProviderMessageContent {
+export function getProviderRequestMaxOutputTokens(body: Record<string, unknown>, fallback = 0) {
+  const value = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens;
+  return normalizePositiveRequestInteger(value, fallback);
+}
+
+export function estimateProviderRequestReasoningReserveTokens(settings: ProviderSettings, body: Record<string, unknown>) {
+  if (!settings.thinking.enabled) {
+    return 0;
+  }
+
+  const thinkingBudget = readNestedNumber(body.thinking, "budget_tokens");
+  if (thinkingBudget) {
+    // Anthropic's thinking budget is part of max_tokens, so it is tracked as a
+    // lane but not added again to the request total.
+    return thinkingBudget;
+  }
+
+  const googleThinkingBudget = readGoogleThinkingBudget(body.extra_body);
+  if (googleThinkingBudget) {
+    return googleThinkingBudget;
+  }
+
+  if (body.reasoning || body.reasoning_effort || body.include_reasoning || body.thinking) {
+    return estimateReasoningReserveFromEffort(settings.thinking.effort);
+  }
+
+  return 0;
+}
+
+function applyContextWindowPreflightToBody(settings: ProviderSettings, body: Record<string, unknown>, contextWindowTokens?: number) {
+  const boundedContextWindow = Math.max(Math.round(contextWindowTokens || 0), 0);
+
+  if (!boundedContextWindow) {
+    return body;
+  }
+
+  const maxOutputField = getProviderMaxOutputField(body);
+  if (!maxOutputField) {
+    return body;
+  }
+
+  const model = typeof body.model === "string" ? body.model : settings.model;
+  const requestedMaxOutput = getProviderRequestMaxOutputTokens(body, settings.maxTokens);
+  const manualMaxOutput = getManualMaxOutputOverride(settings, model);
+  const metadataMaxOutput = manualMaxOutput ?? getFallbackMaxOutputTokens(model, settings.provider, boundedContextWindow);
+  const thinkingBudget = readNestedNumber(body.thinking, "budget_tokens");
+  const minimumAcceptedOutput = settings.provider === "anthropic" && thinkingBudget
+    ? thinkingBudget + 1024
+    : 256;
+  const safetyMarginTokens = getContextWindowSafetyMarginTokens(boundedContextWindow);
+  const outputCappedByMetadata = Math.max(
+    minimumAcceptedOutput,
+    Math.min(requestedMaxOutput, metadataMaxOutput, Math.max(boundedContextWindow - safetyMarginTokens, minimumAcceptedOutput)),
+  );
+  body[maxOutputField] = outputCappedByMetadata;
+
+  const inputTokens = estimateProviderRequestInputTokens(body);
+  const reasoningReserveTokens = estimateAdditionalProviderReasoningReserveTokens(settings, body);
+  const availableOutputTokens = Math.floor(boundedContextWindow - inputTokens - reasoningReserveTokens - safetyMarginTokens);
+
+  if (availableOutputTokens >= minimumAcceptedOutput && outputCappedByMetadata > availableOutputTokens) {
+    body[maxOutputField] = Math.max(minimumAcceptedOutput, Math.min(outputCappedByMetadata, availableOutputTokens));
+  }
+
+  return body;
+}
+
+function getManualMaxOutputOverride(settings: ProviderSettings, model: string) {
+  const override = settings.modelBudgetOverrides?.[settings.provider]?.[model]?.maxOutputTokens;
+  return typeof override === "number" && Number.isFinite(override) && override > 0 ? Math.round(override) : undefined;
+}
+
+function getProviderMaxOutputField(body: Record<string, unknown>) {
+  if ("max_output_tokens" in body) return "max_output_tokens";
+  if ("max_completion_tokens" in body) return "max_completion_tokens";
+  if ("max_tokens" in body) return "max_tokens";
+  return "";
+}
+
+function estimateProviderRequestInputTokens(body: Record<string, unknown>) {
+  const inputOnlyBody = { ...body };
+  delete inputOnlyBody.max_completion_tokens;
+  delete inputOnlyBody.max_output_tokens;
+  delete inputOnlyBody.max_tokens;
+  return estimateTextTokens(JSON.stringify(inputOnlyBody));
+}
+
+function estimateAdditionalProviderReasoningReserveTokens(settings: ProviderSettings, body: Record<string, unknown>) {
+  const thinkingBudget = readNestedNumber(body.thinking, "budget_tokens");
+  if (thinkingBudget) {
+    return 0;
+  }
+
+  if (settings.provider === "openai" && "max_output_tokens" in body) {
+    return 0;
+  }
+
+  return estimateProviderRequestReasoningReserveTokens(settings, body);
+}
+
+function estimateReasoningReserveFromEffort(effort: ReasoningEffort) {
+  const effortReserve: Record<ReasoningEffort, number> = {
+    low: 1024,
+    medium: 4096,
+    high: 16_384,
+  };
+
+  return effortReserve[effort] ?? effortReserve.medium;
+}
+
+function readGoogleThinkingBudget(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+
+  const google = (value as { google?: unknown }).google;
+  if (!google || typeof google !== "object") {
+    return 0;
+  }
+
+  const config = (google as { thinking_config?: unknown }).thinking_config;
+  return readNestedNumber(config, "thinking_budget");
+}
+
+function readNestedNumber(value: unknown, key: string) {
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0 ? Math.round(candidate) : 0;
+}
+
+function normalizePositiveRequestInteger(value: unknown, fallback: number) {
+  const numberValue = typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return Math.max(Math.round(numberValue || 0), 0);
+}
+
+export function createProviderMessageContent(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}): ProviderMessageContent {
   const imageAttachments = message.attachments?.filter(isImageAttachment) ?? [];
-  const text = createMessageTextForProvider(message);
+  const videoAttachments = message.attachments?.filter(isVideoAttachment) ?? [];
+  const text = createMessageTextForProvider(message, contextOptions);
 
-  if (imageAttachments.length === 0) {
+  if (imageAttachments.length === 0 && videoAttachments.length === 0) {
     return text;
   }
 
   return [
     {
-      text: text || "User attached image.",
+      text: text || "User attached media.",
       type: "text",
     },
     ...imageAttachments.map((attachment) => ({
@@ -842,17 +1557,23 @@ export function createProviderMessageContent(message: ChatMessage): ProviderMess
       },
       type: "image_url" as const,
     })),
+    ...videoAttachments.map((attachment) => ({
+      type: "video_url" as const,
+      videoUrl: {
+        url: attachment.dataUrl,
+      },
+    })),
   ];
 }
 
-function createResponsesMessageContent(message: ChatMessage) {
-  return createMessageTextForProvider(message) || message.content || " ";
+function createResponsesMessageContent(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}) {
+  return createMessageTextForProvider(message, contextOptions) || message.content || " ";
 }
 
-export function createMessageTextForProvider(message: ChatMessage) {
+export function createMessageTextForProvider(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}) {
   const content = message.content.trim();
   const attachments = message.attachments ?? [];
-  const contextSurface = createMessageContextSurface(message);
+  const contextSurface = createMessageContextSurface(message, contextOptions);
   const body = contextSurface ? [content, contextSurface].filter(Boolean).join("\n\n") : content;
 
   if (attachments.length === 0) {
@@ -868,32 +1589,43 @@ export function createMessageTextForProvider(message: ChatMessage) {
   return body ? `${body}\n\nAttachments:\n${summary}` : `Attachments:\n${summary}`;
 }
 
-function createAnthropicRequestBody(settings: ProviderSettings, messages: ChatMessage[], model: string, stream: boolean, toolBridge?: ProviderToolBridgeOptions) {
-  const thinkingBudget = createAnthropicThinkingBudget(settings, model);
+function createAnthropicRequestBody(
+  settings: ProviderSettings,
+  messages: ChatMessage[],
+  model: string,
+  stream: boolean,
+  toolBridge?: ProviderToolBridgeOptions,
+  contextWindowTokens?: number,
+  structuredOutput?: ProviderStructuredOutputOptions,
+) {
+  const thinkingConfig = createAnthropicThinkingConfig(settings, model);
   const body: Record<string, unknown> = {
-    max_tokens: thinkingBudget ? Math.max(settings.maxTokens, thinkingBudget + 1024) : settings.maxTokens,
+    max_tokens: thinkingConfig.maxTokens,
     messages: messages.map((message) => ({
       role: message.role === "assistant" ? "assistant" : "user",
-      content: createAnthropicMessageContent(message),
+      content: createAnthropicMessageContent(message, { contextWindowTokens }),
     })),
     model,
     stream,
-    system: createProviderSystemPrompt(settings, messages),
+    system: createProviderSystemPrompt(settings, messages, toolBridge),
   };
 
-  if (thinkingBudget) {
-    body.thinking = {
-      type: "enabled",
-      budget_tokens: thinkingBudget,
-    };
+  if (thinkingConfig.thinking) {
+    body.thinking = thinkingConfig.thinking;
   }
+
+  if (thinkingConfig.outputConfig) {
+    body.output_config = thinkingConfig.outputConfig;
+  }
+
+  applyAnthropicStructuredOutput(body, structuredOutput);
 
   return applyToolBridgeToProviderRequest(body, "anthropic-messages", toolBridge);
 }
 
-function createAnthropicMessageContent(message: ChatMessage) {
+function createAnthropicMessageContent(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}) {
   const imageAttachments = message.attachments?.filter(isImageAttachment) ?? [];
-  const text = createMessageTextForProvider(message);
+  const text = createMessageTextForProvider(message, contextOptions);
 
   if (imageAttachments.length === 0) {
     return text || message.content || " ";
@@ -925,12 +1657,12 @@ function createAnthropicMessageContent(message: ChatMessage) {
   ];
 }
 
-function createProviderSystemPrompt(settings: ProviderSettings, messages: ChatMessage[]) {
-  return buildAgentSystemPrompt({ messages, settings });
+function createProviderSystemPrompt(settings: ProviderSettings, messages: ChatMessage[], toolBridge?: ProviderToolBridgeOptions) {
+  return buildAgentSystemPrompt({ messages, settings, toolBridge });
 }
 
 function applyChatMaxTokens(settings: ProviderSettings, body: Record<string, unknown>) {
-  if (settings.provider === "openai") {
+  if (usesMaxCompletionTokens(settings.provider)) {
     body.max_completion_tokens = settings.maxTokens;
     return;
   }
@@ -938,10 +1670,103 @@ function applyChatMaxTokens(settings: ProviderSettings, body: Record<string, unk
   body.max_tokens = settings.maxTokens;
 }
 
+function usesMaxCompletionTokens(provider: ModelProviderId) {
+  return provider === "openai" || provider === "openrouter" || provider === "groq";
+}
+
+function applyChatStructuredOutput(body: Record<string, unknown>, structuredOutput: ProviderStructuredOutputOptions | undefined) {
+  if (!structuredOutput) {
+    return;
+  }
+
+  body.response_format = {
+    json_schema: createOpenAiJsonSchemaFormat(structuredOutput),
+    type: "json_schema",
+  };
+}
+
+function applyResponsesStructuredOutput(body: Record<string, unknown>, structuredOutput: ProviderStructuredOutputOptions | undefined) {
+  if (!structuredOutput) {
+    return;
+  }
+
+  body.text = {
+    format: {
+      ...createOpenAiJsonSchemaFormat(structuredOutput),
+      type: "json_schema",
+    },
+  };
+}
+
+function applyAnthropicStructuredOutput(body: Record<string, unknown>, structuredOutput: ProviderStructuredOutputOptions | undefined) {
+  if (!structuredOutput) {
+    return;
+  }
+
+  const existingOutputConfig = typeof body.output_config === "object" && body.output_config
+    ? body.output_config as Record<string, unknown>
+    : {};
+
+  body.output_config = {
+    ...existingOutputConfig,
+    format: {
+      schema: structuredOutput.schema,
+      type: "json_schema",
+    },
+  };
+}
+
+function createOpenAiJsonSchemaFormat(structuredOutput: ProviderStructuredOutputOptions) {
+  return {
+    ...(structuredOutput.description ? { description: structuredOutput.description } : {}),
+    name: structuredOutput.name,
+    schema: structuredOutput.schema,
+    strict: structuredOutput.strict ?? true,
+  };
+}
+
 function usesResponsesApi(settings: ProviderSettings, model: string) {
   const provider = getModelProvider(settings.provider);
 
-  return provider.reasoningMode === "local-responses" && settings.thinking.enabled && supportsProviderThinking(settings.provider, settings.thinking.effort, model);
+  return (settings.provider === "openai" || provider.reasoningMode === "local-responses") && settings.thinking.enabled && supportsProviderThinking(settings.provider, settings.thinking.effort, model);
+}
+
+function createAnthropicThinkingConfig(settings: ProviderSettings, model: string) {
+  if (!settings.thinking.enabled || !supportsProviderThinking(settings.provider, settings.thinking.effort, model)) {
+    return { maxTokens: settings.maxTokens };
+  }
+
+  if (usesAnthropicAdaptiveThinking(model)) {
+    return {
+      maxTokens: settings.maxTokens,
+      outputConfig: {
+        effort: mapAnthropicEffort(settings.thinking.effort),
+      },
+      thinking: {
+        type: "adaptive",
+      },
+    };
+  }
+
+  const budgetTokens = createAnthropicThinkingBudget(settings, model);
+
+  return {
+    maxTokens: budgetTokens ? Math.max(settings.maxTokens, budgetTokens + 1024) : settings.maxTokens,
+    thinking: budgetTokens
+      ? {
+          type: "enabled",
+          budget_tokens: budgetTokens,
+        }
+      : undefined,
+  };
+}
+
+function usesAnthropicAdaptiveThinking(model: string) {
+  return /claude-(opus-4-[67]|sonnet-4-6)/.test(model.toLowerCase());
+}
+
+function mapAnthropicEffort(effort: ReasoningEffort) {
+  return effort;
 }
 
 function createAnthropicThinkingBudget(settings: ProviderSettings, model: string) {
@@ -949,12 +1774,15 @@ function createAnthropicThinkingBudget(settings: ProviderSettings, model: string
     return 0;
   }
 
+  // Anthropic requires `budget_tokens` >= 1024. The Low/Medium/High labels in the
+  // UI need a meaningful gradation, so spread the budget non-linearly:
+  //   Low    1k  — quick, single-pass reasoning
+  //   Medium 4k  — balanced (default)
+  //   High   16k — deep reasoning, multi-step planning
   const effortBudget: Record<ReasoningEffort, number> = {
-    minimal: 1024,
     low: 1024,
-    medium: 2048,
-    high: 4096,
-    xhigh: 8192,
+    medium: 4096,
+    high: 16384,
   };
 
   return effortBudget[settings.thinking.effort] ?? effortBudget.medium;
@@ -974,6 +1802,12 @@ function applyReasoningToRequestBody(settings: ProviderSettings, body: Record<st
 
     if (provider.reasoningMode === "groq-reasoning" && model.toLowerCase().includes("gpt-oss")) {
       body.include_reasoning = false;
+    }
+
+    if (provider.reasoningMode === "deepseek-thinking") {
+      body.thinking = {
+        type: "disabled",
+      };
     }
 
     return;
@@ -1054,11 +1888,9 @@ function createGoogleThinkingConfig(effort: ReasoningEffort, model: string) {
 
   if (normalizedModel.startsWith("gemini-2.5")) {
     const thinkingBudgets: Record<ReasoningEffort, number> = {
-      minimal: 1024,
       low: 1024,
       medium: 8192,
       high: 24576,
-      xhigh: 24576,
     };
 
     return {
@@ -1073,37 +1905,17 @@ function createGoogleThinkingConfig(effort: ReasoningEffort, model: string) {
   };
 }
 
-function mapGoogleThinkingLevel(effort: ReasoningEffort, normalizedModel: string) {
-  if (effort === "xhigh") {
-    return "high";
-  }
-
-  if (effort === "minimal" && normalizedModel.includes("3.1-pro")) {
-    return "low";
-  }
-
+function mapGoogleThinkingLevel(effort: ReasoningEffort, _normalizedModel: string) {
   return effort;
 }
 
 function mapReasoningEffort(providerId: ModelProviderId, effort: ReasoningEffort) {
   if (providerId === "deepseek") {
-    return effort === "xhigh" ? "max" : "high";
-  }
-
-  if (providerId === "google") {
-    return effort === "xhigh" ? "high" : effort;
+    return effort;
   }
 
   if (providerId === "mistral") {
     return "high";
-  }
-
-  if (providerId === "groq" || providerId === "lmstudio" || providerId === "ollama" || providerId === "xai") {
-    if (effort === "minimal") {
-      return "low";
-    }
-
-    return effort === "xhigh" ? "high" : effort;
   }
 
   return effort;
@@ -1128,8 +1940,10 @@ function createProviderHeaders(providerId: ModelProviderId, apiKey: string) {
   }
 
   if (providerId === "openrouter") {
-    headers["HTTP-Referer"] = window.location.origin;
-    headers["X-Title"] = "Gilbert Codex";
+    headers["HTTP-Referer"] = OPENROUTER_APP_REFERER;
+    headers["X-OpenRouter-Title"] = OPENROUTER_APP_TITLE;
+    headers["X-OpenRouter-Categories"] = OPENROUTER_APP_CATEGORIES;
+    headers["X-Title"] = OPENROUTER_APP_TITLE;
   }
 
   return headers;
@@ -1195,6 +2009,7 @@ function parseOpenAiCompatibleStreamData(data: string): ProviderStreamDelta {
   return {
     contentDelta: extracted.content,
     reasoningDelta: mergeReasoningTextParts(extractReasoningText(delta), extracted.reasoning),
+    reasoningStateEntries: extractProviderReasoningEntries(delta),
     toolCallDeltas: parseOpenAiCompatibleStreamToolCallDeltas(payload),
     usage: normalizeProviderUsage(payload.usage),
   };
@@ -1217,13 +2032,17 @@ function parseResponsesStreamData(data: string, providerId: ModelProviderId): Pr
   const isTextDelta = type.includes("output_text.delta") || type.includes("text.delta");
   const isReasoningDelta = type.includes("reasoning") && type.includes("delta");
   const responseSnapshot = payload.response ? extractResponsesOutput(payload.response) : undefined;
-  const toolCallsSnapshot = parseResponsesStreamToolCalls(payload, providerId);
+  const responseReasoningState = payload.response ? extractResponsesReasoningState(payload.response, providerId) : undefined;
+  const toolCallsSnapshot = payload.response ? parseResponsesStreamToolCalls(payload, providerId) : undefined;
+  const toolCallDeltas = parseResponsesStreamToolCallDeltas(payload);
 
   return {
     contentDelta: isTextDelta ? payload.delta ?? payload.text ?? "" : "",
     contentSnapshot: responseSnapshot?.content || undefined,
     reasoningDelta: isReasoningDelta ? payload.delta ?? payload.text ?? "" : "",
     reasoningSnapshot: responseSnapshot?.reasoning || undefined,
+    reasoningState: responseReasoningState,
+    toolCallDeltas: toolCallDeltas.length > 0 ? toolCallDeltas : undefined,
     toolCallsSnapshot,
     usage: normalizeResponsesUsage(payload.usage ?? payload.response?.usage),
   };
@@ -1246,10 +2065,12 @@ function parseAnthropicStreamData(data: string): ProviderStreamDelta {
   const contentDelta = delta?.type === "text_delta" ? delta.text ?? "" : "";
   const reasoningDelta = delta?.type === "thinking_delta" ? delta.thinking ?? "" : "";
   const toolCallDelta = parseAnthropicStreamToolCallDelta(payload);
+  const reasoningStateEntries = createAnthropicStreamReasoningEntries(payload);
 
   return {
     contentDelta,
     reasoningDelta,
+    reasoningStateEntries,
     toolCallDeltas: toolCallDelta ? [toolCallDelta] : undefined,
     usage: normalizeAnthropicUsage(payload.usage ?? payload.message?.usage),
   };
@@ -1377,18 +2198,70 @@ function limitReasoningText(reasoning: string) {
   return reasoning.length > MAX_STREAM_REASONING_CHARS ? reasoning.slice(-MAX_STREAM_REASONING_CHARS) : reasoning;
 }
 
-function createReasoningSnapshot(reasoning: string, trimmed: boolean) {
-  const cleanReasoning = reasoning.trim();
-
-  if (!cleanReasoning) {
-    return undefined;
+function mergeReasoningStateEntries(existing: ProviderReasoningEntry[], next: ProviderReasoningEntry[] | undefined) {
+  if (!next?.length) {
+    return existing;
   }
 
-  return createActivityReasoningSnapshot(cleanReasoning, { trimmed });
+  return [...existing, ...next];
 }
 
-function createReasoningSnapshotFromRaw(reasoning: string) {
-  return createReasoningSnapshot(limitReasoningText(reasoning), reasoning.length > MAX_STREAM_REASONING_CHARS);
+function getReasoningStateKey(reasoningState: ProviderReasoningState | undefined) {
+  return reasoningState ? `${reasoningState.provider}:${reasoningState.format}:${reasoningState.entries.length}` : "";
+}
+
+function createStreamProviderReasoningState(
+  provider: ModelProviderId,
+  reasoning: string,
+  entries: ProviderReasoningEntry[],
+  trimmed = false,
+) {
+  if (provider === "anthropic") {
+    const thinking = [
+      ...entries
+        .filter((entry) => entry.type === "thinking_delta")
+        .map((entry) => entry.value)
+        .filter((value): value is string => typeof value === "string"),
+      reasoning,
+    ].join("");
+    const signature = entries
+      .filter((entry) => entry.type === "signature_delta")
+      .map((entry) => entry.value)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+
+    return createProviderReasoningState(provider, "anthropic-thinking", thinking || signature ? [{
+      type: "thinking",
+      value: {
+        signature: signature || undefined,
+        thinking,
+        type: "thinking",
+      },
+    }] : []);
+  }
+
+  if (provider === "openrouter") {
+    return createProviderReasoningState(provider, "openrouter-reasoning", entries.length > 0 ? entries : [{
+      type: "reasoning",
+      value: reasoning,
+    }]);
+  }
+
+  if (provider === "deepseek") {
+    return createProviderReasoningState(provider, "deepseek-reasoning", [{
+      type: "reasoning_content",
+      value: reasoning,
+    }]);
+  }
+
+  const format = provider === "google" ? "google-thinking" : "provider-effort";
+  return createProviderReasoningState(provider, format, [
+    ...entries,
+    {
+      type: trimmed ? "reasoning_trimmed" : "reasoning",
+      value: reasoning,
+    },
+  ]);
 }
 
 function normalizeProviderUsage(usage: ProviderUsage | null | undefined): ProviderUsage | undefined {
@@ -1460,7 +2333,7 @@ function extractProviderMessageOutput(
   const content = message?.content;
 
   if (typeof content === "string") {
-    return separateInlineThinking(content);
+    return separateInlineThinking(content, { final: true });
   }
 
   if (!Array.isArray(content)) {
@@ -1484,7 +2357,7 @@ function extractProviderMessageOutput(
     }
   }
 
-  const separatedText = separateInlineThinking(textParts.join(""));
+  const separatedText = separateInlineThinking(textParts.join(""), { final: true });
 
   return {
     content: separatedText.content,
@@ -1511,7 +2384,7 @@ function extractResponsesOutput(payload: ResponsesApiResponse) {
     }
   }
 
-  const separatedText = separateInlineThinking(textParts.join(""));
+  const separatedText = separateInlineThinking(textParts.join(""), { final: true });
 
   return {
     content: separatedText.content,
@@ -1519,27 +2392,14 @@ function extractResponsesOutput(payload: ResponsesApiResponse) {
   };
 }
 
-function separateInlineThinking(value: string) {
-  const reasoningParts: string[] = [];
-  let visibleContent = value.replace(INLINE_THINKING_BLOCK_PATTERN, (_match, _tag: string, thinking: string) => {
-    reasoningParts.push(thinking);
-    return "";
-  });
-  const openThinkingMatch = INLINE_THINKING_OPEN_PATTERN.exec(visibleContent);
-
-  if (openThinkingMatch && typeof openThinkingMatch.index === "number") {
-    const openThinkingIndex = openThinkingMatch.index;
-    const beforeThinking = visibleContent.slice(0, openThinkingIndex);
-    const afterThinking = visibleContent.slice(openThinkingIndex + openThinkingMatch[0].length);
-
-    reasoningParts.push(afterThinking.replace(INLINE_THINKING_CLOSE_PATTERN, ""));
-    visibleContent = beforeThinking;
-  }
-
-  return {
-    content: visibleContent.replace(INLINE_THINKING_CLOSE_PATTERN, ""),
-    reasoning: reasoningParts.join("").trim(),
-  };
+/**
+ * Streaming-aware wrapper around `extractInlineThinking`. Pass `final=true`
+ * for completed payloads (non-streaming responses) so any trailing tag-prefix
+ * is released rather than buffered.
+ */
+function separateInlineThinking(value: string, options: { final?: boolean } = {}) {
+  const { content, reasoning, pendingPrefix } = extractInlineThinking(value, { final: options.final });
+  return { content, reasoning, pendingPrefix };
 }
 
 function extractThinkingChunkText(chunk: ProviderContentChunk) {
@@ -1558,7 +2418,8 @@ function normalizeProviderModels(payload: ProviderModelsResponse, providerId: Mo
   const seen = new Set<string>();
 
   return (payload.data ?? []).flatMap((entry) => {
-    const modelId = normalizeModelId(entry.id ?? entry.name);
+    const rawModelId = normalizeModelId(entry.id ?? entry.name);
+    const modelId = providerId === "9router" ? normalizeNineRouterDiscoveredModelId(rawModelId) : rawModelId;
 
     if (!modelId || seen.has(modelId) || isExpiredModel(entry.expiration_date)) {
       return [];
@@ -1574,6 +2435,7 @@ function normalizeProviderModels(payload: ProviderModelsResponse, providerId: Mo
         id: modelId,
         inputModalities: normalizeStringList(entry.architecture?.input_modalities),
         label: normalizeModelId(entry.display_name ?? entry.name),
+        maxOutputTokens: normalizeModelContextLength(entry.top_provider?.max_completion_tokens),
         outputModalities: normalizeStringList(entry.architecture?.output_modalities),
         pricing: normalizeProviderModelPricing(entry.pricing, providerId),
         supportedParameters: normalizeStringList(entry.supported_parameters),
@@ -1695,6 +2557,158 @@ function extractReasoningText(
   return firstReasoningText(delta.reasoning, delta.reasoning_content, delta.thinking, extractReasoningDetailsText(delta.reasoning_details));
 }
 
+function extractProviderMessageReasoningState(
+  message:
+    | {
+        reasoning?: string;
+        reasoning_content?: string;
+        reasoning_details?: ProviderReasoningDetail[];
+        thinking?: string;
+      }
+    | undefined,
+  provider: ModelProviderId,
+  inlineThinking = "",
+) {
+  return createProviderReasoningState(provider, getOpenAiCompatibleReasoningFormat(provider, message), [
+    ...extractProviderReasoningEntries(message),
+    {
+      type: "inline_thinking",
+      value: inlineThinking,
+    },
+  ]);
+}
+
+function extractProviderReasoningEntries(
+  delta:
+    | {
+        reasoning?: string;
+        reasoning_content?: string;
+        reasoning_details?: ProviderReasoningDetail[];
+        thinking?: string;
+      }
+    | undefined,
+): ProviderReasoningEntry[] {
+  if (!delta) {
+    return [];
+  }
+
+  const entries: ProviderReasoningEntry[] = [];
+
+  if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+    entries.push({
+      type: "reasoning_details",
+      value: delta.reasoning_details,
+    });
+  }
+
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+    entries.push({
+      type: "reasoning_content",
+      value: delta.reasoning_content,
+    });
+  }
+
+  if (typeof delta.reasoning === "string" && delta.reasoning) {
+    entries.push({
+      type: "reasoning",
+      value: delta.reasoning,
+    });
+  }
+
+  if (typeof delta.thinking === "string" && delta.thinking) {
+    entries.push({
+      type: "thinking",
+      value: delta.thinking,
+    });
+  }
+
+  return entries;
+}
+
+function getOpenAiCompatibleReasoningFormat(
+  provider: ModelProviderId,
+  message:
+    | {
+        reasoning_content?: string;
+        reasoning_details?: ProviderReasoningDetail[];
+      }
+    | undefined,
+) {
+  if (provider === "openrouter" || message?.reasoning_details?.length) {
+    return "openrouter-reasoning" as const;
+  }
+
+  if (provider === "deepseek" || message?.reasoning_content) {
+    return "deepseek-reasoning" as const;
+  }
+
+  if (provider === "google") {
+    return "google-thinking" as const;
+  }
+
+  return "provider-effort" as const;
+}
+
+function extractResponsesReasoningState(payload: ResponsesApiResponse, provider: ModelProviderId) {
+  const entries = (payload.output ?? []).flatMap((item): ProviderReasoningEntry[] => {
+    if (item.type !== "reasoning") {
+      return [];
+    }
+
+    return [{
+      id: item.id,
+      type: "reasoning",
+      value: item,
+    }];
+  });
+
+  return createProviderReasoningState(provider, "openai-responses", entries);
+}
+
+function extractAnthropicReasoningState(payload: AnthropicMessageResponse, provider: ModelProviderId) {
+  const entries = (payload.content ?? []).flatMap((block): ProviderReasoningEntry[] => {
+    if (block.type !== "thinking" && block.type !== "redacted_thinking") {
+      return [];
+    }
+
+    return [{
+      id: block.id,
+      type: block.type,
+      value: block,
+    }];
+  });
+
+  return createProviderReasoningState(provider, "anthropic-thinking", entries);
+}
+
+function createAnthropicStreamReasoningEntries(payload: AnthropicStreamChunk): ProviderReasoningEntry[] {
+  const entries: ProviderReasoningEntry[] = [];
+
+  if (payload.content_block?.type === "thinking" || payload.content_block?.type === "redacted_thinking") {
+    entries.push({
+      id: payload.content_block.id,
+      type: payload.content_block.type,
+      value: payload.content_block,
+    });
+  }
+
+  if (payload.delta?.type === "thinking_delta" && payload.delta.thinking) {
+    entries.push({
+      type: "thinking_delta",
+      value: payload.delta.thinking,
+    });
+  }
+
+  if (payload.delta?.type === "signature_delta" && payload.delta.signature) {
+    entries.push({
+      type: "signature_delta",
+      value: payload.delta.signature,
+    });
+  }
+
+  return entries;
+}
+
 function extractReasoningDetailsText(details: ProviderReasoningDetail[] | undefined) {
   if (!Array.isArray(details) || details.length === 0) {
     return "";
@@ -1745,13 +2759,6 @@ function extractAnthropicText(payload: AnthropicMessageResponse) {
   return (payload.content ?? [])
     .filter((block) => block.type === "text")
     .map((block) => block.text ?? "")
-    .join("");
-}
-
-function extractAnthropicReasoning(payload: AnthropicMessageResponse) {
-  return (payload.content ?? [])
-    .filter((block) => block.type === "thinking")
-    .map((block) => block.thinking ?? block.text ?? "")
     .join("");
 }
 

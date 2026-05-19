@@ -13,6 +13,6 @@
 /src-tauri/ @UrbanWafflezz
 /src/app/ @UrbanWafflezz
 /src/prompts/ @UrbanWafflezz
-/src/tools/ @UrbanWafflezz
-/src/services/openRouterClient.ts @UrbanWafflezz
+/src/services/modelProviderClient.ts @UrbanWafflezz
+/src/services/openRouterRouting.ts @UrbanWafflezz
 /src/services/webSearchClient.ts @UrbanWafflezz

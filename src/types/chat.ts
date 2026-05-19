@@ -1,4 +1,4 @@
-import type { ReasoningEffort } from "./settings";
+import type { ModelProviderId, ReasoningEffort } from "./settings";
 import type { LocalWorkspaceSettings } from "./localWorkspace";
 import type { TerminalShellId } from "./terminal";
 import type { WebSearchProvider } from "./settings";
@@ -27,7 +27,12 @@ export interface ChatImageAttachment extends ChatAttachmentBase {
   width?: number;
 }
 
-export type ChatAttachment = ChatFileAttachment | ChatImageAttachment;
+export interface ChatVideoAttachment extends ChatAttachmentBase {
+  dataUrl: string;
+  kind: "video";
+}
+
+export type ChatAttachment = ChatFileAttachment | ChatImageAttachment | ChatVideoAttachment;
 
 export interface ChatThinking {
   completedAt?: string;
@@ -73,6 +78,7 @@ export interface ChatPlanning {
   inputRequests?: ChatPlanningInputRequest[];
   maxPasses: number;
   passCount: number;
+  planContent?: string;
   startedAt: string;
 }
 
@@ -156,7 +162,30 @@ export interface ChatToolFileChangeLine {
   oldLine?: number;
 }
 
+export type ChatToolBatchFileStatus = "error" | "ok" | "skipped";
+
+export interface ChatToolBatchFileResult {
+  additions: number;
+  deletions: number;
+  detail?: string;
+  kind?: ChatToolFileChange["kind"];
+  path: string;
+  requestedPath?: string;
+  status: ChatToolBatchFileStatus;
+}
+
+export interface ChatToolBatchSummary {
+  failureCount: number;
+  fileCount: number;
+  operation: "edit" | "write";
+  requestedCount: number;
+  skippedCount: number;
+  successCount: number;
+}
+
 export interface ChatToolCall {
+  batchFileResults?: ChatToolBatchFileResult[];
+  batchSummary?: ChatToolBatchSummary;
   detail?: string;
   fileChanges?: ChatToolFileChange[];
   id: string;
@@ -168,6 +197,29 @@ export interface ChatToolCall {
   terminal?: ChatToolCallTerminal;
   toolId?: string;
 }
+
+export type ChatWorkTraceStatus = "active" | "complete";
+
+export interface ChatWorkTraceThinkingItem {
+  content: string;
+  id: string;
+  kind: "thinking";
+  status?: ChatWorkTraceStatus;
+}
+
+export interface ChatWorkTraceToolItem {
+  id: string;
+  kind: "tool";
+  toolCall: ChatToolCall;
+}
+
+export interface ChatWorkTraceProgressItem {
+  id: string;
+  kind: "progress";
+  progress: ChatProgressItem;
+}
+
+export type ChatWorkTraceItem = ChatWorkTraceThinkingItem | ChatWorkTraceToolItem | ChatWorkTraceProgressItem;
 
 export type ChatWebSearchStatus = "active" | "complete" | "error";
 
@@ -191,6 +243,8 @@ export interface ChatContextCompaction {
   compactedMessageCount: number;
   contextWindowTokens?: number;
   forcedByProviderUsage?: boolean;
+  strategy?: string;
+  summaryVersion?: number;
   thresholdTokens?: number;
 }
 
@@ -202,6 +256,13 @@ export interface ChatMessageSource {
   receivedAt?: string;
   userId?: string;
   username?: string;
+}
+
+export interface ChatResearchReference {
+  chatId: string;
+  project: string;
+  title: string;
+  updatedAt: string;
 }
 
 export interface ChatMessage {
@@ -220,6 +281,7 @@ export interface ChatMessage {
   progress?: ChatProgressItem[];
   reasoning?: string;
   responseThinking?: string;
+  researchReferences?: ChatResearchReference[];
   role: ChatRole;
   source?: ChatMessageSource;
   sources?: ChatSource[];
@@ -227,6 +289,7 @@ export interface ChatMessage {
   thinking?: ChatThinking;
   toolCalls?: ChatToolCall[];
   webSearch?: ChatWebSearch;
+  workTrace?: ChatWorkTraceItem[];
 }
 
 export interface ChatSendInput {
@@ -235,6 +298,7 @@ export interface ChatSendInput {
   localWorkspace?: LocalWorkspaceSettings;
   mode?: ChatMessageMode;
   planning?: Record<string, never>;
+  referencedChatIds?: string[];
   webSearch?: {
     enabled: boolean;
     maxResults?: number;
@@ -249,11 +313,14 @@ export interface ChatComposerDraft {
 
 export interface ChatSummary {
   archived?: boolean;
+  composerDraft?: ChatComposerDraft;
   id: string;
   isDraft?: boolean;
   messages: ChatMessage[];
+  model?: string;
   pinned?: boolean;
   project: string;
+  provider?: ModelProviderId;
   title: string;
   toolRuntimeVersion?: number;
   updatedAt: string;

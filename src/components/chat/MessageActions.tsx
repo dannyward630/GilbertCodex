@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Clock3, Copy, MoreHorizontal, RefreshCcw, Square } from "lucide-react";
+import { Check, Clock3, Copy, MoreHorizontal, Pencil, RefreshCcw, Square } from "lucide-react";
 import { copyTextToClipboard } from "../../lib/clipboard";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import type { ChatMessage } from "../../types/chat";
@@ -7,6 +7,7 @@ import type { ChatMessage } from "../../types/chat";
 interface MessageActionsProps {
   canRegenerate?: boolean;
   message: ChatMessage;
+  onEditMessage?: (messageId: string) => void;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
   onStopGeneration?: (messageId: string) => void;
 }
@@ -37,18 +38,19 @@ function formatMessageDateTime(createdAt: string) {
   }).format(new Date(timestamp));
 }
 
-export function MessageActions({ canRegenerate, message, onRegenerateResponse, onStopGeneration }: MessageActionsProps) {
+export function MessageActions({ canRegenerate, message, onEditMessage, onRegenerateResponse, onStopGeneration }: MessageActionsProps) {
   const actionRef = useRef<HTMLDivElement | null>(null);
   const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const timeLabel = formatMessageTime(message.createdAt);
   const fullTimeLabel = formatMessageDateTime(message.createdAt);
-  const copyContent = [message.responseThinking, message.content].filter((part) => part?.trim()).join("\n\n");
+  const copyContent = message.content;
   const copyDisabled = !copyContent.trim();
   const showRegenerate = Boolean(canRegenerate && onRegenerateResponse && message.role === "assistant" && !message.isStreaming);
   const regenerateLabel = isInterruptedAssistantMessage(message) ? "Continue response" : "Regenerate response";
   const showStop = Boolean(onStopGeneration && message.role === "assistant" && message.isStreaming);
+  const showEdit = Boolean(onEditMessage && message.role === "user");
   const statusLabel = message.status === "queued" ? "Queued" : null;
 
   useEffect(() => {
@@ -115,6 +117,15 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
     void onRegenerateResponse(message.id);
   }
 
+  function editMessage() {
+    if (!showEdit || !onEditMessage) {
+      return;
+    }
+
+    setMenuOpen(false);
+    onEditMessage(message.id);
+  }
+
   function stopGeneration() {
     if (!showStop || !onStopGeneration) {
       return;
@@ -142,6 +153,11 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
           <RefreshCcw size={14} aria-hidden="true" />
         </button>
       ) : null}
+      {showEdit ? (
+        <button className="message-action" type="button" aria-label="Edit message" title="Edit message" onClick={editMessage}>
+          <Pencil size={14} aria-hidden="true" />
+        </button>
+      ) : null}
       <button className="message-action" type="button" aria-label={copied ? "Message copied" : "Copy message"} title={copied ? "Message copied" : "Copy message"} disabled={copyDisabled} onClick={copyMessage}>
         {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
       </button>
@@ -159,6 +175,12 @@ export function MessageActions({ canRegenerate, message, onRegenerateResponse, o
         </button>
         {menuOpen ? (
           <div className="message-action-menu" role="menu">
+            {showEdit ? (
+              <button type="button" role="menuitem" onClick={editMessage}>
+                <Pencil size={14} aria-hidden="true" />
+                <span>Edit message</span>
+              </button>
+            ) : null}
             {showStop ? (
               <button type="button" role="menuitem" onClick={stopGeneration}>
                 <Square size={12} aria-hidden="true" />

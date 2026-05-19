@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { PanelBottomClose, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react";
+import "../../styles/terminal.css";
+import { ChevronsUpDown, FolderOpen, PanelBottomClose, Plus, RotateCw, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { createTerminalSession, drainTerminalSession, killTerminalSession, resizeTerminalSession, writeTerminalSession } from "../../app/tauriClient";
-import { getAvailableTerminalShells, getDefaultTerminalShell, terminalShellLabel } from "../../lib/terminalShells";
+import { listComputerDrives, pickComputerFolder } from "../../localWorkspace/files";
+import { getAvailableTerminalShells, getDefaultTerminalShell, getHostPlatform, terminalShellLabel } from "../../lib/terminalShells";
 import type { TerminalAttachedSession, TerminalOutputChunk, TerminalShellId } from "../../types/terminal";
 
 interface TerminalPanelProps {
@@ -20,17 +22,38 @@ interface TerminalPanelProps {
 type TerminalStatus = "connected" | "error" | "exited" | "running" | "starting" | "stopped" | "unavailable";
 type ResolvedTerminalTheme = "dark" | "light";
 
+interface TerminalTab {
+  activeCommand: string | null;
+  attached: boolean;
+  id: string;
+  owned: boolean;
+  pendingWorkingDirectory: string | null;
+  sessionId: string | null;
+  shell: TerminalShellId;
+  status: TerminalStatus;
+  workingDirectory: string;
+}
+
+interface TerminalWorkspaceState {
+  activeTabId: string;
+  tabs: TerminalTab[];
+}
+
 const MIN_TERMINAL_HEIGHT = 184;
-const MAX_TERMINAL_HEIGHT = 640;
+const MAX_TERMINAL_HEIGHT = 720;
 const POLL_INTERVAL_MS = 90;
+const IDLE_POLL_INTERVAL_MS = 240;
 const RESIZE_STEP = 28;
+const MAX_REPLAY_BUFFER_CHARS = 2_000_000;
+
+let terminalTabCounter = 0;
 
 const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
   dark: {
-    background: "#101215",
-    black: "#1c2229",
+    background: "#0d1117",
+    black: "#141a22",
     blue: "#8fc7ff",
-    brightBlack: "#66717d",
+    brightBlack: "#6e7681",
     brightBlue: "#add7ff",
     brightCyan: "#9be7ff",
     brightGreen: "#b8e6c8",
@@ -39,9 +62,9 @@ const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
     brightWhite: "#ffffff",
     brightYellow: "#ffe1a3",
     cursor: "#d7ecff",
-    cursorAccent: "#101215",
+    cursorAccent: "#0d1117",
     cyan: "#7bd8f7",
-    foreground: "#e9edf2",
+    foreground: "#e6edf3",
     green: "#91d7a7",
     magenta: "#c7a9ff",
     red: "#ff8f85",
@@ -52,7 +75,7 @@ const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
     yellow: "#f2c978",
   },
   light: {
-    background: "#f8fafc",
+    background: "#fbfdff",
     black: "#1f2937",
     blue: "#0969da",
     brightBlack: "#667085",
@@ -80,59 +103,41 @@ const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
 };
 
 export function TerminalPanel({ attachedSession, desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [shell, setShell] = useState<TerminalShellId>(() => getDefaultTerminalShell());
-  const [status, setStatus] = useState<TerminalStatus>(desktopRuntime ? "stopped" : "unavailable");
-  const [activeCommand, setActiveCommand] = useState<string | null>(null);
-  const [pendingWorkingDirectory, setPendingWorkingDirectory] = useState<string | null>(null);
+  const [workspace, setWorkspaceState] = useState<TerminalWorkspaceState>(() => createInitialWorkspace(workingDirectory));
+  const [cwdMenuOpen, setCwdMenuOpen] = useState(false);
+  const [cwdDraft, setCwdDraft] = useState("");
+  const [cwdMenuError, setCwdMenuError] = useState<string | null>(null);
+  const [directoryShortcuts, setDirectoryShortcuts] = useState<string[]>([]);
   const [resolvedTerminalTheme, setResolvedTerminalTheme] = useState<ResolvedTerminalTheme>(() => readResolvedTerminalTheme());
-  const [sessionWorkingDirectory, setSessionWorkingDirectory] = useState(workingDirectory ?? "");
   const shellOptions = useMemo(() => getAvailableTerminalShells(), []);
-  const autoStartedRef = useRef(false);
+  const activeTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
+  const activeStatusLabel = useMemo(() => getStatusLabel(activeTab?.status ?? (desktopRuntime ? "stopped" : "unavailable"), desktopRuntime), [activeTab?.status, desktopRuntime]);
+
+  const activeProjectKeyRef = useRef(createProjectKey(workingDirectory));
+  const activeTabIdRef = useRef(workspace.activeTabId);
+  const cwdMenuRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const lastRequestedWorkingDirectoryRef = useRef((workingDirectory ?? "").trim());
-  const ownedSessionIdRef = useRef<string | null>(null);
-  const replayedAttachedSessionRef = useRef<string | null>(null);
+  const ownedSessionIdsRef = useRef(new Set<string>());
+  const replayedAttachedSessionRef = useRef(new Set<string>());
   const resolvedTerminalThemeRef = useRef<ResolvedTerminalTheme>(resolvedTerminalTheme);
-  const pendingTerminalTextRef = useRef("");
-  const pendingWorkingDirectoryRef = useRef<string | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
-  const startingRef = useRef(false);
-  const statusRef = useRef(status);
+  const startingTabIdsRef = useRef(new Set<string>());
+  const tabOutputRef = useRef<Record<string, string>>(
+    Object.fromEntries(workspace.tabs.map((tab) => [tab.id, ""])),
+  );
+  const tabsRef = useRef(workspace.tabs);
+  const workspaceCacheRef = useRef<Record<string, TerminalWorkspaceState>>({
+    [activeProjectKeyRef.current]: workspace,
+  });
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
 
-  const statusLabel = useMemo(() => {
-    if (!desktopRuntime) {
-      return "Desktop required";
-    }
-
-    if (status === "starting") {
-      return "Starting";
-    }
-
-    if (status === "connected") {
-      return "Ready";
-    }
-
-    if (status === "running") {
-      return "Running";
-    }
-
-    if (status === "exited") {
-      return "Exited";
-    }
-
-    if (status === "error") {
-      return "Needs attention";
-    }
-
-    return "Stopped";
-  }, [desktopRuntime, status]);
+  useEffect(() => {
+    tabsRef.current = workspace.tabs;
+  }, [workspace.tabs]);
 
   useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+    activeTabIdRef.current = workspace.activeTabId;
+  }, [workspace.activeTabId]);
 
   useEffect(() => {
     resolvedTerminalThemeRef.current = resolvedTerminalTheme;
@@ -162,45 +167,72 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
 
   useEffect(() => {
     return () => {
-      const activeSessionId = sessionIdRef.current;
-
-      if (activeSessionId && activeSessionId === ownedSessionIdRef.current) {
-        void killTerminalSession(activeSessionId).catch(() => undefined);
+      for (const sessionId of ownedSessionIdsRef.current) {
+        void killTerminalSession(sessionId).catch(() => undefined);
       }
+
+      ownedSessionIdsRef.current.clear();
     };
   }, []);
 
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-
-  const writeTerminalText = useCallback((text: string) => {
-    if (!text) {
-      return;
-    }
-
-    const terminal = terminalRef.current;
-
-    if (!terminal) {
-      pendingTerminalTextRef.current += text;
-      return;
-    }
-
-    terminal.write(text);
+  const setWorkspace = useCallback((updater: TerminalWorkspaceState | ((current: TerminalWorkspaceState) => TerminalWorkspaceState)) => {
+    setWorkspaceState((current) => {
+      const nextWorkspace = typeof updater === "function" ? updater(current) : updater;
+      workspaceCacheRef.current[activeProjectKeyRef.current] = nextWorkspace;
+      tabsRef.current = nextWorkspace.tabs;
+      activeTabIdRef.current = nextWorkspace.activeTabId;
+      return nextWorkspace;
+    });
   }, []);
 
-  const writeTerminalChunks = useCallback(
-    (chunks: TerminalOutputChunk[]) => {
-      writeTerminalText(chunks.map((chunk) => chunk.text).join(""));
-    },
-    [writeTerminalText],
-  );
+  const findCachedTab = useCallback((tabId: string) => {
+    for (const projectWorkspace of Object.values(workspaceCacheRef.current)) {
+      const tab = projectWorkspace.tabs.find((candidate) => candidate.id === tabId);
 
-  const writeSystemMessage = useCallback(
-    (message: string) => {
-      writeTerminalText(`\r\n${message.trimEnd()}\r\n`);
+      if (tab) {
+        return tab;
+      }
+    }
+
+    return undefined;
+  }, []);
+
+  const updateTab = useCallback(
+    (tabId: string, patch: Partial<TerminalTab> | ((tab: TerminalTab) => Partial<TerminalTab>)) => {
+      const activeProjectKey = activeProjectKeyRef.current;
+      const nextCache: Record<string, TerminalWorkspaceState> = { ...workspaceCacheRef.current };
+      let nextActiveWorkspace: TerminalWorkspaceState | null = null;
+
+      for (const [projectKey, projectWorkspace] of Object.entries(workspaceCacheRef.current)) {
+        let changed = false;
+        const nextTabs = projectWorkspace.tabs.map((tab) => {
+          if (tab.id !== tabId) {
+            return tab;
+          }
+
+          const nextPatch = typeof patch === "function" ? patch(tab) : patch;
+          changed = true;
+          return { ...tab, ...nextPatch };
+        });
+
+        if (changed) {
+          const nextProjectWorkspace = { ...projectWorkspace, tabs: nextTabs };
+          nextCache[projectKey] = nextProjectWorkspace;
+
+          if (projectKey === activeProjectKey) {
+            nextActiveWorkspace = nextProjectWorkspace;
+          }
+        }
+      }
+
+      workspaceCacheRef.current = nextCache;
+
+      if (nextActiveWorkspace) {
+        tabsRef.current = nextActiveWorkspace.tabs;
+        setWorkspaceState(nextActiveWorkspace);
+      }
     },
-    [writeTerminalText],
+    [],
   );
 
   const fitTerminal = useCallback(() => {
@@ -211,6 +243,160 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
     }
   }, []);
 
+  const replayTabOutput = useCallback(
+    (tabId: string) => {
+      const terminal = terminalRef.current;
+
+      if (!terminal) {
+        return;
+      }
+
+      terminal.reset();
+      terminal.clear();
+
+      const output = tabOutputRef.current[tabId];
+      if (output) {
+        terminal.write(output);
+      }
+
+      window.requestAnimationFrame(() => {
+        fitTerminal();
+        terminal.focus();
+      });
+    },
+    [fitTerminal],
+  );
+
+  const appendTabText = useCallback(
+    (tabId: string, text: string) => {
+      if (!text) {
+        return;
+      }
+
+      const previous = tabOutputRef.current[tabId] ?? "";
+      const next = trimReplayBuffer(`${previous}${text}`);
+      tabOutputRef.current[tabId] = next;
+
+      const tab = findCachedTab(tabId);
+      const inferredWorkingDirectory = tab ? inferWorkingDirectoryFromTerminalOutput(next, tab.shell) : null;
+
+      if (tab && inferredWorkingDirectory && inferredWorkingDirectory !== tab.workingDirectory) {
+        updateTab(tabId, {
+          pendingWorkingDirectory: null,
+          workingDirectory: inferredWorkingDirectory,
+        });
+      }
+
+      if (tabId === activeTabIdRef.current) {
+        terminalRef.current?.write(text);
+      }
+    },
+    [findCachedTab, updateTab],
+  );
+
+  const appendTabChunks = useCallback(
+    (tabId: string, chunks: TerminalOutputChunk[]) => {
+      appendTabText(tabId, chunks.map((chunk) => chunk.text).join(""));
+    },
+    [appendTabText],
+  );
+
+  const writeSystemMessage = useCallback(
+    (tabId: string, message: string) => {
+      appendTabText(tabId, `\r\n${message.trimEnd()}\r\n`);
+    },
+    [appendTabText],
+  );
+
+  const selectTab = useCallback(
+    (tabId: string) => {
+      if (!tabsRef.current.some((tab) => tab.id === tabId)) {
+        return;
+      }
+
+      activeTabIdRef.current = tabId;
+      setWorkspace((current) => ({ ...current, activeTabId: tabId }));
+      replayTabOutput(tabId);
+    },
+    [replayTabOutput],
+  );
+
+  const startSession = useCallback(
+    async (tabId: string, replace = false, workingDirectoryOverride?: string) => {
+      const currentTab = tabsRef.current.find((tab) => tab.id === tabId);
+
+      if (!currentTab || startingTabIdsRef.current.has(tabId)) {
+        return;
+      }
+
+      if (!desktopRuntime) {
+        updateTab(tabId, { status: "unavailable" });
+        writeSystemMessage(tabId, "Open the desktop app to run terminal sessions.");
+        return;
+      }
+
+      startingTabIdsRef.current.add(tabId);
+      updateTab(tabId, { status: "starting" });
+
+      const previousSessionId = replace ? currentTab.sessionId : null;
+      const nextWorkingDirectory = (workingDirectoryOverride ?? currentTab.pendingWorkingDirectory ?? currentTab.workingDirectory).trim();
+
+      if (previousSessionId) {
+        try {
+          await killTerminalSession(previousSessionId);
+        } catch {
+          // A dead session should not block replacing the tab.
+        }
+
+        ownedSessionIdsRef.current.delete(previousSessionId);
+        updateTab(tabId, {
+          activeCommand: null,
+          sessionId: null,
+        });
+      }
+
+      tabOutputRef.current[tabId] = "";
+      if (tabId === activeTabIdRef.current) {
+        terminalRef.current?.reset();
+        terminalRef.current?.clear();
+      }
+
+      try {
+        const response = await createTerminalSession({
+          mode: "interactive",
+          shell: currentTab.shell,
+          workingDirectory: nextWorkingDirectory || undefined,
+        });
+
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) {
+          await killTerminalSession(response.sessionId).catch(() => undefined);
+          return;
+        }
+
+        ownedSessionIdsRef.current.add(response.sessionId);
+        updateTab(tabId, {
+          activeCommand: null,
+          attached: false,
+          owned: true,
+          pendingWorkingDirectory: null,
+          sessionId: response.sessionId,
+          shell: response.shell,
+          status: "connected",
+          workingDirectory: response.workingDirectory,
+        });
+        appendTabChunks(tabId, response.initialOutput);
+        window.requestAnimationFrame(fitTerminal);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        updateTab(tabId, { status: "error" });
+        writeSystemMessage(tabId, `Could not start terminal: ${detail}`);
+      } finally {
+        startingTabIdsRef.current.delete(tabId);
+      }
+    },
+    [appendTabChunks, desktopRuntime, fitTerminal, updateTab, writeSystemMessage],
+  );
+
   useEffect(() => {
     if (!open || !desktopRuntime || !terminalHostRef.current) {
       return;
@@ -218,16 +404,24 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
 
     const terminal = new Terminal({
       allowProposedApi: false,
+      allowTransparency: true,
       convertEol: true,
       cursorBlink: true,
       cursorStyle: "block",
       disableStdin: false,
       drawBoldTextInBrightColors: true,
-      fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
+      fontFamily: '"Cascadia Code", "SFMono-Regular", "JetBrains Mono", Consolas, monospace',
       fontSize: 12.5,
-      lineHeight: 1.22,
+      fontWeight: 450,
+      fontWeightBold: 720,
+      ignoreBracketedPasteMode: false,
+      letterSpacing: 0,
+      lineHeight: 1.2,
+      rightClickSelectsWord: true,
       scrollback: 12_000,
+      scrollOnUserInput: true,
       theme: { ...XTERM_THEMES[resolvedTerminalThemeRef.current] },
+      windowsPty: getHostPlatform() === "windows" ? { backend: "conpty" } : undefined,
     });
     const fitAddon = new FitAddon();
     const host = terminalHostRef.current;
@@ -238,35 +432,30 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
     fitAddonRef.current = fitAddon;
 
     const dataDisposable = terminal.onData((data) => {
-      const activeSessionId = sessionIdRef.current;
+      const activeTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
 
-      if (!activeSessionId || statusRef.current === "exited" || statusRef.current === "stopped") {
+      if (!activeTab?.sessionId || activeTab.status === "exited" || activeTab.status === "stopped") {
         return;
       }
 
-      void writeTerminalSession(activeSessionId, data).catch((error) => {
+      void writeTerminalSession(activeTab.sessionId, data).catch((error) => {
         const detail = error instanceof Error ? error.message : String(error);
-        setStatus("error");
-        writeSystemMessage(`Terminal input failed: ${detail}`);
+        updateTab(activeTab.id, { status: "error" });
+        writeSystemMessage(activeTab.id, `Terminal input failed: ${detail}`);
       });
     });
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-      const activeSessionId = sessionIdRef.current;
+      const activeTab = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
 
-      if (!activeSessionId) {
+      if (!activeTab?.sessionId) {
         return;
       }
 
-      void resizeTerminalSession(activeSessionId, cols, rows).catch(() => undefined);
+      void resizeTerminalSession(activeTab.sessionId, cols, rows).catch(() => undefined);
     });
     const animationFrame = window.requestAnimationFrame(() => {
       fitTerminal();
-
-      if (pendingTerminalTextRef.current) {
-        terminal.write(pendingTerminalTextRef.current);
-        pendingTerminalTextRef.current = "";
-      }
-
+      replayTabOutput(activeTabIdRef.current);
       terminal.focus();
     });
 
@@ -278,7 +467,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       terminalRef.current = null;
       terminal.dispose();
     };
-  }, [desktopRuntime, fitTerminal, open, writeSystemMessage]);
+  }, [desktopRuntime, fitTerminal, open, replayTabOutput, updateTab, writeSystemMessage]);
 
   useEffect(() => {
     if (!open || !desktopRuntime || !terminalHostRef.current) {
@@ -297,190 +486,72 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
     };
   }, [desktopRuntime, fitTerminal, height, open]);
 
-  const startSession = useCallback(
-    async (replace = false, workingDirectoryOverride?: string) => {
-      if (startingRef.current) {
-        return;
-      }
+  useEffect(() => {
+    if (!open || !desktopRuntime || !activeTab || activeTab.sessionId || activeTab.status === "starting" || activeTab.attached) {
+      return;
+    }
 
-      if (!desktopRuntime) {
-        setStatus("unavailable");
-        writeSystemMessage("Terminal commands are available in the Tauri desktop app.");
-        return;
-      }
-
-      startingRef.current = true;
-      setStatus("starting");
-
-      const previousSessionId = replace ? sessionIdRef.current : null;
-      const nextWorkingDirectory = (workingDirectoryOverride ?? sessionWorkingDirectory).trim();
-
-      if (previousSessionId) {
-        try {
-          await killTerminalSession(previousSessionId);
-        } catch {
-          // The session may already be gone; starting a fresh one is still the useful path.
-        }
-
-        sessionIdRef.current = null;
-        ownedSessionIdRef.current = null;
-        setSessionId(null);
-        setActiveCommand(null);
-        pendingTerminalTextRef.current = "";
-        terminalRef.current?.reset();
-        terminalRef.current?.clear();
-      }
-
-      try {
-        const response = await createTerminalSession({
-          mode: "interactive",
-          shell,
-          workingDirectory: nextWorkingDirectory || undefined,
-        });
-
-        sessionIdRef.current = response.sessionId;
-        ownedSessionIdRef.current = response.sessionId;
-        setSessionId(response.sessionId);
-        setActiveCommand(null);
-        setSessionWorkingDirectory(response.workingDirectory);
-        pendingWorkingDirectoryRef.current = null;
-        setPendingWorkingDirectory(null);
-        setStatus("connected");
-        writeTerminalChunks(response.initialOutput);
-        window.requestAnimationFrame(fitTerminal);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        setStatus("error");
-        writeSystemMessage(`Could not start terminal: ${detail}`);
-      } finally {
-        startingRef.current = false;
-      }
-    },
-    [desktopRuntime, fitTerminal, sessionWorkingDirectory, shell, writeSystemMessage, writeTerminalChunks],
-  );
+    void startSession(activeTab.id, false);
+  }, [activeTab, desktopRuntime, open, startSession]);
 
   useEffect(() => {
-    const nextWorkingDirectory = workingDirectory?.trim() ?? "";
-
-    if (nextWorkingDirectory === lastRequestedWorkingDirectoryRef.current) {
-      return;
-    }
-
-    lastRequestedWorkingDirectoryRef.current = nextWorkingDirectory;
-
-    if (!nextWorkingDirectory || nextWorkingDirectory === sessionWorkingDirectory.trim()) {
-      return;
-    }
-
-    if (!sessionIdRef.current) {
-      setSessionWorkingDirectory(nextWorkingDirectory);
-      return;
-    }
-
-    pendingWorkingDirectoryRef.current = nextWorkingDirectory;
-    setPendingWorkingDirectory(nextWorkingDirectory);
-    writeSystemMessage(`Project changed. Restart the terminal to switch to ${nextWorkingDirectory}.`);
-  }, [sessionWorkingDirectory, workingDirectory, writeSystemMessage]);
-
-  useEffect(() => {
-    if (!attachedSession?.sessionId || !desktopRuntime) {
-      return;
-    }
-
-    const previousOwnedSessionId = ownedSessionIdRef.current;
-    const switching = sessionIdRef.current !== attachedSession.sessionId;
-
-    if (previousOwnedSessionId && previousOwnedSessionId !== attachedSession.sessionId) {
-      void killTerminalSession(previousOwnedSessionId).catch(() => undefined);
-    }
-
-    autoStartedRef.current = true;
-    ownedSessionIdRef.current = null;
-    sessionIdRef.current = attachedSession.sessionId;
-    setSessionId(attachedSession.sessionId);
-    setStatus("running");
-    setActiveCommand(attachedSession.command ?? null);
-
-    if (attachedSession.shell) {
-      setShell(attachedSession.shell);
-    }
-
-    if (attachedSession.workingDirectory) {
-      setSessionWorkingDirectory(attachedSession.workingDirectory);
-      pendingWorkingDirectoryRef.current = null;
-      setPendingWorkingDirectory(null);
-    }
-
-    if (switching) {
-      pendingTerminalTextRef.current = "";
-      terminalRef.current?.reset();
-      terminalRef.current?.clear();
-    }
-
-    if (replayedAttachedSessionRef.current !== attachedSession.sessionId) {
-      replayedAttachedSessionRef.current = attachedSession.sessionId;
-      writeSystemMessage(`Attached to background command: ${attachedSession.command ?? attachedSession.sessionId}`);
-
-      if (attachedSession.initialOutput?.trim()) {
-        writeSystemMessage("Recent output captured before attach:");
-        writeTerminalText(attachedSession.initialOutput.endsWith("\n") ? attachedSession.initialOutput : `${attachedSession.initialOutput}\n`);
-      }
-    }
-  }, [attachedSession, desktopRuntime, writeSystemMessage, writeTerminalText]);
-
-  useEffect(() => {
-    if (!open || !desktopRuntime || sessionId || attachedSession?.sessionId || autoStartedRef.current) {
-      return;
-    }
-
-    autoStartedRef.current = true;
-    void startSession(false);
-  }, [attachedSession?.sessionId, desktopRuntime, open, sessionId, startSession]);
-
-  useEffect(() => {
-    if (!open || !sessionId) {
+    if (!desktopRuntime) {
       return;
     }
 
     let canceled = false;
-    const activeSessionId = sessionId;
     let timeoutId: number | undefined;
 
     async function drain() {
-      try {
-        const response = await drainTerminalSession(activeSessionId);
+      const sessions = Object.values(workspaceCacheRef.current)
+        .flatMap((projectWorkspace) => projectWorkspace.tabs)
+        .filter((tab) => tab.sessionId);
 
-        if (canceled) {
-          return;
-        }
+      await Promise.allSettled(
+        sessions.map(async (tab) => {
+          const sessionId = tab.sessionId;
 
-        writeTerminalChunks(response.chunks);
+          if (!sessionId) {
+            return;
+          }
 
-        if (response.workingDirectory && !pendingWorkingDirectoryRef.current) {
-          setSessionWorkingDirectory(response.workingDirectory);
-        }
+          try {
+            const response = await drainTerminalSession(sessionId);
 
-        setActiveCommand(response.activeCommand ?? null);
+            if (canceled) {
+              return;
+            }
 
-        if (response.commandRunning) {
-          setStatus("running");
-        } else if (response.exitCode !== null && response.exitCode !== undefined) {
-          setStatus("exited");
-        } else {
-          setStatus("connected");
-        }
-      } catch (error) {
-        if (canceled) {
-          return;
-        }
+            appendTabChunks(tab.id, response.chunks);
 
-        const detail = error instanceof Error ? error.message : String(error);
-        setStatus("error");
-        writeSystemMessage(`Terminal disconnected: ${detail}`);
-      }
+            updateTab(tab.id, (current) => {
+              const nextStatus: TerminalStatus = response.commandRunning ? "running" : response.exitCode !== null && response.exitCode !== undefined ? "exited" : "connected";
+              const patch: Partial<TerminalTab> = {
+                activeCommand: response.activeCommand ?? null,
+                status: nextStatus,
+              };
+
+              if (current.attached && response.workingDirectory) {
+                patch.workingDirectory = response.workingDirectory;
+              }
+
+              return patch;
+            });
+          } catch (error) {
+            if (canceled || !findCachedTab(tab.id)) {
+              return;
+            }
+
+            const detail = error instanceof Error ? error.message : String(error);
+            updateTab(tab.id, { status: "error" });
+            writeSystemMessage(tab.id, `Terminal disconnected: ${detail}`);
+          }
+        }),
+      );
 
       if (!canceled) {
-        timeoutId = window.setTimeout(drain, POLL_INTERVAL_MS);
+        const active = tabsRef.current.find((tab) => tab.id === activeTabIdRef.current);
+        timeoutId = window.setTimeout(drain, active?.status === "running" ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS);
       }
     }
 
@@ -492,32 +563,225 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
         window.clearTimeout(timeoutId);
       }
     };
-  }, [open, sessionId, writeSystemMessage, writeTerminalChunks]);
+  }, [appendTabChunks, desktopRuntime, findCachedTab, updateTab, writeSystemMessage]);
 
-  async function stopSession() {
-    if (!sessionIdRef.current) {
+  useEffect(() => {
+    if (!attachedSession?.sessionId || !desktopRuntime) {
       return;
     }
 
-    const activeSessionId = sessionIdRef.current;
+    const existingAttachedTab = Object.values(workspaceCacheRef.current)
+      .flatMap((projectWorkspace) => projectWorkspace.tabs)
+      .find((tab) => tab.sessionId === attachedSession.sessionId);
+    const attachedTab =
+      existingAttachedTab ??
+      createTerminalTab(attachedSession.workingDirectory ?? workingDirectory ?? "", attachedSession.shell ?? getDefaultTerminalShell(), {
+        activeCommand: attachedSession.command ?? null,
+        attached: true,
+        owned: false,
+        sessionId: attachedSession.sessionId,
+        status: "running",
+      });
+
+    if (!existingAttachedTab) {
+      tabOutputRef.current[attachedTab.id] = "";
+      setWorkspace((current) => ({
+        activeTabId: attachedTab.id,
+        tabs: [...current.tabs, attachedTab],
+      }));
+    } else {
+      updateTab(attachedTab.id, {
+        activeCommand: attachedSession.command ?? null,
+        attached: true,
+        owned: false,
+        shell: attachedSession.shell ?? attachedTab.shell,
+        status: "running",
+        workingDirectory: attachedSession.workingDirectory ?? attachedTab.workingDirectory,
+      });
+      selectTab(attachedTab.id);
+    }
+
+    activeTabIdRef.current = attachedTab.id;
+
+    if (!replayedAttachedSessionRef.current.has(attachedSession.sessionId)) {
+      replayedAttachedSessionRef.current.add(attachedSession.sessionId);
+      const intro = `\r\nAttached to background command: ${attachedSession.command ?? attachedSession.sessionId}\r\n`;
+      const recentOutput = attachedSession.initialOutput?.trim()
+        ? `Recent output captured before attach:\r\n${attachedSession.initialOutput.endsWith("\n") ? attachedSession.initialOutput : `${attachedSession.initialOutput}\r\n`}`
+        : "";
+      tabOutputRef.current[attachedTab.id] = trimReplayBuffer(`${tabOutputRef.current[attachedTab.id] ?? ""}${intro}${recentOutput}`);
+    }
+
+    window.requestAnimationFrame(() => replayTabOutput(attachedTab.id));
+  }, [attachedSession, desktopRuntime, replayTabOutput, selectTab, updateTab, workingDirectory]);
+
+  useEffect(() => {
+    workspaceCacheRef.current[activeProjectKeyRef.current] = workspace;
+  }, [workspace]);
+
+  useEffect(() => {
+    const nextWorkingDirectory = workingDirectory?.trim() ?? "";
+    const nextProjectKey = createProjectKey(workingDirectory);
+
+    if (nextProjectKey === activeProjectKeyRef.current) {
+      return;
+    }
+
+    const nextWorkspace = workspaceCacheRef.current[nextProjectKey] ?? createInitialWorkspace(nextWorkingDirectory);
+    workspaceCacheRef.current[nextProjectKey] = nextWorkspace;
+    activeProjectKeyRef.current = nextProjectKey;
+    activeTabIdRef.current = nextWorkspace.activeTabId;
+    tabsRef.current = nextWorkspace.tabs;
+    setCwdMenuOpen(false);
+    setCwdMenuError(null);
+    setWorkspaceState(nextWorkspace);
+    window.requestAnimationFrame(() => replayTabOutput(nextWorkspace.activeTabId));
+  }, [replayTabOutput, workingDirectory]);
+
+  useEffect(() => {
+    if (!cwdMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (cwdMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+
+      setCwdMenuOpen(false);
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setCwdMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [cwdMenuOpen]);
+
+  useEffect(() => {
+    if (!cwdMenuOpen || !desktopRuntime) {
+      return;
+    }
+
+    let canceled = false;
+
+    async function loadShortcuts() {
+      const shortcuts = new Map<string, string>();
+      addShortcut(shortcuts, activeTab?.workingDirectory);
+      addShortcut(shortcuts, activeTab?.pendingWorkingDirectory);
+      addShortcut(shortcuts, workingDirectory);
+
+      try {
+        const drives = await listComputerDrives();
+
+        for (const drive of drives) {
+          if (drive.available) {
+            addShortcut(shortcuts, drive.path);
+          }
+        }
+      } catch {
+        // The native picker remains the primary browsing path if drive listing fails.
+      }
+
+      if (!canceled) {
+        setDirectoryShortcuts(Array.from(shortcuts.values()).slice(0, 7));
+      }
+    }
+
+    void loadShortcuts();
+
+    return () => {
+      canceled = true;
+    };
+  }, [activeTab?.pendingWorkingDirectory, activeTab?.workingDirectory, cwdMenuOpen, desktopRuntime, workingDirectory]);
+
+  async function stopActiveSession() {
+    if (!activeTab?.sessionId) {
+      return;
+    }
+
+    const sessionId = activeTab.sessionId;
 
     try {
-      await killTerminalSession(activeSessionId);
+      await killTerminalSession(sessionId);
     } catch {
       // Closing a dead session should still leave the UI in a clean stopped state.
     }
 
-    setSessionId(null);
-    sessionIdRef.current = null;
-    ownedSessionIdRef.current = null;
-    setStatus("stopped");
-    setActiveCommand(null);
-    writeSystemMessage("Terminal session stopped.");
+    ownedSessionIdsRef.current.delete(sessionId);
+    updateTab(activeTab.id, {
+      activeCommand: null,
+      owned: false,
+      sessionId: null,
+      status: "stopped",
+    });
+    writeSystemMessage(activeTab.id, "Terminal session stopped.");
   }
 
-  function clearTerminal() {
+  function clearActiveTerminal() {
+    if (!activeTab) {
+      return;
+    }
+
+    tabOutputRef.current[activeTab.id] = "";
     terminalRef.current?.clear();
-    pendingTerminalTextRef.current = "";
+  }
+
+  function createNewTab(startDirectory = activeTab?.workingDirectory ?? workingDirectory ?? "", shell = activeTab?.shell ?? getDefaultTerminalShell()) {
+    const tab = createTerminalTab(startDirectory, shell);
+    tabOutputRef.current[tab.id] = "";
+    activeTabIdRef.current = tab.id;
+    setWorkspace((current) => ({
+      activeTabId: tab.id,
+      tabs: [...current.tabs, tab],
+    }));
+    replayTabOutput(tab.id);
+  }
+
+  async function closeTab(tabId: string) {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+
+    if (!tab) {
+      return;
+    }
+
+    if (tab.sessionId) {
+      try {
+        await killTerminalSession(tab.sessionId);
+      } catch {
+        // Removing the tab is still the expected UI result.
+      }
+
+      ownedSessionIdsRef.current.delete(tab.sessionId);
+    }
+
+    delete tabOutputRef.current[tabId];
+    startingTabIdsRef.current.delete(tabId);
+
+    setWorkspace((current) => {
+      const index = current.tabs.findIndex((candidate) => candidate.id === tabId);
+      const nextTabs = current.tabs.filter((candidate) => candidate.id !== tabId);
+
+      if (nextTabs.length === 0) {
+        const replacement = createTerminalTab(workingDirectory ?? "", getDefaultTerminalShell());
+        tabOutputRef.current[replacement.id] = "";
+        activeTabIdRef.current = replacement.id;
+        return { activeTabId: replacement.id, tabs: [replacement] };
+      }
+
+      const activeTabId = current.activeTabId === tabId ? nextTabs[Math.max(0, index - 1)]?.id ?? nextTabs[0].id : current.activeTabId;
+      activeTabIdRef.current = activeTabId;
+      window.requestAnimationFrame(() => replayTabOutput(activeTabId));
+      return { activeTabId, tabs: nextTabs };
+    });
   }
 
   function handleResizeStart(event: ReactPointerEvent<HTMLElement>) {
@@ -584,6 +848,75 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
     }
   }
 
+  function openCwdMenu() {
+    if (!activeTab) {
+      return;
+    }
+
+    setCwdDraft(activeTab.pendingWorkingDirectory ?? activeTab.workingDirectory);
+    setCwdMenuError(null);
+    setCwdMenuOpen((value) => !value);
+  }
+
+  async function browseForWorkingDirectory() {
+    if (!activeTab) {
+      return;
+    }
+
+    try {
+      const picked = await pickComputerFolder(cwdDraft || activeTab.workingDirectory);
+
+      if (!picked) {
+        return;
+      }
+
+      setCwdDraft(picked);
+      await applyWorkingDirectory(picked, "active");
+    } catch (error) {
+      setCwdMenuError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function applyWorkingDirectory(path: string, mode: "active" | "new") {
+    const trimmedPath = path.trim();
+
+    if (!trimmedPath || !activeTab) {
+      setCwdMenuError("Choose a folder first.");
+      return;
+    }
+
+    if (mode === "new") {
+      setCwdMenuOpen(false);
+      createNewTab(trimmedPath, activeTab.shell);
+      return;
+    }
+
+    if (activeTab.attached && activeTab.status === "running") {
+      setCwdMenuError("Open a new terminal for another folder while this command is attached.");
+      return;
+    }
+
+    updateTab(activeTab.id, {
+      pendingWorkingDirectory: null,
+      workingDirectory: trimmedPath,
+    });
+    setCwdMenuOpen(false);
+
+    if (!activeTab.sessionId || activeTab.status === "exited" || activeTab.status === "stopped") {
+      await startSession(activeTab.id, Boolean(activeTab.sessionId), trimmedPath);
+      return;
+    }
+
+    try {
+      await writeTerminalSession(activeTab.sessionId, `${createChangeDirectoryCommand(activeTab.shell, trimmedPath)}\r`);
+      terminalRef.current?.focus();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      updateTab(activeTab.id, { status: "error" });
+      writeSystemMessage(activeTab.id, `Could not change directory: ${detail}`);
+    }
+  }
+
   if (!open) {
     return null;
   }
@@ -599,56 +932,252 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
         onKeyDown={handleResizeKeyDown}
         onPointerDown={handleResizeStart}
       />
-      <header className="terminal-toolbar">
-        <div className="terminal-title">
-          <SquareTerminal size={18} aria-hidden="true" />
-          <strong>Terminal</strong>
-          <span data-status={status}>{statusLabel}</span>
-          {activeCommand ? <em title={activeCommand}>{activeCommand}</em> : null}
-        </div>
-        <label className="terminal-shell-select">
-          <span className="sr-only">Shell</span>
-          <select value={shell} onChange={(event) => setShell(event.target.value as TerminalShellId)} disabled={Boolean(sessionId)}>
-            {shellOptions.map((option) => (
-              <option value={option} key={option}>
-                {terminalShellLabel(option)}
-              </option>
+      <div className="terminal-workspace">
+        <aside className="terminal-session-rail" aria-label="Terminal sessions">
+          <div className="terminal-session-rail-header">
+            <span>Sessions</span>
+            <button type="button" aria-label="New terminal session" title="New terminal session" onClick={() => createNewTab()}>
+              <Plus size={15} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="terminal-session-list">
+            {workspace.tabs.map((tab, index) => (
+              <div className="terminal-session-row" data-active={tab.id === workspace.activeTabId} key={tab.id}>
+                <button type="button" className="terminal-session-tab" aria-current={tab.id === workspace.activeTabId ? "true" : undefined} onClick={() => selectTab(tab.id)}>
+                  <span className="terminal-session-status" data-status={tab.status} />
+                  <span className="terminal-session-copy">
+                    <strong>{formatSessionTitle(tab, index)}</strong>
+                    <small title={tab.workingDirectory}>{formatDirectoryShortName(tab.workingDirectory)}</small>
+                  </span>
+                </button>
+                <button type="button" className="terminal-session-close" aria-label={`Close ${formatSessionTitle(tab, index)}`} title="Close session" onClick={() => void closeTab(tab.id)}>
+                  <X size={13} aria-hidden="true" />
+                </button>
+              </div>
             ))}
-          </select>
-        </label>
-        <label className="terminal-cwd-field">
-          <span>cwd</span>
-          <input
-            value={pendingWorkingDirectory ?? sessionWorkingDirectory}
-            spellCheck={false}
-            disabled={Boolean(sessionId)}
-            onChange={(event) => setSessionWorkingDirectory(event.target.value)}
-          />
-        </label>
-        <div className="terminal-actions">
-          <button type="button" aria-label="Restart terminal session" title="Restart terminal session" disabled={Boolean(attachedSession?.sessionId && sessionId === attachedSession.sessionId)} onClick={() => void startSession(true, pendingWorkingDirectoryRef.current ?? undefined)}>
-            <RotateCw size={16} aria-hidden="true" />
-          </button>
-          <button type="button" aria-label="Stop terminal session" title="Stop terminal session" disabled={!sessionId} onClick={() => void stopSession()}>
-            <Square size={15} aria-hidden="true" />
-          </button>
-          <button type="button" aria-label="Clear terminal output" title="Clear terminal output" onClick={clearTerminal}>
-            <Trash2 size={16} aria-hidden="true" />
-          </button>
-          <button type="button" aria-label="Close terminal" title="Close terminal" onClick={onClose}>
-            <PanelBottomClose size={17} aria-hidden="true" />
-          </button>
+          </div>
+        </aside>
+        <div className="terminal-main">
+          <header className="terminal-toolbar">
+            <div className="terminal-title">
+              <SquareTerminal size={18} aria-hidden="true" />
+              <strong>{activeTab ? terminalShellLabel(activeTab.shell) : "Terminal"}</strong>
+              <span data-status={activeTab?.status ?? "stopped"}>{activeStatusLabel}</span>
+              {activeTab?.activeCommand ? <em title={activeTab.activeCommand}>{activeTab.activeCommand}</em> : null}
+            </div>
+            <div className="terminal-location" ref={cwdMenuRef}>
+              <button type="button" className="terminal-cwd-button" aria-expanded={cwdMenuOpen} aria-haspopup="dialog" title={activeTab?.workingDirectory || "Choose folder"} onClick={openCwdMenu}>
+                <span>cwd</span>
+                <code>{activeTab?.pendingWorkingDirectory ?? activeTab?.workingDirectory ?? "Choose folder"}</code>
+                <ChevronsUpDown size={14} aria-hidden="true" />
+              </button>
+              {cwdMenuOpen ? (
+                <div className="terminal-cwd-popover" role="dialog" aria-label="Terminal working directory">
+                  <label>
+                    <span>Folder</span>
+                    <input value={cwdDraft} spellCheck={false} onChange={(event) => setCwdDraft(event.target.value)} onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void applyWorkingDirectory(cwdDraft, "active");
+                      }
+                    }} />
+                  </label>
+                  <div className="terminal-cwd-popover-actions">
+                    <button type="button" onClick={() => void browseForWorkingDirectory()}>
+                      <FolderOpen size={15} aria-hidden="true" />
+                      Browse
+                    </button>
+                    <button type="button" onClick={() => void applyWorkingDirectory(cwdDraft, "active")}>Open</button>
+                    <button type="button" onClick={() => void applyWorkingDirectory(cwdDraft, "new")}>New session</button>
+                  </div>
+                  {directoryShortcuts.length > 0 ? (
+                    <div className="terminal-cwd-shortcuts" aria-label="Folder shortcuts">
+                      {directoryShortcuts.map((path) => (
+                        <button type="button" title={path} key={path} onClick={() => void applyWorkingDirectory(path, "active")}>
+                          {formatDirectoryShortName(path)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {cwdMenuError ? <p>{cwdMenuError}</p> : null}
+                </div>
+              ) : null}
+            </div>
+            <label className="terminal-shell-select">
+              <span className="sr-only">Shell</span>
+              <select
+                value={activeTab?.shell ?? getDefaultTerminalShell()}
+                onChange={(event) => {
+                  if (activeTab) {
+                    updateTab(activeTab.id, { shell: event.target.value as TerminalShellId });
+                  }
+                }}
+                disabled={Boolean(activeTab?.sessionId)}
+              >
+                {shellOptions.map((option) => (
+                  <option value={option} key={option}>
+                    {terminalShellLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="terminal-actions">
+              <button type="button" aria-label="Restart terminal session" title="Restart terminal session" disabled={!activeTab || Boolean(activeTab.attached && activeTab.sessionId === attachedSession?.sessionId)} onClick={() => activeTab && void startSession(activeTab.id, true, activeTab.pendingWorkingDirectory ?? undefined)}>
+                <RotateCw size={16} aria-hidden="true" />
+              </button>
+              <button type="button" aria-label="Stop terminal session" title="Stop terminal session" disabled={!activeTab?.sessionId} onClick={() => void stopActiveSession()}>
+                <Square size={15} aria-hidden="true" />
+              </button>
+              <button type="button" aria-label="Clear terminal output" title="Clear terminal output" disabled={!activeTab} onClick={clearActiveTerminal}>
+                <Trash2 size={16} aria-hidden="true" />
+              </button>
+              <button type="button" aria-label="Close terminal" title="Close terminal" onClick={onClose}>
+                <PanelBottomClose size={17} aria-hidden="true" />
+              </button>
+            </div>
+          </header>
+          <div className="terminal-output" ref={terminalHostRef} onClick={() => terminalRef.current?.focus()}>
+            {!desktopRuntime ? <div className="terminal-unavailable">Open the desktop app to run terminal sessions.</div> : null}
+          </div>
         </div>
-      </header>
-      <div className="terminal-output" ref={terminalHostRef} onClick={() => terminalRef.current?.focus()}>
-        {!desktopRuntime ? <div className="terminal-unavailable">Open the desktop app to run commands.</div> : null}
       </div>
     </section>
   );
 }
 
+function createInitialWorkspace(workingDirectory?: string): TerminalWorkspaceState {
+  const tab = createTerminalTab(workingDirectory ?? "");
+
+  return {
+    activeTabId: tab.id,
+    tabs: [tab],
+  };
+}
+
+function createProjectKey(workingDirectory?: string | null) {
+  const normalized = (workingDirectory ?? "").trim().replace(/[\\/]+$/, "");
+  return normalized ? normalized.toLowerCase() : "__gilbert-no-project__";
+}
+
+function createTerminalTab(workingDirectory: string, shell: TerminalShellId = getDefaultTerminalShell(), patch: Partial<TerminalTab> = {}): TerminalTab {
+  terminalTabCounter += 1;
+
+  return {
+    activeCommand: null,
+    attached: false,
+    id: `terminal-tab-${Date.now()}-${terminalTabCounter}`,
+    owned: false,
+    pendingWorkingDirectory: null,
+    sessionId: null,
+    shell,
+    status: "stopped",
+    workingDirectory,
+    ...patch,
+  };
+}
+
+function addShortcut(shortcuts: Map<string, string>, path?: string | null) {
+  const normalized = path?.trim();
+
+  if (normalized) {
+    shortcuts.set(normalized.toLowerCase(), normalized);
+  }
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function createChangeDirectoryCommand(shell: TerminalShellId, path: string) {
+  if (shell === "powershell") {
+    return `Set-Location -LiteralPath ${quotePowerShellString(path)}`;
+  }
+
+  if (shell === "cmd") {
+    return `cd /d ${quoteCmdString(path)}`;
+  }
+
+  return `cd ${quotePosixString(path)}`;
+}
+
+function quotePowerShellString(value: string) {
+  return `'${value.split("'").join("''")}'`;
+}
+
+function quoteCmdString(value: string) {
+  return `"${value.split('"').join('""')}"`;
+}
+
+function quotePosixString(value: string) {
+  return `'${value.split("'").join("'\\''")}'`;
+}
+
+function formatDirectoryShortName(path: string) {
+  const trimmed = path.trim();
+
+  if (!trimmed) {
+    return "No folder";
+  }
+
+  const withoutTrailingSlash = trimmed.replace(/[\\/]+$/, "");
+  const parts = withoutTrailingSlash.split(/[\\/]+/);
+  return parts[parts.length - 1] || withoutTrailingSlash || trimmed;
+}
+
+function formatSessionTitle(tab: TerminalTab, index: number) {
+  if (tab.attached && tab.activeCommand) {
+    return "Attached";
+  }
+
+  return `${terminalShellLabel(tab.shell)} ${index + 1}`;
+}
+
+function getStatusLabel(status: TerminalStatus, desktopRuntime: boolean) {
+  if (!desktopRuntime) {
+    return "Desktop required";
+  }
+
+  if (status === "starting") {
+    return "Starting";
+  }
+
+  if (status === "connected") {
+    return "Ready";
+  }
+
+  if (status === "running") {
+    return "Running";
+  }
+
+  if (status === "exited") {
+    return "Exited";
+  }
+
+  if (status === "error") {
+    return "Needs attention";
+  }
+
+  if (status === "unavailable") {
+    return "Unavailable";
+  }
+
+  return "Stopped";
+}
+
+function inferWorkingDirectoryFromTerminalOutput(output: string, shell: TerminalShellId) {
+  const tail = output.slice(-4096).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  if (shell === "powershell") {
+    const matches = Array.from(tail.matchAll(/(?:^|[\r\n])PS ([A-Za-z]:\\[^\r\n>]*|\\\\[^\r\n>]+)> ?/g));
+    return matches[matches.length - 1]?.[1]?.trim() ?? null;
+  }
+
+  if (shell === "cmd") {
+    const matches = Array.from(tail.matchAll(/(?:^|[\r\n])([A-Za-z]:\\[^\r\n>]*|\\\\[^\r\n>]+)> ?/g));
+    return matches[matches.length - 1]?.[1]?.trim() ?? null;
+  }
+
+  return null;
 }
 
 function readResolvedTerminalTheme(): ResolvedTerminalTheme {
@@ -665,4 +1194,12 @@ function readResolvedTerminalTheme(): ResolvedTerminalTheme {
   }
 
   return "dark";
+}
+
+function trimReplayBuffer(value: string) {
+  if (value.length <= MAX_REPLAY_BUFFER_CHARS) {
+    return value;
+  }
+
+  return value.slice(value.length - MAX_REPLAY_BUFFER_CHARS);
 }

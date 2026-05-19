@@ -12,7 +12,27 @@ export default defineConfig({
             return undefined;
           }
 
-          return "vendor";
+          if (id.includes("mapbox-gl")) {
+            return "mapbox";
+          }
+
+          if (id.includes("@xterm")) {
+            return "terminal";
+          }
+
+          if (id.includes("react-markdown") || id.includes("remark-gfm") || id.includes("micromark") || id.includes("mdast") || id.includes("hast") || id.includes("unist")) {
+            return "markdown";
+          }
+
+          if (id.includes("lucide-react")) {
+            return "icons";
+          }
+
+          if (id.includes("react") || id.includes("react-dom")) {
+            return "react";
+          }
+
+          return undefined;
         },
       },
     },

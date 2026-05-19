@@ -1,6 +1,7 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
+import type { ProviderReasoningState } from "../../types/reasoning";
 import { finalizeToolResult } from "../resultFinalizer";
-import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { createInlineToolResultMessage, createProviderVisibleToolSchema, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyResponsesToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -8,6 +9,9 @@ export function applyResponsesToolBridge(body: Record<string, unknown>, options:
   if (tools.length > 0) {
     body.tools = tools.map(createResponsesToolSchema);
     body.tool_choice = options.toolChoice ?? "auto";
+    if (typeof options.parallelToolCalls === "boolean") {
+      body.parallel_tool_calls = options.parallelToolCalls;
+    }
   } else if (options.toolChoice === "none" && options.toolResultDelivery !== "inline-user-message") {
     body.tool_choice = "none";
     delete body.tools;
@@ -23,6 +27,7 @@ export function applyResponsesToolBridge(body: Record<string, unknown>, options:
         })
       : appendResponsesToolResultItems(body.input, options.toolResultMessages, {
           maxToolResultContentChars: options.maxToolResultContentChars,
+          reasoningState: options.reasoningState,
           skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
         });
   }
@@ -31,10 +36,16 @@ export function applyResponsesToolBridge(body: Record<string, unknown>, options:
 }
 
 export function createResponsesToolSchema(tool: ToolDefinition) {
+  const schema = createProviderVisibleToolSchema(tool);
+
   return {
-    description: tool.description,
-    name: tool.id,
-    parameters: tool.inputSchema,
+    description: schema.description,
+    name: schema.name,
+    parameters: schema.inputSchema,
+    // The Responses API normalizes omitted strictness toward strict schemas.
+    // Gilbert's local tools intentionally have optional arguments, so keep
+    // those schemas best-effort unless an individual tool opts into strictness.
+    strict: false,
     type: "function",
   };
 }
@@ -42,13 +53,14 @@ export function createResponsesToolSchema(tool: ToolDefinition) {
 function appendResponsesToolResultItems(
   currentInput: unknown,
   results: ToolResultMessage[],
-  options: { maxToolResultContentChars?: number | null; skipAssistantTurn: boolean },
+  options: { maxToolResultContentChars?: number | null; reasoningState?: ProviderReasoningState; skipAssistantTurn: boolean },
 ) {
   const input = Array.isArray(currentInput) ? [...currentInput] : [];
   let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
 
   for (const result of results) {
     if (!options.skipAssistantTurn) {
+      input.push(...createResponsesReasoningItems(options.reasoningState));
       input.push({
         arguments: JSON.stringify(result.arguments ?? {}),
         call_id: result.callId,
@@ -73,6 +85,17 @@ function appendResponsesToolResultItems(
   }
 
   return input;
+}
+
+function createResponsesReasoningItems(reasoningState: ProviderReasoningState | undefined) {
+  if (reasoningState?.format !== "openai-responses") {
+    return [];
+  }
+
+  return reasoningState.entries
+    .filter((entry) => entry.type === "reasoning")
+    .map((entry) => entry.value)
+    .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value)));
 }
 
 function appendInlineUserToolResultItems(

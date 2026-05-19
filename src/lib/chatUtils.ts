@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatMessage, ChatSummary } from "../types/chat";
+import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSummary } from "../types/chat";
 
 export const DEFAULT_PROJECT = "No project";
 
@@ -27,11 +27,28 @@ export function createEmptyChat(project = DEFAULT_PROJECT): ChatSummary {
 
   return {
     id: createId("chat"),
+    isDraft: true,
     messages: [],
     project: normalizeProjectName(project),
     title: "New chat",
     updatedAt: now,
   };
+}
+
+export function isEmptyChat(chat: Pick<ChatSummary, "messages">) {
+  return chat.messages.length === 0;
+}
+
+export function hasComposerDraftContent(draft?: ChatComposerDraft | null): draft is ChatComposerDraft {
+  return Boolean(draft && (draft.content.trim() || draft.attachments.length > 0));
+}
+
+export function isDiscardableEmptyChat(chat: Pick<ChatSummary, "composerDraft" | "messages">) {
+  return isEmptyChat(chat) && !hasComposerDraftContent(chat.composerDraft);
+}
+
+export function isPlainResearchChat(chat: Pick<ChatSummary, "archived" | "id" | "messages" | "project">, activeChatId?: string) {
+  return chat.id !== activeChatId && isNoProjectName(chat.project) && !chat.archived && !isEmptyChat(chat);
 }
 
 export function createMessage(
@@ -41,12 +58,12 @@ export function createMessage(
   reasoning?: string,
   attachments?: ChatAttachment[],
 ): ChatMessage {
+  void reasoning;
   return {
     attachments: attachments && attachments.length > 0 ? attachments : undefined,
     content,
     createdAt: new Date().toISOString(),
     id: createId("message"),
-    reasoning,
     role,
     status,
   };
@@ -66,6 +83,10 @@ export function titleFromMessage(content: string, attachments: ChatAttachment[] 
 
     if (firstAttachment?.kind === "image") {
       return firstAttachment.name ? `Image: ${firstAttachment.name}` : "Image upload";
+    }
+
+    if (firstAttachment?.kind === "video") {
+      return firstAttachment.name ? `Video: ${firstAttachment.name}` : "Video upload";
     }
 
     if (firstAttachment) {

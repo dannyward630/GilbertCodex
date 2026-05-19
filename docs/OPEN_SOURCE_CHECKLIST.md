@@ -40,7 +40,7 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 - Route-level views belong in `src/pages`.
 - Reusable UI belongs in `src/components`, grouped by product area.
 - Provider, planning, usage, and search clients belong in `src/services`.
-- Provider tool-bridge work should stay documented, tested, and permissioned before new host-facing tool families are enabled broadly.
+- Provider runtime work should stay documented, tested, and permissioned before new host-facing capabilities are enabled broadly.
 - Shared contracts belong in `src/types`.
 - Rust commands belong in `src-tauri/src/commands`.
 - Rust host scaffolding belongs in `src-tauri/src/core`.
@@ -48,7 +48,7 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 ## Comment Style
 
 - Prefer clear names over explanatory comments.
-- Follow [Code Documentation Standards](CODE_DOCUMENTATION.md) for exported contracts, Tauri commands, model/tool boundaries, and security-sensitive fallback behavior.
+- Follow [Code Documentation Standards](CODE_DOCUMENTATION.md) for exported contracts, Tauri commands, model/runtime boundaries, and security-sensitive fallback behavior.
 - Use TSDoc/JSDoc or Rust doc comments where a public contract would otherwise require reading several files.
 - Use short inline comments only where the implementation decision is not self-explanatory.
 - Do not leave TODO, FIXME, debug, or temporary investigation comments in committed code.
@@ -56,5 +56,5 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 ## Security Review
 
 - Check that sample text, docs, fixtures, screenshots, and generated scan reports do not contain real keys, private paths, customer data, or terminal output.
-- Treat auth, terminal, file write, full-computer scope, provider key handling, and tool execution as security-sensitive review areas.
+- Treat auth, terminal, file write, full-computer scope, provider key handling, and local runtime execution as security-sensitive review areas.
 - Keep destructive actions behind explicit confirmation UI.

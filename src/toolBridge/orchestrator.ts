@@ -2,6 +2,8 @@ import type { ChatToolCall } from "../types/chat";
 import { resolveToolPermission } from "./permissions";
 import { ToolRegistry, createDefaultToolRegistry } from "./registry";
 import { createBridgeChatToolCall } from "./results";
+import { coalesceToolBridgeCalls, createToolExecutionSegments } from "./scheduler";
+import type { ProviderReasoningState } from "../types/reasoning";
 import type {
   ToolApprovalCallback,
   ToolBridgeExecutionBatch,
@@ -53,7 +55,7 @@ export interface ToolBridgeOrchestratorResult {
   abortedBySignal: boolean;
   content: string;
   loopCount: number;
-  reasoning?: string;
+  reasoningState?: ProviderReasoningState;
   resultMessages: ToolResultMessage[];
   steps: ToolBridgeExecutionStep[];
   stoppedAtMaxLoops: boolean;
@@ -86,7 +88,7 @@ export class ToolBridgeOrchestrator {
     const resultMessages: ToolResultMessage[] = [];
     const steps: ToolBridgeExecutionStep[] = [];
     let lastContent = "";
-    let lastReasoning: string | undefined;
+    let lastReasoningState: ProviderReasoningState | undefined;
 
     for (let loopIndex = 0; loopIndex < this.maxLoops; loopIndex += 1) {
       if (this.context.signal?.aborted) {
@@ -95,7 +97,7 @@ export class ToolBridgeOrchestrator {
           abortedBySignal: true,
           content: lastContent,
           loopCount: loopIndex,
-          reasoning: lastReasoning,
+          reasoningState: lastReasoningState,
           resultMessages,
           steps,
           stoppedAtMaxLoops: false,
@@ -113,8 +115,8 @@ export class ToolBridgeOrchestrator {
       if (turn.content) {
         lastContent = turn.content;
       }
-      if (turn.reasoning !== undefined) {
-        lastReasoning = turn.reasoning;
+      if (turn.reasoningState !== undefined) {
+        lastReasoningState = turn.reasoningState;
       }
 
       if (!turn.toolCalls?.length) {
@@ -122,7 +124,7 @@ export class ToolBridgeOrchestrator {
           abortedBySignal: false,
           content: turn.content,
           loopCount: loopIndex + 1,
-          reasoning: turn.reasoning,
+          reasoningState: turn.reasoningState,
           resultMessages,
           steps,
           stoppedAtMaxLoops: false,
@@ -148,7 +150,7 @@ export class ToolBridgeOrchestrator {
           abortedBySignal: true,
           content: lastContent,
           loopCount: loopIndex + 1,
-          reasoning: lastReasoning,
+          reasoningState: lastReasoningState,
           resultMessages,
           steps,
           stoppedAtMaxLoops: false,
@@ -161,7 +163,7 @@ export class ToolBridgeOrchestrator {
       abortedBySignal: false,
       content: lastContent,
       loopCount: this.maxLoops,
-      reasoning: lastReasoning,
+      reasoningState: lastReasoningState,
       resultMessages,
       steps,
       stoppedAtMaxLoops: true,
@@ -174,66 +176,138 @@ export async function executeToolBridgeCalls(
 ): Promise<ToolBridgeExecutionBatch> {
   const registry = options.registry ?? createDefaultToolRegistry();
   const maxConcurrency = Math.max(1, options.maxConcurrency ?? DEFAULT_BRIDGE_MAX_CONCURRENCY);
-  const calls = options.calls;
-  const total = calls.length;
+  const requestedCalls = options.calls;
+  const total = requestedCalls.length;
 
   // Skip duplicate call IDs so one provider call cannot execute twice or collide in result replay.
   const seen = new Map<string, number>();
-  const isDuplicate = calls.map((call) => {
+  const uniqueCalls: ToolCallRequest[] = [];
+  const originalPositionByCallId = new Map<string, number>();
+  const prefilledSteps: Array<{ position: number; step: ToolBridgeExecutionStep }> = [];
+
+  requestedCalls.forEach((call, position) => {
     const count = seen.get(call.id) ?? 0;
     seen.set(call.id, count + 1);
-    return count > 0;
+
+    if (count > 0) {
+      emitTelemetry(options.telemetry, { callId: call.id, toolName: call.name, type: "tool-call-duplicate" });
+      const duplicateStep = makeDuplicateStep(call);
+      prefilledSteps.push({ position, step: duplicateStep });
+      notifyToolUpdate(options.onToolCallUpdate, duplicateStep.chatToolCall);
+      return;
+    }
+
+    uniqueCalls.push(call);
+    originalPositionByCallId.set(call.id, position);
   });
 
-  const steps: (ToolBridgeExecutionStep | undefined)[] = new Array(total);
+  const coalesced = coalesceToolBridgeCalls(uniqueCalls, registry);
 
-  let nextIndex = 0;
-  const workerCount = Math.max(1, Math.min(maxConcurrency, total));
+  if (coalesced.coalescedCount > 0) {
+    emitTelemetry(options.telemetry, {
+      coalescedCount: coalesced.coalescedCount,
+      fromToolIds: coalesced.fromToolIds,
+      requestedCount: coalesced.requestedCount,
+      toToolIds: coalesced.toToolIds,
+      type: "tool-batch-coalesced",
+    });
+  }
 
-  async function worker() {
-    while (true) {
-      const current = nextIndex;
-      if (current >= total) {
-        return;
-      }
-      nextIndex += 1;
-      const call = calls[current]!;
+  const segments = createToolExecutionSegments(coalesced.calls, registry);
+  emitTelemetry(options.telemetry, {
+    exclusiveCount: segments.filter((segment) => segment.mode === "exclusive").reduce((count, segment) => count + segment.calls.length, 0),
+    parallelCount: segments.filter((segment) => segment.mode === "parallel").reduce((count, segment) => count + segment.calls.length, 0),
+    segmentCount: segments.length,
+    type: "tool-batch-scheduled",
+  });
 
-      if (isDuplicate[current]) {
-        emitTelemetry(options.telemetry, { callId: call.id, toolName: call.name, type: "tool-call-duplicate" });
-        const duplicateStep = makeDuplicateStep(call);
-        steps[current] = duplicateStep;
-        notifyToolUpdate(options.onToolCallUpdate, duplicateStep.chatToolCall);
-        continue;
-      }
+  const executedSteps: Array<{ position: number; step: ToolBridgeExecutionStep }> = [];
 
-      steps[current] = await executeSingleToolCall(
+  async function executeCall(call: ToolCallRequest): Promise<{ position: number; step: ToolBridgeExecutionStep }> {
+    return {
+      position: getOriginalCallPosition(call, originalPositionByCallId, total),
+      step: await executeSingleToolCall(
         call,
         registry,
         options.context,
         options.onToolCallUpdate,
         options.approval,
         options.telemetry,
-      );
+      ),
+    };
+  }
+
+  for (const segment of segments) {
+    if (segment.mode === "exclusive") {
+      for (const call of segment.calls) {
+        executedSteps.push(await executeCall(call));
+      }
+      continue;
     }
+
+    const segmentResults = new Array<{ position: number; step: ToolBridgeExecutionStep }>(segment.calls.length);
+    let nextIndex = 0;
+    const workerCount = Math.max(1, Math.min(maxConcurrency, segment.calls.length));
+
+    async function worker() {
+      while (true) {
+        const current = nextIndex;
+        if (current >= segment.calls.length) {
+          return;
+        }
+        nextIndex += 1;
+        segmentResults[current] = await executeCall(segment.calls[current]!);
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    executedSteps.push(...segmentResults.filter((entry): entry is { position: number; step: ToolBridgeExecutionStep } => Boolean(entry)));
   }
 
-  const workerPromises: Promise<void>[] = [];
-  for (let i = 0; i < workerCount; i += 1) {
-    workerPromises.push(worker());
-  }
-  await Promise.all(workerPromises);
-
-  const orderedSteps = steps.filter((step): step is ToolBridgeExecutionStep => step !== undefined);
+  const orderedSteps = [...prefilledSteps, ...executedSteps]
+    .sort((left, right) => left.position - right.position)
+    .map((entry) => entry.step);
 
   return {
+    coalescedCount: coalesced.coalescedCount,
     executedCount: orderedSteps.filter((step) => step.result.ok).length,
     handledCount: orderedSteps.length,
+    hostExecutionCount: coalesced.calls.length,
     requestedCount: total,
     resultMessages: orderedSteps.map((step) => step.resultMessage),
     steps: orderedSteps,
     toolCalls: orderedSteps.map((step) => step.chatToolCall),
   };
+}
+
+function getOriginalCallPosition(call: ToolCallRequest, originalPositionByCallId: Map<string, number>, fallbackPosition: number) {
+  const directPosition = originalPositionByCallId.get(call.id);
+  if (directPosition !== undefined) {
+    return directPosition;
+  }
+
+  const raw = call.raw;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return fallbackPosition;
+  }
+
+  const coalescedCallIds = (raw as { coalescedCallIds?: unknown }).coalescedCallIds;
+  if (!Array.isArray(coalescedCallIds)) {
+    return fallbackPosition;
+  }
+
+  for (const callId of coalescedCallIds) {
+    if (typeof callId !== "string") {
+      continue;
+    }
+
+    const position = originalPositionByCallId.get(callId);
+    if (position !== undefined) {
+      return position;
+    }
+  }
+
+  return fallbackPosition;
 }
 
 function makeDuplicateStep(call: ToolCallRequest): ToolBridgeExecutionStep {
@@ -381,7 +455,21 @@ async function executeResolvedToolCall(
 
   const startedAt = nowMs();
   try {
-    const result = await tool.execute(validation.args, context);
+    const progressContext: ToolExecutionContext = {
+      ...context,
+      reportProgress: (progressResult) => {
+        try {
+          context.reportProgress?.(progressResult);
+        } catch {
+          // Progress observers must not break the actual tool run.
+        }
+        notifyToolUpdate(
+          onToolCallUpdate,
+          createBridgeChatToolCall(call, tool, progressResult, "active"),
+        );
+      },
+    };
+    const result = await tool.execute(validation.args, progressContext);
     emitTelemetry(telemetry, {
       callId: call.id,
       durationMs: nowMs() - startedAt,

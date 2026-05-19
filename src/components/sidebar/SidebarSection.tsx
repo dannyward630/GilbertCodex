@@ -1,5 +1,5 @@
 import { ChevronRight, MoreHorizontal } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 
@@ -32,6 +32,7 @@ interface SidebarItem {
 interface SidebarSectionProps {
   actionIcon?: LucideIcon;
   actionLabel?: string;
+  emptyMessage?: string;
   items: SidebarItem[];
   onAction?: () => void;
   onSecondaryAction?: () => void;
@@ -40,9 +41,10 @@ interface SidebarSectionProps {
   title: string;
 }
 
-export function SidebarSection({
+export const SidebarSection = memo(function SidebarSection({
   actionIcon: ActionIcon,
   actionLabel,
+  emptyMessage,
   items,
   onAction,
   onSecondaryAction,
@@ -52,12 +54,14 @@ export function SidebarSection({
 }: SidebarSectionProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const sectionTitleId = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-section`;
+  const dismissableRefs = useMemo(() => [sectionRef], []);
+  const dismissMenu = useCallback(() => setOpenMenuId(null), []);
+  const sectionTitleId = useMemo(() => `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-section`, [title]);
 
   useDismissableLayer({
     active: openMenuId !== null,
-    onDismiss: () => setOpenMenuId(null),
-    refs: [sectionRef],
+    onDismiss: dismissMenu,
+    refs: dismissableRefs,
   });
 
   function renderItem(item: SidebarItem, depth = 0) {
@@ -179,10 +183,12 @@ export function SidebarSection({
           ) : null}
         </div>
       </div>
-      <div className="sidebar-list">{items.map((item) => renderItem(item))}</div>
+      <div className="sidebar-list">
+        {items.length > 0 ? items.map((item) => renderItem(item)) : emptyMessage ? <p className="sidebar-empty-state">{emptyMessage}</p> : null}
+      </div>
     </section>
   );
-}
+});
 
 function formatActivityLabel(activity: SidebarItemActivity) {
   if (activity === "waiting") {

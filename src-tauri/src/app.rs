@@ -10,6 +10,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         .manage(commands::computer::files::ComputerFileIndexState::default())
         .manage(commands::discord::DiscordBridgeState::default())
         .manage(commands::github::GithubState::default())
+        .manage(commands::nine_router::NineRouterLocalState::default())
         .manage(commands::terminal::TerminalState::default())
         .manage(commands::updates::AppUpdateState::default())
         .setup(|app| {
@@ -18,7 +19,6 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
                     window.set_icon(icon.clone())?;
                 }
             }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -33,6 +33,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::app_info::get_app_info,
             commands::browser::browser_automation,
             commands::computer::files::computer_build_file_index,
+            commands::computer::files::computer_create_directory,
             commands::computer::files::computer_delete_file,
             commands::computer::files::computer_get_default_workspace,
             commands::computer::files::computer_get_file_index_summary,
@@ -50,9 +51,15 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::computer::files::computer_move_path,
             commands::computer::files::computer_pick_folder,
             commands::computer::files::computer_read_text_file,
+            commands::computer::files::computer_read_text_file_range,
             commands::computer::files::computer_search_file_index,
+            commands::computer::files::computer_search_text_files,
             commands::computer::files::computer_write_text_file,
+            commands::computer::files::computer_write_text_files,
+            commands::database::gilbert_database_auto_finalize_migration,
+            commands::database::gilbert_database_backup,
             commands::database::gilbert_database_cleanup_legacy_storage,
+            commands::database::gilbert_database_finalize_migration,
             commands::database::gilbert_database_get_overview,
             commands::database::gilbert_database_load,
             commands::database::gilbert_database_reset,
@@ -84,6 +91,15 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::github::github_poll_device_login,
             commands::github::github_read_file,
             commands::github::github_search_code,
+            commands::nine_router::nine_router_local_http,
+            commands::nine_router::nine_router_local_install,
+            commands::nine_router::nine_router_local_ensure,
+            commands::nine_router::nine_router_local_set_auto_start,
+            commands::nine_router::nine_router_local_status,
+            commands::nine_router::nine_router_local_stop,
+            commands::nine_router::nine_router_local_stream,
+            commands::nine_router::nine_router_oauth_callback_finish,
+            commands::nine_router::nine_router_oauth_callback_start,
             commands::app_info::open_external_url,
             commands::settings::settings_get_user_config,
             commands::settings::settings_open_user_config,

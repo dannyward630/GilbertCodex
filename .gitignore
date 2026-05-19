@@ -2,6 +2,17 @@
 node_modules/
 .tools/
 
+# Private local tool/runtime code
+src/toolBridge/tools/
+src/toolBridge/memory/
+src/toolBridge/__tests__/
+src/webSearch/
+docs/assets/readme/gilbert-codex-activity.png
+docs/assets/readme/gilbert-codex-toolbox.png
+docs/promo/reddit/
+docs/promo/social/
+.gilbert/
+
 # Frontend output
 dist/
 dist-ssr/
@@ -14,6 +25,8 @@ test-results/
 target/
 src-tauri/target/
 src-tauri/.tauri/
+src-tauri/resources/9router/*
+!src-tauri/resources/9router/README.md
 
 # Claude / Cursor local agent settings (may contain machine-specific paths)
 .claude/
@@ -44,6 +57,7 @@ src-tauri/.tauri/
 
 # Logs and diagnostics
 *.log
+*.tmp
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

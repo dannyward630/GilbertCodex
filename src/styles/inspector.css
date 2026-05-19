@@ -15,6 +15,7 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+  container-type: inline-size;
   filter: none;
   text-shadow: none;
 }
@@ -636,4 +637,393 @@
 .rail-row:disabled svg,
 .rail-row:disabled:hover svg {
   color: var(--text-dim);
+}
+
+/* ----- plan-review rail mode ----- */
+/* Pair with PlanReviewPanel.tsx. Layout mirrors review-card so the rail
+   chrome lines up; the panel-specific selectors live below. */
+
+.conversation-body .right-rail[data-mode="plan-review"] {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.plan-review-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 16px;
+  background: var(--surface);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.plan-review-panel-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 16px 18px 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent),
+    color-mix(in srgb, var(--surface-strong) 82%, transparent);
+}
+
+.plan-review-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.plan-review-panel-header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plan-review-panel-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.plan-review-panel-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 760;
+  color: var(--text);
+}
+
+.plan-review-panel-header small {
+  max-width: 52ch;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.plan-review-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plan-review-panel-evidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: color-mix(in srgb, var(--accent) 86%, var(--text));
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  width: fit-content;
+}
+
+.plan-review-panel-shell {
+  display: grid;
+  grid-template-columns: minmax(152px, 188px) minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+}
+
+.plan-review-panel-toc {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 14px 8px 14px 14px;
+  border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.plan-review-panel-toc button {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.35;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.plan-review-panel-toc button[data-level="3"] {
+  padding-left: 18px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text-dim) 86%, transparent);
+}
+
+.plan-review-panel-toc button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.plan-review-panel-toc button[data-active="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 600;
+}
+
+.plan-review-panel-body {
+  min-height: 0;
+  padding: 22px 26px 26px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  font-size: 15px;
+  line-height: 1.64;
+}
+
+.plan-review-panel-body .markdown-message {
+  max-width: 860px;
+}
+
+.plan-review-panel-body .markdown-message h2 {
+  margin-top: 24px;
+  font-size: 17px;
+}
+
+.plan-review-panel-body .markdown-message h3 {
+  margin-top: 20px;
+  font-size: 15.5px;
+}
+
+.plan-review-panel-body .markdown-table-scroll {
+  overflow-x: auto;
+}
+
+.plan-review-panel-body .markdown-message table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.plan-review-panel-body .markdown-message th,
+.plan-review-panel-body .markdown-message td {
+  min-width: 0;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.plan-review-panel-body .markdown-message :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.plan-review-panel-body h2,
+.plan-review-panel-body h3 {
+  scroll-margin-top: 12px;
+}
+
+.plan-review-panel-editor {
+  width: 100%;
+  min-height: 320px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font: 13px/1.55 ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  resize: vertical;
+}
+
+.plan-review-panel-skeleton {
+  display: grid;
+  gap: 10px;
+}
+
+.plan-review-panel-skeleton span {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+  animation: plan-review-skel 1.4s linear infinite;
+}
+
+.plan-review-panel-skeleton span:nth-child(2) { width: 78%; }
+.plan-review-panel-skeleton span:nth-child(3) { width: 56%; }
+
+@keyframes plan-review-skel {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.9; }
+}
+
+.plan-review-panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 84%, transparent);
+}
+
+.plan-review-panel-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.plan-review-panel-footer button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.plan-review-panel-footer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.plan-review-panel-primary {
+  margin-left: auto;
+  background: var(--accent) !important;
+  color: var(--accent-contrast, #fff) !important;
+  border-color: var(--accent) !important;
+}
+
+.plan-review-panel-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.plan-review-panel-decline {
+  color: color-mix(in srgb, var(--danger, #c8503f) 88%, var(--text)) !important;
+}
+
+.plan-review-panel-secondary[data-active="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.plan-review-panel-feedback {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.plan-review-panel-feedback textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.plan-review-panel-feedback-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.plan-review-panel-feedback-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plan-review-panel-feedback-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.conversation-body[data-side-layout="split"] .plan-review-panel {
+  border-radius: 14px;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .right-rail {
+  overflow: visible;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel-header {
+  padding: 18px 22px 15px;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel-shell {
+  grid-template-columns: minmax(188px, 240px) minmax(0, 1fr);
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel-toc {
+  padding: 18px 12px 18px 18px;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel-body {
+  padding: 30px 38px 34px;
+  font-size: 15.5px;
+}
+
+.conversation-body[data-plan-review-expanded="true"] .plan-review-panel-body .markdown-message {
+  max-width: 940px;
+}
+
+@container (max-width: 620px) {
+  .plan-review-panel-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .plan-review-panel-toc {
+    flex-direction: row;
+    max-width: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  }
+
+  .plan-review-panel-toc button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .plan-review-panel-toc button[data-level="3"] {
+    padding-left: 8px;
+  }
+
+  .plan-review-panel-body {
+    padding: 20px 18px 24px;
+  }
 }

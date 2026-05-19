@@ -1,6 +1,7 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
+import type { ProviderReasoningState } from "../../types/reasoning";
 import { finalizeToolResult } from "../resultFinalizer";
-import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { appendInlineUserToolResultMessages, createProviderVisibleToolSchema, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyAnthropicToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -26,6 +27,7 @@ export function applyAnthropicToolBridge(body: Record<string, unknown>, options:
         })
       : appendAnthropicToolResultMessages(body.messages, options.toolResultMessages, {
           maxToolResultContentChars: options.maxToolResultContentChars,
+          reasoningState: options.reasoningState,
           skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
         });
   }
@@ -34,17 +36,19 @@ export function applyAnthropicToolBridge(body: Record<string, unknown>, options:
 }
 
 export function createAnthropicToolSchema(tool: ToolDefinition) {
+  const schema = createProviderVisibleToolSchema(tool);
+
   return {
-    description: tool.description,
-    input_schema: tool.inputSchema,
-    name: tool.id,
+    description: schema.description,
+    input_schema: schema.inputSchema,
+    name: schema.name,
   };
 }
 
 function appendAnthropicToolResultMessages(
   currentMessages: unknown,
   results: ToolResultMessage[],
-  options: { maxToolResultContentChars?: number | null; skipAssistantTurn: boolean },
+  options: { maxToolResultContentChars?: number | null; reasoningState?: ProviderReasoningState; skipAssistantTurn: boolean },
 ) {
   const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
   let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
@@ -53,6 +57,7 @@ function appendAnthropicToolResultMessages(
     if (!options.skipAssistantTurn) {
       messages.push({
         content: [
+          ...createAnthropicReasoningBlocks(options.reasoningState),
           {
             id: result.callId,
             input: result.arguments ?? {},
@@ -88,22 +93,13 @@ function appendAnthropicToolResultMessages(
   return messages;
 }
 
-function appendInlineUserToolResultMessages(
-  currentMessages: unknown,
-  results: ToolResultMessage[],
-  options: { maxToolResultContentChars?: number | null },
-) {
-  const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
-  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
-
-  for (const result of results) {
-    const inlineResult = createInlineToolResultMessage(result, remainingToolResultChars);
-    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, inlineResult.providerRawCharCount);
-    messages.push({
-      content: inlineResult.content,
-      role: "user",
-    });
+function createAnthropicReasoningBlocks(reasoningState: ProviderReasoningState | undefined) {
+  if (reasoningState?.format !== "anthropic-thinking") {
+    return [];
   }
 
-  return messages;
+  return reasoningState.entries
+    .filter((entry) => entry.type === "thinking" || entry.type === "redacted_thinking")
+    .map((entry) => entry.value)
+    .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value)));
 }

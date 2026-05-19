@@ -1,30 +1,44 @@
 import {
+  CloudSun,
   Database,
   FileCog,
-  FileText,
   Github,
-  KeyRound,
-  Map,
   MessageCircle,
-  Monitor,
+  Route,
   Search,
   ServerCog,
   Settings2,
-  UserRoundCog,
 } from "lucide-react";
-import type { SettingsNavItem } from "./types";
+import type { SettingsNavItem, SettingsSectionId } from "./types";
 
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
-  { icon: Settings2, id: "general", label: "General" },
-  { icon: Monitor, id: "appearance", label: "Appearance" },
-  { icon: ServerCog, id: "model", label: "Model" },
-  { icon: KeyRound, id: "providers", label: "Providers" },
-  { icon: Search, id: "braveSearch", label: "Brave Search" },
-  { icon: Map, id: "mapbox", label: "Mapbox" },
-  { icon: UserRoundCog, id: "personalization", label: "Personalization" },
-  { icon: FileCog, id: "configuration", label: "Configuration" },
-  { icon: FileText, id: "pdf", label: "PDF" },
-  { icon: Database, id: "database", label: "Database" },
-  { icon: Github, id: "github", label: "GitHub" },
-  { icon: MessageCircle, id: "discord", label: "Discord" },
+  { icon: Settings2, id: "general", label: "General", meta: "Profile" },
+  { icon: ServerCog, id: "model", label: "AI & Providers", meta: "Models" },
+  { icon: Route, id: "nineRouter", label: "Subscriptions", meta: "Accounts" },
+  { icon: Search, id: "braveSearch", label: "Web Search", meta: "Sources" },
+  { icon: CloudSun, id: "weatherSources", label: "Weather & Maps", meta: "Geo" },
+  { icon: FileCog, id: "configuration", label: "Workspace", meta: "Runtime" },
+  { icon: Database, id: "database", label: "Library & Data", meta: "Local" },
+  { icon: Github, id: "github", label: "GitHub", meta: "Code" },
+  { icon: MessageCircle, id: "discord", label: "Discord", meta: "Chat" },
 ];
+
+export function resolveSettingsNavSection(section: SettingsSectionId): SettingsSectionId {
+  if (section === "appearance" || section === "personalization") {
+    return "general";
+  }
+
+  if (section === "providers") {
+    return "model";
+  }
+
+  if (section === "mapbox") {
+    return "weatherSources";
+  }
+
+  if (section === "pdf") {
+    return "database";
+  }
+
+  return section;
+}

@@ -59,7 +59,7 @@ const onboardingPages: OnboardingPage[] = [
     eyebrow: "First run",
     features: [
       { detail: "Open provider settings, confirm API/runtime state, and keep the selected model intentional.", icon: Settings, label: "Model", title: "Set the path" },
-      { detail: "Use planning or deep thinking when the task needs staged reasoning, broad inspection, or careful source review.", icon: BrainCircuit, label: "Reasoning", title: "Choose depth" },
+      { detail: "Use planning or higher thinking depth when the task needs staged reasoning, broad inspection, or careful source review.", icon: BrainCircuit, label: "Reasoning", title: "Choose depth" },
       { detail: "Leave web search available for current facts, docs, dependency changes, and release checks.", icon: Globe2, label: "Fresh facts", title: "Search when needed" },
       { detail: "Ask for real work directly: inspect, change, test, rebuild, and summarize the result.", icon: Bot, label: "Agent", title: "Give it momentum" },
     ],

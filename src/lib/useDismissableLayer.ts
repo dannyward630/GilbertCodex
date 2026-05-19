@@ -12,9 +12,11 @@ interface UseDismissableLayerOptions {
   refs: DismissableLayerRef[];
 }
 
+const EMPTY_IGNORE_SELECTORS: string[] = [];
+
 export function useDismissableLayer({
   active,
-  ignoreSelectors = [],
+  ignoreSelectors = EMPTY_IGNORE_SELECTORS,
   keyboardTarget = "document",
   onDismiss,
   refs,

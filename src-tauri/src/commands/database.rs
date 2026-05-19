@@ -5,14 +5,14 @@ use crate::{
         storage::{self, DeviceStorageSeed, DeviceStorageSnapshot},
     },
 };
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
 
@@ -34,6 +34,8 @@ pub struct DatabaseOverviewResponse {
     categories: Vec<DatabaseStorageCategory>,
     records: Vec<DatabaseStorageRecord>,
     context: DatabaseContextSummary,
+    engine: DatabaseEngineSummary,
+    migration: DatabaseMigrationSummary,
     legacy_storage: LegacyStorageSummary,
 }
 
@@ -85,6 +87,37 @@ pub struct DatabaseContextSummary {
     largest_chat_bytes: u64,
 }
 
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseEngineSummary {
+    schema_version: String,
+    journal_mode: String,
+    synchronous: String,
+    wal_autocheckpoint: u64,
+    quick_check: String,
+    page_size_bytes: u64,
+    page_count: u64,
+    freelist_count: u64,
+    free_bytes: u64,
+    wal_size_bytes: u64,
+    shm_size_bytes: u64,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseMigrationSummary {
+    target_schema_version: String,
+    current_schema_version: String,
+    status: String,
+    typed_chat_count: u64,
+    typed_message_count: u64,
+    typed_agent_run_count: u64,
+    typed_agent_run_event_count: u64,
+    typed_memory_chunk_count: u64,
+    binary_vector_count: u64,
+    legacy_agent_run_blob_bytes: u64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyStorageSummary {
@@ -105,6 +138,33 @@ pub struct LegacyStorageEntry {
 pub struct DatabaseResetResponse {
     removed_paths: Vec<String>,
     failed_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupResponse {
+    backup_path: String,
+    file_size_bytes: u64,
+    created_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseMigrationFinalizeResponse {
+    backup: DatabaseBackupResponse,
+    removed_storage_keys: Vec<String>,
+    removed_legacy_paths: Vec<String>,
+    failed_legacy_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseAutoMigrationFinalizeResponse {
+    already_finalized: bool,
+    backup: Option<DatabaseBackupResponse>,
+    removed_storage_keys: Vec<String>,
+    removed_legacy_paths: Vec<String>,
+    failed_legacy_paths: Vec<String>,
 }
 
 struct StoredDatabaseRecord {
@@ -155,12 +215,9 @@ pub fn gilbert_database_set_values(
 pub fn gilbert_database_cleanup_legacy_storage(
     app: AppHandle,
 ) -> Result<LegacyStorageCleanupResponse, String> {
-    let mut removed_paths = Vec::new();
-
-    for path in legacy_storage_paths(&app)? {
-        if delete_path(&path)? {
-            removed_paths.push(path_to_string(&path));
-        }
+    let (removed_paths, failed_paths) = cleanup_paths(&legacy_storage_paths(&app)?);
+    if let Some(error) = failed_paths.first() {
+        return Err(error.clone());
     }
 
     Ok(LegacyStorageCleanupResponse { removed_paths })
@@ -172,6 +229,9 @@ pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewR
     let database_path = storage::database_path(&app)
         .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
     let exists = database_path.exists();
+    if exists {
+        storage::with_database_connection(&app, |_| Ok(()))?;
+    }
     let metadata = fs::metadata(&database_path).ok();
     let file_size_bytes = metadata
         .as_ref()
@@ -218,6 +278,9 @@ pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewR
         ((context.content_bytes + context.reasoning_bytes + context.thinking_bytes) as f64 / 4.0)
             .ceil() as u64;
 
+    let engine = inspect_database_engine(&database_path).unwrap_or_default();
+    let migration =
+        inspect_database_migration(&database_path, &active_namespace).unwrap_or_default();
     let legacy_storage = inspect_legacy_storage(&app)?;
 
     Ok(DatabaseOverviewResponse {
@@ -230,7 +293,135 @@ pub fn gilbert_database_get_overview(app: AppHandle) -> Result<DatabaseOverviewR
         categories,
         records,
         context,
+        engine,
+        migration,
         legacy_storage,
+    })
+}
+
+#[tauri::command]
+pub fn gilbert_database_backup(app: AppHandle) -> Result<DatabaseBackupResponse, String> {
+    create_database_backup(&app)
+}
+
+#[tauri::command]
+pub fn gilbert_database_finalize_migration(
+    app: AppHandle,
+) -> Result<DatabaseMigrationFinalizeResponse, String> {
+    let backup = create_database_backup_with_label(&app, "secure-v3")?;
+    let removed_storage_keys = storage::finalize_schema_v3_migration(&app)?;
+    let (removed_legacy_paths, failed_legacy_paths) =
+        cleanup_paths(&safe_legacy_replacement_paths(&app)?);
+
+    if failed_legacy_paths.is_empty() {
+        storage::mark_schema_v3_auto_finalized(&app)?;
+    }
+
+    Ok(DatabaseMigrationFinalizeResponse {
+        backup,
+        removed_storage_keys,
+        removed_legacy_paths,
+        failed_legacy_paths,
+    })
+}
+
+#[tauri::command]
+pub fn gilbert_database_auto_finalize_migration(
+    app: AppHandle,
+) -> Result<DatabaseAutoMigrationFinalizeResponse, String> {
+    let database_path = storage::database_path(&app)
+        .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
+    if !database_path.exists() {
+        return Ok(DatabaseAutoMigrationFinalizeResponse {
+            already_finalized: true,
+            backup: None,
+            removed_storage_keys: Vec::new(),
+            removed_legacy_paths: Vec::new(),
+            failed_legacy_paths: Vec::new(),
+        });
+    }
+
+    let legacy_paths = safe_legacy_replacement_paths(&app)?;
+    let has_legacy_paths = legacy_paths.iter().any(|path| path.exists());
+    let auto_finalized = storage::schema_v3_auto_finalized(&app)?;
+    let has_legacy_hot_storage = storage::schema_v3_has_legacy_hot_storage(&app)?;
+
+    if auto_finalized && !has_legacy_paths && !has_legacy_hot_storage {
+        return Ok(DatabaseAutoMigrationFinalizeResponse {
+            already_finalized: true,
+            backup: None,
+            removed_storage_keys: Vec::new(),
+            removed_legacy_paths: Vec::new(),
+            failed_legacy_paths: Vec::new(),
+        });
+    }
+
+    let backup = Some(create_database_backup_with_label(&app, "auto-v3")?);
+    let removed_storage_keys = storage::finalize_schema_v3_migration(&app)?;
+    let (removed_legacy_paths, failed_legacy_paths) = cleanup_paths(&legacy_paths);
+
+    if failed_legacy_paths.is_empty() {
+        storage::mark_schema_v3_auto_finalized(&app)?;
+    }
+
+    Ok(DatabaseAutoMigrationFinalizeResponse {
+        already_finalized: false,
+        backup,
+        removed_storage_keys,
+        removed_legacy_paths,
+        failed_legacy_paths,
+    })
+}
+
+fn create_database_backup(app: &AppHandle) -> Result<DatabaseBackupResponse, String> {
+    create_database_backup_with_label(app, "backup")
+}
+
+fn create_database_backup_with_label(
+    app: &AppHandle,
+    label: &str,
+) -> Result<DatabaseBackupResponse, String> {
+    let database_path = storage::database_path(app)
+        .map_err(|error| format!("Could not resolve the local database path: {error}"))?;
+    if !database_path.exists() {
+        return Err("Gilbert Database has not been created yet.".to_string());
+    }
+
+    let backup_dir = database_path
+        .parent()
+        .ok_or_else(|| "Could not resolve the database backup folder.".to_string())?
+        .join("backups");
+    fs::create_dir_all(&backup_dir).map_err(|error| {
+        format!(
+            "Could not create database backup folder at {}: {error}",
+            path_to_string(&backup_dir)
+        )
+    })?;
+
+    let created_at = current_time_millis();
+    let backup_path = backup_dir.join(format!("Gilbert Database {label} {created_at}.sqlite3"));
+    let backup_path_text = path_to_string(&backup_path);
+
+    storage::with_database_connection(app, |connection| {
+        connection
+            .execute("VACUUM main INTO ?1", params![backup_path_text])
+            .map(|_| ())
+            .map_err(|error| format!("Could not create WAL-safe database backup: {error}"))
+    })?;
+
+    let file_size_bytes = fs::metadata(&backup_path)
+        .map(|metadata| metadata.len())
+        .map_err(|error| {
+            format!(
+                "Could not inspect database backup at {}: {error}",
+                path_to_string(&backup_path)
+            )
+        })?;
+
+    Ok(DatabaseBackupResponse {
+        backup_path: path_to_string(&backup_path),
+        file_size_bytes,
+        created_at,
     })
 }
 
@@ -241,7 +432,7 @@ pub fn gilbert_database_reset(app: AppHandle) -> Result<DatabaseResetResponse, S
     let mut removed_paths = Vec::new();
     let mut failed_paths = Vec::new();
 
-    for path in database_file_family(&database_path) {
+    for path in storage::database_file_family(&database_path) {
         if delete_path(&path)? {
             removed_paths.push(path_to_string(&path));
         }
@@ -262,16 +453,7 @@ pub fn gilbert_database_reset(app: AppHandle) -> Result<DatabaseResetResponse, S
 }
 
 fn legacy_storage_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Could not resolve the old app data folder: {error}"))?;
-    let mut paths = storage::legacy_database_file_family(app)?;
-    paths.extend([
-        app_data.join("auth").join("local-auth-db.json"),
-        app_data.join("agent-runs.json"),
-        app_data.join("github").join("github-account.json"),
-    ]);
+    let mut paths = safe_legacy_replacement_paths(app)?;
 
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         paths.push(
@@ -284,6 +466,36 @@ fn legacy_storage_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
     }
 
     Ok(paths)
+}
+
+fn safe_legacy_replacement_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve the old app data folder: {error}"))?;
+    let mut paths = storage::legacy_database_file_family(app)?;
+    paths.extend([
+        app_data.join("auth").join("local-auth-db.json"),
+        app_data.join("agent-runs.json"),
+        app_data.join("github").join("github-account.json"),
+    ]);
+
+    Ok(paths)
+}
+
+fn cleanup_paths(paths: &[PathBuf]) -> (Vec<String>, Vec<String>) {
+    let mut removed_paths = Vec::new();
+    let mut failed_paths = Vec::new();
+
+    for path in paths {
+        match delete_path(path) {
+            Ok(true) => removed_paths.push(path_to_string(path)),
+            Ok(false) => {}
+            Err(error) => failed_paths.push(error),
+        }
+    }
+
+    (removed_paths, failed_paths)
 }
 
 fn require_active_namespace(app: &AppHandle, requested_namespace: &str) -> Result<String, String> {
@@ -326,16 +538,6 @@ fn delete_path(path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-fn database_file_family(database_path: &Path) -> Vec<PathBuf> {
-    let path_text = path_to_string(database_path);
-    vec![
-        database_path.to_path_buf(),
-        PathBuf::from(format!("{path_text}-journal")),
-        PathBuf::from(format!("{path_text}-wal")),
-        PathBuf::from(format!("{path_text}-shm")),
-    ]
-}
-
 fn read_database_records(
     database_path: &Path,
     namespace: &str,
@@ -368,6 +570,175 @@ fn read_database_records(
     }
 
     Ok(records)
+}
+
+fn inspect_database_engine(database_path: &Path) -> Result<DatabaseEngineSummary, String> {
+    if !database_path.exists() {
+        return Ok(DatabaseEngineSummary::default());
+    }
+
+    let connection = Connection::open(database_path)
+        .map_err(|error| format!("Could not open local database: {error}"))?;
+    let schema_version = read_metadata_value(&connection, "schema_version")?.unwrap_or_default();
+    let journal_mode = read_text_pragma(&connection, "journal_mode")?;
+    let synchronous = read_integer_pragma(&connection, "synchronous")?.to_string();
+    let wal_autocheckpoint = read_integer_pragma(&connection, "wal_autocheckpoint")?;
+    let quick_check = read_text_pragma(&connection, "quick_check")?;
+    let page_size_bytes = read_integer_pragma(&connection, "page_size")?;
+    let page_count = read_integer_pragma(&connection, "page_count")?;
+    let freelist_count = read_integer_pragma(&connection, "freelist_count")?;
+    let free_bytes = page_size_bytes.saturating_mul(freelist_count);
+    let path_text = path_to_string(database_path);
+    let wal_size_bytes = fs::metadata(PathBuf::from(format!("{path_text}-wal")))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let shm_size_bytes = fs::metadata(PathBuf::from(format!("{path_text}-shm")))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+
+    Ok(DatabaseEngineSummary {
+        schema_version,
+        journal_mode,
+        synchronous,
+        wal_autocheckpoint,
+        quick_check,
+        page_size_bytes,
+        page_count,
+        freelist_count,
+        free_bytes,
+        wal_size_bytes,
+        shm_size_bytes,
+    })
+}
+
+fn inspect_database_migration(
+    database_path: &Path,
+    namespace: &str,
+) -> Result<DatabaseMigrationSummary, String> {
+    if !database_path.exists() {
+        return Ok(DatabaseMigrationSummary {
+            target_schema_version: "3".to_string(),
+            ..DatabaseMigrationSummary::default()
+        });
+    }
+
+    let connection = Connection::open(database_path)
+        .map_err(|error| format!("Could not open local database: {error}"))?;
+    let current_schema_version = read_metadata_value(&connection, "schema_version")?
+        .unwrap_or_else(|| "unknown".to_string());
+    let typed_chat_count = count_table_rows(&connection, "chat_records", namespace)?;
+    let typed_message_count = count_table_rows(&connection, "chat_messages", namespace)?;
+    let typed_agent_run_count = count_table_rows(&connection, "agent_runs", namespace)?;
+    let typed_agent_run_event_count = count_table_rows(&connection, "agent_run_events", namespace)?;
+    let typed_memory_chunk_count = count_table_rows(&connection, "memory_chunks", namespace)?;
+    let binary_vector_count = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM vector_embeddings
+             WHERE namespace = ?1 AND vector_blob IS NOT NULL",
+            params![namespace],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not count binary vector rows: {error}"))?
+        .unwrap_or(0)
+        .max(0) as u64;
+    let legacy_agent_run_blob_bytes = connection
+        .query_row(
+            "SELECT LENGTH(storage_value)
+             FROM app_storage
+             WHERE namespace = ?1 AND storage_key = 'agent-runs.v1'",
+            params![namespace],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not inspect legacy agent run blob: {error}"))?
+        .flatten()
+        .unwrap_or(0)
+        .max(0) as u64;
+    let status = if current_schema_version == "3" {
+        "schema-v3-ready"
+    } else {
+        "migration-pending"
+    }
+    .to_string();
+
+    Ok(DatabaseMigrationSummary {
+        target_schema_version: "3".to_string(),
+        current_schema_version,
+        status,
+        typed_chat_count,
+        typed_message_count,
+        typed_agent_run_count,
+        typed_agent_run_event_count,
+        typed_memory_chunk_count,
+        binary_vector_count,
+        legacy_agent_run_blob_bytes,
+    })
+}
+
+fn count_table_rows(connection: &Connection, table: &str, namespace: &str) -> Result<u64, String> {
+    if !table_exists(connection, table)? {
+        return Ok(0);
+    }
+
+    connection
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE namespace = ?1"),
+            params![namespace],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count.max(0) as u64)
+        .map_err(|error| format!("Could not count {table}: {error}"))
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|error| format!("Could not inspect database table {table}: {error}"))
+}
+
+fn read_metadata_value(connection: &Connection, key: &str) -> Result<Option<String>, String> {
+    if !table_exists(connection, "database_metadata")? {
+        return Ok(None);
+    }
+
+    connection
+        .query_row(
+            "SELECT value FROM database_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not read database metadata {key}: {error}"))
+}
+
+fn read_text_pragma(connection: &Connection, pragma: &str) -> Result<String, String> {
+    connection
+        .query_row(&format!("PRAGMA {pragma}"), [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("Could not read PRAGMA {pragma}: {error}"))
+}
+
+fn read_integer_pragma(connection: &Connection, pragma: &str) -> Result<u64, String> {
+    connection
+        .query_row(&format!("PRAGMA {pragma}"), [], |row| row.get::<_, i64>(0))
+        .map(|value| value.max(0) as u64)
+        .map_err(|error| format!("Could not read PRAGMA {pragma}: {error}"))
+}
+
+fn current_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn inspect_legacy_storage(app: &AppHandle) -> Result<LegacyStorageSummary, String> {
@@ -418,6 +789,22 @@ fn category_for_key(key: &str) -> CategoryDefinition {
             label: "Chats & context",
             description:
                 "Saved conversations, sources, attachments, tool traces, and reasoning context.",
+        },
+        key if key.starts_with("gilbert-codex.project-tool-memory.v1.") => CategoryDefinition {
+            id: "context",
+            label: "Chats & context",
+            description:
+                "Saved conversations, sources, attachments, tool traces, and reasoning context.",
+        },
+        key if key.starts_with("gilbert-codex.chat-memory.v1.")
+            || key.starts_with("gilbert-codex.project-memory.v1.") =>
+        {
+            CategoryDefinition {
+                id: "context",
+                label: "Chats & context",
+                description:
+                    "Saved conversations, sources, attachments, tool traces, reasoning summaries, memory indexes, and project maps.",
+            }
         },
         "gilbert-codex.projects.v1" => CategoryDefinition {
             id: "projects",
@@ -486,6 +873,9 @@ fn add_category_usage(
 fn label_for_key(key: &str) -> &'static str {
     match key {
         "gilbert-codex.chats.v1" => "Saved chats",
+        key if key.starts_with("gilbert-codex.project-tool-memory.v1.") => "Project tool memory",
+        key if key.starts_with("gilbert-codex.chat-memory.v1.") => "Chat memory index",
+        key if key.starts_with("gilbert-codex.project-memory.v1.") => "Project memory map",
         "gilbert-codex.projects.v1" => "Projects",
         "gilbert-codex.provider-settings.v1" => "Provider settings",
         "gilbert-codex.thinking.v1" => "Thinking settings",
@@ -524,6 +914,14 @@ fn summarize_record(key: &str, raw: &str) -> String {
 
     match key {
         "gilbert-codex.chats.v1" => summarize_chat_record(&value),
+        key if key.starts_with("gilbert-codex.project-tool-memory.v1.") => {
+            summarize_project_tool_memory_record(&value)
+        }
+        key if key.starts_with("gilbert-codex.chat-memory.v1.")
+            || key.starts_with("gilbert-codex.project-memory.v1.") =>
+        {
+            summarize_durable_memory_record(&value)
+        }
         "gilbert-codex.projects.v1" => summarize_array_record(&value, "project", "projects"),
         "agent-runs.v1" => summarize_agent_record(&value),
         "gilbert-codex.tool-registry.v1" => summarize_tool_registry_record(&value),
@@ -547,6 +945,59 @@ fn summarize_chat_record(value: &Value) -> String {
         message_count,
         plural("message", "messages", message_count)
     )
+}
+
+fn summarize_project_tool_memory_record(value: &Value) -> String {
+    let entry_count = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+
+    if entry_count == 1 {
+        "1 project tool lesson".to_string()
+    } else {
+        format!("{entry_count} project tool lessons")
+    }
+}
+
+fn summarize_durable_memory_record(value: &Value) -> String {
+    let event_count = value
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| events.len())
+        .unwrap_or(0);
+    let record_count = value
+        .get("records")
+        .and_then(Value::as_array)
+        .map(|records| records.len())
+        .unwrap_or(0);
+    let known_file_count = value
+        .get("fileMap")
+        .and_then(|file_map| file_map.get("knownFiles"))
+        .and_then(Value::as_array)
+        .map(|files| files.len())
+        .unwrap_or(0);
+
+    if known_file_count > 0 {
+        format!(
+            "{} {}, {} {}, {} known {}",
+            event_count,
+            plural("event", "events", event_count),
+            record_count,
+            plural("memory chunk", "memory chunks", record_count),
+            known_file_count,
+            plural("path", "paths", known_file_count)
+        )
+    } else {
+        format!(
+            "{} {}, {} {}",
+            event_count,
+            plural("event", "events", event_count),
+            record_count,
+            plural("memory chunk", "memory chunks", record_count)
+        )
+    }
 }
 
 fn summarize_array_record(value: &Value, singular: &str, plural_label: &str) -> String {

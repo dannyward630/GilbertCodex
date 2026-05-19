@@ -1,6 +1,7 @@
 import type { ProviderToolBridgeOptions, ToolDefinition, ToolResultMessage } from "../types";
+import type { ProviderReasoningState } from "../../types/reasoning";
 import { finalizeToolResult } from "../resultFinalizer";
-import { createInlineToolResultMessage, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
+import { appendInlineUserToolResultMessages, createProviderVisibleToolSchema, decrementRemainingChars, normalizeRemainingChars } from "./sharedUtils";
 
 export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, options: ProviderToolBridgeOptions) {
   const tools = options.toolChoice === "none" ? [] : options.tools ?? [];
@@ -8,6 +9,9 @@ export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, o
   if (tools.length > 0) {
     body.tools = tools.map(createOpenAiCompatibleToolSchema);
     body.tool_choice = options.toolChoice ?? "auto";
+    if (typeof options.parallelToolCalls === "boolean") {
+      body.parallel_tool_calls = options.parallelToolCalls;
+    }
   } else if (options.toolChoice === "none" && options.toolResultDelivery !== "inline-user-message") {
     // Propagate explicit disable so callers can suppress additional tool calls mid-conversation.
     body.tool_choice = "none";
@@ -24,6 +28,7 @@ export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, o
         })
       : appendOpenAiCompatibleToolResultMessages(body.messages, options.toolResultMessages, {
           maxToolResultContentChars: options.maxToolResultContentChars,
+          reasoningState: options.reasoningState,
           skipAssistantTurn: Boolean(options.resultsHistoryAlreadyContainsAssistantTurns),
         });
   }
@@ -32,11 +37,13 @@ export function applyOpenAiCompatibleToolBridge(body: Record<string, unknown>, o
 }
 
 export function createOpenAiCompatibleToolSchema(tool: ToolDefinition) {
+  const schema = createProviderVisibleToolSchema(tool);
+
   return {
     function: {
-      description: tool.description,
-      name: tool.id,
-      parameters: tool.inputSchema,
+      description: schema.description,
+      name: schema.name,
+      parameters: schema.inputSchema,
     },
     type: "function",
   };
@@ -45,7 +52,7 @@ export function createOpenAiCompatibleToolSchema(tool: ToolDefinition) {
 function appendOpenAiCompatibleToolResultMessages(
   currentMessages: unknown,
   results: ToolResultMessage[],
-  options: { maxToolResultContentChars?: number | null; skipAssistantTurn: boolean },
+  options: { maxToolResultContentChars?: number | null; reasoningState?: ProviderReasoningState; skipAssistantTurn: boolean },
 ) {
   const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
   let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
@@ -54,6 +61,7 @@ function appendOpenAiCompatibleToolResultMessages(
     if (!options.skipAssistantTurn) {
       messages.push({
         content: null,
+        ...createOpenAiCompatibleReasoningFields(options.reasoningState),
         role: "assistant",
         tool_calls: [
           {
@@ -86,22 +94,34 @@ function appendOpenAiCompatibleToolResultMessages(
   return messages;
 }
 
-function appendInlineUserToolResultMessages(
-  currentMessages: unknown,
-  results: ToolResultMessage[],
-  options: { maxToolResultContentChars?: number | null },
-) {
-  const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
-  let remainingToolResultChars = normalizeRemainingChars(options.maxToolResultContentChars);
-
-  for (const result of results) {
-    const inlineResult = createInlineToolResultMessage(result, remainingToolResultChars);
-    remainingToolResultChars = decrementRemainingChars(remainingToolResultChars, inlineResult.providerRawCharCount);
-    messages.push({
-      content: inlineResult.content,
-      role: "user",
-    });
+function createOpenAiCompatibleReasoningFields(reasoningState: ProviderReasoningState | undefined) {
+  if (!reasoningState?.entries.length) {
+    return {};
   }
 
-  return messages;
+  if (reasoningState.format === "openrouter-reasoning") {
+    const reasoningDetails = reasoningState.entries
+      .filter((entry) => entry.type === "reasoning_details")
+      .flatMap((entry) => Array.isArray(entry.value) ? entry.value : [entry.value]);
+
+    return reasoningDetails.length > 0 ? { reasoning_details: reasoningDetails } : {};
+  }
+
+  if (reasoningState.format === "deepseek-reasoning") {
+    const reasoningContent = reasoningState.entries
+      .filter((entry) => entry.type === "reasoning_content")
+      .map((entry) => entry.value)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .join("");
+
+    return reasoningContent ? { reasoning_content: reasoningContent } : {};
+  }
+
+  const reasoning = reasoningState.entries
+    .filter((entry) => entry.type === "reasoning" || entry.type === "thinking")
+    .map((entry) => entry.value)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("");
+
+  return reasoning ? { reasoning } : {};
 }

@@ -64,17 +64,17 @@
     place-items: center;
     width: 38px;
     height: 38px;
-    color: #f4f1eb;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
     border-radius: 8px;
-    background: rgba(18, 19, 21, 0.86);
+    background: color-mix(in srgb, var(--surface-panel) 86%, transparent);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
     backdrop-filter: blur(16px);
   }
 
   .desktop-root[data-runtime="web"] .mobile-sidebar-toggle:hover,
   .desktop-root[data-runtime="web"] .mobile-sidebar-toggle[data-open="true"] {
-    background: rgba(36, 38, 42, 0.94);
+    background: color-mix(in srgb, var(--surface-raised) 86%, transparent);
   }
 
   .desktop-root[data-runtime="web"] .app-topbar {
@@ -138,7 +138,7 @@
     inset: 48px 0 0;
     z-index: 58;
     display: block;
-    background: rgba(0, 0, 0, 0.38);
+    background: color-mix(in srgb, var(--modal-scrim) 82%, transparent);
     opacity: 0;
     pointer-events: none;
     transition: opacity 180ms ease;
@@ -159,8 +159,7 @@
   }
 
   .desktop-root[data-runtime="web"] .conversation-frame,
-  .desktop-root[data-runtime="web"] .settings-page,
-  .desktop-root[data-runtime="web"] .utility-page {
+  .desktop-root[data-runtime="web"] .settings-page {
     border-left: 0;
     border-radius: 0;
   }
@@ -226,7 +225,7 @@
     inset: 48px 0 0;
     z-index: 58;
     display: block;
-    background: rgba(0, 0, 0, 0.38);
+    background: color-mix(in srgb, var(--modal-scrim) 82%, transparent);
     opacity: 0;
     pointer-events: none;
     transition: opacity 180ms ease;
@@ -244,8 +243,7 @@
   }
 
   .desktop-root[data-runtime="desktop"] .conversation-frame,
-  .desktop-root[data-runtime="desktop"] .settings-page,
-  .desktop-root[data-runtime="desktop"] .utility-page {
+  .desktop-root[data-runtime="desktop"] .settings-page {
     border-left: 0;
     border-radius: 0;
   }
