@@ -348,7 +348,7 @@ export function toolBridgePermissionLabel(value: unknown) {
 
 Write-ShimFile "parsers.ts" @'
 import type { ModelProviderId } from "../types/settings";
-import type { ToolBridgeProviderTurn, ToolCallRequest } from "./types";
+import type { ToolCallRequest } from "./types";
 
 export function createToolCallRequest(name: string, args: unknown, provider: ModelProviderId, raw?: unknown): ToolCallRequest {
   return {
@@ -364,32 +364,32 @@ export function parseVisibleTextToolCalls(): ToolCallRequest[] {
   return [];
 }
 
-export function parseAnthropicStreamToolCallDelta(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseAnthropicStreamToolCallDelta(..._args: unknown[]): { argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown } | undefined {
+  return undefined;
 }
 
-export function parseAnthropicToolCalls(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseAnthropicToolCalls(..._args: unknown[]): ToolCallRequest[] {
+  return [];
 }
 
-export function parseOpenAiCompatibleStreamToolCallDeltas(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseOpenAiCompatibleStreamToolCallDeltas(..._args: unknown[]): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
+  return [];
 }
 
-export function parseOpenAiCompatibleToolCalls(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseOpenAiCompatibleToolCalls(..._args: unknown[]): ToolCallRequest[] {
+  return [];
 }
 
-export function parseResponsesStreamToolCallDeltas(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseResponsesStreamToolCallDeltas(..._args: unknown[]): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
+  return [];
 }
 
-export function parseResponsesStreamToolCalls(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseResponsesStreamToolCalls(..._args: unknown[]): ToolCallRequest[] {
+  return [];
 }
 
-export function parseResponsesToolCalls(): ToolBridgeProviderTurn {
-  return { content: "" };
+export function parseResponsesToolCalls(..._args: unknown[]): ToolCallRequest[] {
+  return [];
 }
 '@
 
