@@ -37,16 +37,19 @@ export function ProvidersSettingsPage({
   testing,
   testStatus,
 }: ProvidersSettingsPageProps) {
+  const isSubscriptionsProvider = settings.provider === "9router";
+  const providerDetail = isSubscriptionsProvider ? "Connected account routes and live subscription model catalogs." : activeProvider.detail;
+
   return (
     <>
-      {showHeading ? <SettingsSectionHeading detail="Keep all model provider API keys, base URLs, and live catalogs in one place." icon={KeyRound} title="Providers" /> : null}
+      {showHeading ? <SettingsSectionHeading detail="Keep provider keys, subscription routes, base URLs, and live catalogs in one place." icon={KeyRound} title="Providers" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">
             <KeyRound size={19} aria-hidden="true" />
             <div>
               <h2>Model provider</h2>
-              <p>{activeProvider.detail}</p>
+              <p>{providerDetail}</p>
             </div>
           </div>
 
@@ -61,29 +64,31 @@ export function ProvidersSettingsPage({
                 onClick={() => onSelectProvider(provider.id)}
               >
                 <strong>{provider.label}</strong>
-                <small>{provider.requiresApiKey ? "API key" : provider.optionalApiKey ? "Local, optional key" : "Local"}</small>
+                <small>{formatProviderCredentialHint(provider)}</small>
               </button>
             ))}
           </div>
 
-          <label className="settings-field">
-            <span>{activeProvider.apiKeyLabel}</span>
-            <div className="settings-secret-row">
-              <input
-                autoComplete="off"
-                placeholder={activeProvider.apiKeyPlaceholder}
-                type={showKey ? "text" : "password"}
-                value={activeProviderApiKey}
-                onChange={(event) => onUpdateActiveProviderApiKey(event.target.value)}
-              />
-              <button type="button" aria-label={showKey ? "Hide API key" : "Show API key"} onClick={onToggleShowKey}>
-                {showKey ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
-              </button>
-              <button type="button" aria-label="Clear API key" disabled={!activeProviderApiKey.trim()} onClick={onClearApiKey}>
-                <Trash2 size={17} aria-hidden="true" />
-              </button>
-            </div>
-          </label>
+          {!isSubscriptionsProvider ? (
+            <label className="settings-field">
+              <span>{activeProvider.apiKeyLabel}</span>
+              <div className="settings-secret-row">
+                <input
+                  autoComplete="off"
+                  placeholder={activeProvider.apiKeyPlaceholder}
+                  type={showKey ? "text" : "password"}
+                  value={activeProviderApiKey}
+                  onChange={(event) => onUpdateActiveProviderApiKey(event.target.value)}
+                />
+                <button type="button" aria-label={showKey ? "Hide API key" : "Show API key"} onClick={onToggleShowKey}>
+                  {showKey ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                </button>
+                <button type="button" aria-label="Clear API key" disabled={!activeProviderApiKey.trim()} onClick={onClearApiKey}>
+                  <Trash2 size={17} aria-hidden="true" />
+                </button>
+              </div>
+            </label>
+          ) : null}
 
           <label className="settings-field">
             <span>{activeProvider.baseUrlLabel}</span>
@@ -103,7 +108,7 @@ export function ProvidersSettingsPage({
           <div className="settings-actions-row">
             <button className="settings-primary-button" type="button" disabled={testing} onClick={onTestConnection}>
               <CheckCircle2 size={16} aria-hidden="true" />
-              {testing ? "Checking" : "Test provider"}
+              {testing ? "Checking" : isSubscriptionsProvider ? "Test subscriptions" : "Test provider"}
             </button>
             {testStatus ? (
               <span className="settings-status" data-kind={testStatus.kind}>
@@ -115,4 +120,16 @@ export function ProvidersSettingsPage({
       </div>
     </>
   );
+}
+
+function formatProviderCredentialHint(provider: ModelProviderCatalogItem) {
+  if (provider.id === "9router") {
+    return "Account routes";
+  }
+
+  if (provider.requiresApiKey) {
+    return "API key";
+  }
+
+  return provider.optionalApiKey ? "Optional key" : "Local";
 }

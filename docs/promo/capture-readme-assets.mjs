@@ -16,6 +16,17 @@ const storageSuffix = `user.${userId}`;
 const demoWorkspacePath =
   process.env.GILBERT_CODEX_DEMO_WORKSPACE ?? (process.platform === "win32" ? "C:\\Projects\\GilbertCodex" : "/home/demo/projects/GilbertCodex");
 const demoWebSearchMaxResults = normalizeDemoWebSearchMaxResults(process.env.GILBERT_CODEX_DEMO_WEB_RESULTS);
+const demoSubscriptionModels = [
+  "cx/gpt-5.5",
+  "cx/gpt-5.4",
+  "cx/gpt-5.3-codex",
+  "cx/gpt-5.3-codex-xhigh",
+  "claude/sonnet-4.5",
+  "gemini/gemini-3.1-pro-preview",
+  "gh/gpt-5-mini",
+  "gh/claude-haiku-4.5",
+  "free-combo",
+];
 
 const browserCandidates = [
   process.env.CHROMIUM_EXECUTABLE_PATH,
@@ -173,6 +184,30 @@ function createSeedState() {
     updatedAt: isoNow,
   };
 
+  const providerSettings = {
+    apiKeys: {},
+    baseUrls: {
+      "9router": "http://127.0.0.1:20128/v1",
+    },
+    model: "cx/gpt-5.5",
+    provider: "9router",
+    providerModels: {
+      "9router": "cx/gpt-5.5",
+    },
+    thinking: {
+      effort: "medium",
+      enabled: true,
+    },
+    tools: {
+      imageGeneration: true,
+    },
+    webSearch: {
+      enabled: true,
+      maxResults: demoWebSearchMaxResults,
+      provider: "duckduckgo",
+    },
+  };
+
   const emptyChat = {
     id: "chat-readme-empty",
     messages: [],
@@ -185,6 +220,7 @@ function createSeedState() {
   return {
     activeChat,
     emptyChat,
+    providerSettings,
     workspace,
     projects: [
       {
@@ -229,8 +265,17 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const seed = createSeedState();
 
+  await page.route("**/v1/models", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({ data: demoSubscriptionModels.map((id) => ({ id })) }),
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      status: 200,
+    });
+  });
+
   await page.addInitScript(
-    ({ activeChat, emptyChat, projects, storageSuffix, userId, workspace }) => {
+    ({ activeChat, emptyChat, projects, providerSettings, storageSuffix, userId, workspace }) => {
       const authDb = {
         currentSession: {
           createdAt: Date.now(),
@@ -290,6 +335,7 @@ try {
       window.localStorage.setItem(scoped("gilbert-codex.local-workspace.v1"), JSON.stringify(workspace));
       window.localStorage.setItem(scoped("gilbert-codex.onboarding.never-show.v1"), "true");
       window.localStorage.setItem(scoped("gilbert-codex.personalization.v1"), JSON.stringify({ locationServicesEnabled: false }));
+      window.localStorage.setItem(scoped("gilbert-codex.provider-settings.v1"), JSON.stringify(providerSettings));
       window.localStorage.setItem(scoped("gilbert-codex.projects.v1"), JSON.stringify(projects));
       window.localStorage.setItem(scoped("gilbert-codex.tool-registry.v1"), JSON.stringify(toolDefaults));
     },
@@ -297,6 +343,7 @@ try {
       activeChat: seed.activeChat,
       emptyChat: seed.emptyChat,
       projects: seed.projects,
+      providerSettings: seed.providerSettings,
       storageSuffix,
       userId,
       workspace: seed.workspace,
@@ -309,6 +356,7 @@ try {
   await page.locator(".message-sources-toggle").first().click();
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-activity.png");
+  await capture(page, "gilbert-codex-chat-progress.png");
 
   await page.locator(".sidebar-action").filter({ hasText: "New chat" }).first().click();
   await page.getByRole("menuitem", { name: "Start from scratch" }).click();
@@ -316,16 +364,25 @@ try {
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-overview.png");
 
-  await page.getByText("Settings", { exact: true }).click();
-  await page.waitForSelector(".settings-page");
-  await page.getByText("Configuration", { exact: true }).click();
+  await page.getByText("Fund project", { exact: true }).click();
+  await page.waitForSelector(".support-page");
   await waitForStableUi(page);
-  await capture(page, "gilbert-codex-toolbox.png");
+  await capture(page, "gilbert-codex-support.png");
 
-  await page.getByText("Providers", { exact: true }).click();
+  await page.getByText("Settings", { exact: true }).click();
   await page.waitForSelector(".settings-page");
   await waitForStableUi(page);
   await capture(page, "gilbert-codex-settings.png");
+
+  await page.getByText("AI & Providers", { exact: true }).click();
+  await page.waitForSelector(".settings-page");
+  await waitForStableUi(page);
+  await capture(page, "gilbert-codex-provider-settings.png");
+
+  await page.getByText("Subscriptions", { exact: true }).click();
+  await page.waitForSelector(".settings-page");
+  await waitForStableUi(page);
+  await capture(page, "gilbert-codex-subscriptions.png");
 } finally {
   await browser.close();
 }

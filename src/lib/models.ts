@@ -312,16 +312,16 @@ const DEFAULT_PROVIDER_MODELS: Required<Record<ModelProviderId, string>> = {
 
 const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinition> = {
   "9router": {
-    apiKeyLabel: "9Router local API key",
-    apiKeyPlaceholder: "Optional local 9Router key",
+    apiKeyLabel: "Optional local token",
+    apiKeyPlaceholder: "Optional local access token",
     apiStyle: "openai-compatible",
-    baseUrlLabel: "9Router local base URL",
+    baseUrlLabel: "Subscriptions base URL",
     baseUrlPlaceholder: DEFAULT_PROVIDER_BASE_URLS["9router"],
     defaultBaseUrl: DEFAULT_PROVIDER_BASE_URLS["9router"],
     defaultModel: DEFAULT_PROVIDER_MODELS["9router"],
-    detail: "Local 9Router gateway for subscription-backed provider routes.",
+    detail: "Connected account routes for subscription-backed models.",
     docsUrl: "https://github.com/decolua/9router",
-    label: "9Router Local",
+    label: "Subscriptions",
     listModelsPath: "/models",
     optionalApiKey: true,
     reasoningMode: "openrouter",
@@ -589,29 +589,29 @@ function getModelProviderLabel(provider: ModelProviderId) {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "9Router Codex subscription route when the user has connected Codex locally.", 1_000_000, {
+  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "Subscription route for connected Codex / ChatGPT accounts.", 1_000_000, {
     capabilities: ["Local gateway", "Subscription", "Reasoning"],
     category: "reasoning",
-    pricing: routedPricing("Codex-backed 9Router route. Usage comes from the user's connected Codex account and plan limits.", "9router"),
-    useCase: "Use when the user has deliberately connected Codex in 9Router and wants Gilbert to spend that local subscription quota.",
+    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
+    useCase: "Use when the user has connected Codex or ChatGPT and wants Gilbert to use that subscription route.",
   }),
-  modelOption("9router", "9router-codex-gpt-54", "Codex GPT-5.4", "cx/gpt-5.4", "9Router Codex route for balanced subscription-backed coding and chat.", 1_000_000, {
+  modelOption("9router", "9router-codex-gpt-54", "Codex GPT-5.4", "cx/gpt-5.4", "Balanced subscription-backed coding and chat route.", 1_000_000, {
     capabilities: ["Local gateway", "Subscription", "Coding"],
     category: "coding",
-    pricing: routedPricing("Codex-backed 9Router route. Usage comes from the user's connected Codex account and plan limits.", "9router"),
+    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use as the balanced Codex route when the user wants strong coding without jumping to GPT-5.5.",
   }),
-  modelOption("9router", "9router-codex-gpt-53-codex", "Codex GPT-5.3 Codex", "cx/gpt-5.3-codex", "9Router Codex coding route when the user has connected Codex locally.", 400_000, {
+  modelOption("9router", "9router-codex-gpt-53-codex", "Codex GPT-5.3 Codex", "cx/gpt-5.3-codex", "Codex-tuned coding route for connected subscription accounts.", 400_000, {
     capabilities: ["Local gateway", "Subscription", "Coding"],
     category: "coding",
-    pricing: routedPricing("Codex-backed 9Router route. Usage comes from the user's connected Codex account and plan limits.", "9router"),
+    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use when the user wants the Codex-tuned model through their connected Codex account.",
   }),
-  modelOption("9router", "9router-codex-gpt-53-codex-xhigh", "Codex GPT-5.3 Codex xHigh", "cx/gpt-5.3-codex-xhigh", "9Router Codex coding route with xHigh reasoning through the connected Codex account.", 400_000, {
+  modelOption("9router", "9router-codex-gpt-53-codex-xhigh", "Codex GPT-5.3 Codex xHigh", "cx/gpt-5.3-codex-xhigh", "Codex coding route with xHigh reasoning through the connected account.", 400_000, {
     capabilities: ["Local gateway", "Subscription", "Coding", "High reasoning"],
     category: "reasoning",
-    pricing: routedPricing("Codex-backed 9Router route. Usage comes from the user's connected Codex account and plan limits.", "9router"),
-    useCase: "Use for harder coding turns where the Codex xHigh route is available in 9Router.",
+    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
+    useCase: "Use for harder coding turns where the Codex xHigh route is available through the subscription account.",
   }),
   modelOption("openrouter", "openrouter-free-auto", "Auto Route Free", DEFAULT_CHAT_MODEL, "Speed-biased free routing across reliable OpenRouter free coding and reasoning models.", 262_144, {
     capabilities: ["Free", "Structured", "Reasoning"],

@@ -300,7 +300,7 @@ export async function fetchNineRouterJson<T>(url: string) {
   const payload = await readJsonResponse<T & { error?: { message?: string } }>(response);
 
   if (!response.ok) {
-    throw new Error(payload.error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+    throw new Error(payload.error?.message || `Subscriptions request failed with HTTP ${response.status}.`);
   }
 
   return payload;
@@ -318,7 +318,7 @@ export async function postNineRouterJson<T>(url: string, body: unknown) {
 
   if (!response.ok) {
     const error = payload.error;
-    throw new Error(typeof error === "string" ? error : error?.message || `Subscription helper request failed with HTTP ${response.status}.`);
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscriptions request failed with HTTP ${response.status}.`);
   }
 
   return payload;
@@ -334,7 +334,7 @@ async function connectCodexAccount(dashboardUrl: string, options: NineRouterConn
     const authData = await fetchNineRouterJson<NineRouterAuthorizeResponse>(authUrl);
 
     if (!authData.authUrl || !authData.state || !authData.codeVerifier) {
-      throw new Error("The subscription helper did not return a complete Codex sign-in request.");
+      throw new Error("Subscriptions did not return a complete Codex sign-in request.");
     }
 
     const proxyUrl = createNineRouterUrl(dashboardUrl, "/api/oauth/codex/start-proxy", {
@@ -346,7 +346,7 @@ async function connectCodexAccount(dashboardUrl: string, options: NineRouterConn
     const proxy = await fetchNineRouterJson<NineRouterCodexProxyResponse>(proxyUrl);
 
     if (!proxy.success || !proxy.serverSide) {
-      throw new Error(proxy.reason === "port_busy" ? "Codex sign-in is already open. Finish or close the previous sign-in window, then retry." : "The subscription helper could not start the Codex sign-in callback.");
+      throw new Error(proxy.reason === "port_busy" ? "Codex sign-in is already open. Finish or close the previous sign-in window, then retry." : "Subscriptions could not start the Codex sign-in callback.");
     }
 
     options.onStatus?.({ kind: "warning", text: "Finish the OpenAI sign-in in your browser. Gilbert will pick it up automatically." });
@@ -363,7 +363,7 @@ async function connectDeviceCodeProvider(provider: NineRouterAccountProvider, da
   const verifyUrl = deviceData.verification_uri_complete || deviceData.verification_uri;
 
   if (!deviceCode || !verifyUrl) {
-    throw new Error(`The subscription helper did not return a complete ${provider.name} device sign-in request.`);
+    throw new Error(`Subscriptions did not return a complete ${provider.name} device sign-in request.`);
   }
 
   const userCode = deviceData.user_code?.trim();
@@ -382,11 +382,11 @@ async function connectAuthorizationCodeProvider(provider: NineRouterAccountProvi
   }));
 
   if (!authData.authUrl || !authData.state) {
-    throw new Error(`The subscription helper did not return a complete ${provider.name} sign-in request.`);
+    throw new Error(`Subscriptions did not return a complete ${provider.name} sign-in request.`);
   }
 
   if (provider.id !== "cline" && !authData.codeVerifier) {
-    throw new Error(`The subscription helper did not return a code verifier for ${provider.name}.`);
+    throw new Error(`Subscriptions did not return a code verifier for ${provider.name}.`);
   }
 
   options.onStatus?.({ kind: "warning", text: `Finish ${provider.name} sign-in in your browser. Gilbert will close the loop automatically.` });
@@ -515,9 +515,9 @@ async function fetchWithTimeout(url: string, init: RequestInit) {
   try {
     if (isTauriDesktopRuntime()) {
       const nativeResponse = await nineRouterLocalHttp({
-        body: normalizeNativeRequestBody(init.body, "The subscription helper bridge"),
+        body: normalizeNativeRequestBody(init.body, "Subscriptions bridge"),
         headers: headersToRecord(init.headers),
-        method: normalizeNativeRequestMethod(init.method, "The subscription helper bridge"),
+        method: normalizeNativeRequestMethod(init.method, "Subscriptions bridge"),
         timeoutMs: 10_000,
         url,
       });
@@ -534,12 +534,12 @@ async function fetchWithTimeout(url: string, init: RequestInit) {
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`The subscription helper did not answer ${url} within 10 seconds.`);
+      throw new Error(`Subscriptions did not answer ${url} within 10 seconds.`);
     }
 
     const message = error instanceof Error ? error.message : String(error);
     if (/failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
-      throw new Error(`Could not reach the subscription helper at ${url}. Open Subscriptions, then retry.`);
+      throw new Error(`Could not reach Subscriptions at ${url}. Open Subscriptions, then retry.`);
     }
 
     throw error;

@@ -1,40 +1,90 @@
 <p align="center">
-  <img src="docs/assets/readme/gilbert-codex-readme-logo.svg" alt="Gilbert Codex" width="760">
+  <img src="docs/assets/github/gilbert-codex-social-preview.png" alt="Gilbert Codex local-first desktop agent workspace" width="960">
 </p>
 
-# Gilbert Codex
+<h1 align="center">Gilbert Codex</h1>
 
-Gilbert Codex is a GUI-first local desktop agent workspace for building, reviewing, researching, and shipping code from one focused surface. It combines React, TypeScript, Tauri 2, and a Rust command layer so local workspace features can run without requiring a hosted backend for the public alpha.
+<p align="center">
+  <strong>A local-first desktop AI agent workspace for coding, review, tools, research, image creation, and release work.</strong>
+</p>
 
-[![Version](https://img.shields.io/badge/version-0.5.0-d8b36c)](docs/releases/v0.5.0.md)
-[![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db)](https://tauri.app/)
-[![React 18](https://img.shields.io/badge/React-18-61dafb)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6)](https://www.typescriptlang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="docs/releases/v0.5.0.md">v0.5.0 release notes</a>
+  |
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.0">Windows alpha download</a>
+  |
+  <a href="docs/ROADMAP.md">Roadmap</a>
+  |
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-## Preview
+<p align="center">
+  <a href="docs/releases/v0.5.0.md"><img alt="Version 0.5.0" src="https://img.shields.io/badge/version-0.5.0-d8b36c"></a>
+  <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
+  <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
+  <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+</p>
 
-![Gilbert Codex animated desktop preview](docs/assets/readme/gilbert-codex-readme-demo.gif)
+## v0.5.0 Public Alpha
 
-| Focused chat workspace | Local app settings |
+Gilbert Codex v0.5.0 is the largest public alpha jump so far. The app has moved from a basic desktop chat shell into a serious local AI workspace with local users, project-scoped state, multi-provider streaming, thinking/planning controls, source-backed context, subscription account sign-in, image-generation artifacts, GitHub and Discord setup, safer review flows, and a cleaner modular runtime.
+
+This is still alpha software. Windows x64 is the verified target; macOS and Linux have partial source support and need contributor testing. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+
+The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
+
+## Highlights
+
+| Area | What changed in v0.5.0 |
 | --- | --- |
-| ![Gilbert Codex empty chat workspace with project sidebar and composer](docs/assets/readme/gilbert-codex-overview.png) | ![Gilbert Codex settings page showing app metadata, model, and permissions](docs/assets/readme/gilbert-codex-settings.png) |
+| Local users | Local account creation/sign-in with namespaced chats, projects, settings, and workspace state. |
+| Subscriptions | Connected account routes for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported providers, with model catalogs visible in Settings and no required local subscription API key. |
+| Image generation | Chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. |
+| Agent workspace | Project grouping, searchable history, pinned chats, generated titles, queued sends, regeneration, stop controls, file/image attachments, and local persistence. |
+| Source context | DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging. |
+| Review posture | Destructive delete confirmation, explicit local workspace permission modes, source-write guardrails, notification checks, CSP configuration, and visible progress/activity cards. |
 
-## Current Status
+## Screenshots
 
-Gilbert Codex v0.5.0 is the largest public alpha jump so far: a middle-ground release between the early 0.3 line and the road to 1.0. The app now feels much closer to a serious desktop AI workspace, with local users, project-scoped state, multi-provider model streaming, thinking/planning controls, source-backed context, subscription account sign-in, image-generation artifacts, GitHub and Discord setup, safer deletion/review flows, and a cleaner modular app runtime.
-
-This is still alpha software. Provider behavior varies by model, and some edge cases are still being tightened as real users test the app. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths remain gated by explicit permission and review behavior.
-
-Platform status: Windows x64 is the verified alpha target. macOS and Linux have partial source support, but they still need contributors on those operating systems to run the app, package it, and finish native port issues. See [Platform Support And Porting Notes](docs/platform/README.md).
-
-The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git. Source files are grouped by product surface so contributors can find the UI, provider clients, settings, types, and Rust commands without reverse-engineering the whole app.
+<table>
+  <tr>
+    <td width="50%">
+      <strong>Focused chat workspace</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-overview.png" alt="Gilbert Codex empty chat workspace with project sidebar and composer">
+    </td>
+    <td width="50%">
+      <strong>Live progress, sources, and approvals</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-chat-progress.png" alt="Gilbert Codex chat thread showing live progress, sources, and review state">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <strong>General settings</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-settings.png" alt="Gilbert Codex settings page showing app metadata, model, permissions, and theme controls">
+    </td>
+    <td width="50%">
+      <strong>Subscription model settings</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-provider-settings.png" alt="Gilbert Codex AI and Providers settings showing subscription model routes without a required local API key">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <strong>Subscription setup</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-subscriptions.png" alt="Gilbert Codex subscription settings setup page">
+    </td>
+    <td width="50%">
+      <strong>Project support</strong><br>
+      <img src="docs/assets/readme/gilbert-codex-support.png" alt="Gilbert Codex voluntary project funding page">
+    </td>
+  </tr>
+</table>
 
 ## Download
 
 The v0.5.0 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.0).
 
-Download the Windows x64 setup executable, run it, and configure provider keys or local endpoints in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
+Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
 
@@ -50,7 +100,7 @@ See [v0.5.0 release notes](docs/releases/v0.5.0.md) for release-prep notes, setu
 - Image generation: chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. Codex / ChatGPT-backed image generation is the first-class path in this release; broader provider coverage is still being tightened.
 - Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
-- Settings: provider key/base URL entry, subscription setup, GitHub browser login, Discord bridge setup/runtime controls, support/funding links, connection validation, appearance mode, model, generation, thinking, and workspace controls.
+- Settings: provider key/base URL entry, subscription account setup, subscription model catalogs without a required local API key, GitHub browser login, Discord bridge setup/runtime controls, support/funding links, connection validation, appearance mode, model, generation, thinking, and workspace controls.
 
 ## Coming Next
 

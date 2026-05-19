@@ -555,7 +555,7 @@ function createModelSearchTags(entry: ModelSelectorEntry) {
   const local = isLocalRuntimeProvider(entry.provider.id);
   const gateway = entry.provider.id === "9router";
   const tags = [
-    local ? "Local" : gateway ? "Subscription" : "Provider",
+    gateway ? "Subscription" : local ? "Local" : "Provider",
     free ? "Free" : formatModelPricingSummary(entry.option.pricing),
     formatModelContextWindow(entry.contextWindow),
   ];
@@ -576,12 +576,12 @@ function getModelSearchText(option: ChatModelOption) {
 }
 
 function iconForEntry(entry: ModelSelectorEntry) {
-  if (isLocalRuntimeProvider(entry.provider.id)) {
-    return Gauge;
-  }
-
   if (entry.provider.id === "9router") {
     return Route;
+  }
+
+  if (isLocalRuntimeProvider(entry.provider.id)) {
+    return Gauge;
   }
 
   const text = getModelSearchText(entry.option);

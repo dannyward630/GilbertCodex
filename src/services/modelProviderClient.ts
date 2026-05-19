@@ -468,6 +468,7 @@ function readProviderStreamChunk(
 }
 
 async function fetchProviderJson<T>(
+  providerId: ModelProviderId,
   providerLabel: string,
   url: string,
   init: RequestInit,
@@ -480,27 +481,27 @@ async function fetchProviderJson<T>(
   );
 
   try {
-    const response = await fetchProviderResponse(providerLabel, url, init, requestTimeout.signal, PROVIDER_RESPONSE_START_TIMEOUT_MS);
+    const response = await fetchProviderResponse(providerId, url, init, requestTimeout.signal, PROVIDER_RESPONSE_START_TIMEOUT_MS);
     const payload = (await readJson(response)) as T;
     requestTimeout.throwIfTimedOut();
     return { payload, response };
   } catch (error) {
     requestTimeout.throwIfTimedOut();
-    throw createProviderFetchError(providerLabel, url, error);
+    throw createProviderFetchError(providerId, providerLabel, url, error);
   } finally {
     requestTimeout.clear();
   }
 }
 
 async function fetchProviderResponse(
-  providerLabel: string,
+  providerId: ModelProviderId,
   url: string,
   init: RequestInit,
   signal: AbortSignal | undefined,
   timeoutMs: number,
   options: { stream?: boolean } = {},
 ) {
-  if (providerLabel === "9Router Local" && isTauriDesktopRuntime()) {
+  if (providerId === "9router" && isTauriDesktopRuntime()) {
     if (options.stream) {
       return fetchNineRouterNativeStreamResponse(url, init, signal, timeoutMs);
     }
@@ -654,10 +655,10 @@ function throwIfSignalAborted(signal: AbortSignal | undefined) {
   throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
 }
 
-function createProviderFetchError(providerLabel: string, url: string, error: unknown) {
+function createProviderFetchError(providerId: ModelProviderId, providerLabel: string, url: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
 
-  if (providerLabel === "9Router Local" && /failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
+  if (providerId === "9router" && /failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
     return new Error(`Could not reach subscriptions at ${url}. Open Subscriptions, then retry.`);
   }
 
@@ -901,6 +902,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   if (provider.apiStyle === "anthropic-messages") {
     const { payload, response } = await fetchProviderJson<AnthropicMessageResponse>(
+      settings.provider,
       provider.label,
       joinUrl(getProviderBaseUrl(settings), "/messages"),
       {
@@ -932,6 +934,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
 
   if (usesResponsesApi(settings, model)) {
     const { payload, response } = await fetchProviderJson<ResponsesApiResponse>(
+      settings.provider,
       provider.label,
       joinUrl(getProviderBaseUrl(settings), "/responses"),
       {
@@ -962,6 +965,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
   }
 
   const { payload, response } = await fetchProviderJson<ProviderChatResponse>(
+    settings.provider,
     provider.label,
     joinUrl(getProviderBaseUrl(settings), "/chat/completions"),
     {
@@ -1023,7 +1027,7 @@ export async function streamProviderMessage(
 
   try {
     response = await fetchProviderResponse(
-      provider.label,
+      settings.provider,
       requestUrl,
       {
         body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, true, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
@@ -1036,7 +1040,7 @@ export async function streamProviderMessage(
     );
   } catch (error) {
     requestTimeout.throwIfTimedOut();
-    throw createProviderFetchError(provider.label, requestUrl, error);
+    throw createProviderFetchError(settings.provider, provider.label, requestUrl, error);
   } finally {
     requestTimeout.clear();
   }
@@ -1212,6 +1216,7 @@ export async function validateProviderSettings(settings: ProviderSettings) {
   assertUsableSettings(settings.provider, apiKey, model);
 
   const { payload, response } = await fetchProviderJson<ProviderModelsResponse>(
+    settings.provider,
     provider.label,
     joinUrl(getProviderBaseUrl(settings), provider.listModelsPath),
     {
@@ -1229,7 +1234,9 @@ export async function validateProviderSettings(settings: ProviderSettings) {
 
   return modelExists
     ? `Connected. ${model} is available on ${provider.label}.`
-    : `Connected to ${provider.label}. The key works, but this model was not listed.`;
+    : settings.provider === "9router"
+      ? `Connected to ${provider.label}. This model was not listed.`
+      : `Connected to ${provider.label}. The key works, but this model was not listed.`;
 }
 
 export async function fetchProviderModels(settings: ProviderSettings, options: ProviderRequestOptions = {}): Promise<ProviderModelMetadata[]> {
@@ -1241,6 +1248,7 @@ export async function fetchProviderModels(settings: ProviderSettings, options: P
   }
 
   const { payload, response } = await fetchProviderJson<ProviderModelsResponse>(
+    settings.provider,
     provider.label,
     joinUrl(getProviderBaseUrl(settings), provider.listModelsPath),
     {

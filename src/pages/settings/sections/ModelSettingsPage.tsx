@@ -50,6 +50,7 @@ export function ModelSettingsPage({
   const enabledModelCount = activeProviderAllModels.filter((option) => !disabledModelSet.has(option.value)).length;
   const localContextWindowTokens = settings.contextWindowTokens?.[settings.provider] ?? DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS;
   const activeModelBudgetOverride = settings.modelBudgetOverrides?.[settings.provider]?.[settings.model] ?? {};
+  const activeProviderPresetLabel = settings.provider === "9router" ? "Subscription model" : `${activeProvider.label} preset`;
 
   function patchActiveModelBudgetOverride(patch: { contextWindowTokens?: number; maxOutputTokens?: number }) {
     const model = settings.model.trim();
@@ -119,7 +120,7 @@ export function ModelSettingsPage({
               </select>
             </label>
             <label className="settings-field">
-              <span>{activeProvider.label} preset</span>
+              <span>{activeProviderPresetLabel}</span>
               <select value={settings.model} onChange={(event) => onUpdateActiveProviderModel(event.target.value)}>
                 {activeProviderModels.length === 0 ? (
                   <option value="">{activeProviderPrefersLiveCatalog ? "No loaded models found" : "Choose a model"}</option>

@@ -6,10 +6,17 @@ Last reviewed for the v0.5.0 release prep on May 19, 2026. Recapture the screens
 
 ## Outputs
 
-- `../assets/readme/gilbert-codex-readme-demo.gif`: short animated README preview that plays inline on GitHub when animated images are enabled.
+- `../assets/github/gilbert-codex-social-preview.png`: primary GitHub README banner and social preview artwork.
 - `../assets/readme/gilbert-codex-overview.png`: focused chat workspace screenshot.
-- `../assets/readme/gilbert-codex-settings.png`: provider/settings screenshot.
+- `../assets/readme/gilbert-codex-chat-progress.png`: chat thread with live progress, sources, approvals, and activity state.
+- `../assets/readme/gilbert-codex-settings.png`: General settings screenshot.
+- `../assets/readme/gilbert-codex-provider-settings.png`: AI and Providers screenshot with subscription model routing.
+- `../assets/readme/gilbert-codex-subscriptions.png`: Subscriptions setup screenshot.
+- `../assets/readme/gilbert-codex-support.png`: voluntary project funding page screenshot.
 - `../assets/readme/gilbert-codex-readme-logo.svg`: README wordmark used on the GitHub landing page.
+- `../assets/github/gilbert-codex-github-logo.png`: square GitHub-ready Source Compass logo.
+- `../assets/brand/gilbert-codex-source-compass-icon.png`: source PNG used to regenerate desktop app icon sizes.
+- `../assets/readme/gilbert-codex-readme-demo.gif`: legacy animated preview retained for older issue/social posts.
 - `promo.html`: optional source scene for generating a longer standalone promo video outside release assets.
 
 ## Refreshing The README Screenshots
@@ -43,4 +50,4 @@ If Playwright is not available in the local environment, install it outside the 
 
 ## GitHub Sharing Notes
 
-GitHub READMEs are friendlier to images than repo-hosted video tags. Keep release assets focused on installable builds and checksums. Use the animated GIF plus screenshots in README copy, and only attach standalone video to issues, discussions, or social posts when needed.
+GitHub READMEs are friendlier to images than repo-hosted video tags. Keep release assets focused on installable builds and checksums. Use the social preview banner plus current screenshots in README copy, and only attach standalone video or the legacy animated GIF to issues, discussions, or social posts when needed.
