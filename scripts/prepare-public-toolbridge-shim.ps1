@@ -350,10 +350,10 @@ Write-ShimFile "parsers.ts" @'
 import type { ModelProviderId } from "../types/settings";
 import type { ToolCallRequest } from "./types";
 
-export function createToolCallRequest(name: string, args: unknown, provider: ModelProviderId, raw?: unknown): ToolCallRequest {
+export function createToolCallRequest(provider: ModelProviderId, id: string, name: string, args: unknown, raw?: unknown): ToolCallRequest {
   return {
     arguments: args,
-    id: `${name}-${Math.random().toString(36).slice(2)}`,
+    id,
     name,
     provider,
     raw,
