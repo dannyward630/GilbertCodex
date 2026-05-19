@@ -141,6 +141,31 @@ function Draw-Mark {
   $nodeBrush.Dispose()
 }
 
+function Draw-BrandIcon {
+  param(
+    [System.Drawing.Graphics]$Graphics,
+    [float]$X,
+    [float]$Y,
+    [float]$Size
+  )
+
+  $brandIconPath = Join-Path $PSScriptRoot "..\docs\assets\brand\gilbert-codex-source-compass-icon.png"
+  if (-not (Test-Path $brandIconPath)) {
+    Draw-Mark $Graphics $X $Y $Size
+    return
+  }
+
+  $previousInterpolation = $Graphics.InterpolationMode
+  $Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+
+  $image = [System.Drawing.Image]::FromFile($brandIconPath)
+  $target = [System.Drawing.RectangleF]::new($X, $Y, $Size, $Size)
+  $Graphics.DrawImage($image, $target)
+  $image.Dispose()
+
+  $Graphics.InterpolationMode = $previousInterpolation
+}
+
 function New-InstallerSidebar {
   $bitmap = [System.Drawing.Bitmap]::new(164, 314, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -166,7 +191,7 @@ function New-InstallerSidebar {
 
   Fill-RoundedRect $graphics "#0E1726" 14 150 136 136 12
   Stroke-RoundedRect $graphics "#314157" 14 150 136 136 12 1
-  Draw-Mark $graphics 28 168 42
+  Draw-BrandIcon $graphics 26 162 54
   Draw-Text $graphics "Gilbert" 26 222 108 22 16 "#F8FAFC" "Bold"
   Draw-Text $graphics "Codex" 26 244 108 22 16 "#B9C6DA" "Bold"
   Draw-Text $graphics "Dark ready" 26 268 108 18 11 "#21C7A8" "Regular"
@@ -190,10 +215,7 @@ function New-InstallerHeader {
   $graphics.FillRectangle($background, 0, 0, 150, 57)
   $background.Dispose()
 
-  Fill-RoundedRect $graphics "#0E1726" 96 7 42 42 9
-  Fill-RoundedRect $graphics "#21C7A8" 104 17 10 10 5
-  Fill-RoundedRect $graphics "#8B5CF6" 120 17 10 10 5
-  Fill-RoundedRect $graphics "#F2B84B" 112 31 10 10 5
+  Draw-BrandIcon $graphics 96 7 42
   Draw-Text $graphics "Gilbert Codex" 8 8 86 18 12 "#172033" "Bold"
   Draw-Text $graphics "Light + dark" 8 28 86 16 10 "#58677D" "Regular"
 
