@@ -86,7 +86,7 @@ mod tests {
     fn external_url_validation_rejects_local_or_script_protocols() {
         assert!(!is_allowed_external_url("javascript:alert(1)"));
         assert!(!is_allowed_external_url(
-            "file:///C:/Users/Kobe/secrets.txt"
+            "file:///C:/Users/Example/secrets.txt"
         ));
         assert!(!is_allowed_external_url(""));
     }

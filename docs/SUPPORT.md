@@ -4,10 +4,7 @@ Gilbert Codex can show voluntary project-funding options inside the app without 
 
 ## Current First Setup
 
-Cash App is the live default funding option:
-
-- Cashtag: `$kobeelijahhh`
-- Hosted link: `https://cash.app/$kobeelijahhh`
+No personal funding link is checked into the repository. Add only public hosted provider links through local or release environment values.
 
 PayPal stays visible as `Coming soon` until the real PayPal link is added.
 
@@ -34,10 +31,10 @@ Add only public hosted funding URLs to `.env` before building:
 VITE_SUPPORT_STRIPE_ONE_TIME_URL=https://buy.stripe.com/...
 VITE_SUPPORT_STRIPE_MONTHLY_URL=https://buy.stripe.com/...
 VITE_SUPPORT_PAYPAL_URL=
-VITE_SUPPORT_CASHAPP_URL=https://cash.app/$kobeelijahhh
+VITE_SUPPORT_CASHAPP_URL=
 ```
 
-Empty Stripe values are hidden until configured. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
+Empty Stripe and Cash App values are hidden until configured. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
 
 ## Safety Rules
 
@@ -52,5 +49,5 @@ Empty Stripe values are hidden until configured. Empty PayPal stays visible as `
 2. Put the public hosted links in `.env`.
 3. Run `npm.cmd run typecheck`.
 4. Run `npm.cmd run build`.
-5. Open the funding page and confirm Cash App opens externally.
+5. Open the funding page and confirm configured hosted links open externally.
 6. Confirm PayPal is the only visible `Coming soon` provider while it has no URL.

@@ -44,8 +44,8 @@ interface SupportLinkDefinition {
 }
 
 export const SUPPORT_GITHUB_URL = "https://github.com/UrbanWafflezz/GilbertCodex";
-export const SUPPORT_CASH_TAG = "$kobeelijahhh";
-export const DEFAULT_CASH_APP_URL = `https://cash.app/${SUPPORT_CASH_TAG}`;
+export const SUPPORT_CASH_TAG = "";
+export const DEFAULT_CASH_APP_URL = "";
 
 const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
   {
@@ -79,13 +79,13 @@ const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
     tone: "gold",
   },
   {
-    description: "Chip in directly through Cash App with $kobeelijahhh.",
-    disabledLabel: "Cash App funding is unavailable.",
+    description: "A Cash App funding link can sit here once it is ready.",
+    disabledLabel: "Add a Cash App hosted funding link to enable this option.",
     envKey: "VITE_SUPPORT_CASHAPP_URL",
     id: "cashApp",
     label: "Chip in with Cash App",
     placement: "primary",
-    providerLabel: SUPPORT_CASH_TAG,
+    providerLabel: "Cash App",
     tone: "rose",
   },
 ];

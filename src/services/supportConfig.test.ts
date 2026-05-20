@@ -2,28 +2,28 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CASH_APP_URL, normalizeSupportConfig, normalizeSupportUrl } from "./supportConfig";
 
 describe("support config", () => {
-  it("keeps Cash App enabled by default and hides unconfigured funding links except PayPal", () => {
+  it("hides unconfigured funding links except PayPal", () => {
     const config = normalizeSupportConfig({});
 
-    expect(config.configuredCount).toBe(1);
+    expect(config.configuredCount).toBe(0);
     expect(config.links).toHaveLength(4);
     expect(config.primaryLinks).toHaveLength(1);
     expect(config.primaryLinks[0]).toMatchObject({
-      enabled: true,
+      enabled: false,
       id: "cashApp",
       url: DEFAULT_CASH_APP_URL,
     });
-    expect(config.visiblePrimaryLinks.map((link) => link.id)).toEqual(["cashApp"]);
+    expect(config.visiblePrimaryLinks.map((link) => link.id)).toEqual([]);
     expect(config.visibleSecondaryLinks.map((link) => link.id)).toEqual(["paypal"]);
   });
 
-  it("uses the default Cash App link when the Cash App env value is blank", () => {
+  it("keeps Cash App disabled when the env value is blank", () => {
     const config = normalizeSupportConfig({
       VITE_SUPPORT_CASHAPP_URL: "  ",
     });
 
     expect(config.primaryLinks[0]).toMatchObject({
-      enabled: true,
+      enabled: false,
       id: "cashApp",
       url: DEFAULT_CASH_APP_URL,
     });
@@ -31,8 +31,8 @@ describe("support config", () => {
 
   it("normalizes valid hosted funding URLs", () => {
     const config = normalizeSupportConfig({
-      VITE_SUPPORT_CASHAPP_URL: "https://cash.app/$kobeelijahhh",
-      VITE_SUPPORT_PAYPAL_URL: " https://paypal.me/KobeLowery ",
+      VITE_SUPPORT_CASHAPP_URL: "https://cash.app/$projecthandle",
+      VITE_SUPPORT_PAYPAL_URL: " https://paypal.me/projectmaintainer ",
       VITE_SUPPORT_STRIPE_MONTHLY_URL: "https://buy.stripe.com/monthly_123",
       VITE_SUPPORT_STRIPE_ONE_TIME_URL: "https://buy.stripe.com/once_123",
     });
@@ -46,14 +46,14 @@ describe("support config", () => {
 
   it("rejects unsupported protocols and malformed URLs", () => {
     expect(normalizeSupportUrl("javascript:alert(1)")).toBe("");
-    expect(normalizeSupportUrl("file:///C:/Users/Kobe/secrets.txt")).toBe("");
+    expect(normalizeSupportUrl("file:///C:/Users/Example/secrets.txt")).toBe("");
     expect(normalizeSupportUrl("not-a-url")).toBe("");
   });
 
   it("rejects secret-like values instead of exposing them as funding links", () => {
     const config = normalizeSupportConfig({
-      VITE_SUPPORT_CASHAPP_URL: "https://cash.app/$kobeelijahhh?access_token=abc",
-      VITE_SUPPORT_PAYPAL_URL: "https://paypal.me/KobeLowery?client_secret=sk_live_123",
+      VITE_SUPPORT_CASHAPP_URL: "https://cash.app/$projecthandle?access_token=abc",
+      VITE_SUPPORT_PAYPAL_URL: "https://paypal.me/projectmaintainer?client_secret=sk_live_123",
       VITE_SUPPORT_STRIPE_MONTHLY_URL: "whsec_live_123",
       VITE_SUPPORT_STRIPE_ONE_TIME_URL: "sk_live_123",
     });

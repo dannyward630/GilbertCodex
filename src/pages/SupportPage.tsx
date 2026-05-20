@@ -35,8 +35,8 @@ export function SupportPage({ onBackToChat }: SupportPageProps) {
           </span>
           <h1>Help Fund Gilbert Codex</h1>
           <p>
-            I&apos;m Kobe Lowery. Gilbert Codex is open source, but I still treat it like one of my main projects: something people should be able
-            to open, use, and trust without having to fix half the app themselves.
+            Gilbert Codex is open source, but it is still built like a serious project: something people should be able to open, use, and trust
+            without having to fix half the app themselves.
           </p>
         </div>
         <button className="support-back-button" type="button" onClick={onBackToChat}>
@@ -46,11 +46,10 @@ export function SupportPage({ onBackToChat }: SupportPageProps) {
       </header>
 
       <div className="support-body">
-        <section className="support-note" aria-label="A note from Kobe Lowery">
+        <section className="support-note" aria-label="Support note">
           <p>
-            I&apos;m a software engineer, a dad with two kids, and I&apos;m trying to build tools that feel genuinely useful instead of locked down or
-            half-finished. If Gilbert Codex helps you, supporting it helps me keep showing up, keep improving it, and keep making more free tools for
-            people.
+            The app stays usable without payment or account pressure. If Gilbert Codex helps you, optional support helps keep the project moving,
+            improving, and available as open source.
           </p>
           <p>No pressure, no locked features, no guilt trip. Just an honest way to help the work keep moving.</p>
         </section>
