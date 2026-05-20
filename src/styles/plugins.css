@@ -372,6 +372,10 @@
   padding: 12px;
 }
 
+.plugin-card:not([data-expanded="true"]) {
+  min-height: 276px;
+}
+
 .plugin-card[data-expanded="true"] {
   grid-column: span 2;
 }
@@ -643,6 +647,10 @@
 .plugin-review-actions,
 .plugin-marketplace-add-actions {
   justify-content: flex-end;
+}
+
+.plugin-card-actions {
+  margin-top: auto;
 }
 
 .plugin-card-actions a,

@@ -778,30 +778,54 @@ export function activateForkedChat(deps: WorkspaceRuntimeDeps, forkedChat: ChatS
 
 export function notifyPlanningInputNeeded(deps: WorkspaceRuntimeDeps, inputRequest: ChatPlanningInputRequest, chatId?: string) {
   const { activeChat, createNeedsInputNotification, notifyAgentRunStatus } = deps;
+  const context = createNotificationContext(deps, chatId ?? activeChat.id);
 
     notifyAgentRunStatus({
-      chatId: chatId ?? activeChat.id,
-      notification: createNeedsInputNotification(inputRequest.detail || inputRequest.title),
+      chatId: context.chatId,
+      context,
+      notification: createNeedsInputNotification(inputRequest.detail || inputRequest.title, context),
     });
   }
 
 export function notifyRunNeedsAttention(deps: WorkspaceRuntimeDeps, detail?: string, chatId?: string) {
   const { activeChat, createNeedsAttentionNotification, notifyAgentRunStatus } = deps;
+  const context = createNotificationContext(deps, chatId ?? activeChat.id);
 
     notifyAgentRunStatus({
-      chatId: chatId ?? activeChat.id,
-      notification: createNeedsAttentionNotification(detail),
+      chatId: context.chatId,
+      context,
+      notification: createNeedsAttentionNotification(detail, context),
     });
   }
 
 export function notifyRunComplete(deps: WorkspaceRuntimeDeps, message: ChatMessage, chatId?: string) {
   const { activeChat, notifyAgentRunStatus } = deps;
+  const context = createNotificationContext(deps, chatId ?? activeChat.id);
 
     notifyAgentRunStatus({
-      chatId: chatId ?? activeChat.id,
+      chatId: context.chatId,
+      context,
       message,
     });
   }
+
+function createNotificationContext(deps: WorkspaceRuntimeDeps, chatId: string) {
+  const { activeChat, pendingChatsRef, titleFromMessage } = deps;
+  const chat = pendingChatsRef.current.find((candidate: ChatSummary) => candidate.id === chatId) ?? activeChat;
+  const latestUserMessage = [...(chat.messages ?? [])].reverse().find((message: ChatMessage) => message.role === "user");
+  const fallbackTitle = latestUserMessage ? titleFromMessage(latestUserMessage.content) : chat.project;
+  const chatTitle = isPlaceholderChatTitle(chat.title) ? fallbackTitle : chat.title;
+
+  return {
+    chatId: chat.id,
+    chatTitle,
+    project: chat.project,
+  };
+}
+
+function isPlaceholderChatTitle(title: string) {
+  return !title.trim() || /^new chat$/i.test(title) || /^naming chat/i.test(title);
+}
 
 export function touchProject(deps: WorkspaceRuntimeDeps, projectName: string) {
   const { createId, isNoProjectName, normalizeProjectName, projectsRef, setProjects, sortProjectsByUpdatedAt } = deps;

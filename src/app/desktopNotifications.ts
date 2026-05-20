@@ -9,6 +9,12 @@ interface AgentNotification {
   title: string;
 }
 
+export interface AgentNotificationContext {
+  chatId?: string;
+  chatTitle?: string;
+  project?: string;
+}
+
 export type NotificationKind = "completion" | "permission" | "question";
 
 export interface DesktopNotificationActivation {
@@ -18,6 +24,7 @@ export interface DesktopNotificationActivation {
 
 interface NotifyAgentRunOptions {
   chatId?: string;
+  context?: AgentNotificationContext;
   message?: ChatMessage;
   notification?: AgentNotification;
 }
@@ -62,12 +69,16 @@ export function prepareDesktopNotifications() {
   return ensureNotificationPermission();
 }
 
-export function notifyAgentRunStatus({ chatId, message, notification }: NotifyAgentRunOptions) {
+export function notifyAgentRunStatus({ chatId, context, message, notification }: NotifyAgentRunOptions) {
   if (!canUseDesktopNotifications()) {
     return;
   }
 
-  const resolvedNotification = notification ?? createNotificationFromMessage(message);
+  const resolvedContext: AgentNotificationContext = {
+    ...context,
+    chatId: context?.chatId ?? chatId,
+  };
+  const resolvedNotification = notification ?? createNotificationFromMessage(message, resolvedContext);
 
   if (!resolvedNotification) {
     return;
@@ -89,7 +100,7 @@ export function notifyAgentRunStatus({ chatId, message, notification }: NotifyAg
       sendNotification({
         autoCancel: true,
         body: formatNotificationBody(resolvedNotification.body),
-        extra: createNotificationExtra(chatId, kind),
+        extra: createNotificationExtra(resolvedContext.chatId, kind),
         group: "agent-runs",
         id,
         title: resolvedNotification.title,
@@ -100,43 +111,61 @@ export function notifyAgentRunStatus({ chatId, message, notification }: NotifyAg
   });
 }
 
-export function createNeedsInputNotification(detail?: string): AgentNotification {
+export function createNeedsInputNotification(detail?: string, context?: AgentNotificationContext): AgentNotification {
+  const chatTitle = formatNotificationChatTitle(context?.chatTitle);
+
   return {
-    body: detail || "Gilbert is waiting for your input before continuing.",
-    title: "Gilbert needs your input",
+    body: formatNotificationLines([
+      chatTitle ? `Chat: ${chatTitle}` : "",
+      detail || "Gilbert is waiting for your input before continuing.",
+    ]),
+    title: chatTitle ? `Input needed: ${chatTitle}` : "Gilbert needs your input",
   };
 }
 
-export function createNeedsAttentionNotification(detail?: string): AgentNotification {
+export function createNeedsAttentionNotification(detail?: string, context?: AgentNotificationContext): AgentNotification {
+  const chatTitle = formatNotificationChatTitle(context?.chatTitle);
+
   return {
-    body: detail || "Gilbert needs you to review the latest response.",
-    title: "Gilbert needs attention",
+    body: formatNotificationLines([
+      chatTitle ? `Chat: ${chatTitle}` : "",
+      detail || "Gilbert needs you to review the latest response.",
+    ]),
+    title: chatTitle ? `Review needed: ${chatTitle}` : "Gilbert needs attention",
   };
 }
 
-function createNotificationFromMessage(message?: ChatMessage): AgentNotification | null {
+function createNotificationFromMessage(message?: ChatMessage, context?: AgentNotificationContext): AgentNotification | null {
   if (!message) {
     return null;
   }
 
+  const chatTitle = formatNotificationChatTitle(context?.chatTitle);
+
   if (message.status === "error") {
-    return createNeedsAttentionNotification("The latest response needs attention before it can continue.");
+    return createNeedsAttentionNotification("The latest response needs attention before it can continue.", context);
   }
 
   if (hasPendingPlanningInput(message)) {
-    return createNeedsInputNotification(message.planning?.inputRequest?.title);
+    return createNeedsInputNotification(message.planning?.inputRequest?.title, context);
   }
 
   if (hasApprovalBlockedTool(message.toolCalls)) {
     return {
-      body: "A local action was blocked and may need your approval.",
-      title: "Gilbert needs approval",
+      body: formatNotificationLines([
+        chatTitle ? `Chat: ${chatTitle}` : "",
+        "A local action was blocked and may need your approval.",
+      ]),
+      title: chatTitle ? `Approval needed: ${chatTitle}` : "Gilbert needs approval",
     };
   }
 
   return {
-    body: "Your latest response is ready to review.",
-    title: "Response completed",
+    body: formatNotificationLines([
+      chatTitle ? `Chat: ${chatTitle}` : "",
+      formatCompletedResponsePreview(message.content),
+    ]),
+    title: chatTitle ? `Response ready: ${chatTitle}` : "Response completed",
   };
 }
 
@@ -277,10 +306,48 @@ function isNotificationKind(value: unknown): value is NotificationKind {
 }
 
 function formatNotificationBody(body: string) {
-  const parts = [body, "Open Gilbert Codex to review."];
+  const parts = [body, "Click to open this chat."];
   return parts.join("\n").slice(0, 220);
 }
 
 function createNotificationId() {
   return Math.floor(Date.now() % 2_000_000_000);
+}
+
+function formatNotificationLines(lines: string[]) {
+  return lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatNotificationChatTitle(title?: string) {
+  const trimmed = title?.trim();
+
+  if (!trimmed || /^new chat$/i.test(trimmed) || /^naming chat/i.test(trimmed)) {
+    return "";
+  }
+
+  return trimmed.slice(0, 72);
+}
+
+function formatCompletedResponsePreview(content: string) {
+  const preview = stripNotificationMarkdown(content);
+
+  if (!preview) {
+    return "The latest response finished.";
+  }
+
+  return `Completed: ${preview}`;
+}
+
+function stripNotificationMarkdown(content: string) {
+  return content
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_~>#-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
 }

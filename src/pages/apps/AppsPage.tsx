@@ -1057,7 +1057,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={gmailExpanded} onClick={() => toggleAppCardExpanded("gmail")}>
                   <ChevronDown size={14} aria-hidden="true" />
-                  Tools
+                  {gmailExpanded ? "Collapse" : "Expand"}
                 </button>
                 <span>{gmailConnected ? `${gmailAccountRows.length}/${gmailMaxAccounts} connected. Tools use the active account by default` : gmailInstalled ? "Connect Google before Gmail tools can read mail" : "Installs locally and opens Google account selection"}</span>
               </div>
@@ -1132,7 +1132,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={calendarExpanded} onClick={() => toggleAppCardExpanded("google-calendar")}>
                   <ChevronDown size={14} aria-hidden="true" />
-                  Tools
+                  {calendarExpanded ? "Collapse" : "Expand"}
                 </button>
                 <span>{calendarConnected ? `${calendarAccountRows.length}/${calendarMaxAccounts} connected. Tools use the active account by default` : calendarInstalled ? "Connect Google before Calendar tools can read events" : "Installs locally and opens Google account selection"}</span>
               </div>
@@ -1206,13 +1206,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <button className="apps-plugin-primary" type="button" disabled={githubBusy} onClick={() => void installOrOpenGithub()}>
                   {githubActionState === "install" ? "Installing" : githubConnected ? "Manage" : githubInstalled ? "Sign in" : "Install"}
                 </button>
-                <button className="apps-plugin-secondary" type="button" disabled={githubBusy || !githubAvailable} onClick={() => void refreshGithubConnection()}>
+                <button className="apps-plugin-secondary apps-plugin-icon-action" type="button" aria-label="Refresh GitHub" title="Refresh GitHub" disabled={githubBusy || !githubAvailable} onClick={() => void refreshGithubConnection()}>
                   <RefreshCw size={14} aria-hidden="true" />
-                  Refresh
                 </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={githubExpanded} onClick={() => toggleAppCardExpanded("github")}>
                   <ChevronDown size={14} aria-hidden="true" />
-                  Tools
+                  {githubExpanded ? "Collapse" : "Expand"}
                 </button>
                 <span>{githubConnected ? "Tools use the connected GitHub account and the current workspace by default" : githubInstalled ? "Finish sign-in in Settings before GitHub tools can access repositories" : "Installs locally and reuses the existing GitHub settings sign-in"}</span>
               </div>
@@ -1305,7 +1304,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={mcpExpanded} onClick={() => toggleAppCardExpanded("mcp")}>
                   <ChevronDown size={14} aria-hidden="true" />
-                  Tools
+                  {mcpExpanded ? "Collapse" : "Expand"}
                 </button>
                 <span>{mcpConfigured ? `${mcpToolCount} cached tools across ${mcpServers.length} configured server${mcpServers.length === 1 ? "" : "s"}` : "Connect HTTPS, localhost, or command-line stdio servers"}</span>
               </div>

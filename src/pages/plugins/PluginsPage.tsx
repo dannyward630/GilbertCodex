@@ -511,7 +511,7 @@ function PluginCardGrid({
               </button>
               <button className="plugin-card-expand-button" type="button" aria-expanded={expanded} onClick={() => onExpandToggle(plugin.id)}>
                 <ChevronDown size={15} aria-hidden="true" />
-                <span>{expanded ? "Collapse" : "Details"}</span>
+                <span>{expanded ? "Collapse" : "Expand"}</span>
               </button>
               <button type="button" data-installed={installed} onClick={() => onInstallToggle(plugin.id)}>
                 {installed ? <Check size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
