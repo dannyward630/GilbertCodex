@@ -1483,6 +1483,14 @@
     grid-template-columns: 1fr;
   }
 
+  .apps-plugin-card[data-expanded="true"] {
+    grid-column: auto;
+  }
+
+  .apps-plugin-card[data-expanded="true"] .apps-plugin-expanded {
+    grid-template-columns: 1fr;
+  }
+
   .apps-catalog-metrics {
     justify-content: flex-start;
     flex-wrap: wrap;
