@@ -249,7 +249,7 @@ export function looksLikeUnnecessaryLocalActionConfirmation(content: string, too
 }
 
 const APP_TOOL_NAME_PATTERN =
-  /\b(?:files[._](?:append|apply_patch|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
+  /\b(?:files[._](?:append|apply_patch|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|gmail_[\w.-]+|calendar_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
 const FILE_LINE_EDIT_FRAME_PATTERN =
   /\b(?:current\s+)?`?[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)`?\s+lines?\s+\d+(?:\s*-\s*\d+)?\b/i;
 const EDITABLE_FILE_MENTION_PATTERN =
@@ -262,6 +262,10 @@ const STANDALONE_CODING_ACTION_PROMISE_PATTERN =
   /\b(?:now\s+)?i\s+need\s+to\s+(?:add|change|create|delete|edit|fix|implement|modify|patch|remove|replace|update|write)\b[\s\S]{0,360}\b(?:api|app|code|component|css|database|file|function|handler|hook|jsx|logic|module|route|screen|service|state|support|tsx|ui)\b[\s:;.,-]*$/i;
 const TOOL_INVENTORY_NARRATION_PATTERN =
   /\b(?:available tools?|tools?\s+i\s+(?:do\s+)?have|tools?\s+available|what tools?\s+i\s+(?:do\s+)?have|i\s+(?:do\s+not|don't)\s+have\s+[\w.:-]+\s+available|tools?\s+attached|attached tools?)\b/i;
+const CAPABILITY_INVENTORY_QUESTION_PATTERN =
+  /\b(?:what|which|list|show|tell(?:\s+me)?|explain|describe)\b[\s\S]{0,180}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b[\s\S]{0,180}\b(?:available|enabled|installed|connected|do\s+you\s+have|can\s+you\s+(?:access|call|use|do))\b/i;
+const LOCAL_TOOLING_IMPLEMENTATION_QUESTION_PATTERN =
+  /\b(?:our|this|the)\s+(?:app|code|codebase|project|repo|repository|workspace)\b[\s\S]{0,220}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?|prompt|prompts?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?|prompt|prompts?)\b[\s\S]{0,220}\b(?:code|codebase|implementation|registry|runtime|selector|source|workspace|actual\s+files?|how\s+(?:it|they)\s+work)\b/i;
 const CONVERSATION_ONLY_PROMPT_PATTERN =
   /^\s*(?:thanks?|thank you|ok(?:ay)?|cool|nice|got it|sounds good|perfect|great|continue|go on|tell me more|explain that|summarize(?: this)?(?: conversation| chat| thread)?)\s*[.!?]*\s*$/i;
 const LOCAL_FACT_QUESTION_PATTERN =
@@ -269,7 +273,7 @@ const LOCAL_FACT_QUESTION_PATTERN =
 const LOCAL_WORKSPACE_REFERENCE_PATTERN =
   /\b(?:our|this|the)\s+(?:app|code|codebase|project|repo|repository|workspace)\b|\b(?:codebase|project|repo|repository|workspace|source\s+code)\b/i;
 const LOCAL_CODE_ENTITY_PATTERN =
-  /\b(?:adapter|api|backend|bridge|component|config(?:uration)?|database|frontend|integration|model|providers?|registry|route|runtime|service|settings?|tools?|tauri|vite|react|typescript|openrouter|anthropic|openai|gemini|ollama|mapbox|weather)\b/i;
+  /\b(?:adapter|api|backend|bridge|component|config(?:uration)?|database|frontend|integration|model|plugins?|prompt|prompts?|providers?|registry|route|runtime|selector|service|settings?|tools?|tauri|vite|react|typescript|openrouter|anthropic|openai|gemini|ollama|mapbox|weather)\b/i;
 const LOCAL_EVIDENCE_VERIFICATION_PATTERN =
   /\b(?:check|confirm|inspect|look(?:\s+at)?|read|search|verify)\b[\s\S]{0,180}\b(?:code|codebase|files?|project|repo|repository|source|workspace|config(?:uration)?|provider|settings?|tool|runtime)\b/i;
 const LOCAL_GIT_CHANGE_REVIEW_PATTERN =
@@ -277,6 +281,20 @@ const LOCAL_GIT_CHANGE_REVIEW_PATTERN =
 
 function referencesAppToolName(content: string) {
   return APP_TOOL_NAME_PATTERN.test(content);
+}
+
+export function looksLikeCapabilityInventoryQuestion(prompt: string) {
+  const trimmed = prompt.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  return CAPABILITY_INVENTORY_QUESTION_PATTERN.test(trimmed);
+}
+
+function looksLikeLocalToolingImplementationQuestion(prompt: string) {
+  return LOCAL_TOOLING_IMPLEMENTATION_QUESTION_PATTERN.test(prompt.trim());
 }
 
 function hasSuccessfulMutatingFileToolCall(toolCalls: ChatToolCall[]) {
@@ -306,8 +324,9 @@ export function looksLikeToolProtocolNarration(content: string) {
   return (
     /<<<\s*(?:END_)?TOOL_CALL\s*>>>/i.test(trimmed) ||
     /<\s*\|\s*DSML\s*\|\s*(?:tool_calls|invoke|parameter)\b/i.test(trimmed) ||
+    /\bBRIDGE_TOOL_CALL\s*:\s*{/i.test(trimmed) ||
     /<\s*\/?\s*tool_call\b/i.test(trimmed) ||
-    /<\s*\/?\s*(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+\b/i.test(trimmed) ||
+    /<\s*\/?\s*(?:files_|git_|terminal_|browser_|web_|github_|gmail_|calendar_|bridge_)[\w.-]+\b/i.test(trimmed) ||
     /<\s*\/?\s*arg_(?:key|value)\b/i.test(trimmed) ||
     /\barg_(?:key|value)\b[\s\S]{0,120}\b(?:path|command|cwd|old_text|new_text|files_read|edit_file|run_terminal)\b/i.test(trimmed) ||
     looksLikeProviderToolCallJson(trimmed) ||
@@ -321,8 +340,8 @@ function looksLikeProviderToolCallJson(trimmed: string) {
   }
 
   return (
-    /"function"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+"/i.test(trimmed) ||
-    /"function"\s*:\s*\{[\s\S]{0,700}"name"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|bridge_)[\w.-]+"/i.test(trimmed) ||
+    /"function"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|gmail_|calendar_|bridge_)[\w.-]+"/i.test(trimmed) ||
+    /"function"\s*:\s*\{[\s\S]{0,700}"name"\s*:\s*"(?:files_|git_|terminal_|browser_|web_|github_|gmail_|calendar_|bridge_)[\w.-]+"/i.test(trimmed) ||
     /"parameters"\s*:\s*\{[\s\S]{0,700}"(?:path|cwd|command|query|url|oldText|newText)"\s*:/i.test(trimmed)
   );
 }
@@ -681,6 +700,10 @@ export function needsFreshLocalToolEvidence(prompt: string, hasWorkspaceRoots: b
     return false;
   }
 
+  if (looksLikeCapabilityInventoryQuestion(trimmed) && !looksLikeLocalToolingImplementationQuestion(trimmed)) {
+    return false;
+  }
+
   const asksForFacts = LOCAL_FACT_QUESTION_PATTERN.test(trimmed);
   const referencesWorkspace = LOCAL_WORKSPACE_REFERENCE_PATTERN.test(trimmed);
   const referencesCodeEntity = LOCAL_CODE_ENTITY_PATTERN.test(trimmed);
@@ -702,9 +725,13 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
     return false;
   }
 
+  if (looksLikeCapabilityInventoryQuestion(trimmed) && !looksLikeLocalToolingImplementationQuestion(trimmed)) {
+    return false;
+  }
+
   const asksToContinueWork = /\b(?:do\s+(?:it|the\s+job)|continue|finish(?:\s+it)?|go\s+ahead|make\s+it\s+happen|apply\s+(?:it|that|the\s+change))\b/i.test(trimmed);
   const asksForEdit =
-    /\b(?:add|append|change|create|delete|edit|fix|implement|improve|insert|make\s+(?:it|this|that)?\s*(?:look\s+|feel\s+|more\s+)?(?:better|cleaner|clearer|polished|readable)|patch|polish|refactor|remove|replace|restyle|revamp|style|update|upgrade|write)\b/i.test(trimmed);
+    /\b(?:add|append|change|create|delete|edit|fix|implement|improve|insert|make\s+(?:it|this|that)?\s*(?:look\s+|feel\s+|more\s+)?(?:better|cleaner|clearer|polished|readable)|modi(?:fy|fy|y)|patch|polish|refactor|remove|replace|restyle|revamp|style|tweak|update|upgrade|write)\b/i.test(trimmed);
   const asksForInspection =
     /\b(?:check|inspect|look(?:\s+at)?|read|review|search|verify)\b[\s\S]{0,180}\b(?:app|code|codebase|files?|project|repo|repository|source|workspace)\b/i.test(trimmed);
   const asksForGitChangeReview = LOCAL_GIT_CHANGE_REVIEW_PATTERN.test(trimmed);
@@ -717,14 +744,18 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
   return asksForGitChangeReview || ((asksForEdit || asksForInspection || asksToContinueWork) && referencesLocalTarget);
 }
 
-export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string) {
+export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string, options: { blockedReasons?: string[]; canUseProviderTools?: boolean } = {}) {
   const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
+  const canUseProviderTools = options.canUseProviderTools !== false;
 
   return [
     "FRESH LOCAL WORKSPACE EVIDENCE REQUIRED",
     `Original user request: ${prompt}`,
     "The previous visible response answered from chat context or promised inspection without a real current workspace tool-call record for this request.",
-    "Use the real provider tool-call channel now before writing the final answer. For Git/change-review requests, call git_status and git_diff when attached. Otherwise search and read the selected workspace with files_search, files_read_many, files_tree_summary, or files_read as appropriate.",
+    canUseProviderTools
+      ? "Use the real provider tool-call channel now before writing the final answer. For Git/change-review requests, call git_status and git_diff when attached. Otherwise search and read the selected workspace with files_search, files_read_many, files_tree_summary, or files_read as appropriate."
+      : "No provider workspace tools are attached for this retry. Do not claim a fresh workspace read, edit, Git command, terminal command, browser action, or web search ran; state the tool-availability blocker plainly.",
+    !canUseProviderTools && options.blockedReasons?.length ? `Blocked gates: ${options.blockedReasons.slice(0, 4).join(" | ")}` : "",
     "Do not answer from memory, prior chat context, project summaries, or visible tool-call syntax alone. After at least one real current workspace tool succeeds, answer from that evidence.",
     excerpt ? `Rejected unsupported answer excerpt: ${excerpt}` : "",
   ].filter(Boolean).join("\n\n");
@@ -849,11 +880,13 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "FINAL ANSWER REQUIRED FROM LOCAL TOOL RESULTS",
     `Original user request: ${prompt}`,
     "Use the conversation, attached workspace context, and web context already provided as the evidence for your answer.",
+    "The original user request is the success condition. Address it directly from the available evidence; do not substitute a recap, plan, or adjacent task.",
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
     "If more evidence is truly required, ask for it. Otherwise write the final answer now.",
+    "Claim completed work only when current tool results prove it. If something is unverified or blocked, say that plainly.",
     "Do not describe the tool loop, provider behavior, saved evidence, continuation state, recovery state, or why an answer was missing.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
-    "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
+    "Format the visible answer as valid GitHub-flavored Markdown prose with headings, bullets, and links when helpful. Start with the direct answer. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs, and always close every fence. If you use a pipe table, include a complete GFM delimiter row for every column, or use bullets instead.",
     "Cite web sources with Markdown links when the tool results include URLs.",
     "Do not output hidden tool protocol text as prose. Do not output JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output.",
   ].join("\n\n");
@@ -866,9 +899,11 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     `Original user request: ${prompt}`,
     detail,
     "Use the evidence already provided and write the best final answer now.",
+    "The original user request is the success condition. Address it directly and do not substitute a plan, recap, or adjacent task.",
     "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
+    "Claim completed work only when current tool results prove it. If something is unverified or blocked, say that plainly.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
-    "Format the visible answer as normal Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs. If you use a pipe table, include a complete GFM delimiter row for every column.",
+    "Format the visible answer as valid GitHub-flavored Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs, and always close every fence. If you use a pipe table, include a complete GFM delimiter row for every column, or use bullets instead.",
     "Do not emit hidden tool protocol text, JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output. Do not promise to keep inspecting unless the next step is impossible without user input.",
   ].join("\n\n");
 }
@@ -881,9 +916,11 @@ export function createFinalAnswerRecoveryInstruction(prompt: string, detail: str
     detail,
     "Use the conversation context, web context, and local workspace context already provided above.",
     "Write only the user-facing answer now.",
+    "The original user request is the success condition. Address it directly, and claim completed work only when current evidence proves it.",
     "Do not mention background work, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
     "Do not paste raw TOOL blocks or adaptation recommendations.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
+    "Use valid GitHub-flavored Markdown. Keep lists, links, tables, and fenced code blocks structurally complete; always close every fence.",
     "Do not output JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output.",
     "If the available context is insufficient, say exactly what is missing in one short sentence, then give the best answer possible from the available evidence.",
   ].join("\n\n");

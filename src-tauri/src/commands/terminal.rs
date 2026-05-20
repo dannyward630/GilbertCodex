@@ -272,6 +272,8 @@ pub enum TerminalShell {
     PowerShell,
     #[serde(rename = "cmd")]
     Cmd,
+    #[serde(rename = "wsl")]
+    Wsl,
     #[serde(rename = "bash")]
     Bash,
     #[serde(rename = "zsh")]
@@ -618,15 +620,17 @@ fn run_command_blocking(
         .unwrap_or(DEFAULT_RUN_TIMEOUT_MS)
         .clamp(1_000, MAX_RUN_TIMEOUT_MS);
     let started_at = Instant::now();
-    let mut command = create_shell_command(&shell, input);
+    let mut command = create_shell_command(&shell, input, &working_directory);
 
     command
-        .current_dir(&working_directory)
         .env("GILBERT_CODEX_TERMINAL", "1")
         .env("GILBERT_CODEX_AGENT_TOOL", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if !matches!(shell, TerminalShell::Wsl) {
+        command.current_dir(&working_directory);
+    }
     scrub_inherited_dev_env(&mut command);
 
     let mut child = command
@@ -766,7 +770,7 @@ fn refresh_active_command(session: &mut TerminalSession) -> Result<(), String> {
     Ok(())
 }
 
-fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
+fn create_shell_command(shell: &TerminalShell, input: &str, working_directory: &Path) -> Command {
     #[cfg(windows)]
     {
         match shell {
@@ -791,6 +795,9 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
                 command.args(["/Q", "/C", input]);
                 command
             }
+            TerminalShell::Wsl => {
+                create_wsl_process_command(working_directory, &["--exec", "sh", "-lc", input])
+            }
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = Command::new(unix_shell_program(shell));
                 command.creation_flags(CREATE_NO_WINDOW);
@@ -802,19 +809,79 @@ fn create_shell_command(shell: &TerminalShell, input: &str) -> Command {
 
     #[cfg(not(windows))]
     {
+        let _ = working_directory;
         match shell {
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = Command::new(unix_shell_program(shell));
                 command.args(["-lc", input]);
                 command
             }
-            TerminalShell::PowerShell | TerminalShell::Cmd => {
+            TerminalShell::PowerShell | TerminalShell::Cmd | TerminalShell::Wsl => {
                 let mut command = Command::new(default_unix_shell_path());
                 command.args(["-lc", input]);
                 command
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn create_wsl_process_command(working_directory: &Path, command_args: &[&str]) -> Command {
+    let mut command = Command::new("wsl.exe");
+    command.creation_flags(CREATE_NO_WINDOW);
+    for arg in create_wsl_args(working_directory, command_args) {
+        command.arg(arg);
+    }
+    command
+}
+
+#[cfg(windows)]
+fn create_wsl_pty_command(working_directory: &Path, command_args: &[&str]) -> CommandBuilder {
+    let mut command = CommandBuilder::new("wsl.exe");
+    for arg in create_wsl_args(working_directory, command_args) {
+        command.arg(arg);
+    }
+    command
+}
+
+#[cfg(windows)]
+fn create_wsl_args(working_directory: &Path, command_args: &[&str]) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if let Some((distribution, linux_directory)) = wsl_unc_directory(working_directory) {
+        args.push("-d".to_string());
+        args.push(distribution);
+        args.push("--cd".to_string());
+        args.push(linux_directory);
+    } else {
+        args.push("--cd".to_string());
+        args.push(path_to_string(working_directory));
+    }
+
+    args.extend(command_args.iter().map(|arg| (*arg).to_string()));
+    args
+}
+
+#[cfg(windows)]
+fn wsl_unc_directory(path: &Path) -> Option<(String, String)> {
+    let normalized = path_to_string(path).replace('/', "\\");
+    let rest = normalized
+        .strip_prefix("\\\\wsl$\\")
+        .or_else(|| normalized.strip_prefix("\\\\wsl.localhost\\"))?;
+    let (distribution, directory) = rest.split_once('\\').unwrap_or((rest, ""));
+    let distribution = distribution.trim();
+
+    if distribution.is_empty() {
+        return None;
+    }
+
+    let linux_directory = if directory.trim().is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", directory.replace('\\', "/"))
+    };
+
+    Some((distribution.to_string(), linux_directory))
 }
 
 type InteractiveTerminalParts = (
@@ -881,6 +948,9 @@ fn create_interactive_shell_command(
                 command.args(["/Q"]);
                 command
             }
+            TerminalShell::Wsl => {
+                create_wsl_pty_command(working_directory, &["--exec", "sh", "-l"])
+            }
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = CommandBuilder::new(unix_shell_program(shell));
                 command.arg("-i");
@@ -888,7 +958,7 @@ fn create_interactive_shell_command(
             }
         };
 
-        configure_pty_command(&mut command, working_directory);
+        configure_pty_command(&mut command, shell, working_directory);
         command
     }
 
@@ -900,14 +970,14 @@ fn create_interactive_shell_command(
                 command.arg("-i");
                 command
             }
-            TerminalShell::PowerShell | TerminalShell::Cmd => {
+            TerminalShell::PowerShell | TerminalShell::Cmd | TerminalShell::Wsl => {
                 let mut command = CommandBuilder::new(default_unix_shell_path());
                 command.arg("-i");
                 command
             }
         };
 
-        configure_pty_command(&mut command, working_directory);
+        configure_pty_command(&mut command, shell, working_directory);
         command
     }
 }
@@ -938,6 +1008,9 @@ fn create_pty_shell_command(
                 command.args(["/Q", "/C", input]);
                 command
             }
+            TerminalShell::Wsl => {
+                create_wsl_pty_command(working_directory, &["--exec", "sh", "-lc", input])
+            }
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = CommandBuilder::new(unix_shell_program(shell));
                 command.args(["-lc", input]);
@@ -945,7 +1018,7 @@ fn create_pty_shell_command(
             }
         };
 
-        configure_pty_command(&mut command, working_directory);
+        configure_pty_command(&mut command, shell, working_directory);
         command
     }
 
@@ -957,20 +1030,26 @@ fn create_pty_shell_command(
                 command.args(["-lc", input]);
                 command
             }
-            TerminalShell::PowerShell | TerminalShell::Cmd => {
+            TerminalShell::PowerShell | TerminalShell::Cmd | TerminalShell::Wsl => {
                 let mut command = CommandBuilder::new(default_unix_shell_path());
                 command.args(["-lc", input]);
                 command
             }
         };
 
-        configure_pty_command(&mut command, working_directory);
+        configure_pty_command(&mut command, shell, working_directory);
         command
     }
 }
 
-fn configure_pty_command(command: &mut CommandBuilder, working_directory: &Path) {
-    command.cwd(working_directory);
+fn configure_pty_command(
+    command: &mut CommandBuilder,
+    shell: &TerminalShell,
+    working_directory: &Path,
+) {
+    if !matches!(shell, TerminalShell::Wsl) {
+        command.cwd(working_directory);
+    }
     command.env("GILBERT_CODEX_TERMINAL", "1");
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
@@ -1037,7 +1116,9 @@ fn normalize_terminal_shell(shell: TerminalShell) -> TerminalShell {
     #[cfg(not(windows))]
     {
         match shell {
-            TerminalShell::PowerShell | TerminalShell::Cmd => default_unix_shell(),
+            TerminalShell::PowerShell | TerminalShell::Cmd | TerminalShell::Wsl => {
+                default_unix_shell()
+            }
             _ => shell,
         }
     }
@@ -1068,6 +1149,7 @@ fn unix_shell_program(shell: &TerminalShell) -> &'static str {
         TerminalShell::Bash => "bash",
         TerminalShell::Zsh => "zsh",
         TerminalShell::Sh => "sh",
+        TerminalShell::Wsl => "sh",
         TerminalShell::PowerShell => "pwsh",
         TerminalShell::Cmd => "cmd",
     }
@@ -1415,6 +1497,7 @@ fn shell_label(shell: &TerminalShell) -> &'static str {
     match shell {
         TerminalShell::PowerShell => "PowerShell",
         TerminalShell::Cmd => "Command Prompt",
+        TerminalShell::Wsl => "WSL",
         TerminalShell::Bash => "Bash",
         TerminalShell::Zsh => "Zsh",
         TerminalShell::Sh => "sh",
@@ -1580,6 +1663,47 @@ mod tests {
             response.stderr.contains("terminal-error"),
             "stderr was {:?}",
             response.stderr
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_unc_directory_is_converted_to_linux_path() {
+        let parsed = wsl_unc_directory(Path::new(r"\\wsl$\Ubuntu\home\kobe\repo"))
+            .expect("WSL UNC path should parse");
+
+        assert_eq!(parsed.0, "Ubuntu");
+        assert_eq!(parsed.1, "/home/kobe/repo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_executes_powershell_shell_directly() {
+        let response = run_test_command(
+            "Write-Output terminal-powershell-ok",
+            TerminalShell::PowerShell,
+        );
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            response.stdout.contains("terminal-powershell-ok"),
+            "stdout was {:?}",
+            response.stdout
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_runner_executes_cmd_shell_directly() {
+        let response = run_test_command("echo terminal-cmd-ok", TerminalShell::Cmd);
+
+        assert_eq!(response.exit_code, Some(0));
+        assert!(!response.timed_out);
+        assert!(
+            response.stdout.contains("terminal-cmd-ok"),
+            "stdout was {:?}",
+            response.stdout
         );
     }
 

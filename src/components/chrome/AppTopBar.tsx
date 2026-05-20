@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import { closeWindow, maximizeWindow, minimizeWindow } from "../../app/windowClient";
 import { IconButton } from "../common/IconButton";
@@ -9,6 +9,7 @@ import { handleTopBarDoubleClick, handleTopBarMouseDown } from "./topBarWindowIn
 import { WeatherTopBarIndicator } from "./WeatherTopBarIndicator";
 import { WindowControls } from "./WindowControls";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { formatShortcutForPlatform, isMacHostPlatform, type HostPlatform } from "../../lib/hostPlatform";
 import type { AppInfo } from "../../types/app";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { AppearanceMode } from "../../types/settings";
@@ -18,10 +19,12 @@ interface AppTopBarProps {
   appInfo: AppInfo;
   appearanceMode: AppearanceMode;
   desktopRuntime: boolean;
+  hostPlatform: HostPlatform;
   locationServicesEnabled: boolean;
   onNewChat: () => void;
   onOpenSearch: () => void;
   onAppearanceModeChange: (mode: AppearanceMode) => void;
+  onPreloadRoute?: (route: PrimaryRoute) => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onShowAbout: () => void;
   onToggleSidebar: () => void;
@@ -45,10 +48,12 @@ export function AppTopBar({
   appInfo,
   appearanceMode,
   desktopRuntime,
+  hostPlatform,
   locationServicesEnabled,
   onNewChat,
   onOpenSearch,
   onAppearanceModeChange,
+  onPreloadRoute,
   onRouteChange,
   onShowAbout,
   onToggleSidebar,
@@ -59,37 +64,40 @@ export function AppTopBar({
   const topbarRef = useRef<HTMLElement>(null);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const updateController = useAppUpdateController(desktopRuntime);
+  const isMac = isMacHostPlatform(hostPlatform);
+  const shortcut = useCallback((value: string) => formatShortcutForPlatform(value, hostPlatform), [hostPlatform]);
+  const preloadRoute = useCallback((route: PrimaryRoute) => () => onPreloadRoute?.(route), [onPreloadRoute]);
 
   const menus = useMemo<Record<MenuId, TopBarMenuAction[]>>(
     () => ({
       file: [
-        { label: "New chat", shortcut: "Ctrl+N", onSelect: onNewChat },
-        { label: "Search chats", shortcut: "Ctrl+K", onSelect: onOpenSearch },
-        { label: "Settings", shortcut: "Ctrl+,", separatorBefore: true, onSelect: () => onRouteChange("settings") },
-        { label: "Exit", shortcut: "Alt+F4", danger: true, separatorBefore: true, onSelect: closeWindow },
+        { label: "New chat", shortcut: shortcut("Ctrl+N"), onSelect: onNewChat },
+        { label: "Search chats", shortcut: shortcut("Ctrl+K"), onSelect: onOpenSearch },
+        { label: "Settings", shortcut: shortcut("Ctrl+,"), separatorBefore: true, onPreload: preloadRoute("settings"), onSelect: () => onRouteChange("settings") },
+        { label: isMac ? `Quit ${appInfo.name}` : "Exit", shortcut: isMac ? "Command+Q" : "Alt+F4", danger: true, separatorBefore: true, onSelect: closeWindow },
       ],
       edit: [
-        { label: "Undo", shortcut: "Ctrl+Z", onSelect: () => runTopBarEditCommand("undo") },
-        { label: "Cut", shortcut: "Ctrl+X", separatorBefore: true, onSelect: () => runTopBarEditCommand("cut") },
-        { label: "Copy", shortcut: "Ctrl+C", onSelect: () => runTopBarEditCommand("copy") },
-        { label: "Paste", shortcut: "Ctrl+V", onSelect: () => runTopBarEditCommand("paste") },
-        { label: "Select all", shortcut: "Ctrl+A", separatorBefore: true, onSelect: () => runTopBarEditCommand("selectAll") },
+        { label: "Undo", shortcut: shortcut("Ctrl+Z"), onSelect: () => runTopBarEditCommand("undo") },
+        { label: "Cut", shortcut: shortcut("Ctrl+X"), separatorBefore: true, onSelect: () => runTopBarEditCommand("cut") },
+        { label: "Copy", shortcut: shortcut("Ctrl+C"), onSelect: () => runTopBarEditCommand("copy") },
+        { label: "Paste", shortcut: shortcut("Ctrl+V"), onSelect: () => runTopBarEditCommand("paste") },
+        { label: "Select all", shortcut: shortcut("Ctrl+A"), separatorBefore: true, onSelect: () => runTopBarEditCommand("selectAll") },
       ],
       view: [
-        { label: "Show sidebar", shortcut: "Ctrl+B", checked: sidebarOpen, onSelect: onToggleSidebar },
-        { label: "Terminal", shortcut: "Ctrl+`", checked: terminalOpen, disabled: !desktopRuntime, onSelect: onToggleTerminal },
-        { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onSelect: () => onRouteChange("chat") },
-        { label: "Apps", checked: activeRoute === "apps", onSelect: () => onRouteChange("apps") },
-        ...(locationServicesEnabled ? [{ label: "Radar", checked: activeRoute === "radar", onSelect: () => onRouteChange("radar") }] : []),
-        { label: "Settings", checked: activeRoute === "settings", onSelect: () => onRouteChange("settings") },
+        { label: "Show sidebar", shortcut: shortcut("Ctrl+B"), checked: sidebarOpen, onSelect: onToggleSidebar },
+        { label: "Terminal", shortcut: shortcut("Ctrl+`"), checked: terminalOpen, disabled: !desktopRuntime, onSelect: onToggleTerminal },
+        { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onPreload: preloadRoute("chat"), onSelect: () => onRouteChange("chat") },
+        { label: "Apps", checked: activeRoute === "apps", onPreload: preloadRoute("apps"), onSelect: () => onRouteChange("apps") },
+        ...(locationServicesEnabled ? [{ label: "Radar", checked: activeRoute === "radar", onPreload: preloadRoute("radar"), onSelect: () => onRouteChange("radar") }] : []),
+        { label: "Settings", checked: activeRoute === "settings", onPreload: preloadRoute("settings"), onSelect: () => onRouteChange("settings") },
         { label: "System theme", checked: appearanceMode === "system", separatorBefore: true, onSelect: () => onAppearanceModeChange("system") },
         { label: "Dark theme", checked: appearanceMode === "dark", onSelect: () => onAppearanceModeChange("dark") },
         { label: "Light theme", checked: appearanceMode === "light", onSelect: () => onAppearanceModeChange("light") },
       ],
       window: [
-        { label: "Minimize", onSelect: minimizeWindow },
-        { label: "Maximize or restore", onSelect: maximizeWindow },
-        { label: "Close window", danger: true, separatorBefore: true, onSelect: closeWindow },
+        { label: "Minimize", shortcut: isMac ? "Command+M" : undefined, onSelect: minimizeWindow },
+        { label: isMac ? "Zoom" : "Maximize or restore", onSelect: maximizeWindow },
+        { label: "Close window", shortcut: isMac ? "Command+W" : undefined, danger: true, separatorBefore: true, onSelect: closeWindow },
       ],
       help: [
         {
@@ -98,7 +106,7 @@ export function AppTopBar({
           onSelect: updateController.checkNow,
         },
         { label: `About ${appInfo.name}`, onSelect: onShowAbout },
-        { label: "Open settings", separatorBefore: true, onSelect: () => onRouteChange("settings") },
+        { label: "Open settings", separatorBefore: true, onPreload: preloadRoute("settings"), onSelect: () => onRouteChange("settings") },
       ],
     }),
     [
@@ -106,14 +114,19 @@ export function AppTopBar({
       appInfo,
       appearanceMode,
       desktopRuntime,
+      hostPlatform,
+      isMac,
       onAppearanceModeChange,
       onNewChat,
       onOpenSearch,
+      onPreloadRoute,
       onRouteChange,
       onShowAbout,
       onToggleSidebar,
       onToggleTerminal,
       locationServicesEnabled,
+      preloadRoute,
+      shortcut,
       sidebarOpen,
       terminalOpen,
       updateController.busy,
@@ -130,7 +143,7 @@ export function AppTopBar({
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const usesCommandKey = event.ctrlKey || event.metaKey;
+      const usesCommandKey = isMac ? event.metaKey : event.ctrlKey || event.metaKey;
       const target = event.target instanceof HTMLElement ? event.target : null;
 
       if (!usesCommandKey || target?.closest("[role='dialog']")) {
@@ -154,16 +167,23 @@ export function AppTopBar({
       } else if (key === ",") {
         event.preventDefault();
         onRouteChange("settings");
+      } else if (isMac && key === "q") {
+        event.preventDefault();
+        void closeWindow();
+      } else if (isMac && key === "w") {
+        event.preventDefault();
+        void closeWindow();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [desktopRuntime, onNewChat, onOpenSearch, onRouteChange, onToggleSidebar, onToggleTerminal]);
+  }, [desktopRuntime, isMac, onNewChat, onOpenSearch, onRouteChange, onToggleSidebar, onToggleTerminal]);
 
   return (
     <header ref={topbarRef} className="app-topbar" data-tauri-drag-region onDoubleClick={handleTopBarDoubleClick} onMouseDown={handleTopBarMouseDown}>
       <div className="topbar-left">
+        {isMac ? <WindowControls hostPlatform={hostPlatform} /> : null}
         <IconButton ariaLabel="Toggle sidebar" icon={PanelLeft} pressed={sidebarOpen} onClick={onToggleSidebar} />
         <TopBarMenus ariaLabel="Application menu" definitions={menuDefinitions} menus={menus} openMenu={openMenu} onOpenMenuChange={setOpenMenu} />
       </div>
@@ -174,7 +194,7 @@ export function AppTopBar({
       {locationServicesEnabled ? <WeatherTopBarIndicator onOpenRadar={() => onRouteChange("radar")} /> : null}
       <div className="topbar-right" data-topbar-interactive="true">
         <AppUpdateIndicator controller={updateController} />
-        <WindowControls />
+        {!isMac ? <WindowControls hostPlatform={hostPlatform} /> : null}
       </div>
     </header>
   );

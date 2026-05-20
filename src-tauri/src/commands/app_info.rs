@@ -7,6 +7,8 @@ pub struct AppInfo {
     pub version: String,
     pub phase: String,
     pub runtime: String,
+    pub platform: String,
+    pub arch: String,
 }
 
 #[tauri::command]
@@ -16,6 +18,20 @@ pub fn get_app_info() -> AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         phase: "Public alpha".to_string(),
         runtime: "Tauri desktop".to_string(),
+        platform: host_platform().to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+    }
+}
+
+fn host_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
     }
 }
 

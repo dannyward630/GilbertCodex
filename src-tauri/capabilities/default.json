@@ -13,10 +13,14 @@
     "core:webview:allow-set-webview-zoom",
     "core:window:allow-close",
     "core:window:allow-minimize",
+    "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
+    "core:window:allow-show",
     "core:window:allow-toggle-maximize",
+    "core:window:allow-unminimize",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
+    "notification:allow-register-listener",
     "notification:allow-notify"
   ]
 }

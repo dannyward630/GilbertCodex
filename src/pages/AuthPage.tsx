@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Check, KeyRound, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { ArrowRight, Check, Code2, Database, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles, UserRound } from "lucide-react";
 import { createLocalAccount, loginLocalAccount } from "../app/authClient";
 import { AuthTopBar } from "../components/chrome/AuthTopBar";
 import type { AuthSession } from "../types/auth";
@@ -119,6 +119,11 @@ export function AuthPage({ hasAccounts, initialError, loading = false, onAuthent
     <div className="auth-root">
       <AuthTopBar activeMode={mode} hasAccounts={hasAccounts} onModeChange={switchMode} />
       <main className="auth-shell">
+        <div className="auth-ambient" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
         <section className="auth-brand-panel" aria-label="Gilbert Codex local auth">
           <div className="auth-brand-lockup">
             <div className="auth-brand-mark">
@@ -130,13 +135,36 @@ export function AuthPage({ hasAccounts, initialError, loading = false, onAuthent
             </div>
           </div>
           <p>Keep chats, tools, settings, and workspace context tied to this computer and the local account you choose.</p>
+          <div className="auth-workspace-preview" aria-hidden="true">
+            <div className="auth-preview-header">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="auth-preview-body">
+              <div className="auth-preview-thread">
+                <strong>Project context</strong>
+                <span>files / tools / runs</span>
+              </div>
+              <div className="auth-preview-grid">
+                <i />
+                <i />
+                <i />
+                <i />
+              </div>
+              <div className="auth-preview-command">
+                <Code2 size={15} />
+                <span>ready for local work</span>
+              </div>
+            </div>
+          </div>
           <div className="auth-local-stack" aria-label="Local account guarantees">
             <div>
-              <Check size={16} aria-hidden="true" />
+              <Database size={16} aria-hidden="true" />
               <span>Local database</span>
             </div>
             <div>
-              <Check size={16} aria-hidden="true" />
+              <ShieldCheck size={16} aria-hidden="true" />
               <span>User-scoped workspace data</span>
             </div>
             <div>
@@ -147,6 +175,10 @@ export function AuthPage({ hasAccounts, initialError, loading = false, onAuthent
         </section>
 
         <section className="auth-form-panel" aria-label={isCreateMode ? "Create local account" : "Sign in"}>
+          <div className="auth-form-accent" aria-hidden="true">
+            <Sparkles size={15} />
+            <span>{isCreateMode ? "New local profile" : "Secure local entry"}</span>
+          </div>
           <div className="auth-mode-switch" role="tablist" aria-label="Auth mode">
             <button type="button" role="tab" aria-selected={isCreateMode} data-active={isCreateMode} onClick={() => switchMode("create")}>
               Create account

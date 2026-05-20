@@ -466,7 +466,7 @@ function createProviderPayloadBreakdown({
   const providerEnvelopeTokens = Math.max(requestOverheadTokens - bridgeToolOutputTokens.total - toolSchemaTokens, 0);
   const toolOutputCount = countToolOutputs(messages, toolBridge);
   const attachmentCount = countAttachments(messages);
-  const toolSchemaCount = toolBridge?.tools?.length ?? 0;
+  const toolSchemaCount = getProviderVisibleBridgeTools(toolBridge).length;
   const items: ContextWindowPayloadBreakdownItem[] = [
     {
       detail: `${Math.max(messages.length - draftCount, 0)} chat message${messages.length - draftCount === 1 ? "" : "s"}`,
@@ -630,7 +630,14 @@ function estimateBridgeToolResultTokenParts(toolBridge: ProviderToolBridgeOption
 }
 
 function estimateToolSchemaTokens(toolBridge: ProviderToolBridgeOptions | undefined) {
-  return estimateSerializedTokens((toolBridge?.tools ?? []).map(createProviderVisibleToolSchema));
+  return estimateSerializedTokens(getProviderVisibleBridgeTools(toolBridge).map(createProviderVisibleToolSchema));
+}
+
+function getProviderVisibleBridgeTools(toolBridge: ProviderToolBridgeOptions | undefined) {
+  const tools = toolBridge?.tools ?? [];
+  const providerVisibleToolIds = toolBridge?.providerVisibleToolIds ?? toolBridge?.capabilityPlan?.providerVisibleToolIds;
+
+  return providerVisibleToolIds ? tools.filter((tool) => providerVisibleToolIds.includes(tool.id)) : tools;
 }
 
 function countToolOutputs(messages: ChatMessage[], toolBridge: ProviderToolBridgeOptions | undefined) {

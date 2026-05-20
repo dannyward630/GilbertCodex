@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { initializeDeviceStorage, setStorageNamespace } from "../lib/appStorage";
+import { initializeDeviceStorage, loadDiscordBridgeSettings, saveDiscordBridgeSettings, setStorageNamespace } from "../lib/appStorage";
+import { scheduleIdleTask } from "../lib/idleTask";
 import { AuthPage } from "../pages/AuthPage";
 import type { AuthSession } from "../types/auth";
 import { getAuthState, logoutLocalAccount } from "./authClient";
 import { AppStartupScreen } from "./bootstrap/AppStartupScreen";
 import { useExternalLinkRouting } from "./bootstrap/useExternalLinkRouting";
-import { isTauriDesktopRuntime } from "./tauriClient";
+import { createDiscordBridgeAutoStartKey, ensureDiscordBridgeAutoStarted } from "./discordBridgeAutoStart";
+import { isTauriDesktopRuntime, stopDiscordBridge, stopNineRouterLocal } from "./tauriClient";
 import { WorkspaceApp } from "./workspace/WorkspaceApp";
 
 export function App() {
@@ -15,6 +17,7 @@ export function App() {
   const [authBootstrapped, setAuthBootstrapped] = useState(false);
   const [authHasAccounts, setAuthHasAccounts] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const discordAppAutoStartKeyRef = useRef<string | null>(null);
 
   useExternalLinkRouting();
 
@@ -29,11 +32,14 @@ export function App() {
         if (cancelled) {
           return;
         }
-        setAuthSession(state.session);
-        setAuthHasAccounts(state.hasAccounts);
         if (state.session) {
           await initializeDeviceStorage(state.session.user.id);
+          if (cancelled) {
+            return;
+          }
         }
+        setAuthSession(state.session);
+        setAuthHasAccounts(state.hasAccounts);
       } catch (error) {
         if (!cancelled) {
           console.error("Failed to load auth state", error);
@@ -54,8 +60,38 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!authSession || !isTauriDesktopRuntime()) {
+      discordAppAutoStartKeyRef.current = null;
+      return;
+    }
+
+    const settings = loadDiscordBridgeSettings();
+    const autoStartKey = createDiscordBridgeAutoStartKey(settings);
+
+    if (!autoStartKey || discordAppAutoStartKeyRef.current === autoStartKey) {
+      return;
+    }
+
+    discordAppAutoStartKeyRef.current = autoStartKey;
+
+    return scheduleIdleTask(() => {
+      void ensureDiscordBridgeAutoStarted(settings)
+        .then((result) => {
+          if (result.settings !== settings) {
+            saveDiscordBridgeSettings(result.settings);
+          }
+        })
+        .catch(() => {
+          discordAppAutoStartKeyRef.current = null;
+        });
+    }, 500);
+  }, [authSession]);
+
   async function handleLogout() {
     if (isTauriDesktopRuntime()) {
+      await stopNineRouterLocal().catch(() => undefined);
+      await stopDiscordBridge().catch(() => undefined);
       await logoutLocalAccount();
     }
 

@@ -32,6 +32,12 @@ const MAX_GIT_UNTRACKED_DIFF_BYTES: u64 = 524_288;
 const INDEX_PROGRESS_EVENT: &str = "computer-file-index-progress";
 const INDEX_PROGRESS_INTERVAL_MS: u64 = 150;
 const INDEX_PROGRESS_ENTRY_INTERVAL: usize = 250;
+const TEXT_SEARCH_TIME_BUDGET_MS: u64 = 15_000;
+const DEFAULT_TEXT_SEARCH_MAX_MATCHES: usize = 120;
+const MAX_TEXT_SEARCH_MAX_MATCHES: usize = 500;
+const DEFAULT_TEXT_SEARCH_MAX_MATCHES_PER_FILE: usize = 20;
+const MAX_TEXT_SEARCH_MAX_MATCHES_PER_FILE: usize = 100;
+const MAX_TEXT_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_TEXT_SEARCH_EXTENSIONS: &[&str] = &[
     "astro", "bat", "c", "cmd", "cpp", "cs", "css", "csv", "dart", "go", "graphql", "h", "html",
     "java", "js", "json", "jsx", "kt", "kts", "lua", "md", "mdx", "php", "ps1", "py", "rb", "rs",
@@ -436,6 +442,7 @@ pub struct ComputerTextSearchRequest {
     pub max_matches_per_file: Option<usize>,
     pub path: String,
     pub query: String,
+    pub regex: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -565,6 +572,7 @@ pub struct ComputerTextSearchResponse {
     pub limited: bool,
     pub matches: Vec<ComputerTextSearchFileResult>,
     pub scanned_directories: usize,
+    pub skipped_large_files: usize,
     pub skipped_directories: usize,
     pub skipped_files: usize,
     pub total_content_matches: usize,
@@ -1682,6 +1690,7 @@ fn computer_read_text_file_range_blocking(
 fn computer_search_text_files_blocking(
     request: ComputerTextSearchRequest,
 ) -> Result<ComputerTextSearchResponse, String> {
+    let started_at = Instant::now();
     let root = normalize_input_path(&request.path);
     let query = request.query.trim().to_string();
 
@@ -1700,8 +1709,16 @@ fn computer_search_text_files_blocking(
     let include_content = request.include_content.unwrap_or(true);
     let include_generated = request.include_generated.unwrap_or(false);
     let include_path = request.include_path.unwrap_or(true);
-    let max_matches = request.max_matches.filter(|value| *value > 0);
-    let max_matches_per_file = request.max_matches_per_file.filter(|value| *value > 0);
+    let max_matches = request
+        .max_matches
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_TEXT_SEARCH_MAX_MATCHES)
+        .min(MAX_TEXT_SEARCH_MAX_MATCHES);
+    let max_matches_per_file = request
+        .max_matches_per_file
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_TEXT_SEARCH_MAX_MATCHES_PER_FILE)
+        .min(MAX_TEXT_SEARCH_MAX_MATCHES_PER_FILE);
     let extensions = normalize_search_extensions(request.extensions.as_deref());
     let exclude_directories = request
         .exclude_directories
@@ -1711,16 +1728,17 @@ fn computer_search_text_files_blocking(
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     let globs = request.globs.unwrap_or_default();
-    let query_cmp = if case_sensitive {
-        query.clone()
-    } else {
-        query.to_lowercase()
-    };
+    let matcher = NativeTextMatcher::new(&query, case_sensitive, request.regex.unwrap_or(false))?;
     let mut response = ComputerTextSearchResponse::default();
     let mut queue = VecDeque::from([root]);
 
     'scan: while let Some(directory) = queue.pop_front() {
-        if max_matches.is_some_and(|limit| response.matches.len() >= limit) {
+        if text_search_time_budget_exceeded(started_at) {
+            response.limited = true;
+            break;
+        }
+
+        if response.matches.len() >= max_matches {
             response.limited = true;
             break;
         }
@@ -1735,7 +1753,12 @@ fn computer_search_text_files_blocking(
         response.scanned_directories += 1;
 
         for entry_result in read_dir {
-            if max_matches.is_some_and(|limit| response.matches.len() >= limit) {
+            if text_search_time_budget_exceeded(started_at) {
+                response.limited = true;
+                break 'scan;
+            }
+
+            if response.matches.len() >= max_matches {
                 response.limited = true;
                 break 'scan;
             }
@@ -1795,9 +1818,8 @@ fn computer_search_text_files_blocking(
             }
 
             let extension = file_extension(&path).unwrap_or_default();
-            let path_matched = include_path
-                && (line_matches(&path_text, &query_cmp, case_sensitive)
-                    || line_matches(&name, &query_cmp, case_sensitive));
+            let path_matched =
+                include_path && (matcher.is_match(&path_text) || matcher.is_match(&name));
             let should_read_content =
                 include_content && extensions.iter().any(|value| value == &extension);
             let mut content_matches = Vec::new();
@@ -1805,13 +1827,13 @@ fn computer_search_text_files_blocking(
             response.files_scanned += 1;
 
             if should_read_content {
-                match search_file_for_matches(
-                    &path,
-                    &query_cmp,
-                    case_sensitive,
-                    context_lines,
-                    max_matches_per_file,
-                ) {
+                if metadata.len() > MAX_TEXT_SEARCH_FILE_BYTES {
+                    response.skipped_large_files += 1;
+                    continue;
+                }
+
+                match search_file_for_matches(&path, &matcher, context_lines, max_matches_per_file)
+                {
                     Ok(matches) => {
                         response.files_read += 1;
                         response.total_content_matches += matches.len();
@@ -1845,10 +1867,9 @@ fn computer_search_text_files_blocking(
 
 fn search_file_for_matches(
     path: &Path,
-    query: &str,
-    case_sensitive: bool,
+    matcher: &NativeTextMatcher,
     context_lines: usize,
-    max_matches_per_file: Option<usize>,
+    max_matches_per_file: usize,
 ) -> Result<Vec<ComputerTextSearchMatch>, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let reader = BufReader::new(file);
@@ -1868,9 +1889,7 @@ fn search_file_for_matches(
             add_after_context(&mut matches, line_number, &preview, context_lines);
         }
 
-        if max_matches_per_file.is_none_or(|limit| matches.len() < limit)
-            && line_matches(&line, query, case_sensitive)
-        {
+        if matches.len() < max_matches_per_file && matcher.is_match(&line) {
             matches.push(ComputerTextSearchMatch {
                 after: if context_lines > 0 {
                     Some(Vec::new())
@@ -1885,6 +1904,10 @@ fn search_file_for_matches(
                 line: line_number,
                 preview: preview.clone(),
             });
+        }
+
+        if matches.len() >= max_matches_per_file && context_lines == 0 {
+            break;
         }
 
         if context_lines > 0 {
@@ -1953,12 +1976,52 @@ fn normalize_search_extensions(values: Option<&[String]>) -> Vec<String> {
     }
 }
 
+enum NativeTextMatcher {
+    Literal { case_sensitive: bool, query: String },
+    Regex(regex::Regex),
+}
+
+impl NativeTextMatcher {
+    fn new(query: &str, case_sensitive: bool, regex: bool) -> Result<Self, String> {
+        if regex {
+            return regex::RegexBuilder::new(query)
+                .case_insensitive(!case_sensitive)
+                .build()
+                .map(NativeTextMatcher::Regex)
+                .map_err(|error| format!("Unsupported regex for native files_search: {}", error));
+        }
+
+        Ok(NativeTextMatcher::Literal {
+            case_sensitive,
+            query: if case_sensitive {
+                query.to_string()
+            } else {
+                query.to_lowercase()
+            },
+        })
+    }
+
+    fn is_match(&self, value: &str) -> bool {
+        match self {
+            NativeTextMatcher::Literal {
+                case_sensitive,
+                query,
+            } => line_matches(value, query, *case_sensitive),
+            NativeTextMatcher::Regex(expression) => expression.is_match(value),
+        }
+    }
+}
+
 fn line_matches(value: &str, query: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         value.contains(query)
     } else {
         value.to_lowercase().contains(query)
     }
+}
+
+fn text_search_time_budget_exceeded(started_at: Instant) -> bool {
+    started_at.elapsed() >= Duration::from_millis(TEXT_SEARCH_TIME_BUDGET_MS)
 }
 
 fn normalize_search_preview(line: &str) -> String {
@@ -4654,6 +4717,7 @@ mod tests {
             max_matches_per_file: None,
             path: path_to_string(&base),
             query: "needle".to_string(),
+            regex: None,
         })
         .expect("search text");
 
@@ -4664,6 +4728,42 @@ mod tests {
         assert_eq!(search_match.line, 2);
         assert_eq!(search_match.before.as_ref().unwrap()[0].preview, "before");
         assert_eq!(search_match.after.as_ref().unwrap()[0].preview, "after");
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn text_search_supports_regex_without_renderer_fallback() {
+        let base = temp_index_root("native-regex-search");
+        let src = base.join("src");
+        fs::create_dir_all(&src).expect("create src");
+        fs::write(
+            src.join("danger.rs"),
+            "Command::new(\"git\");\nfs::remove_file(path)?;\nlet safe = true;\n",
+        )
+        .expect("write source");
+
+        let result = computer_search_text_files_blocking(ComputerTextSearchRequest {
+            case_sensitive: None,
+            context_lines: None,
+            exclude_directories: None,
+            extensions: Some(vec!["rs".to_string()]),
+            globs: None,
+            include_content: None,
+            include_generated: None,
+            include_path: None,
+            max_matches: None,
+            max_matches_per_file: None,
+            path: path_to_string(&base),
+            query: r"Command::new|fs::remove".to_string(),
+            regex: Some(true),
+        })
+        .expect("regex search");
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.total_content_matches, 2);
+        assert_eq!(result.matches[0].content_matches[0].line, 1);
+        assert_eq!(result.matches[0].content_matches[1].line, 2);
 
         let _ = fs::remove_dir_all(base);
     }

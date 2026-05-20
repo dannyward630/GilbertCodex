@@ -198,6 +198,7 @@ export interface ComputerTextSearchRequest {
   maxMatchesPerFile?: number;
   path: string;
   query: string;
+  regex?: boolean;
 }
 
 export interface ComputerTextSearchResponse {
@@ -208,6 +209,7 @@ export interface ComputerTextSearchResponse {
   limited: boolean;
   matches: ComputerTextSearchFileResult[];
   scannedDirectories: number;
+  skippedLargeFiles?: number;
   skippedDirectories: number;
   skippedFiles: number;
   totalContentMatches: number;

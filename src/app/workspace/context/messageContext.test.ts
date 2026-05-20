@@ -1,0 +1,59 @@
+import { describe, expect, it } from "vitest";
+
+import { createChatToolSelectionPrompt } from "./messageContext";
+import type { ChatMessage } from "../../../types/chat";
+import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
+
+const deps = {
+  referencesSelectedWorkspaceForToolSelection: () => false,
+  shouldAttachWebSearch: () => false,
+};
+
+const workspaceDisabled: LocalWorkspaceSettings = {
+  enabled: false,
+  permissionMode: "default",
+  roots: [],
+  scope: "current-folder",
+};
+
+function message(role: ChatMessage["role"], content: string): ChatMessage {
+  return {
+    content,
+    createdAt: "2026-05-20T13:31:00.000Z",
+    id: `${role}-${content.slice(0, 12)}`,
+    role,
+  };
+}
+
+describe("createChatToolSelectionPrompt", () => {
+  it("carries recent Google Calendar context into terse re-check follow-ups", () => {
+    const prompt = createChatToolSelectionPrompt(
+      deps as any,
+      "check 1 more time",
+      [
+        message("user", "check google calendar"),
+        message("assistant", "Your Google Calendar is connected for calendar-user@example.com. For today, Wednesday, May 20, 2026, I found no events on your primary calendar."),
+      ],
+      workspaceDisabled,
+    );
+
+    expect(prompt).toContain("check 1 more time");
+    expect(prompt).toContain("Recent app/tool conversation context for tool selection only:");
+    expect(prompt).toContain("Google Calendar");
+    expect(prompt).toContain("primary calendar");
+  });
+
+  it("does not add app tool context for plain acknowledgements", () => {
+    const prompt = createChatToolSelectionPrompt(
+      deps as any,
+      "thanks",
+      [
+        message("user", "check google calendar"),
+        message("assistant", "Your Google Calendar shows one all-day event today."),
+      ],
+      workspaceDisabled,
+    );
+
+    expect(prompt).toBe("thanks");
+  });
+});

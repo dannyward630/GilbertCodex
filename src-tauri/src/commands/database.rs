@@ -843,6 +843,11 @@ fn category_for_key(key: &str) -> CategoryDefinition {
             label: "Agent runs",
             description: "Background run history, steps, events, and tool activity.",
         },
+        "gilbert-codex.usage-history.v1" => CategoryDefinition {
+            id: "usage",
+            label: "Usage & costs",
+            description: "Provider request history, token totals, and estimated cost rollups.",
+        },
         "github-account.v1"
         | "gilbert-codex.discord-bridge.v1"
         | "gilbert-codex.github-oauth-client-id.v1" => CategoryDefinition {
@@ -910,6 +915,7 @@ fn label_for_key(key: &str) -> &'static str {
         "gilbert-codex.browser-preview-session.v1" => "Browser preview session",
         "local-auth-db.v1" => "Local auth",
         "agent-runs.v1" => "Agent runs",
+        "gilbert-codex.usage-history.v1" => "Usage history",
         "github-account.v1" => "GitHub account",
         _ => "Local record",
     }
@@ -946,6 +952,7 @@ fn summarize_record(key: &str, raw: &str) -> String {
         }
         "gilbert-codex.projects.v1" => summarize_array_record(&value, "project", "projects"),
         "agent-runs.v1" => summarize_agent_record(&value),
+        "gilbert-codex.usage-history.v1" => summarize_usage_history_record(&value),
         "gilbert-codex.tool-registry.v1" => summarize_tool_registry_record(&value),
         _ => summarize_json_record(&value),
     }
@@ -1053,6 +1060,35 @@ fn summarize_agent_record(value: &Value) -> String {
         plural("step", "steps", step_count),
         event_count,
         plural("event", "events", event_count)
+    )
+}
+
+fn summarize_usage_history_record(value: &Value) -> String {
+    let Some(records) = value.get("records").and_then(Value::as_array) else {
+        return "Saved provider usage history.".to_string();
+    };
+
+    let request_count = records
+        .iter()
+        .filter_map(|record| record.get("requestCount").and_then(Value::as_u64))
+        .sum::<u64>();
+    let token_count = records
+        .iter()
+        .filter_map(|record| record.get("totalTokens").and_then(Value::as_u64))
+        .sum::<u64>();
+    let provider_count = records
+        .iter()
+        .filter_map(|record| record.get("provider").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+
+    format!(
+        "{} {}, {} tokens, {} {}",
+        request_count,
+        plural("request", "requests", request_count as usize),
+        token_count,
+        provider_count,
+        plural("provider", "providers", provider_count)
     )
 }
 

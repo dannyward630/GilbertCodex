@@ -6,35 +6,48 @@
   .desktop-root[data-runtime="web"] .conversation-body,
   .desktop-root[data-runtime="web"] .conversation-body[data-right-rail-open="true"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="rail"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="rail-closing"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="review"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="review-closing"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="preview"],
-  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split"] {
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="preview-closing"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split-preview-closing"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split-rail-closing"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .desktop-root[data-runtime="web"] .conversation-body .right-rail,
   .desktop-root[data-runtime="web"] .conversation-body .git-review-panel,
+  .desktop-root[data-runtime="web"] .conversation-body .coding-sidecar-panel,
   .desktop-root[data-runtime="web"] .conversation-body .browser-preview-panel {
-    display: none;
-  }
-
-  .desktop-root[data-runtime="web"] .conversation-tool-desktop-only {
     display: none;
   }
 
   .conversation-body,
   .conversation-body[data-right-rail-open="true"],
   .conversation-body[data-side-layout="rail"],
+  .conversation-body[data-side-layout="rail-closing"],
   .conversation-body[data-side-layout="review"],
+  .conversation-body[data-side-layout="review-closing"],
   .conversation-body[data-side-layout="preview"],
-  .conversation-body[data-side-layout="split"] {
+  .conversation-body[data-side-layout="preview-closing"],
+  .conversation-body[data-side-layout="split"],
+  .conversation-body[data-side-layout="split-preview-closing"],
+  .conversation-body[data-side-layout="split-rail-closing"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .conversation-body .right-rail,
   .conversation-body .git-review-panel,
+  .conversation-body .coding-sidecar-panel,
   .conversation-body .browser-preview-panel {
     display: none;
+  }
+
+  .project-open-main {
+    min-width: 32px;
+    padding: 0;
   }
 }
 
@@ -103,6 +116,40 @@
   .desktop-root[data-runtime="web"] .app-main,
   .desktop-root[data-runtime="desktop"] .app-main {
     grid-column: 1;
+  }
+
+  .conversation-header {
+    gap: 8px;
+    padding-right: 8px;
+    padding-left: 58px;
+  }
+
+  .conversation-action-group {
+    min-height: 34px;
+    padding: 2px;
+  }
+
+  .project-open-control {
+    grid-template-columns: 30px 22px;
+    height: 30px;
+  }
+
+  .conversation-tools .icon-button,
+  .conversation-options-button,
+  .project-open-main,
+  .workspace-tools-trigger {
+    width: 30px;
+    height: 30px;
+  }
+
+  .project-open-menu-button {
+    width: 22px;
+    height: 30px;
+  }
+
+  .project-open-main {
+    min-width: 30px;
+    padding: 0;
   }
 
   .desktop-root[data-runtime="web"] .workspace-shell .shell-sidebar {

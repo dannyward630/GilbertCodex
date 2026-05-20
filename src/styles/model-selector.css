@@ -16,7 +16,7 @@
 }
 
 .composer-popover-model.model-selector-popover[data-mode="quick"] {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .composer-popover-model.model-selector-popover[data-mode="all"] {
@@ -39,10 +39,14 @@ body > .composer-popover-model.model-selector-popover {
 .model-selector-quick-head,
 .model-selector-all-head {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
   min-width: 0;
+}
+
+.model-selector-all-head {
+  grid-template-columns: 34px minmax(0, 1fr);
 }
 
 .model-selector-quick-icon,
@@ -100,16 +104,123 @@ body > .composer-popover-model.model-selector-popover {
   font-weight: 680;
 }
 
+.model-selector-quick-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  max-width: 130px;
+  padding: 0 9px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 52%, transparent);
+  font-size: 11.5px;
+  font-weight: 780;
+}
+
+.model-selector-quick-more:hover,
+.model-selector-quick-more:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
+  background: var(--composer-control-hover);
+  outline: 0;
+}
+
+.model-selector-quick-more span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-selector-thinking-panel {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-raised) 34%, transparent);
+}
+
+.model-selector-thinking-panel .thinking-panel,
+.model-selector-thinking-panel .thinking-options {
+  gap: 7px;
+}
+
+.model-selector-thinking-panel .thinking-popover-header {
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  min-height: 40px;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 46%, transparent);
+}
+
+.model-selector-thinking-panel .thinking-popover-orb {
+  width: 27px;
+  height: 27px;
+}
+
+.model-selector-thinking-panel .thinking-popover-header strong {
+  font-size: 12.5px;
+}
+
+.model-selector-thinking-panel .thinking-popover-header small,
+.model-selector-thinking-panel .thinking-field-row,
+.model-selector-thinking-panel .thinking-field-row small {
+  font-size: 10.5px;
+}
+
+.model-selector-thinking-panel .thinking-power {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.model-selector-thinking-panel .thinking-effort-grid {
+  gap: 5px;
+}
+
+.model-selector-thinking-panel .thinking-effort-grid button {
+  min-height: 45px;
+  padding: 6px;
+  border-radius: 8px;
+}
+
+.model-selector-thinking-panel .thinking-effort-grid strong {
+  font-size: 11.5px;
+}
+
+.model-selector-thinking-panel .thinking-effort-grid small {
+  font-size: 10px;
+}
+
 .model-selector-quick-list {
   display: grid;
   align-content: start;
   gap: 2px;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-color: color-mix(in srgb, var(--blue) 38%, var(--line)) transparent;
+  scrollbar-width: thin;
 }
 
-.model-selector-quick-row,
-.model-selector-more-button {
+.model-selector-quick-list::-webkit-scrollbar {
+  width: 7px;
+}
+
+.model-selector-quick-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 38%, var(--line));
+}
+
+.model-selector-quick-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.model-selector-quick-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 22px;
   align-items: center;
@@ -132,9 +243,7 @@ body > .composer-popover-model.model-selector-popover {
 
 .model-selector-quick-row:hover,
 .model-selector-quick-row:focus-visible,
-.model-selector-quick-row[data-selected="true"],
-.model-selector-more-button:hover,
-.model-selector-more-button:focus-visible {
+.model-selector-quick-row[data-selected="true"] {
   background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
   outline: 0;
 }
@@ -150,8 +259,7 @@ body > .composer-popover-model.model-selector-popover {
 }
 
 .model-selector-quick-row strong,
-.model-selector-quick-row small,
-.model-selector-more-button span {
+.model-selector-quick-row small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -177,20 +285,6 @@ body > .composer-popover-model.model-selector-popover {
 .model-selector-quick-row > svg {
   justify-self: end;
   color: color-mix(in srgb, var(--blue) 72%, white 28%);
-}
-
-.model-selector-more-button {
-  min-height: 50px;
-  margin-top: 6px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
-  border-radius: 0;
-  color: var(--text-muted);
-  font-size: 14px;
-  font-weight: 780;
-}
-
-.model-selector-more-button svg {
-  justify-self: end;
 }
 
 .model-selector-search {

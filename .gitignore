@@ -3,6 +3,8 @@ node_modules/
 .tools/
 
 # Private local tool/runtime code
+.agents/plugins/
+plugins/
 src/toolBridge/
 src/toolBridge/tools/
 src/toolBridge/memory/

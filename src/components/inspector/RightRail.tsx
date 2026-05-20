@@ -1,4 +1,4 @@
-import { Ban, Check, FileCode2, FileText, Globe2, Image, LoaderCircle, Pin, SendHorizontal, X } from "lucide-react";
+import { Ban, CalendarDays, Check, FileCode2, FileText, Globe2, Image, LoaderCircle, Mail, Pencil, Pin, Save, SendHorizontal, Sparkles, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AgentApproval, AgentApprovalDecision } from "../../types/agentRun";
@@ -164,40 +164,326 @@ function ApprovalPanel({
         <small>{approvals.length} pending</small>
       </h4>
       {approvals.map((approval) => (
-        <article className="approval-card" data-risk={approval.risk} key={approval.id}>
-          <div className="approval-card-header">
-            <span>
-              <strong>{approval.title}</strong>
-              <small>{approval.detail ?? approval.kind}</small>
-            </span>
-            <b>{approval.risk}</b>
-          </div>
-          {approval.preview ? <pre>{limitPreviewText(approval.preview, 1600)}</pre> : null}
-          <div className="approval-actions">
-            <button type="button" onClick={() => onResolve(approval.id, { status: "approved" })}>
-              <Check size={14} aria-hidden="true" />
-              <span>Allow</span>
-            </button>
-            {approval.tool !== "planning_handoff" ? (
-              <button
-                type="button"
-                data-variant="session"
-                title="Allow this tool for this workspace session"
-                onClick={() => onResolve(approval.id, { scope: "session", status: "approved" })}
-              >
-                <Pin size={14} aria-hidden="true" />
-                <span>Allow session</span>
-              </button>
-            ) : null}
-            <button type="button" onClick={() => onResolve(approval.id, { status: "denied" })}>
-              <Ban size={14} aria-hidden="true" />
-              <span>Deny</span>
-            </button>
-          </div>
-        </article>
+        <ApprovalCard approval={approval} key={approval.id} onResolve={onResolve} />
       ))}
     </div>
   );
+}
+
+type ApprovalEditMode = "manual" | "request" | null;
+
+function ApprovalCard({
+  approval,
+  onResolve,
+}: {
+  approval: AgentApproval;
+  onResolve: (approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
+}) {
+  const display = getApprovalDisplay(approval);
+  const Icon = display.icon;
+  const [editMode, setEditMode] = useState<ApprovalEditMode>(null);
+  const [argsText, setArgsText] = useState(() => formatApprovalArgs(approval.args));
+  const [editRequest, setEditRequest] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const connectedAppApproval = isConnectedAppApproval(approval);
+  const canAllowSession = approval.tool !== "planning_handoff";
+
+  useEffect(() => {
+    setArgsText(formatApprovalArgs(approval.args));
+    setEditRequest("");
+    setEditError(null);
+    setEditMode(null);
+    setSubmitting(false);
+  }, [approval.id, approval.args]);
+
+  async function resolve(decision: AgentApprovalDecision) {
+    setSubmitting(true);
+    try {
+      await onResolve(approval.id, decision);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function approveEditedArgs() {
+    setEditError(null);
+
+    try {
+      const parsed = JSON.parse(argsText);
+
+      if (!isRecord(parsed)) {
+        setEditError("Edited arguments must be a JSON object.");
+        return;
+      }
+
+      await resolve({ editedArgs: parsed, status: "edited" });
+    } catch {
+      setEditError("Edited arguments must be valid JSON.");
+    }
+  }
+
+  async function requestRevision() {
+    const note = editRequest.trim();
+
+    if (!note) {
+      setEditError("Add the change you want first.");
+      return;
+    }
+
+    await resolve({ note, status: "edited" });
+  }
+
+  return (
+    <article className="approval-card approval-card-rich" data-family={display.family} data-risk={approval.risk}>
+      <div className="approval-card-header approval-card-header-rich">
+        <span className="approval-card-icon" aria-hidden="true">
+          <Icon size={16} />
+        </span>
+        <span>
+          <strong>{approval.title}</strong>
+          <small>{display.detail}</small>
+        </span>
+        <b>{approval.risk}</b>
+      </div>
+
+      <ApprovalPreview approval={approval} display={display} />
+
+      {editMode === "manual" ? (
+        <div className="approval-editor" data-mode="manual">
+          <textarea
+            aria-label="Edit approval arguments"
+            spellCheck={false}
+            value={argsText}
+            onChange={(event) => {
+              setArgsText(event.target.value);
+              setEditError(null);
+            }}
+          />
+          {editError ? <small className="approval-editor-error">{editError}</small> : null}
+          <div className="approval-editor-actions">
+            <button type="button" disabled={submitting} onClick={() => void approveEditedArgs()}>
+              <Save size={14} aria-hidden="true" />
+              <span>{getEditedApprovalLabel(approval)}</span>
+            </button>
+            <button type="button" disabled={submitting} onClick={() => setEditMode(null)}>
+              <X size={14} aria-hidden="true" />
+              <span>Cancel</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {editMode === "request" ? (
+        <div className="approval-editor" data-mode="request">
+          <textarea
+            aria-label="Describe approval changes"
+            placeholder="Make the email warmer, change Tuesday to Thursday, add the meeting room..."
+            value={editRequest}
+            onChange={(event) => {
+              setEditRequest(event.target.value);
+              setEditError(null);
+            }}
+          />
+          {editError ? <small className="approval-editor-error">{editError}</small> : null}
+          <div className="approval-editor-actions">
+            <button type="button" disabled={submitting} onClick={() => void requestRevision()}>
+              <Sparkles size={14} aria-hidden="true" />
+              <span>Revise</span>
+            </button>
+            <button type="button" disabled={submitting} onClick={() => setEditMode(null)}>
+              <X size={14} aria-hidden="true" />
+              <span>Cancel</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="approval-actions">
+        <button type="button" disabled={submitting} data-primary="true" onClick={() => void resolve({ status: "approved" })}>
+          <Check size={14} aria-hidden="true" />
+          <span>{getPrimaryApprovalLabel(approval)}</span>
+        </button>
+        <button type="button" disabled={submitting} data-active={editMode === "manual" ? "true" : undefined} onClick={() => setEditMode((mode) => mode === "manual" ? null : "manual")}>
+          <Pencil size={14} aria-hidden="true" />
+          <span>Edit</span>
+        </button>
+        {connectedAppApproval ? (
+          <button type="button" disabled={submitting} data-active={editMode === "request" ? "true" : undefined} onClick={() => setEditMode((mode) => mode === "request" ? null : "request")}>
+            <Sparkles size={14} aria-hidden="true" />
+            <span>Ask Gilbert</span>
+          </button>
+        ) : null}
+        {canAllowSession ? (
+          <button
+            type="button"
+            data-variant="session"
+            data-connected-app={connectedAppApproval ? "true" : undefined}
+            disabled={submitting}
+            title={connectedAppApproval ? "Always allow this Gmail or Google Calendar action type in this chat" : "Allow this tool for this chat"}
+            onClick={() => void resolve({ scope: "session", status: "approved" })}
+          >
+            <Pin size={14} aria-hidden="true" />
+            <span>{connectedAppApproval ? "Always allow in chat" : "Allow in chat"}</span>
+          </button>
+        ) : null}
+        <button type="button" disabled={submitting} onClick={() => void resolve({ status: "denied" })}>
+          <Ban size={14} aria-hidden="true" />
+          <span>Deny</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+interface ApprovalDisplay {
+  detail: string;
+  family: "calendar" | "gmail" | "other";
+  icon: LucideIcon;
+}
+
+function ApprovalPreview({ approval, display }: { approval: AgentApproval; display: ApprovalDisplay }) {
+  const preview = approval.preview ? parseApprovalPreview(approval.preview) : undefined;
+
+  if (!preview) {
+    return approval.detail ? <p className="approval-preview-empty">{approval.detail}</p> : null;
+  }
+
+  const Icon = display.icon;
+
+  return (
+    <div className="approval-preview" data-family={display.family}>
+      <div className="approval-preview-heading">
+        <Icon size={15} aria-hidden="true" />
+        <span>
+          <strong>{preview.title || approval.title}</strong>
+          <small>{display.family === "gmail" ? "Gmail action" : display.family === "calendar" ? "Google Calendar action" : approval.kind}</small>
+        </span>
+      </div>
+      {preview.fields.length > 0 ? (
+        <dl className="approval-preview-fields">
+          {preview.fields.map((field) => (
+            <div key={`${field.label}-${field.value}`}>
+              <dt>{field.label}</dt>
+              <dd>{field.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {preview.body ? (
+        <div className="approval-preview-body">
+          <small>{display.family === "gmail" ? "Message" : "Notes"}</small>
+          <p>{preview.body}</p>
+        </div>
+      ) : null}
+      {preview.raw.length > 0 ? <pre>{preview.raw.join("\n")}</pre> : null}
+    </div>
+  );
+}
+
+function getApprovalDisplay(approval: AgentApproval): ApprovalDisplay {
+  if (approval.tool.startsWith("gmail_")) {
+    return {
+      detail: approval.detail ?? "Review the Gmail action before it runs.",
+      family: "gmail",
+      icon: Mail,
+    };
+  }
+
+  if (approval.tool.startsWith("calendar_")) {
+    return {
+      detail: approval.detail ?? "Review the Google Calendar action before it runs.",
+      family: "calendar",
+      icon: CalendarDays,
+    };
+  }
+
+  return {
+    detail: approval.detail ?? approval.kind,
+    family: "other",
+    icon: FileCode2,
+  };
+}
+
+function getPrimaryApprovalLabel(approval: AgentApproval) {
+  if (approval.tool === "gmail_send_message" || approval.tool === "gmail_send_separate_messages" || approval.tool === "gmail_send_draft") {
+    return "Send";
+  }
+
+  if (approval.tool === "calendar_create_event") {
+    return "Create event";
+  }
+
+  if (approval.tool === "calendar_update_event") {
+    return "Update event";
+  }
+
+  if (approval.tool.includes("delete") || approval.tool.includes("trash")) {
+    return "Delete";
+  }
+
+  return "Allow";
+}
+
+function getEditedApprovalLabel(approval: AgentApproval) {
+  if (approval.tool.startsWith("gmail_")) {
+    return "Use edited email";
+  }
+
+  if (approval.tool.startsWith("calendar_")) {
+    return "Use edited event";
+  }
+
+  return "Use edited args";
+}
+
+function isConnectedAppApproval(approval: AgentApproval) {
+  return approval.tool.startsWith("gmail_") || approval.tool.startsWith("calendar_");
+}
+
+function formatApprovalArgs(args: Record<string, unknown> | undefined) {
+  return JSON.stringify(args ?? {}, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseApprovalPreview(value: string) {
+  const lines = limitPreviewText(value, 1600)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
+  const [title = "", ...rest] = lines;
+  const fields: Array<{ label: string; value: string }> = [];
+  const raw: string[] = [];
+  let body = "";
+
+  for (const line of rest) {
+    const match = line.match(/^([^:]{2,36}):\s*(.*)$/);
+
+    if (!match) {
+      raw.push(line);
+      continue;
+    }
+
+    const label = match[1].trim();
+    const fieldValue = match[2].trim();
+
+    if (/body preview|description|notes?/i.test(label)) {
+      body = body ? `${body}\n${fieldValue}` : fieldValue;
+      continue;
+    }
+
+    fields.push({ label, value: fieldValue });
+  }
+
+  return {
+    body,
+    fields,
+    raw,
+    title,
+  };
 }
 
 function getPlanningInputRequests(message: ChatMessage) {

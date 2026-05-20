@@ -75,7 +75,98 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::process::{Command, Stdio};
+
+    const ACCOUNT: &str = "GilbertCodex";
+
+    pub fn set_secret(target: &str, value: &str) -> Result<(), String> {
+        let status = Command::new("/usr/bin/security")
+            .args([
+                "add-generic-password",
+                "-a",
+                ACCOUNT,
+                "-s",
+                target,
+                "-w",
+                value,
+                "-U",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .map_err(|error| {
+                format!("macOS Keychain could not save secure secret `{target}`: {error}")
+            })?;
+
+        if !status.success() {
+            return Err(format!(
+                "macOS Keychain could not save secure secret `{target}`."
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_secret(target: &str) -> Result<Option<String>, String> {
+        let output = Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-a", ACCOUNT, "-s", target, "-w"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                format!("macOS Keychain could not read secure secret `{target}`: {error}")
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+            if stderr.contains("could not be found") || output.status.code() == Some(44) {
+                return Ok(None);
+            }
+
+            return Err(format!(
+                "macOS Keychain could not read secure secret `{target}`."
+            ));
+        }
+
+        let secret = String::from_utf8(output.stdout)
+            .map_err(|error| format!("macOS Keychain returned invalid UTF-8: {error}"))?
+            .trim_end_matches(&['\r', '\n'][..])
+            .to_string();
+
+        Ok(Some(secret))
+    }
+
+    pub fn delete_secret(target: &str) -> Result<(), String> {
+        let output = Command::new("/usr/bin/security")
+            .args(["delete-generic-password", "-a", ACCOUNT, "-s", target])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                format!("macOS Keychain could not delete secure secret `{target}`: {error}")
+            })?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        if stderr.contains("could not be found") || output.status.code() == Some(44) {
+            return Ok(());
+        }
+
+        Err(format!(
+            "macOS Keychain could not delete secure secret `{target}`."
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
     pub fn set_secret(target: &str, _value: &str) -> Result<(), String> {
         Err(format!(

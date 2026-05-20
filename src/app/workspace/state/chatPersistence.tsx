@@ -23,11 +23,10 @@ import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolRespo
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
 export function persistChatState(deps: WorkspaceRuntimeDeps, nextChats: ChatSummary[], previousChats: ChatSummary[]) {
-  const { pendingChatsRef, queueDurableMemoryForChangedChats, saveChats, syncPdfLibraryFromChats } = deps;
+  const { pendingChatsRef, queueDurableMemoryForChangedChats, scheduleChatStatePersistence } = deps;
 
     pendingChatsRef.current = nextChats;
-    saveChats(nextChats);
-    syncPdfLibraryFromChats(nextChats);
+    scheduleChatStatePersistence(nextChats);
     queueDurableMemoryForChangedChats(nextChats, previousChats);
   }
 
@@ -50,7 +49,7 @@ export function setChats(deps: WorkspaceRuntimeDeps, update: SetStateAction<Chat
   }
 
 export function handleComposerDraftChange(deps: WorkspaceRuntimeDeps, chatId: string, draft: ChatComposerDraft | null) {
-  const { activeChatIdRef, hasComposerDraftContent, pendingChatsRef, pruneEmptyChats, sameComposerDraft, saveChats, setChatsState, sortChatsByUpdatedAt, syncPdfLibraryFromChats } = deps;
+  const { activeChatIdRef, hasComposerDraftContent, pendingChatsRef, pruneEmptyChats, sameComposerDraft, scheduleChatStatePersistence, setChatsState, sortChatsByUpdatedAt } = deps;
 
     const nextDraft = hasComposerDraftContent(draft) ? draft : undefined;
     let changed = false;
@@ -79,8 +78,7 @@ export function handleComposerDraftChange(deps: WorkspaceRuntimeDeps, chatId: st
 
     const prunedChats = sortChatsByUpdatedAt(pruneEmptyChats(nextChats, activeChatIdRef.current));
     pendingChatsRef.current = prunedChats;
-    saveChats(prunedChats);
-    syncPdfLibraryFromChats(prunedChats);
+    scheduleChatStatePersistence(prunedChats);
     setChatsState(prunedChats);
   }
 

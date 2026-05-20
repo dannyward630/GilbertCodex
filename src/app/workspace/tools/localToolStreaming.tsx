@@ -4,8 +4,9 @@ import type { SetStateAction } from "react";
 import type { AgentRuntimeDecision } from "../../../agentRuntime/codingAgent";
 import type { LocalComputerToolExecutionPolicy, LocalSubagentResult, LocalSubagentTask } from "../../../localWorkspace/localToolRuntimeDisabled";
 import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap, compactMessagesForContext } from "../../../lib/contextWindow";
+import { createVisibleToolApprovalThinking, createVisibleToolPlanThinking, createVisibleToolResultThinking } from "../../../lib/thinkingTrace";
 import type { PlanningProviderRequest } from "../../../services/planningClient";
-import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolMemorySearchRequest, ToolResultMessage } from "../../../toolBridge";
+import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolBridgeToolFamily, ToolCallRequest, ToolCapabilityPlan, ToolDefinition, ToolExecutionContext, ToolIntent, ToolMemorySearchRequest, ToolResultMessage } from "../../../toolBridge";
 import type { AppInfo } from "../../../types/app";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../../types/agentRun";
 import type { AuthSession } from "../../../types/auth";
@@ -21,6 +22,16 @@ import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import { withCodingBridgeBatch, withCodingTelemetryEvent, withCodingToolHealth } from "../../../coding/evidence";
+import { createToolHealthSnapshot } from "../../../coding/toolHealth";
+import { DEFAULT_INSTALLED_PLUGIN_IDS, PLUGIN_LISTINGS } from "../../../features/plugins/pluginCatalog";
+import {
+  createPlainTextRevisionBridgeCalls as createFallbackRevisionBridgeCalls,
+  formatApprovalRevisionOriginalCalls as formatFallbackRevisionOriginalCalls,
+} from "./approvalRevisionFallback";
+
+const CAPABILITY_INVENTORY_PROMPT_PATTERN =
+  /\b(?:what|which|list|show|tell(?:\s+me)?|explain|describe)\b[\s\S]{0,180}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b[\s\S]{0,180}\b(?:available|enabled|installed|connected|do\s+you\s+have|can\s+you\s+(?:access|call|use|do))\b/i;
 
 export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, {
     approvalDecisions,
@@ -34,6 +45,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     previousToolCalls,
     prompt,
     requestId,
+    runId,
     resumeToolCallContent,
     runtimeToolOverrides,
     toolSelectionPrompt,
@@ -51,6 +63,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     previousToolCalls?: ChatToolCall[];
     prompt: string;
     requestId: number;
+    runId?: string;
     resumeToolCallContent?: string;
     /**
      * Tools that should be force-enabled or force-disabled for this run only,
@@ -63,7 +76,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     webSearchSettingsOverride?: WebSearchSettings;
     workspaceSettings: LocalWorkspaceSettings;
   }): Promise<AssistantToolResponse> {
-  const { activeChat, appendAutoCompactionContinuation, attachLiveTerminalSession, BRIDGE_TOOL_APPROVAL_RESUME_KIND, coalesceToolBridgeCalls, compactProviderMessages, completeStreamingWorkThinking, contextWindowRef, createActiveLocalToolCalls, createApprovalSessionDecisionKey, createApprovedPlanExecutionFailedAnswer, createApprovedPlanExecutionRetryInstruction, createAssistantToolRequestContent, createBridgeChatToolCall, createContextBoundLocalToolExecutionPolicy, createContextCompactionProgress, createDefaultToolRegistry, createFabricatedToolProgressRecoveryInstruction, createFinalAnswerRecoveryInstruction, createFinalOnlyProviderSettings, createFreshLocalToolEvidenceInstruction, createId, createLocalComputerProgress, createLocalToolBudgetFinalInstruction, createLocalToolFinalInstruction, createMalformedToolCallRecoveryInstruction, createMemorySearchForRequest, createMessage, createNeutralToolSynthesisFailureMessage, createNoExecutedToolFinalAnswer, createNoExecutedToolFinalInstruction, createPromptAwareProviderSettings, createRecoverableBridgeToolRetryInstruction, createRecoverableLocalEditRetryInstruction, createRuntimeApprovalDecisions, createSimpleLocalTaskCompletionAnswer, createToolActionPromiseRecoveryInstruction, createToolFinalAnswerUnavailableMessage, createToolProtocolNarrationRecoveryInstruction, createUnappliedFileEditRecoveryInstruction, createUnnecessaryLocalActionConfirmationRecoveryInstruction, detectSimpleLocalTaskCompletion, executeToolBridgeCalls, formatDiscordToolStatus, formatLocalToolPreviewProgress, getEnabledWorkspaceRoots, getModelVisibleToolResultCharBudget, getRuntimeWebSearchSettings, getToolMemoryProjectName, hasLocalComputerToolCalls, hasRequestScopedWorkspaceToolsEnabled, hasSuccessfulApprovedPlanMutation, hasSuccessfulApprovedPlanWorkspaceTool, isAbortError, isEmptySelectedScaffoldProbe, isMissingFileReadError, isRecoverableLocalEditFailure, isRequestInactive, isSimpleLocalScaffoldRequest, isVisibleToolResultLeak, LOCAL_TOOL_FINAL_MIN_TOKENS, looksLikeContradictedSuccessfulFileMutationAnswer, looksLikeFabricatedToolProgress, looksLikeInFlightToolPlanning, looksLikeInternalToolRecoveryAnswer, looksLikeOnlyToolPrelude, looksLikePrivateThinkingNarration, looksLikeSubstantiveVisibleAnswer, looksLikeToolProtocolNarration, looksLikeUnappliedFileEditAnswer, looksLikeUnexecutedToolActionPromise, looksLikeUnnecessaryLocalActionConfirmation, MAX_LOCAL_TOOL_EXECUTIONS, MAX_LOCAL_TOOL_PASSES, MAX_MALFORMED_TOOL_RECOVERY_RETRIES, MAX_RECOVERABLE_LOCAL_EDIT_RETRIES, MAX_TOOL_FINALIZATION_RETRIES, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, needsFreshLocalToolEvidence, parseVisibleTextToolCalls, pendingChatsRef, providerSettings, recordProviderActualUsage, recordProviderContextUsage, rememberProjectToolMemoryFromBridgeRun, rememberProjectToolMemoryFromChatToolCalls, requiresWorkspaceToolCallForPrompt, resolveContextWindowForModel, resolveToolPermission, routePrimitiveEvidenceBatchToWorkflow, runLocalComputerToolCalls, runParallelSubagents, sanitizeLocalToolCallsForDisplay, selectAdvertisedBridgeTools, sendProviderMessage, setBrowserPreviewTarget, shouldAttachWebSearch, shouldHoldStreamingContentForToolCalls, shouldSynthesizeEmptyFinalFromToolResults, stampLocalToolCallIds, STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY, streamProviderMessageWithRetry, stripLeadingToolPreludeForDisplay, supportsProviderParallelToolCalls, toolSettings, updateGeneratedMessage, upsertToolCall, validateToolArguments, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withStreamingWorkThinking } = deps;
+  const { activeChat, appendAutoCompactionContinuation, attachLiveTerminalSession, BRIDGE_TOOL_APPROVAL_RESUME_KIND, coalesceToolBridgeCalls, compactProviderMessages, completeStreamingWorkThinking, contextWindowRef, createActiveLocalToolCalls, createApprovalSessionDecisionKey, createApprovedPlanExecutionFailedAnswer, createApprovedPlanExecutionRetryInstruction, createAssistantToolRequestContent, createBridgeChatToolCall, createContextBoundLocalToolExecutionPolicy, createContextCompactionProgress, createDefaultToolRegistry, createFabricatedToolProgressRecoveryInstruction, createFinalAnswerRecoveryInstruction, createFinalOnlyProviderSettings, createFreshLocalToolEvidenceInstruction, createId, createLocalComputerProgress, createLocalToolBudgetFinalInstruction, createLocalToolFinalInstruction, createMalformedToolCallRecoveryInstruction, createMemorySearchForRequest, createMessage, createNeutralToolSynthesisFailureMessage, createNoExecutedToolFinalAnswer, createNoExecutedToolFinalInstruction, createPromptAwareProviderSettings, createRecoverableBridgeToolRetryInstruction, createRecoverableLocalEditRetryInstruction, createRuntimeApprovalDecisions, createSimpleLocalTaskCompletionAnswer, createToolActionPromiseRecoveryInstruction, createToolFinalAnswerUnavailableMessage, createToolProtocolNarrationRecoveryInstruction, createUnappliedFileEditRecoveryInstruction, createUnnecessaryLocalActionConfirmationRecoveryInstruction, detectSimpleLocalTaskCompletion, executeToolBridgeCalls, formatDiscordToolStatus, formatLocalToolPreviewProgress, generalSettings, getEnabledWorkspaceRoots, getModelVisibleToolResultCharBudget, getRuntimeWebSearchSettings, getToolMemoryProjectName, hasLocalComputerToolCalls, hasRequestScopedWorkspaceToolsEnabled, hasSuccessfulApprovedPlanMutation, hasSuccessfulApprovedPlanWorkspaceTool, inferProviderToolBridgeFormat, isAbortError, isEmptySelectedScaffoldProbe, isMissingFileReadError, isRecoverableLocalEditFailure, isRequestInactive, isSimpleLocalScaffoldRequest, isVisibleToolResultLeak, LOCAL_TOOL_FINAL_MIN_TOKENS, looksLikeContradictedSuccessfulFileMutationAnswer, looksLikeFabricatedToolProgress, looksLikeInFlightToolPlanning, looksLikeInternalToolRecoveryAnswer, looksLikeOnlyToolPrelude, looksLikePrivateThinkingNarration, looksLikeSubstantiveVisibleAnswer, looksLikeToolProtocolNarration, looksLikeUnappliedFileEditAnswer, looksLikeUnexecutedToolActionPromise, looksLikeUnnecessaryLocalActionConfirmation, MAX_LOCAL_TOOL_EXECUTIONS, MAX_LOCAL_TOOL_PASSES, MAX_MALFORMED_TOOL_RECOVERY_RETRIES, MAX_RECOVERABLE_LOCAL_EDIT_RETRIES, MAX_TOOL_FINALIZATION_RETRIES, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, needsFreshLocalToolEvidence, parseVisibleTextToolCalls, pendingChatsRef, providerSettings, recordProviderActualUsage, recordProviderContextUsage, rememberProjectToolMemoryFromBridgeRun, rememberProjectToolMemoryFromChatToolCalls, requiresWorkspaceToolCallForPrompt, resolveContextWindowForModel, resolveToolPermission, routePrimitiveEvidenceBatchToWorkflow, runLocalComputerToolCalls, runParallelSubagents, sanitizeLocalToolCallsForDisplay, selectToolCapabilityPlan, sendProviderMessage, setBrowserPreviewTarget, shouldAttachWebSearch, shouldHoldStreamingContentForToolCalls, shouldSynthesizeEmptyFinalFromToolResults, stampLocalToolCallIds, STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY, streamProviderMessageWithRetry, stripLeadingToolPreludeForDisplay, supportsProviderParallelToolCalls, toolSettings, updateAgentRun, updateGeneratedMessage, upsertToolCall, validateToolArguments, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withStreamingWorkThinking } = deps;
 
     function applyToolOverrides(settings: ProviderSettings): ProviderSettings {
       if (!runtimeToolOverrides) return settings;
@@ -99,7 +112,18 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     const bridgeRegistry = createDefaultToolRegistry();
     const bridgeToolResultMessages: ToolResultMessage[] = [];
     let bridgeReasoningState: ProviderReasoningState | undefined;
+    let approvalRevisionPrompt: string | undefined;
+    let approvalRevisionRequiredFamilies: ToolBridgeToolFamily[] = [];
+    let approvalRevisionRequiresToolCall = false;
+    let pendingApprovalRevision: { calls: ToolCallRequest[]; note: string; requiredFamilies: ToolBridgeToolFamily[] } | undefined;
     const memorySearch = createMemorySearchForRequest(chatId, getToolMemoryProjectName(chatId), workspaceSettings);
+    const updateCodingRun = (updater: (run: AgentRun) => AgentRun) => {
+      if (!runId) return;
+      updateAgentRun(runId, (run) => updater(run));
+    };
+    const bridgeTelemetry = runId
+      ? (event) => updateCodingRun((run) => withCodingTelemetryEvent(run, event))
+      : undefined;
 
     function maybeFinishSimpleLocalScaffold(): typeof finalResponse | null {
       if (!simpleLocalScaffoldRequest) {
@@ -141,6 +165,73 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       return finalResponse;
     }
 
+    function createToolCapabilityBlockedAnswer(plan: ToolCapabilityPlan) {
+      if (CAPABILITY_INVENTORY_PROMPT_PATTERN.test(prompt)) {
+        return createFriendlyCapabilityInventoryAnswer(baseRuntimeSettings, plan);
+      }
+
+      const blockedReasons = plan.blockedReasons
+        .map((reason) => `${reason.code}${reason.family ? `/${reason.family}` : ""}: ${reason.detail}`)
+        .slice(0, 4);
+      const requiredFamilies = plan.requiredFamilies.length > 0
+        ? `Required tool families: ${plan.requiredFamilies.join(", ")}.`
+        : "";
+      const providerVisibleTools = plan.providerVisibleToolIds.length > 0
+        ? `Provider-visible tools: ${plan.providerVisibleToolIds.join(", ")}.`
+        : "Provider-visible tools: none.";
+
+      return [
+        "I could not start the required workspace tool pass because this provider request has no required callable tools attached.",
+        blockedReasons.length > 0 ? `Blocked gates: ${blockedReasons.join(" | ")}` : "",
+        [requiredFamilies, providerVisibleTools].filter(Boolean).join(" "),
+        "No fresh workspace read, edit, Git command, terminal command, browser action, or web search ran in this turn.",
+      ].filter(Boolean).join("\n\n");
+    }
+
+    function createFriendlyCapabilityInventoryAnswer(settings: ProviderSettings, plan: ToolCapabilityPlan) {
+      const enabledCapabilities = formatEnabledToolSettings(settings);
+      const defaultCatalogEntries = PLUGIN_LISTINGS
+        .filter((plugin) => (DEFAULT_INSTALLED_PLUGIN_IDS as readonly string[]).includes(plugin.id))
+        .map((plugin) => plugin.name)
+        .slice(0, 8);
+      const pluginCategories = [...new Set(PLUGIN_LISTINGS.map((plugin) => plugin.category))].slice(0, 10);
+      const selectedTools = plan.selectedToolIds.length > 0
+        ? `The tool selector picked ${plan.selectedToolIds.length} tool${plan.selectedToolIds.length === 1 ? "" : "s"} for this request, but none were callable in this provider pass.`
+        : "The live callable-tool manifest was not attached for this provider pass.";
+
+      return [
+        "I can help with a bunch of app tools, but I could not inspect the live callable-tool manifest in this turn.",
+        "",
+        "In this chat, the enabled capability areas are:",
+        enabledCapabilities.length > 0 ? enabledCapabilities.map((capability) => `- ${capability}`).join("\n") : "- Plain chat and reasoning from the current conversation.",
+        "",
+        defaultCatalogEntries.length > 0
+          ? `Bundled catalog default entries include ${defaultCatalogEntries.join(", ")}. That is catalog/default metadata, not proof every plugin is connected in this chat.`
+          : "",
+        pluginCategories.length > 0
+          ? `The plugin catalog also has categories like ${pluginCategories.join(", ")}.`
+          : "",
+        "",
+        `${selectedTools} Exact live tools can change with the selected workspace, tool toggles, connected accounts, and installed plugins. I should not claim a plugin, skill, MCP server, account, or connector is live unless the current app state or a tool result proves it.`,
+      ].filter(Boolean).join("\n");
+    }
+
+    function formatEnabledToolSettings(settings: ProviderSettings) {
+      const tools = settings.tools;
+      return [
+        tools.fileBrowser || tools.fileSearch || tools.codeView ? "Workspace files and code reading/search" : "",
+        tools.codeEdit || tools.codeGeneration || tools.fileCreation ? "Code editing, file creation, and implementation work" : "",
+        tools.sourceControl ? "Git/source-control review and actions" : "",
+        tools.terminal ? "Terminal commands for builds, tests, installs, and dev servers" : "",
+        tools.browserPreview ? "Browser preview and console inspection" : "",
+        tools.webSearch ? "Web search for current/source-backed facts when enabled for the run" : "",
+        tools.imageGeneration ? "Image generation" : "",
+        tools.planning ? "Planning mode" : "",
+        tools.thinking ? "Thinking mode" : "",
+        tools.mcpServers ? "MCP/server-backed integrations" : "",
+      ].filter(Boolean);
+    }
+
     function createSimpleScaffoldToolPlanContent() {
       return "";
     }
@@ -154,7 +245,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       let liveToolCalls = activeToolCalls;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...(activeToolCalls.length > 0 ? withStreamingWorkThinking(message, createVisibleToolPlanThinking(activeToolCalls), "active") : message),
         agentRunStatus: "running",
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
@@ -167,7 +258,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions, chatId),
         assistantContent: recoveryToolContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal, runtimeChat),
@@ -227,7 +318,11 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       finalResponse.waitingForApproval = toolRun.waitingForApproval;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...withStreamingWorkThinking(
+          message,
+          toolRun.waitingForApproval ? createVisibleToolApprovalThinking(allToolCalls) : createVisibleToolResultThinking(completedToolCalls),
+          "complete",
+        ),
         agentRunStatus: toolRun.waitingForApproval ? "waiting_for_approval" : "running",
         approvals: toolRun.waitingForApproval ? mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []) : message.approvals,
         artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
@@ -890,7 +985,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     }
 
     async function collectPendingBridgeApprovals(calls: ToolCallRequest[], bridgeContext: ToolExecutionContext) {
-      const runtimeDecisions = createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions) ?? {};
+      const runtimeDecisions = createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions, chatId) ?? {};
       const approvals: AgentApproval[] = [];
       const waitingToolCalls: ChatToolCall[] = [];
 
@@ -940,6 +1035,218 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       };
     }
 
+    function applyEditedBridgeApprovalArgs(calls: ToolCallRequest[], decision?: AgentApprovalDecision) {
+      if (decision?.status !== "edited" || !decision.editedArgs) {
+        return calls;
+      }
+
+      const [firstCall, ...restCalls] = calls;
+
+      return firstCall ? [{ ...firstCall, arguments: decision.editedArgs }, ...restCalls] : calls;
+    }
+
+    function getBridgeCallFamilies(calls: ToolCallRequest[]): ToolBridgeToolFamily[] {
+      return [...new Set(calls.flatMap((call) => {
+        const family = bridgeRegistry.get(call.name)?.executorMetadata?.family;
+        return family ? [family] : [];
+      }))];
+    }
+
+    function formatApprovalRevisionOriginalCalls(calls: ToolCallRequest[]) {
+      return JSON.stringify(calls.map((call) => ({
+        arguments: call.arguments,
+        name: call.name,
+      })), null, 2);
+    }
+
+    async function createApprovalRevisionFallbackResponse(
+      assistantContent: string,
+      bridgeContext: ToolExecutionContext,
+      fallbackPassIndex: number,
+    ): Promise<typeof finalResponse | null> {
+      if (!pendingApprovalRevision) {
+        return null;
+      }
+
+      const revisedCalls = createFallbackRevisionBridgeCalls(
+        pendingApprovalRevision.calls,
+        assistantContent,
+        (call) => bridgeRegistry.get(call.name)?.executorMetadata?.family,
+      );
+      const approvals: AgentApproval[] = [];
+      const waitingToolCalls: ChatToolCall[] = [];
+
+      for (const call of revisedCalls) {
+        const tool = bridgeRegistry.get(call.name);
+
+        if (!tool) {
+          continue;
+        }
+
+        const validation = validateToolArguments(tool, call.arguments);
+        if (!validation.ok) {
+          continue;
+        }
+
+        const preview = await createBridgeApprovalPreview(tool, call, bridgeContext);
+        const approval = {
+          ...createBridgeApprovalShell(call, tool, preview),
+          detail: "Review the revised action before it runs. Gilbert rebuilt this approval after the edit request so nothing can send or change silently.",
+          messageId,
+        };
+
+        approvals.push(approval);
+        waitingToolCalls.push(createBridgeChatToolCall(
+          call,
+          tool,
+          { content: preview || "Review the revised action before it runs.", ok: true },
+          "waiting_approval",
+        ));
+      }
+
+      if (approvals.length === 0) {
+        return null;
+      }
+
+      const approvalProgress = createLocalComputerProgress("pending", "Revised tool approval required");
+      const waitingStampedToolCalls = stampLocalToolCallIds(waitingToolCalls, fallbackPassIndex);
+
+      finalResponse = {
+        approvalRequests: approvals,
+        content: "",
+        pendingToolCallContent: approvals[0]?.resumeToolCallContent,
+        progress: approvalProgress,
+        toolCalls: [...allToolCalls, ...waitingStampedToolCalls],
+        waitingForApproval: true,
+      };
+
+      updateGeneratedMessage(chatId, messageId, (message) => ({
+        ...withStreamingWorkThinking(message, createVisibleToolApprovalThinking(waitingStampedToolCalls), "complete"),
+        agentRunStatus: "waiting_for_approval",
+        approvals: mergeAgentApprovals(message.approvals ?? [], approvals),
+        content: "",
+        progress: withLocalComputerProgress(approvalProgress, message.progress),
+        toolCalls: finalResponse.toolCalls,
+      }));
+      onExternalUpdate?.({
+        progress: approvalProgress,
+        status: "Revised tool approval is needed in Gilbert Codex.",
+        toolCall: waitingStampedToolCalls[0],
+      });
+
+      return finalResponse;
+    }
+
+    function createPlainTextRevisionBridgeCalls(calls: ToolCallRequest[], assistantContent: string): ToolCallRequest[] {
+      return calls.map((call) => {
+        const tool = bridgeRegistry.get(call.name);
+        const family = tool?.executorMetadata?.family;
+
+        if (family === "gmail") {
+          return reviseGmailBridgeCallFromPlainText(call, assistantContent);
+        }
+
+        return call;
+      });
+    }
+
+    function reviseGmailBridgeCallFromPlainText(call: ToolCallRequest, assistantContent: string): ToolCallRequest {
+      const args = recordFromUnknown(call.arguments);
+      const parsed = parsePlainTextEmailRevision(assistantContent);
+
+      if (!parsed) {
+        return call;
+      }
+
+      return {
+        ...call,
+        arguments: {
+          ...args,
+          ...(parsed.to.length > 0 ? { to: parsed.to } : {}),
+          ...(parsed.subject ? { subject: parsed.subject } : {}),
+          ...(parsed.body ? { body: parsed.body } : {}),
+          inReplyTo: cleanOptionalEmailMetadata(args.inReplyTo),
+          references: cleanOptionalEmailMetadata(args.references),
+          threadId: cleanOptionalEmailMetadata(args.threadId),
+        },
+      };
+    }
+
+    function recordFromUnknown(value: unknown): Record<string, unknown> {
+      return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    }
+
+    function parsePlainTextEmailRevision(value: string) {
+      const text = value.replace(/\r\n/g, "\n").trim();
+      const to = parseEmailRevisionRecipients(readLabeledValue(text, "To"));
+      const subject = readLabeledValue(text, "Subject");
+      const body = readLabeledBlock(text, "Body");
+
+      if (to.length === 0 && !subject && !body) {
+        return null;
+      }
+
+      return {
+        body: body ? cleanRevisedEmailBody(body) : undefined,
+        subject: subject ? stripMarkdownFormatting(subject) : undefined,
+        to,
+      };
+    }
+
+    function readLabeledValue(text: string, label: string) {
+      const match = text.match(new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${label}(?:\\*\\*)?\\s*:\\s*(.+)$`, "im"));
+      return match?.[1]?.trim();
+    }
+
+    function readLabeledBlock(text: string, label: string) {
+      const match = text.match(new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${label}(?:\\*\\*)?\\s*:\\s*\\n?([\\s\\S]*)$`, "im"));
+
+      if (!match?.[1]) {
+        return undefined;
+      }
+
+      return match[1]
+        .replace(/\n\s*(?:Reply|Respond|Please confirm|Tell me|Say ["“']?send|Press send)\b[\s\S]*$/i, "")
+        .trim();
+    }
+
+    function parseEmailRevisionRecipients(value?: string) {
+      if (!value) {
+        return [];
+      }
+
+      return value
+        .split(/[,;]/)
+        .map((item) => item.trim())
+        .flatMap((item) => {
+          const match = item.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+          return match ? [match[0]] : [];
+        });
+    }
+
+    function cleanRevisedEmailBody(value: string) {
+      return stripMarkdownFormatting(value)
+        .replace(/^\s*```(?:text|markdown)?\s*/i, "")
+        .replace(/\s*```\s*$/i, "")
+        .trim();
+    }
+
+    function stripMarkdownFormatting(value: string) {
+      return value
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/^>\s?/gm, "")
+        .trim();
+    }
+
+    function cleanOptionalEmailMetadata(value: unknown) {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+
+      const normalized = value.trim();
+      return normalized && !/^[-—]+$/.test(normalized) ? normalized : undefined;
+    }
+
     const approvedBridgeResume = parseBridgeToolApprovalResume(resumeToolCallContent);
 
     if (approvedBridgeResume) {
@@ -961,14 +1268,59 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         };
       }
 
+      const revisionNote = submittedDecision?.status === "edited" && !submittedDecision.editedArgs
+        ? submittedDecision.note?.trim()
+        : "";
+
+      if (revisionNote) {
+        const revisionProgress = createLocalComputerProgress("active", "Revising approved tool action");
+        approvalRevisionPrompt = [
+          prompt,
+          "Revise the pending approval tool arguments.",
+          `User requested changes: ${revisionNote}`,
+          "Original pending tool call JSON:",
+          formatFallbackRevisionOriginalCalls(approvedBridgeResume.calls),
+        ].join("\n");
+        approvalRevisionRequiredFamilies = getBridgeCallFamilies(approvedBridgeResume.calls);
+        approvalRevisionRequiresToolCall = true;
+        pendingApprovalRevision = {
+          calls: approvedBridgeResume.calls,
+          note: revisionNote,
+          requiredFamilies: approvalRevisionRequiredFamilies,
+        };
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...withStreamingWorkThinking(message, "I\u2019m revising the pending tool action before it runs.", "active"),
+          agentRunStatus: "running",
+          content: "",
+          progress: withLocalComputerProgress(revisionProgress, message.progress),
+        }));
+
+        messages = [
+          ...messages,
+          createMessage("user", [
+            "REVISE PENDING TOOL ACTION",
+            "The previous tool action was not approved as written.",
+            `User requested changes: ${revisionNote}`,
+            "Original pending tool call JSON:",
+            formatFallbackRevisionOriginalCalls(approvedBridgeResume.calls),
+            "You must call the appropriate attached tool again with revised arguments. Do not answer with a plain-text draft or prose confirmation. The app will show a new approval card before anything runs.",
+          ].join("\n")),
+        ];
+        localProgress = revisionProgress;
+        passIndex += 1;
+        resumeToolCallContent = undefined;
+      } else {
       const activeProgress = createLocalComputerProgress("active", "Running approved tool action");
       const resumeBridgeContext: ToolExecutionContext = {
+        agentEnvironment: baseRuntimeSettings.agentEnvironment ?? generalSettings.agentEnvironment,
         memorySearch,
         model: baseRuntimeSettings.model,
         permissionMode: workspaceSettings.permissionMode,
         provider: baseRuntimeSettings.provider,
         providerApiKey: baseRuntimeSettings.apiKeys[baseRuntimeSettings.provider]?.trim() || "",
         signal: controller.signal,
+        terminalDefaultShell: generalSettings.terminalShell,
         webSearchMaxResults: runtimeWebSearchMaxResults,
         webSearchSettings: runtimeWebSearchSettings,
         workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
@@ -976,7 +1328,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       let liveToolCalls: ChatToolCall[] = [];
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...withStreamingWorkThinking(message, "I’m resuming the approved tool action now.", "active"),
         agentRunStatus: "running",
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
@@ -984,7 +1336,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
 
       const bridgeRun = await executeToolBridgeCalls({
         approval: () => ({ approved: true }),
-        calls: approvedBridgeResume.calls,
+        calls: applyEditedBridgeApprovalArgs(approvedBridgeResume.calls, submittedDecision),
         context: resumeBridgeContext,
         onToolCallUpdate: (toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
@@ -1003,8 +1355,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           }));
         },
         registry: bridgeRegistry,
+        telemetry: bridgeTelemetry,
       });
       const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
+      updateCodingRun((run) => withCodingBridgeBatch(run, completedBridgeToolCalls));
       totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
       bridgeToolResultMessages.push(...bridgeRun.resultMessages);
       rememberProjectToolMemoryFromBridgeRun(chatId, workspaceSettings, prompt, bridgeRun);
@@ -1013,7 +1367,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "approved tool"));
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...withStreamingWorkThinking(message, createVisibleToolResultThinking(completedBridgeToolCalls), "complete"),
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),
         toolCalls: allToolCalls,
@@ -1030,6 +1384,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       ];
       passIndex += 1;
       resumeToolCallContent = undefined;
+      }
     }
 
     if (resumeToolCallContent) {
@@ -1038,7 +1393,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       let liveToolCalls = activeToolCalls;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...(activeToolCalls.length > 0 ? withStreamingWorkThinking(message, createVisibleToolPlanThinking(activeToolCalls), "active") : message),
         agentRunStatus: "running",
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
@@ -1050,7 +1405,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions, chatId),
         assistantContent: resumeToolCallContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal, runtimeChat),
@@ -1111,7 +1466,11 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       finalResponse.waitingForApproval = toolRun.waitingForApproval;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...withStreamingWorkThinking(
+          message,
+          toolRun.waitingForApproval ? createVisibleToolApprovalThinking(allToolCalls) : createVisibleToolResultThinking(completedToolCalls),
+          "complete",
+        ),
         agentRunStatus: toolRun.waitingForApproval ? "waiting_for_approval" : "running",
         approvals: toolRun.waitingForApproval ? mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []) : message.approvals,
         artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
@@ -1152,7 +1511,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const approvedPlanNeedsWorkspaceTool = Boolean(approvedPlanExecution && !hasSuccessfulApprovedPlanWorkspaceTool(allToolCalls));
       const approvedPlanNeedsMutation = Boolean(approvedPlanExecution?.requiresMutation && !hasSuccessfulApprovedPlanMutation(allToolCalls));
       const approvedPlanNeedsToolExecution = approvedPlanNeedsWorkspaceTool || approvedPlanNeedsMutation;
-      const bridgeSelectionPrompt = toolSelectionPrompt ?? prompt;
+      const approvalRevisionToolCallRequiredForPass = approvalRevisionRequiresToolCall && !toolBudgetReached;
+      const bridgeSelectionPrompt = approvalRevisionToolCallRequiredForPass
+        ? approvalRevisionPrompt ?? toolSelectionPrompt ?? prompt
+        : toolSelectionPrompt ?? prompt;
       const latestUserPromptNeedsWebSearch = shouldAttachWebSearch(prompt);
       const freshLocalEvidenceNeeded = needsFreshLocalToolEvidence(bridgeSelectionPrompt, workspaceSettings.enabled);
       const freshLocalEvidenceRequiredForPass = freshLocalEvidenceNeeded && allToolCalls.length === 0 && !toolBudgetReached;
@@ -1169,6 +1531,11 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         !toolBudgetReached &&
         hasRequestScopedWorkspaceToolsEnabled(passSettings) &&
         requiresWorkspaceToolCallForPrompt(bridgeSelectionPrompt, workspaceSettings.enabled);
+      const mustUseToolsForPass =
+        approvedPlanNeedsToolExecution ||
+        freshLocalEvidenceRequiredForPass ||
+        workspaceToolCallRequiredForPass ||
+        approvalRevisionToolCallRequiredForPass;
       const webSearchEnabledForPass =
         passSettings.tools.webSearch &&
         runtimeWebSearchSettings.enabled &&
@@ -1176,12 +1543,14 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         (!freshLocalEvidenceRequiredForPass || latestUserPromptNeedsWebSearch) &&
         (!workspaceToolCallRequiredForPass || latestUserPromptNeedsWebSearch);
       const bridgeContext: ToolExecutionContext = {
+        agentEnvironment: passSettings.agentEnvironment ?? generalSettings.agentEnvironment,
         memorySearch,
         model: passSettings.model,
         permissionMode: workspaceSettings.permissionMode,
         provider: passSettings.provider,
         providerApiKey: passSettings.apiKeys[passSettings.provider]?.trim() || "",
         signal: controller.signal,
+        terminalDefaultShell: generalSettings.terminalShell,
         webSearchMaxResults: runtimeWebSearchMaxResults,
         webSearchSettings: runtimeWebSearchSettings,
         workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
@@ -1189,41 +1558,109 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const availableBridgeTools = bridgeRegistry.listForContext(bridgeContext, undefined, {
         includePendingApproval: true,
       });
-      const selectedBridgeTools = toolBudgetReached
-        ? []
-        : selectAdvertisedBridgeTools(
-          availableBridgeTools,
-          {
-            browserPreviewEnabled: passSettings.tools.browserPreview,
-            imageGenerationEnabled: passSettings.tools.imageGeneration,
-            memoryEnabled: memoryToolsEnabled && !approvedPlanNeedsToolExecution && !freshLocalEvidenceRequiredForPass && !workspaceToolCallRequiredForPass,
-            prompt: bridgeSelectionPrompt,
-            terminalEnabled: passSettings.tools.terminal,
-            webSearchEnabled: webSearchEnabledForPass,
-          },
-        );
-      const bridgeTools = selectedBridgeTools.length > 0 || !workspaceToolCallRequiredForPass
-        ? selectedBridgeTools
-        : selectAdvertisedBridgeTools(
-          availableBridgeTools,
-          {
-            browserPreviewEnabled: passSettings.tools.browserPreview,
-            imageGenerationEnabled: false,
-            memoryEnabled: false,
-            prompt: "fix the selected workspace app. read relevant files and edit code with the attached file tools.",
-            terminalEnabled: passSettings.tools.terminal,
-            webSearchEnabled: false,
-          },
-        );
-      const webSearchRequiredForPass =
+      const providerFormat = inferProviderToolBridgeFormat(passSettings);
+      const workspaceToolFamilies: ToolBridgeToolFamily[] = ["files", "editing", "git", "github", "terminal", "browser"];
+      const workspaceToolsEnabled = hasRequestScopedWorkspaceToolsEnabled(passSettings);
+      const requiredFamilies: ToolBridgeToolFamily[] = [
+        ...(approvedPlanNeedsMutation ? ["editing" as const] : []),
+        ...(approvedPlanNeedsWorkspaceTool || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass ? workspaceToolFamilies : []),
+        ...(approvalRevisionToolCallRequiredForPass ? approvalRevisionRequiredFamilies : []),
+      ];
+      const toolIntent: ToolIntent[] = [
+        ...(approvedPlanNeedsMutation ? ["workspace_mutation" as const] : []),
+        ...(approvedPlanNeedsWorkspaceTool || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass ? ["workspace_evidence" as const] : []),
+        ...(approvalRevisionToolCallRequiredForPass && approvalRevisionRequiredFamilies.includes("gmail") ? ["gmail" as const] : []),
+        ...(approvalRevisionToolCallRequiredForPass && approvalRevisionRequiredFamilies.includes("calendar") ? ["calendar" as const] : []),
+        ...(latestUserPromptNeedsWebSearch ? ["web_search" as const] : []),
+      ];
+      const baseBlockedReasons = [
+        workspaceSettings.enabled ? undefined : {
+          code: "workspace_disabled",
+          detail: "The selected workspace is disabled for this chat.",
+        },
+        workspaceSettings.enabled && getEnabledWorkspaceRoots(workspaceSettings).length === 0 ? {
+          code: "workspace_roots_unavailable",
+          detail: "No enabled workspace roots are available for this chat.",
+        } : undefined,
+        (approvedPlanNeedsToolExecution || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass) && !workspaceToolsEnabled ? {
+          code: "workspace_tool_settings_disabled",
+          detail: "The current tool settings do not enable request-scoped workspace tools.",
+        } : undefined,
+      ].filter(Boolean);
+      const selectionFlags = {
+        browserPreviewEnabled: passSettings.tools.browserPreview,
+        editingEnabled: passSettings.tools.codeEdit || passSettings.tools.codeGeneration || passSettings.tools.fileCreation,
+        fileToolsEnabled: passSettings.tools.fileBrowser || passSettings.tools.fileSearch || passSettings.tools.codeView,
+        gitEnabled: passSettings.tools.sourceControl,
+        imageGenerationEnabled: passSettings.tools.imageGeneration,
+        mcpServersEnabled: passSettings.tools.mcpServers,
+        memoryEnabled: memoryToolsEnabled && !approvedPlanNeedsToolExecution && !freshLocalEvidenceRequiredForPass && !workspaceToolCallRequiredForPass,
+        terminalEnabled: passSettings.tools.terminal,
+      };
+      let toolCapabilityPlan = selectToolCapabilityPlan({
+        ...selectionFlags,
+        availableTools: availableBridgeTools,
+        blockedReasons: baseBlockedReasons,
+        mustUseTools: mustUseToolsForPass,
+        prompt: bridgeSelectionPrompt,
+        providerFormat,
+        requestedToolChoice: approvalRevisionToolCallRequiredForPass ? "required" : undefined,
+        requiredFamilies,
+        toolBudgetReached,
+        toolIntent,
+        webSearchEnabled: webSearchEnabledForPass,
+      });
+
+      if (toolCapabilityPlan.selectedTools.length === 0 && workspaceToolCallRequiredForPass && !toolBudgetReached) {
+        toolCapabilityPlan = selectToolCapabilityPlan({
+          ...selectionFlags,
+          availableTools: availableBridgeTools,
+          blockedReasons: [
+            ...baseBlockedReasons,
+            {
+              code: "workspace_selection_fallback",
+              detail: "The original prompt selected no workspace tools, so the runtime tried the standard workspace read/edit fallback.",
+            },
+          ],
+          imageGenerationEnabled: false,
+          memoryEnabled: false,
+          mustUseTools: true,
+          prompt: "fix the selected workspace app. read relevant files and edit code with the attached file tools.",
+          providerFormat,
+          requiredFamilies: workspaceToolFamilies,
+          toolBudgetReached,
+          toolIntent: ["workspace_evidence", "workspace_mutation"],
+          webSearchEnabled: false,
+        });
+      }
+      const initialWebSearchRequiredForPass =
         latestUserPromptNeedsWebSearch &&
-        bridgeTools.some((tool) => tool.id === "web_search") &&
+        toolCapabilityPlan.selectedTools.some((tool) => tool.id === "web_search") &&
         !allToolCalls.some((toolCall) => toolCall.toolId === "web_search");
-      const bridgeToolResultCharBudget = getModelVisibleToolResultCharBudget(resolveContextWindowForModel(passSettings.model).tokens);
+
+      if (initialWebSearchRequiredForPass && !toolCapabilityPlan.mustUseTools) {
+        toolCapabilityPlan = selectToolCapabilityPlan({
+          ...selectionFlags,
+          availableTools: availableBridgeTools,
+          blockedReasons: baseBlockedReasons,
+          mustUseTools: true,
+          prompt: bridgeSelectionPrompt,
+          providerFormat,
+          requiredFamilies: ["web"],
+          requestedToolChoice: "required",
+          toolBudgetReached,
+          toolIntent,
+          webSearchEnabled: webSearchEnabledForPass,
+        });
+      }
+      const bridgeTools = toolCapabilityPlan.selectedTools;
+      const bridgeToolResultCharBudget = getModelVisibleToolResultCharBudget(resolveContextWindowForModel(passSettings.model).tokens, passSettings);
       const bridgeOptions = bridgeTools.length > 0 || bridgeToolResultMessages.length > 0
         ? {
+            capabilityPlan: toolCapabilityPlan,
             maxToolResultContentChars: bridgeToolResultCharBudget,
             parallelToolCalls: toolBudgetReached ? undefined : supportsProviderParallelToolCalls(passSettings.provider) ? true : undefined,
+            providerVisibleToolIds: toolCapabilityPlan.providerVisibleToolIds,
             reasoningState: bridgeReasoningState,
             runtimeBudget: {
               maxExecutions: maxToolExecutions,
@@ -1232,16 +1669,54 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               remainingExecutions: Math.max(maxToolExecutions - totalExecutedToolCalls, 0),
               remainingPasses: Math.max(maxToolPasses - passIndex, 0),
             },
-            toolChoice: toolBudgetReached
-              ? "none" as const
-              : (approvedPlanNeedsToolExecution || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass || webSearchRequiredForPass) && bridgeTools.length > 0
-                ? "required" as const
-                : "auto" as const,
+            toolChoice: toolCapabilityPlan.toolChoice,
             toolResultDelivery: bridgeToolResultMessages.length > 0 ? "native" as const : undefined,
             toolResultMessages: bridgeToolResultMessages,
             tools: bridgeTools,
           }
         : undefined;
+      if (runId) {
+        updateCodingRun((run) => withCodingToolHealth(run, createToolHealthSnapshot({
+          availableTools: availableBridgeTools,
+          budgetReached: toolBudgetReached,
+          model: passSettings.model,
+          parallelToolCalls: bridgeOptions?.parallelToolCalls,
+          passIndex,
+          permissionMode: workspaceSettings.permissionMode,
+          prompt: bridgeSelectionPrompt,
+          provider: passSettings.provider,
+          registryTools: bridgeRegistry.list(),
+          runtimeBudget: bridgeOptions?.runtimeBudget,
+          toolCapabilityPlan,
+          selectedTools: bridgeTools,
+          toolChoice: bridgeOptions?.toolChoice,
+          workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
+        })));
+      }
+      if (toolCapabilityPlan.mustUseTools && !toolCapabilityPlan.canCallProvider && bridgeToolResultMessages.length === 0) {
+        const blockedProgress = createLocalComputerProgress("complete", "Required tools unavailable");
+        const blockedContent = createToolCapabilityBlockedAnswer(toolCapabilityPlan);
+
+        updateGeneratedMessage(chatId, messageId, (message) => ({
+          ...message,
+          content: blockedContent,
+          progress: withLocalComputerProgress(blockedProgress, message.progress),
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
+        }));
+        onExternalUpdate?.({
+          content: blockedContent,
+          progress: blockedProgress,
+          status: "Required tools unavailable.",
+        });
+
+        return {
+          artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+          content: blockedContent,
+          progress: blockedProgress,
+          sources: allSources.length > 0 ? allSources : undefined,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+        };
+      }
       const passCompaction = compactProviderMessages(messages, passSettings, { toolBridge: bridgeOptions });
       if (passCompaction.compacted) {
         const compactionProgress = createContextCompactionProgress(passCompaction);
@@ -1304,10 +1779,16 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             const promisedToolAction = !hasStreamingLocalToolCalls && !hasSubstantiveVisibleAnswer && looksLikeUnexecutedToolActionPromise(snapshot.content);
             const unappliedFileEditAnswer = !hasStreamingLocalToolCalls && !hasSubstantiveVisibleAnswer && looksLikeUnappliedFileEditAnswer(rawSanitizedContent, allToolCalls);
             const unnecessaryConfirmation = !hasStreamingLocalToolCalls && !hasSubstantiveVisibleAnswer && looksLikeUnnecessaryLocalActionConfirmation(rawSanitizedContent, allToolCalls);
+            const waitingForRevisedApprovalToolCall =
+              approvalRevisionToolCallRequiredForPass &&
+              !hasStreamingLocalToolCalls &&
+              !hasStreamingBridgeToolCalls;
             const streamingLocalProgress = hasStreamingLocalToolCalls
               ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingToolCalls))
               : hasStreamingBridgeToolCalls
                 ? createLocalComputerProgress("active", formatLocalToolPreviewProgress(streamingBridgeToolCalls))
+                : waitingForRevisedApprovalToolCall
+                  ? createLocalComputerProgress("active", "Preparing revised approval")
                 : unappliedFileEditAnswer || unnecessaryConfirmation
                   ? createLocalComputerProgress("active", "Preparing file changes")
                 : waitingForRequiredLocalEvidence && rawSanitizedContent.trim()
@@ -1318,6 +1799,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             const sanitizedContent = hasStreamingLocalToolCalls ? "" : displaySanitizedContent;
             const shouldHideVisibleContent =
               heldToolCallContent ||
+              waitingForRevisedApprovalToolCall ||
               waitingForRequiredLocalEvidence ||
               unappliedFileEditAnswer ||
               unnecessaryConfirmation ||
@@ -1328,9 +1810,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               looksLikeToolProtocolNarration(sanitizedContent);
             const visibleContent = shouldHideVisibleContent ? "" : sanitizedContent;
             const workThinkingContent = shouldHideVisibleContent && rawSanitizedContent.trim() ? rawSanitizedContent : "";
+            const hostThinkingContent = workThinkingContent || createVisibleToolPlanThinking([...streamingToolCalls, ...streamingBridgeToolCalls]);
 
             updateGeneratedMessage(chatId, messageId, (message) => ({
-              ...(workThinkingContent ? withStreamingWorkThinking(message, workThinkingContent, "active") : completeStreamingWorkThinking(message)),
+              ...(hostThinkingContent ? withStreamingWorkThinking(message, hostThinkingContent, "active") : completeStreamingWorkThinking(message)),
               content: visibleContent,
               progress: streamingLocalProgress ? withLocalComputerProgress(streamingLocalProgress, message.progress) : message.progress,
               thinking: message.thinking,
@@ -1422,7 +1905,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           };
 
           updateGeneratedMessage(chatId, messageId, (message) => ({
-            ...message,
+            ...withStreamingWorkThinking(message, createVisibleToolApprovalThinking(waitingToolCalls), "complete"),
             agentRunStatus: "waiting_for_approval",
             approvals: mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []),
             content: "",
@@ -1439,7 +1922,14 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         }
 
         updateGeneratedMessage(chatId, messageId, (message) => ({
-          ...message,
+          ...withStreamingWorkThinking(message, createVisibleToolPlanThinking(bridgeToolCalls.map((call) =>
+            createBridgeChatToolCall(
+              call,
+              bridgeRegistry.get(call.name),
+              { content: "Preparing tool call.", ok: true },
+              "active",
+            ),
+          )), "active"),
           content: "",
           progress: withLocalComputerProgress(activeProgress, message.progress),
           toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
@@ -1475,8 +1965,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             });
           },
           registry: bridgeRegistry,
+          telemetry: bridgeTelemetry,
         });
         const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
+        updateCodingRun((run) => withCodingBridgeBatch(run, completedBridgeToolCalls));
         totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
         bridgeToolResultMessages.push(...bridgeRun.resultMessages);
         rememberProjectToolMemoryFromBridgeRun(chatId, workspaceSettings, prompt, bridgeRun);
@@ -1485,7 +1977,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         localProgress = createLocalComputerProgress("complete", formatBridgeToolRunProgress(bridgeRun, "bridge tool"));
 
         updateGeneratedMessage(chatId, messageId, (message) => ({
-          ...message,
+          ...withStreamingWorkThinking(message, createVisibleToolResultThinking(completedBridgeToolCalls), "complete"),
           content: "",
           progress: withLocalComputerProgress(localProgress, message.progress),
           toolCalls: allToolCalls,
@@ -1635,8 +2127,17 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           !toolBudgetReached &&
           freshLocalEvidenceNeeded;
         const approvedPlanExecutionIncomplete = Boolean(approvedPlanExecution && !toolBudgetReached && approvedPlanNeedsToolExecution);
+        const approvalRevisionIncomplete = approvalRevisionRequiresToolCall && !toolBudgetReached;
 
-        if (approvedPlanExecutionIncomplete || localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolProgress || inFlightToolPlanning || privateThinkingNarration || toolProtocolNarration || unexecutedToolActionPromise || unappliedFileEditAnswer || unnecessaryConfirmation || contradictedSuccessfulFileMutation || visibleToolResultLeak) {
+        if (approvedPlanExecutionIncomplete || approvalRevisionIncomplete || localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolProgress || inFlightToolPlanning || privateThinkingNarration || toolProtocolNarration || unexecutedToolActionPromise || unappliedFileEditAnswer || unnecessaryConfirmation || contradictedSuccessfulFileMutation || visibleToolResultLeak) {
+          if (approvalRevisionIncomplete) {
+            const fallbackApprovalResponse = await createApprovalRevisionFallbackResponse(finalResponse.content, bridgeContext, passIndex);
+
+            if (fallbackApprovalResponse) {
+              return fallbackApprovalResponse;
+            }
+          }
+
           if (localToolEvidenceRequired) {
             freshLocalToolEvidenceRetries += 1;
           }
@@ -1659,6 +2160,8 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
                 ? "The previous finalization attempt claimed tool progress that was not backed by app tool-call records. Do not repeat that claim."
                 : approvedPlanExecutionIncomplete
                   ? "The previous finalization attempt answered before executing the approved plan. Do not repeat that answer."
+                : approvalRevisionIncomplete
+                  ? "The previous finalization attempt answered in prose after an approval edit request. Do not send or claim anything. The next response must call the revised Gmail or Google Calendar tool so the app can show a new approval card."
                 : inFlightToolPlanning
                   ? "The previous finalization attempt exposed in-flight tool planning instead of using real app tool calls or writing a final answer. Do not repeat that planning text."
                 : privateThinkingNarration
@@ -1693,6 +2196,8 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
 
           const recoveryProgress: ChatProgressItem = localProgress ?? (approvedPlanExecutionIncomplete
             ? createLocalComputerProgress("active", "Executing approved plan")
+            : approvalRevisionIncomplete
+              ? createLocalComputerProgress("active", "Revising approved tool action")
             : {
                 detail: "Continuing from the work log",
                 id: "final-answer-recovery",
@@ -1709,6 +2214,8 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             progress: recoveryProgress,
             status: approvedPlanExecutionIncomplete
               ? "Executing approved plan..."
+              : approvalRevisionIncomplete
+                ? "Requesting revised tool action..."
               : localToolEvidenceRequired
                 ? "Requesting fresh tool evidence..."
                 : localProgress
@@ -1722,8 +2229,16 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               "user",
               approvedPlanExecutionIncomplete && approvedPlanExecution
                 ? createApprovedPlanExecutionRetryInstruction(approvedPlanExecution, finalResponse.content, allToolCalls)
+                : approvalRevisionIncomplete
+                ? createFinalAnswerRecoveryInstruction(
+                    prompt,
+                    "The previous response wrote the revised email/event in plain text. That is not enough. Call the revised Gmail or Google Calendar tool now with the updated arguments. Do not answer in prose, do not ask for confirmation, and do not claim the action happened; the app approval card handles confirmation.",
+                  )
                 : localToolEvidenceRequired
-                ? createFreshLocalToolEvidenceInstruction(prompt, finalResponse.content)
+                ? createFreshLocalToolEvidenceInstruction(prompt, finalResponse.content, {
+                    blockedReasons: toolCapabilityPlan.blockedReasons.map((reason) => `${reason.code}: ${reason.detail}`),
+                    canUseProviderTools: Boolean(bridgeOptions?.tools?.length),
+                  })
                 : fabricatedToolProgress
                 ? createFabricatedToolProgressRecoveryInstruction(prompt, finalResponse.content, allToolCalls)
                 : inFlightToolPlanning
@@ -1766,7 +2281,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       let liveToolCalls = activeToolCalls;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...(activeToolCalls.length > 0 ? withStreamingWorkThinking(message, createVisibleToolPlanThinking(activeToolCalls), "active") : message),
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
         toolCalls: activeToolCalls.length > 0 ? [...allToolCalls, ...activeToolCalls] : message.toolCalls,
@@ -1778,7 +2293,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions),
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, approvalDecisions, chatId),
         assistantContent: assistantToolRequestContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, messages, prompt, controller.signal, runtimeChat),
@@ -1839,7 +2354,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
 
       if (toolRun.waitingForApproval) {
         updateGeneratedMessage(chatId, messageId, (message) => ({
-          ...message,
+          ...withStreamingWorkThinking(message, createVisibleToolApprovalThinking(allToolCalls), "complete"),
           agentRunStatus: "waiting_for_approval",
           approvals: mergeAgentApprovals(message.approvals ?? [], finalResponse.approvalRequests ?? []),
           artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
@@ -1899,7 +2414,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       }
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
-        ...message,
+        ...withStreamingWorkThinking(message, createVisibleToolResultThinking(completedToolCalls), "complete"),
         artifacts: mergeChatArtifacts(message.artifacts, toolRun.artifacts),
         content: "",
         progress: withLocalComputerProgress(localProgress, message.progress),

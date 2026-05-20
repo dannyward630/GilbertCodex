@@ -18,7 +18,7 @@ interface MarkdownDisplayOptions {
 // Normalizes display Markdown while leaving real code fences untouched.
 export function normalizeMarkdownForDisplay(content: string, options: MarkdownDisplayOptions = {}) {
   const final = options.final ?? true;
-  const displayContent = final ? repairMalformedMarkdownFences(unwrapWholeMessageTextFence(content), { final }) : content;
+  const displayContent = repairMalformedMarkdownFences(unwrapUnclosedWholeMessageTextFence(unwrapWholeMessageTextFence(content)), { final });
 
   if (!displayContent.includes("|")) {
     return displayContent;
@@ -73,6 +73,33 @@ export function unwrapWholeMessageTextFence(content: string) {
   return content;
 }
 
+function unwrapUnclosedWholeMessageTextFence(content: string) {
+  const match = /^\s{0,3}(`{3,}|~{3,})[ \t]*([^\r\n]*)\r?\n([\s\S]*)$/i.exec(content);
+
+  if (!match) {
+    return content;
+  }
+
+  const marker = match[1] ?? "";
+  const language = getFenceLanguage(match[2] ?? "");
+  const body = match[3] ?? "";
+  const closingFencePattern = new RegExp(`^\\s{0,3}${escapeRegExp(marker[0] ?? "`")}{${marker.length},}\\s*$`, "m");
+
+  if (closingFencePattern.test(body)) {
+    return content;
+  }
+
+  if (isCodeFenceLanguage(language) && body.split(/\r?\n/).some((line) => looksLikeCodeLine(line.trim()))) {
+    return content;
+  }
+
+  return shouldUnwrapWholeMessageFence(body, language) ? body : content;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function repairMalformedMarkdownFences(content: string, options: Required<MarkdownDisplayOptions>) {
   const lines = content.split(/\r\n|\n|\r/);
   const normalizedLines: string[] = [];
@@ -102,7 +129,18 @@ function repairMalformedMarkdownFences(content: string, options: Required<Markdo
       continue;
     }
 
-    if (options.final && shouldCloseFenceBeforeLine(line, openFence)) {
+    if (fence && shouldCloseFenceBeforeNewFence(fence, openFence)) {
+      normalizedLines.push(`${openFence.indent}${openFence.char.repeat(openFence.length)}`);
+      openFence = null;
+      normalizedLines.push(line);
+
+      if (!isClosingFenceLine(fence)) {
+        openFence = { ...fence, bodyLines: [] };
+      }
+      continue;
+    }
+
+    if (shouldCloseFenceBeforeLine(line, openFence)) {
       normalizedLines.push(`${openFence.indent}${openFence.char.repeat(openFence.length)}`);
       openFence = null;
       normalizedLines.push(line);
@@ -254,6 +292,20 @@ function shouldCloseFenceBeforeLine(line: string, openFence: FenceMatch & { body
   }
 
   return isCodeFenceLanguage(openFence.language) || openFence.bodyLines.some((bodyLine) => looksLikeCodeLine(bodyLine.trim()));
+}
+
+function shouldCloseFenceBeforeNewFence(fence: FenceMatch, openFence: FenceMatch & { bodyLines: string[] }) {
+  if (isClosingFenceLine(fence) || LOG_FENCE_LANGUAGES.has(openFence.language)) {
+    return false;
+  }
+
+  const body = openFence.bodyLines.join("\n").trim();
+
+  if (!body) {
+    return false;
+  }
+
+  return isCodeFenceLanguage(openFence.language) || looksLikeStandaloneCode(body);
 }
 
 function shouldCloseUnclosedFenceAtEnd(openFence: FenceMatch & { bodyLines: string[] }) {

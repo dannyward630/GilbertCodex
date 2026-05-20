@@ -10,11 +10,12 @@ interface SettingsSideMenuProps {
   locationServicesEnabled: boolean;
   onLogout: () => void;
   onRouteChange: (route: PrimaryRoute) => void;
+  onSectionPreload?: (section: SettingsSectionId) => void;
   onSectionChange: (section: SettingsSectionId) => void;
   open: boolean;
 }
 
-export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, locationServicesEnabled, onLogout, onRouteChange, onSectionChange, open }: SettingsSideMenuProps) {
+export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, locationServicesEnabled, onLogout, onRouteChange, onSectionChange, onSectionPreload, open }: SettingsSideMenuProps) {
   const activeNavSection = resolveSettingsNavSection(activeSection);
   const navItems = useMemo(() => SETTINGS_NAV_ITEMS, [locationServicesEnabled]);
   const sidebarItems = useMemo(
@@ -24,10 +25,12 @@ export const SettingsSideMenu = memo(function SettingsSideMenu({ activeSection, 
         icon: item.icon,
         id: item.id,
         label: item.label,
+        latencyLabel: `settings:${item.id}`,
         meta: item.meta,
+        onPreload: (sectionId: string) => onSectionPreload?.(sectionId as SettingsSectionId),
         onSelect: (sectionId: string) => onSectionChange(sectionId as SettingsSectionId),
       })),
-    [activeNavSection, navItems, onSectionChange],
+    [activeNavSection, navItems, onSectionChange, onSectionPreload],
   );
 
   return (

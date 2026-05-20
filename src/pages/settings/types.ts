@@ -3,10 +3,11 @@ import type { AppInfo } from "../../types/app";
 import type { DiscordBridgeSettings } from "../../types/discord";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ProjectSummary } from "../../types/project";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
+import type { AppAppearanceSettings, AppGeneralSettings, AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
 
 export type SettingsSectionId =
   | "appearance"
+  | "browser"
   | "braveSearch"
   | "configuration"
   | "database"
@@ -19,6 +20,7 @@ export type SettingsSectionId =
   | "pdf"
   | "personalization"
   | "providers"
+  | "usage"
   | "weatherSources";
 
 export interface SettingsNavItem {
@@ -33,14 +35,19 @@ export interface SettingsPageProps {
   appearanceMode: AppearanceMode;
   appInfo: AppInfo;
   discordBridge: DiscordBridgeSettings;
+  generalSettings: AppGeneralSettings;
   localWorkspace: LocalWorkspaceSettings;
   onAppearanceModeChange: (mode: AppearanceMode) => void;
+  onAppearanceSettingsChange: (settings: AppAppearanceSettings) => void;
+  onActiveSectionChange: (section: SettingsSectionId) => void;
   onDiscordBridgeChange: (settings: DiscordBridgeSettings) => void;
+  onGeneralSettingsChange: (settings: AppGeneralSettings) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onPersonalizationChange: (settings: AppPersonalizationSettings) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
   onSubscriptionSandboxUninstalled?: (settings: ProviderSettings) => void;
   personalization: AppPersonalizationSettings;
+  appearanceSettings: AppAppearanceSettings;
   projects: ProjectSummary[];
   settings: ProviderSettings;
 }

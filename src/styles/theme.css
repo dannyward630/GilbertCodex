@@ -8,6 +8,157 @@
   background: var(--workspace-bg);
 }
 
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: var(--theme-effect-blend, screen);
+}
+
+:root[data-theme-effect]:not([data-theme-effect="none"]) body::before {
+  opacity: var(--theme-effect-opacity, 0.14);
+}
+
+:root[data-theme-effect="aurora"] body::before,
+:root[data-theme-effect="ocean"] body::before,
+:root[data-theme-effect="dawn"] body::before {
+  background:
+    radial-gradient(circle at 16% 18%, var(--theme-effect-color) 0 18%, transparent 39%),
+    radial-gradient(circle at 78% 12%, var(--theme-effect-color-2) 0 14%, transparent 36%),
+    radial-gradient(circle at 48% 88%, var(--theme-effect-color-3) 0 18%, transparent 42%);
+  filter: blur(34px) saturate(1.2);
+  animation: gil-theme-drift var(--theme-effect-speed, 24s) ease-in-out infinite alternate;
+}
+
+:root[data-theme-effect="constellation"] body::before {
+  background-image:
+    radial-gradient(circle, var(--theme-effect-color) 0 1px, transparent 1.5px),
+    radial-gradient(circle, var(--theme-effect-color-2) 0 1px, transparent 1.6px);
+  background-position: 0 0, 23px 31px;
+  background-size: 58px 58px, 92px 92px;
+  animation: gil-theme-slide var(--theme-effect-speed, 24s) linear infinite;
+}
+
+:root[data-theme-effect="matrix"] body::before {
+  opacity: calc(var(--theme-effect-opacity, 0.14) * 0.78);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 28px, var(--theme-effect-color) 29px 30px, transparent 31px 58px),
+    linear-gradient(180deg, transparent 0%, var(--theme-effect-color-2) 48%, transparent 100%);
+  background-size: 76px 100%, 100% 220%;
+  animation: gil-theme-slide var(--theme-effect-speed, 14s) linear infinite;
+}
+
+:root[data-theme-effect="scanlines"] body::before {
+  opacity: calc(var(--theme-effect-opacity, 0.14) * 0.7);
+  background: repeating-linear-gradient(180deg, transparent 0 4px, var(--theme-effect-color) 5px 6px, transparent 7px 12px);
+  animation: gil-theme-slide var(--theme-effect-speed, 14s) linear infinite;
+}
+
+:root[data-theme-effect="circuit"] body::before {
+  opacity: calc(var(--theme-effect-opacity, 0.14) * 0.82);
+  background-image:
+    linear-gradient(var(--theme-effect-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--theme-effect-color-2) 1px, transparent 1px),
+    radial-gradient(circle at 18px 18px, var(--theme-effect-color-3) 0 2px, transparent 3px);
+  background-size: 54px 54px, 54px 54px, 108px 108px;
+  animation: gil-theme-slide var(--theme-effect-speed, 24s) linear infinite;
+}
+
+:root[data-theme-effect="neon"] body::before,
+:root[data-theme-effect="spotlight"] body::before {
+  background:
+    radial-gradient(circle at 50% 0%, var(--theme-effect-color) 0 16%, transparent 42%),
+    radial-gradient(circle at 88% 72%, var(--theme-effect-color-2) 0 14%, transparent 38%),
+    radial-gradient(circle at 8% 82%, var(--theme-effect-color-3) 0 13%, transparent 36%);
+  filter: blur(26px) saturate(1.35);
+  animation: gil-theme-pulse var(--theme-effect-speed, 20s) ease-in-out infinite alternate;
+}
+
+:root[data-theme-effect="prism"] body::before {
+  background: conic-gradient(from 70deg at 50% 50%, transparent, var(--theme-effect-color), var(--theme-effect-color-2), var(--theme-effect-color-3), transparent);
+  filter: blur(36px) saturate(1.45);
+  animation: gil-theme-spin var(--theme-effect-speed, 16s) linear infinite;
+}
+
+:root[data-theme-effect="embers"] body::before,
+:root[data-theme-effect="confetti"] body::before {
+  background-image:
+    radial-gradient(circle, var(--theme-effect-color) 0 2px, transparent 2.8px),
+    radial-gradient(circle, var(--theme-effect-color-2) 0 1.6px, transparent 2.4px),
+    radial-gradient(circle, var(--theme-effect-color-3) 0 2px, transparent 2.8px);
+  background-position: 0 0, 34px 48px, 72px 18px;
+  background-size: 96px 96px, 118px 118px, 142px 142px;
+  animation: gil-theme-float var(--theme-effect-speed, 24s) linear infinite;
+}
+
+@keyframes gil-theme-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(2%, 1.5%, 0) scale(1.08);
+  }
+}
+
+@keyframes gil-theme-slide {
+  from {
+    background-position: 0 0, 23px 31px, 0 0;
+  }
+
+  to {
+    background-position: 120px 180px, 143px 211px, 80px 120px;
+  }
+}
+
+@keyframes gil-theme-spin {
+  from {
+    transform: rotate(0deg) scale(1.25);
+  }
+
+  to {
+    transform: rotate(360deg) scale(1.25);
+  }
+}
+
+@keyframes gil-theme-float {
+  from {
+    background-position: 0 0, 34px 48px, 72px 18px;
+  }
+
+  to {
+    background-position: 90px -180px, -60px -120px, 120px -220px;
+  }
+}
+
+@keyframes gil-theme-pulse {
+  from {
+    transform: translate3d(-1%, 0, 0) scale(1);
+    filter: blur(26px) saturate(1.15);
+  }
+
+  to {
+    transform: translate3d(1.5%, 0.5%, 0) scale(1.06);
+    filter: blur(34px) saturate(1.55);
+  }
+}
+
+:root[data-reduce-motion="on"] body::before,
+:root[data-reduce-motion="on"] body::after {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after {
+    animation: none !important;
+  }
+}
+
 .conversation-frame {
   border-color: var(--line);
   background: var(--chat-page-bg);
@@ -15,7 +166,7 @@
 
 .conversation-header {
   border-bottom-color: transparent;
-  background: transparent;
+  background: var(--chat-page-bg);
 }
 
 .conversation-body {
@@ -91,8 +242,7 @@
 
 .topbar-menu-panel,
 .sidebar-item-menu,
-.search-dialog,
-.message-action-menu {
+.search-dialog {
   color: var(--text);
   border-color: var(--popover-border);
   background:
@@ -102,15 +252,13 @@
 }
 
 .topbar-menu-item,
-.sidebar-item-menu button,
-.message-action-menu button {
+.sidebar-item-menu button {
   color: var(--text);
 }
 
 .topbar-menu-item:hover,
 .topbar-menu-item:focus-visible,
-.sidebar-item-menu button:hover,
-.message-action-menu button:hover {
+.sidebar-item-menu button:hover {
   color: var(--text);
   background: var(--hover);
 }
@@ -441,7 +589,6 @@
 
 .conversation-frame,
 .settings-page,
-.apps-page,
 .plugin-page,
 .weather-radar-page,
 .auth-root,
@@ -462,15 +609,6 @@
   background: var(--chat-page-bg);
 }
 
-.conversation-header::before {
-  background: var(--chat-page-bg);
-  backdrop-filter: none;
-}
-
-.conversation-frame[data-header-blur="true"] .conversation-header::after {
-  opacity: 0;
-}
-
 .conversation-title h1,
 .empty-chat-start h2,
 .settings-section-heading h1,
@@ -485,7 +623,7 @@
 
 .empty-chat-start h2 {
   color: color-mix(in srgb, var(--text) 92%, var(--gold) 8%);
-  font-weight: 640;
+  font-weight: 760;
 }
 
 .message-block[data-role="assistant"] .message-content {
@@ -586,6 +724,7 @@
 .rail-card,
 .review-card,
 .git-review-panel,
+.coding-sidecar-window,
 .browser-preview-window,
 .terminal-panel,
 .search-dialog,
@@ -617,9 +756,7 @@
 .weather-source-provider-grid button,
 .plugin-tabs button,
 .plugin-card-actions button,
-.plugin-card-actions a,
-.apps-back-button,
-.apps-card button {
+.plugin-card-actions a {
   border-color: color-mix(in srgb, var(--line) 82%, transparent);
   background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
 }
@@ -631,9 +768,7 @@
 .settings-segmented-control button:hover,
 .settings-segmented-control button[data-selected="true"],
 .plugin-tabs button:hover,
-.plugin-tabs button[data-active="true"],
-.apps-back-button:hover,
-.apps-card button:hover {
+.plugin-tabs button[data-active="true"] {
   border-color: color-mix(in srgb, var(--blue) 38%, var(--line));
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 54%, transparent), color-mix(in srgb, var(--violet-soft) 28%, transparent)),
@@ -641,8 +776,6 @@
 }
 
 .settings-section-icon,
-.apps-hero-icon,
-.apps-card-icon,
 .plugin-hero-icon,
 .plugin-card-icon,
 .auth-form-icon,
@@ -758,6 +891,7 @@
 .project-toggle,
 .local-toggle,
 .branch-toggle,
+.workspace-toggle,
 .context-window-chip,
 .project-toggle:hover,
 .project-toggle:focus-visible,
@@ -768,6 +902,9 @@
 .branch-toggle:hover,
 .branch-toggle:focus-visible,
 .branch-toggle[data-active="true"],
+.workspace-toggle:hover,
+.workspace-toggle:focus-visible,
+.workspace-toggle[data-active="true"],
 .context-window-chip:hover,
 .context-window-chip:focus-visible,
 .context-window-chip[data-active="true"] {
@@ -785,6 +922,9 @@
 .branch-toggle:hover,
 .branch-toggle:focus-visible,
 .branch-toggle[data-active="true"],
+.workspace-toggle:hover,
+.workspace-toggle:focus-visible,
+.workspace-toggle[data-active="true"],
 .context-window-chip:hover,
 .context-window-chip:focus-visible,
 .context-window-chip[data-active="true"] {
@@ -792,32 +932,33 @@
 }
 
 :root:not([data-theme="light"]) .conversation-tools .icon-button,
+:root:not([data-theme="light"]) .project-open-main,
+:root:not([data-theme="light"]) .project-open-menu-button,
+:root:not([data-theme="light"]) .workspace-tools-trigger,
 :root:not([data-theme="light"]) .conversation-options-button,
 :root:not([data-theme="light"]) .composer-tool,
 :root:not([data-theme="light"]) .mode-chip,
 :root:not([data-theme="light"]) .project-toggle,
 :root:not([data-theme="light"]) .local-toggle,
 :root:not([data-theme="light"]) .branch-toggle,
+:root:not([data-theme="light"]) .workspace-toggle,
 :root:not([data-theme="light"]) .context-window-chip {
   border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   background: color-mix(in srgb, currentColor 8%, transparent);
 }
 
-:root:not([data-theme="light"]) .conversation-options-button,
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Pin chat"],
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Unpin chat"] {
+:root:not([data-theme="light"]) .conversation-options-button {
   color: color-mix(in srgb, var(--gold) 82%, var(--text) 18%);
 }
 
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Open browser preview"],
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Close browser preview"],
+:root:not([data-theme="light"]) .project-open-main,
+:root:not([data-theme="light"]) .project-open-menu-button,
 :root:not([data-theme="light"]) .composer-attach-toggle,
-:root:not([data-theme="light"]) .project-toggle {
+:root:not([data-theme="light"]) .project-toggle,
+:root:not([data-theme="light"]) .workspace-toggle {
   color: color-mix(in srgb, var(--cyan) 78%, var(--text) 22%);
 }
 
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Open terminal"],
-:root:not([data-theme="light"]) .conversation-tools .icon-button[aria-label="Close terminal"],
 :root:not([data-theme="light"]) .mode-chip-model,
 :root:not([data-theme="light"]) .branch-toggle {
   color: color-mix(in srgb, var(--violet) 78%, var(--text) 22%);
@@ -832,11 +973,20 @@
 }
 
 :root:not([data-theme="light"]) .context-window-chip {
-  color: color-mix(in srgb, var(--rose) 72%, var(--text) 28%);
+  color: color-mix(in srgb, var(--blue) 70%, var(--text) 30%);
+  border-color: transparent;
+  background: transparent;
 }
 
 :root:not([data-theme="light"]) .conversation-tools .icon-button:hover,
 :root:not([data-theme="light"]) .conversation-tools .icon-button[data-pressed="true"],
+:root:not([data-theme="light"]) .project-open-main:hover,
+:root:not([data-theme="light"]) .project-open-menu-button:hover,
+:root:not([data-theme="light"]) .project-open-control[data-open="true"] .project-open-main,
+:root:not([data-theme="light"]) .project-open-control[data-open="true"] .project-open-menu-button,
+:root:not([data-theme="light"]) .workspace-tools-trigger:hover,
+:root:not([data-theme="light"]) .workspace-tools-control[data-open="true"] .workspace-tools-trigger,
+:root:not([data-theme="light"]) .workspace-tools-trigger[data-active="true"],
 :root:not([data-theme="light"]) .conversation-options-button:hover,
 :root:not([data-theme="light"]) .conversation-menu-anchor[data-open="true"] .conversation-options-button,
 :root:not([data-theme="light"]) .composer-tool:hover,
@@ -849,6 +999,8 @@
 :root:not([data-theme="light"]) .local-toggle[data-active="true"],
 :root:not([data-theme="light"]) .branch-toggle:hover,
 :root:not([data-theme="light"]) .branch-toggle[data-active="true"],
+:root:not([data-theme="light"]) .workspace-toggle:hover,
+:root:not([data-theme="light"]) .workspace-toggle[data-active="true"],
 :root:not([data-theme="light"]) .context-window-chip:hover,
 :root:not([data-theme="light"]) .context-window-chip[data-active="true"] {
   border-color: color-mix(in srgb, currentColor 38%, transparent);
@@ -883,34 +1035,35 @@
 }
 
 :root[data-theme="light"] .conversation-tools .icon-button,
+:root[data-theme="light"] .project-open-main,
+:root[data-theme="light"] .project-open-menu-button,
+:root[data-theme="light"] .workspace-tools-trigger,
 :root[data-theme="light"] .conversation-options-button,
 :root[data-theme="light"] .composer-tool,
 :root[data-theme="light"] .mode-chip,
 :root[data-theme="light"] .project-toggle,
 :root[data-theme="light"] .local-toggle,
 :root[data-theme="light"] .branch-toggle,
+:root[data-theme="light"] .workspace-toggle,
 :root[data-theme="light"] .context-window-chip {
   border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
   background: color-mix(in srgb, currentColor 10%, white 86%);
 }
 
-:root[data-theme="light"] .conversation-options-button,
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Pin chat"],
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Unpin chat"] {
+:root[data-theme="light"] .conversation-options-button {
   color: #8a6a18;
   background: #fff2c8;
 }
 
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Open browser preview"],
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Close browser preview"],
+:root[data-theme="light"] .project-open-main,
+:root[data-theme="light"] .project-open-menu-button,
 :root[data-theme="light"] .composer-attach-toggle,
-:root[data-theme="light"] .project-toggle {
+:root[data-theme="light"] .project-toggle,
+:root[data-theme="light"] .workspace-toggle {
   color: #167f7a;
   background: #dff8f3;
 }
 
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Open terminal"],
-:root[data-theme="light"] .conversation-tools .icon-button[aria-label="Close terminal"],
 :root[data-theme="light"] .mode-chip-model,
 :root[data-theme="light"] .branch-toggle {
   color: #6652ba;
@@ -928,8 +1081,19 @@
 }
 
 :root[data-theme="light"] .context-window-chip {
-  color: #b55270;
-  background: #ffe7ee;
+  color: #176fd4;
+  border-color: transparent;
+  background: transparent;
+}
+
+:root:not([data-theme="light"]) .context-window-chip[data-context-level="high"],
+:root[data-theme="light"] .context-window-chip[data-context-level="high"] {
+  color: color-mix(in srgb, var(--gold) 78%, var(--text) 22%);
+}
+
+:root:not([data-theme="light"]) .context-window-chip[data-context-level="compact"],
+:root[data-theme="light"] .context-window-chip[data-context-level="compact"] {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text) 22%);
 }
 
 :root[data-theme="light"] .project-toggle:hover,
@@ -941,11 +1105,21 @@
 :root[data-theme="light"] .branch-toggle:hover,
 :root[data-theme="light"] .branch-toggle:focus-visible,
 :root[data-theme="light"] .branch-toggle[data-active="true"],
+:root[data-theme="light"] .workspace-toggle:hover,
+:root[data-theme="light"] .workspace-toggle:focus-visible,
+:root[data-theme="light"] .workspace-toggle[data-active="true"],
 :root[data-theme="light"] .context-window-chip:hover,
 :root[data-theme="light"] .context-window-chip:focus-visible,
 :root[data-theme="light"] .context-window-chip[data-active="true"],
 :root[data-theme="light"] .conversation-tools .icon-button:hover,
 :root[data-theme="light"] .conversation-tools .icon-button[data-pressed="true"],
+:root[data-theme="light"] .project-open-main:hover,
+:root[data-theme="light"] .project-open-menu-button:hover,
+:root[data-theme="light"] .project-open-control[data-open="true"] .project-open-main,
+:root[data-theme="light"] .project-open-control[data-open="true"] .project-open-menu-button,
+:root[data-theme="light"] .workspace-tools-trigger:hover,
+:root[data-theme="light"] .workspace-tools-control[data-open="true"] .workspace-tools-trigger,
+:root[data-theme="light"] .workspace-tools-trigger[data-active="true"],
 :root[data-theme="light"] .conversation-options-button:hover,
 :root[data-theme="light"] .conversation-menu-anchor[data-open="true"] .conversation-options-button,
 :root[data-theme="light"] .composer-tool:hover,
@@ -957,9 +1131,116 @@
     linear-gradient(135deg, color-mix(in srgb, currentColor 14%, white 84%), color-mix(in srgb, currentColor 7%, white 91%));
 }
 
+:root:not([data-theme="light"]) .project-open-control {
+  color: color-mix(in srgb, var(--text) 74%, var(--text-muted) 26%);
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  background: color-mix(in srgb, var(--surface-raised) 54%, transparent);
+}
+
+:root[data-theme="light"] .project-open-control {
+  color: #526070;
+  border: 1px solid rgba(24, 34, 48, 0.14);
+  background: #ffffff;
+}
+
+:root:not([data-theme="light"]) .project-open-main,
+:root:not([data-theme="light"]) .project-open-menu-button,
+:root[data-theme="light"] .project-open-main,
+:root[data-theme="light"] .project-open-menu-button {
+  color: inherit;
+  border: 0;
+  background: transparent;
+}
+
+:root:not([data-theme="light"]) .project-open-main:hover:not(:disabled),
+:root:not([data-theme="light"]) .project-open-menu-button:hover:not(:disabled),
+:root:not([data-theme="light"]) .project-open-control[data-open="true"] .project-open-main,
+:root:not([data-theme="light"]) .project-open-control[data-open="true"] .project-open-menu-button {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+:root[data-theme="light"] .project-open-main:hover:not(:disabled),
+:root[data-theme="light"] .project-open-menu-button:hover:not(:disabled),
+:root[data-theme="light"] .project-open-control[data-open="true"] .project-open-main,
+:root[data-theme="light"] .project-open-control[data-open="true"] .project-open-menu-button {
+  color: #17202b;
+  background: rgba(24, 34, 48, 0.07);
+}
+
+.conversation-header .conversation-action-group {
+  color: var(--text-muted);
+  border-color: color-mix(in srgb, var(--line) 64%, transparent);
+  background: color-mix(in srgb, var(--surface-panel) 66%, transparent);
+}
+
+.conversation-header .conversation-tools .icon-button,
+.conversation-header .project-open-main,
+.conversation-header .project-open-menu-button,
+.conversation-header .workspace-tools-trigger,
+.conversation-header .conversation-options-button,
+:root:not([data-theme="light"]) .conversation-header .conversation-tools .icon-button,
+:root:not([data-theme="light"]) .conversation-header .project-open-main,
+:root:not([data-theme="light"]) .conversation-header .project-open-menu-button,
+:root:not([data-theme="light"]) .conversation-header .workspace-tools-trigger,
+:root:not([data-theme="light"]) .conversation-header .conversation-options-button,
+:root[data-theme="light"] .conversation-header .conversation-tools .icon-button,
+:root[data-theme="light"] .conversation-header .project-open-main,
+:root[data-theme="light"] .conversation-header .project-open-menu-button,
+:root[data-theme="light"] .conversation-header .workspace-tools-trigger,
+:root[data-theme="light"] .conversation-header .conversation-options-button {
+  color: var(--text-muted);
+  border: 0;
+  background: transparent;
+}
+
+.conversation-header .conversation-tools .icon-button:hover,
+.conversation-header .conversation-tools .icon-button[data-pressed="true"],
+.conversation-header .project-open-main:hover:not(:disabled),
+.conversation-header .project-open-menu-button:hover:not(:disabled),
+.conversation-header .project-open-control[data-open="true"] .project-open-main,
+.conversation-header .project-open-control[data-open="true"] .project-open-menu-button,
+.conversation-header .workspace-tools-trigger:hover,
+.conversation-header .workspace-tools-control[data-open="true"] .workspace-tools-trigger,
+.conversation-header .workspace-tools-trigger[data-active="true"],
+.conversation-header .conversation-options-button:hover,
+.conversation-header .conversation-menu-anchor[data-open="true"] .conversation-options-button,
+:root:not([data-theme="light"]) .conversation-header .conversation-tools .icon-button:hover,
+:root:not([data-theme="light"]) .conversation-header .conversation-tools .icon-button[data-pressed="true"],
+:root:not([data-theme="light"]) .conversation-header .project-open-main:hover:not(:disabled),
+:root:not([data-theme="light"]) .conversation-header .project-open-menu-button:hover:not(:disabled),
+:root:not([data-theme="light"]) .conversation-header .project-open-control[data-open="true"] .project-open-main,
+:root:not([data-theme="light"]) .conversation-header .project-open-control[data-open="true"] .project-open-menu-button,
+:root:not([data-theme="light"]) .conversation-header .workspace-tools-trigger:hover,
+:root:not([data-theme="light"]) .conversation-header .workspace-tools-control[data-open="true"] .workspace-tools-trigger,
+:root:not([data-theme="light"]) .conversation-header .workspace-tools-trigger[data-active="true"],
+:root:not([data-theme="light"]) .conversation-header .conversation-options-button:hover,
+:root:not([data-theme="light"]) .conversation-header .conversation-menu-anchor[data-open="true"] .conversation-options-button,
+:root[data-theme="light"] .conversation-header .conversation-tools .icon-button:hover,
+:root[data-theme="light"] .conversation-header .conversation-tools .icon-button[data-pressed="true"],
+:root[data-theme="light"] .conversation-header .project-open-main:hover:not(:disabled),
+:root[data-theme="light"] .conversation-header .project-open-menu-button:hover:not(:disabled),
+:root[data-theme="light"] .conversation-header .project-open-control[data-open="true"] .project-open-main,
+:root[data-theme="light"] .conversation-header .project-open-control[data-open="true"] .project-open-menu-button,
+:root[data-theme="light"] .conversation-header .workspace-tools-control[data-open="true"] .workspace-tools-trigger,
+:root[data-theme="light"] .conversation-header .workspace-tools-trigger[data-active="true"],
+:root[data-theme="light"] .conversation-header .conversation-options-button:hover,
+:root[data-theme="light"] .conversation-header .conversation-menu-anchor[data-open="true"] .conversation-options-button {
+  color: var(--text);
+  border: 0;
+  background: var(--hover);
+}
+
+.conversation-header .conversation-tool-run {
+  color: var(--green);
+}
+
+.conversation-header .workspace-tools-trigger[data-active="true"] {
+  color: var(--blue);
+}
+
 :root[data-theme="light"] .conversation-frame,
 :root[data-theme="light"] .settings-page,
-:root[data-theme="light"] .apps-page,
 :root[data-theme="light"] .plugin-page,
 :root[data-theme="light"] .weather-radar-page {
   box-shadow:

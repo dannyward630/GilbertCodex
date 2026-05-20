@@ -90,20 +90,22 @@ export function ProvidersSettingsPage({
             </label>
           ) : null}
 
-          <label className="settings-field">
-            <span>{activeProvider.baseUrlLabel}</span>
-            <div className="settings-url-row">
-              <input
-                autoComplete="off"
-                placeholder={activeProvider.baseUrlPlaceholder}
-                value={activeProviderBaseUrl}
-                onChange={(event) => onUpdateActiveProviderBaseUrl(event.target.value)}
-              />
-              <button type="button" onClick={() => onUpdateActiveProviderBaseUrl(getDefaultBaseUrlForProvider(settings.provider))}>
-                Default
-              </button>
-            </div>
-          </label>
+          {!isSubscriptionsProvider ? (
+            <label className="settings-field">
+              <span>{activeProvider.baseUrlLabel}</span>
+              <div className="settings-url-row">
+                <input
+                  autoComplete="off"
+                  placeholder={activeProvider.baseUrlPlaceholder}
+                  value={activeProviderBaseUrl}
+                  onChange={(event) => onUpdateActiveProviderBaseUrl(event.target.value)}
+                />
+                <button type="button" onClick={() => onUpdateActiveProviderBaseUrl(getDefaultBaseUrlForProvider(settings.provider))}>
+                  Default
+                </button>
+              </div>
+            </label>
+          ) : null}
 
           <div className="settings-actions-row">
             <button className="settings-primary-button" type="button" disabled={testing} onClick={onTestConnection}>

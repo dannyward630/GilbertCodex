@@ -655,11 +655,11 @@ function throwIfSignalAborted(signal: AbortSignal | undefined) {
   throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
 }
 
-function createProviderFetchError(providerId: ModelProviderId, providerLabel: string, url: string, error: unknown) {
+function createProviderFetchError(providerId: ModelProviderId, _providerLabel: string, _url: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
 
   if (providerId === "9router" && /failed to fetch|load failed|networkerror|request failed|connection refused|could not connect/i.test(message)) {
-    return new Error(`Could not reach subscriptions at ${url}. Open Subscriptions, then retry.`);
+    return new Error("Could not reach subscriptions. Open Subscriptions, then retry.");
   }
 
   return error;

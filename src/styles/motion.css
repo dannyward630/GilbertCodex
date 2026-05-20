@@ -27,6 +27,7 @@
   display: grid;
   min-width: 0;
   min-height: 0;
+  contain: layout paint;
 }
 
 .voice-waveform {
@@ -57,12 +58,6 @@
   }
 }
 
-@keyframes gil-fade-out {
-  to {
-    opacity: 0;
-  }
-}
-
 @keyframes gil-pop-in {
   0% {
     opacity: 0;
@@ -77,18 +72,6 @@
   100% {
     opacity: 1;
     transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes gil-pop-out {
-  0% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(0, 6px, 0);
   }
 }
 
@@ -112,29 +95,58 @@
 @keyframes gil-side-panel-in {
   0% {
     opacity: 0;
-    transform: translate3d(16px, 0, 0);
+    transform: translate3d(18px, 8px, 0) scale(0.982);
   }
 
   70% {
     opacity: 1;
-    transform: translate3d(-1px, 0, 0);
+    transform: translate3d(-1px, -1px, 0) scale(1.002);
   }
 
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 @keyframes gil-side-panel-out {
   0% {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 
   100% {
     opacity: 0;
-    transform: translate3d(16px, 0, 0);
+    transform: translate3d(18px, 8px, 0) scale(0.986);
+  }
+}
+
+@keyframes gil-terminal-panel-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) scale(0.985);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.003);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes gil-terminal-panel-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 22px, 0) scale(0.986);
   }
 }
 
@@ -400,20 +412,22 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .desktop-root {
+    transition: none;
+  }
+
   .workspace-shell {
-    transition:
-      column-gap 360ms var(--motion-ease-soft),
-      grid-template-columns 360ms var(--motion-ease-soft);
+    transition: none;
   }
 
   .workspace-shell[data-sidebar-state="open"] .app-main {
-    animation: gil-main-settle 340ms var(--motion-ease-soft) both;
+    animation: none;
     transform-origin: left center;
   }
 
   .workspace-shell[data-sidebar-state="closing"] .app-main,
   .workspace-shell[data-sidebar-state="closed"] .app-main {
-    animation: gil-main-close-settle 340ms var(--motion-ease-soft) both;
+    animation: none;
     transform-origin: left center;
   }
 
@@ -424,7 +438,7 @@
 
   .conversation-body,
   .desktop-root[data-runtime="desktop"] .conversation-body {
-    transition: grid-template-columns 340ms var(--motion-ease-soft);
+    transition: none;
   }
 
   .conversation-body[data-browser-resizing="true"],
@@ -434,7 +448,7 @@
 
   .route-panel[data-active="true"] > .conversation-frame,
   .route-panel[data-active="true"] > .settings-page {
-    animation: gil-page-enter 300ms var(--motion-ease-soft) both;
+    animation: none;
     backface-visibility: hidden;
     transform: translate3d(0, 0, 0);
   }
@@ -553,7 +567,6 @@
 
   .topbar-menu-panel,
   .conversation-options-menu,
-  .message-action-menu,
   .sidebar-item-menu,
   .composer-popover,
   .composer-submenu,
@@ -599,7 +612,7 @@
       0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent);
   }
 
-  .composer-queue-tray,
+  .composer-steering-tray,
   .composer-change-strip,
   .composer-attachments,
   .composer-status,
@@ -608,7 +621,9 @@
     animation: gil-pop-in 260ms var(--motion-ease-soft) both;
   }
 
-  .composer-queue-row,
+  .composer-steering-row,
+  .composer-steering-action,
+  .composer-steering-icon,
   .attachment-chip,
   .composer-menu-item,
   .composer-submenu button,
@@ -651,6 +666,7 @@
   .project-toggle,
   .local-toggle,
   .branch-toggle,
+  .workspace-toggle,
   .context-window-chip,
   .browser-preview-icon-button,
   .browser-preview-icon-link,
@@ -675,6 +691,7 @@
   .project-toggle:hover,
   .local-toggle:hover,
   .branch-toggle:hover,
+  .workspace-toggle:hover,
   .context-window-chip:hover,
   .browser-preview-icon-button:hover:not(:disabled),
   .browser-preview-icon-link:hover,
@@ -693,6 +710,7 @@
   .project-toggle:active,
   .local-toggle:active,
   .branch-toggle:active,
+  .workspace-toggle:active,
   .context-window-chip:active,
   .browser-preview-icon-button:active:not(:disabled),
   .browser-preview-window-actions button:active:not(:disabled),
@@ -719,7 +737,9 @@
   .project-toggle svg,
   .local-toggle svg,
   .branch-toggle svg,
-  .context-window-chip svg {
+  .workspace-toggle svg,
+  .context-window-chip svg,
+  .context-window-ring {
     transition: transform var(--motion-fast) var(--motion-ease-pop);
   }
 
@@ -728,7 +748,9 @@
   .project-toggle[data-active="true"] svg,
   .local-toggle[data-active="true"] svg,
   .branch-toggle[data-active="true"] svg,
-  .context-window-chip[data-active="true"] svg {
+  .workspace-toggle[data-active="true"] svg,
+  .context-window-chip[data-active="true"] svg,
+  .context-window-chip[data-active="true"] .context-window-ring {
     transform: scale(1.025);
   }
 
@@ -812,8 +834,11 @@
 
   .side-panel-presence[data-presence="enter"] .right-rail,
   .side-panel-presence[data-presence="enter"] .git-review-panel,
+  .side-panel-presence[data-presence="enter"] .coding-sidecar-panel,
   .side-panel-presence[data-presence="enter"] .browser-preview-panel {
-    animation: gil-side-panel-in 340ms var(--motion-ease-soft) both;
+    animation: gil-side-panel-in 180ms var(--motion-ease-soft) both;
+    backface-visibility: hidden;
+    transform-origin: right 24px;
     will-change: transform, opacity;
   }
 
@@ -823,8 +848,29 @@
 
   .side-panel-presence[data-presence="exit"] .right-rail,
   .side-panel-presence[data-presence="exit"] .git-review-panel,
+  .side-panel-presence[data-presence="exit"] .coding-sidecar-panel,
   .side-panel-presence[data-presence="exit"] .browser-preview-panel {
-    animation: gil-side-panel-out 220ms var(--motion-ease) both;
+    animation: gil-side-panel-out 140ms var(--motion-ease) both;
+    backface-visibility: hidden;
+    transform-origin: right 24px;
+    will-change: transform, opacity;
+  }
+
+  .terminal-presence[data-presence="enter"] .terminal-panel {
+    animation: gil-terminal-panel-in 180ms var(--motion-ease-soft) both;
+    backface-visibility: hidden;
+    transform-origin: bottom center;
+    will-change: transform, opacity;
+  }
+
+  .terminal-presence[data-presence="exit"] {
+    pointer-events: none;
+  }
+
+  .terminal-presence[data-presence="exit"] .terminal-panel {
+    animation: gil-terminal-panel-out 140ms var(--motion-ease) both;
+    backface-visibility: hidden;
+    transform-origin: bottom center;
     will-change: transform, opacity;
   }
 
@@ -832,8 +878,10 @@
   .browser-preview-panel[data-expanded="true"],
   .side-panel-presence[data-presence="enter"] .git-review-panel[data-expanded="true"],
   .git-review-panel[data-expanded="true"],
+  .side-panel-presence[data-presence="enter"] .coding-sidecar-panel[data-expanded="true"],
+  .coding-sidecar-panel[data-expanded="true"],
   .conversation-body[data-plan-review-expanded="true"] .right-rail {
-    animation: gil-browser-expand 280ms var(--motion-ease-soft) both;
+    animation: gil-browser-expand 180ms var(--motion-ease-soft) both;
     transform-origin: right center;
     will-change: transform, opacity;
   }
@@ -859,7 +907,7 @@
 
   .empty-chat-suggestions button:hover,
   .empty-chat-suggestions button:focus-visible {
-    transform: translateX(3px) scale(1.002);
+    transform: translateY(-1px) scale(1.002);
   }
 
   .plan-review-response[data-state="streaming"] {

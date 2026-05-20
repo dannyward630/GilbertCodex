@@ -21,6 +21,7 @@ import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import { recordModelProviderUsage } from "../../../services/usageTracker";
 
 export function compactProviderMessages(deps: WorkspaceRuntimeDeps, messages: ChatMessage[], settingsOverride: ProviderSettings, options: { target?: number; threshold?: number; toolBridge?: ProviderToolBridgeOptions }) {
   const { AUTO_COMPACT_CONTEXT_TARGET, AUTO_COMPACT_CONTEXT_THRESHOLD, compactMessagesForContext, createToolAwareProviderSettings, estimateModelProviderPayloadUsage, getProviderCompactionBaseline, recordContextCompaction, resolveContextWindowForModel } = deps;
@@ -152,12 +153,29 @@ export function createContextBoundLocalToolExecutionPolicy(deps: WorkspaceRuntim
     };
   }
 
-export function getModelVisibleToolResultCharBudget(deps: WorkspaceRuntimeDeps, contextWindowTokens: number) {
+export function getModelVisibleToolResultCharBudget(deps: WorkspaceRuntimeDeps, contextWindowTokens: number, settingsOverride?: ProviderSettings) {
 
-    const tokenBudget = Math.min(Math.max(Math.floor(contextWindowTokens * 0.2), 6_000), 60_000);
+    const level = settingsOverride?.subscriptionOptimization?.tokenSaverLevel ?? deps.providerSettings.subscriptionOptimization?.tokenSaverLevel ?? "low";
+    const budget = getTokenSaverToolResultBudget(level);
+    const tokenBudget = Math.min(Math.max(Math.floor(contextWindowTokens * budget.ratio), budget.minTokens), budget.maxTokens);
 
     return tokenBudget * 4;
   }
+
+function getTokenSaverToolResultBudget(level: ProviderSettings["subscriptionOptimization"]["tokenSaverLevel"]) {
+  switch (level) {
+    case "max":
+      return { maxTokens: 20_000, minTokens: 3_000, ratio: 0.08 };
+    case "high":
+      return { maxTokens: 32_000, minTokens: 4_000, ratio: 0.12 };
+    case "medium":
+      return { maxTokens: 48_000, minTokens: 5_000, ratio: 0.16 };
+    case "off":
+    case "low":
+    default:
+      return { maxTokens: 60_000, minTokens: 6_000, ratio: 0.2 };
+  }
+}
 
 export function minNullableCharCap(deps: WorkspaceRuntimeDeps, cap: number | null, budget: number) {
 
@@ -324,17 +342,24 @@ export function recordProviderActualUsage(deps: WorkspaceRuntimeDeps, chatId: st
     const previousCompactedCount = previousRecord?.compactedMessageCount ?? 0;
     const compactedMessageCount = countAutoCompactedProviderMessages(messages);
     const allowDecrease = Boolean(options.allowDecrease || compactedMessageCount > previousCompactedCount);
+    const measuredUsage = preserveContextUsageHighWaterMark(
+      applyProviderUsageToContextEstimate(estimateProviderContextUsageForDisplay(messages, settings, options), usage),
+      previousUsage,
+      { allowDecrease },
+    );
     const nextUsage = {
       chatId,
       compactedMessageCount,
-      usage: preserveContextUsageHighWaterMark(
-        applyProviderUsageToContextEstimate(estimateProviderContextUsageForDisplay(messages, settings, options), usage),
-        previousUsage,
-        { allowDecrease },
-      ),
+      usage: measuredUsage,
     };
     lastProviderContextUsageRef.current = nextUsage;
     setLastProviderContextUsage(nextUsage);
+    recordModelProviderUsage({
+      chatId,
+      measuredUsage,
+      rawUsage: usage,
+      settings,
+    });
   }
 
 export function estimateProviderContextUsageForDisplay(deps: WorkspaceRuntimeDeps, messages: ChatMessage[], settings: ProviderSettings, options: { stream?: boolean; toolBridge?: ProviderToolBridgeOptions }) {
@@ -392,7 +417,7 @@ export function recordPlanningProviderUsage(deps: WorkspaceRuntimeDeps, chatId: 
   }
 
 export function createChatProviderSettings(deps: WorkspaceRuntimeDeps, chat: ChatSummary | null | undefined, overrides: Partial<ProviderSettings>): ProviderSettings {
-  const { getModelProvider, isModelProviderId, providerSettings } = deps;
+  const { generalSettings, getModelProvider, isModelProviderId, providerSettings } = deps;
 
     const baseSettings = {
       ...providerSettings,
@@ -417,6 +442,7 @@ export function createChatProviderSettings(deps: WorkspaceRuntimeDeps, chat: Cha
 
     return {
       ...baseSettings,
+      agentEnvironment: generalSettings.agentEnvironment,
       model,
       provider,
       providerModels: {
@@ -479,19 +505,8 @@ export function hasRequestScopedWorkspaceToolsEnabled(deps: WorkspaceRuntimeDeps
   }
 
 export function createPromptAwareThinkingSettings(deps: WorkspaceRuntimeDeps, thinking: ProviderSettings["thinking"], prompt: string): ProviderSettings["thinking"] {
-  const { shouldUseLighterThinkingForPrompt } = deps;
-
-    if (!thinking.enabled || !shouldUseLighterThinkingForPrompt(prompt)) {
-      return thinking;
-    }
-
-    if (thinking.effort === "high" || thinking.effort === "medium") {
-      return {
-        ...thinking,
-        effort: "low",
-      };
-    }
-
+  void deps;
+  void prompt;
     return thinking;
   }
 
@@ -552,14 +567,24 @@ export function createFinalOnlyProviderSettings(deps: WorkspaceRuntimeDeps, prom
       : settings;
   }
 
-export function rememberSessionApprovalDecision(deps: WorkspaceRuntimeDeps, approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings) {
-  const { createApprovalSessionDecisionKey, createApprovalWorkspaceSessionKey, sessionApprovalDecisionsRef } = deps;
+function createApprovalChatSessionKey(deps: WorkspaceRuntimeDeps, workspaceSettings: LocalWorkspaceSettings, chatId?: string) {
+  const { activeChat, createApprovalWorkspaceSessionKey } = deps;
+  const resolvedChatId = chatId ?? activeChat?.id ?? "active-chat";
+
+  return JSON.stringify({
+    chatId: resolvedChatId,
+    workspace: createApprovalWorkspaceSessionKey(workspaceSettings),
+  });
+}
+
+export function rememberSessionApprovalDecision(deps: WorkspaceRuntimeDeps, approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings, chatId?: string) {
+  const { createApprovalSessionDecisionKey, sessionApprovalDecisionsRef } = deps;
 
     if (decision.scope !== "session" || decision.status === "denied" || approval.tool === "planning_handoff") {
       return;
     }
 
-    const workspaceKey = createApprovalWorkspaceSessionKey(workspaceSettings);
+    const workspaceKey = createApprovalChatSessionKey(deps, workspaceSettings, chatId);
     const workspaceDecisions = sessionApprovalDecisionsRef.current[workspaceKey] ?? {};
     const exactDecision: AgentApprovalDecision = {
       editedArgs: decision.editedArgs,
@@ -585,10 +610,10 @@ export function rememberSessionApprovalDecision(deps: WorkspaceRuntimeDeps, appr
     };
   }
 
-export function createRuntimeApprovalDecisions(deps: WorkspaceRuntimeDeps, workspaceSettings: LocalWorkspaceSettings, approvalDecisions: Record<string, AgentApprovalDecision>) {
-  const { createApprovalWorkspaceSessionKey, sessionApprovalDecisionsRef } = deps;
+export function createRuntimeApprovalDecisions(deps: WorkspaceRuntimeDeps, workspaceSettings: LocalWorkspaceSettings, approvalDecisions?: Record<string, AgentApprovalDecision>, chatId?: string) {
+  const { sessionApprovalDecisionsRef } = deps;
 
-    const sessionDecisions = sessionApprovalDecisionsRef.current[createApprovalWorkspaceSessionKey(workspaceSettings)] ?? {};
+    const sessionDecisions = sessionApprovalDecisionsRef.current[createApprovalChatSessionKey(deps, workspaceSettings, chatId)] ?? {};
 
     if (Object.keys(sessionDecisions).length === 0) {
       return approvalDecisions;

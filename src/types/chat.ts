@@ -1,4 +1,4 @@
-import type { ModelProviderId, ReasoningEffort } from "./settings";
+import type { AppFollowUpBehavior, ModelProviderId, ReasoningEffort } from "./settings";
 import type { LocalWorkspaceSettings } from "./localWorkspace";
 import type { TerminalShellId } from "./terminal";
 import type { WebSearchProvider } from "./settings";
@@ -276,6 +276,7 @@ export interface ChatMessage {
   content: string;
   contextCompactions?: ChatContextCompaction[];
   createdAt: string;
+  feedback?: "disliked" | "liked";
   id: string;
   isStreaming?: boolean;
   mode?: ChatMessageMode;
@@ -297,6 +298,7 @@ export interface ChatMessage {
 export interface ChatSendInput {
   attachments: ChatAttachment[];
   content: string;
+  followUpBehavior?: AppFollowUpBehavior;
   localWorkspace?: LocalWorkspaceSettings;
   mode?: ChatMessageMode;
   planning?: Record<string, never>;

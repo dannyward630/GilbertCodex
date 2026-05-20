@@ -1,4 +1,4 @@
-$root = 'C:\Users\Kobe Work\Documents\GilbertCodex'
+$root = Split-Path -Parent $PSScriptRoot
 $exclude = @('node_modules','target','dist','.git','.github','docs','public','scripts')
 $exts = @('*.ts','*.tsx','*.rs','*.css','*.mjs','*.ps1','*.html','*.md','*.json','*.toml')
 

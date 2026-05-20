@@ -10,16 +10,122 @@
       (() => {
         try {
           const storedMode = window.localStorage.getItem("gilbert-codex.appearance.v1");
+          const storedAppearance = window.localStorage.getItem("gilbert-codex.appearance-settings.v1");
           const mode = storedMode === "light" || storedMode === "dark" || storedMode === "system" ? storedMode : "system";
           const prefersLight = window.matchMedia?.("(prefers-color-scheme: light)").matches ?? false;
           const resolvedTheme = mode === "system" ? (prefersLight ? "light" : "dark") : mode;
+          const defaultFont = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          const defaultCodeFont = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+          const defaults = {
+            codeFontSize: 12,
+            dark: { accent: "#339CFF", background: "#181818", codeFont: defaultCodeFont, foreground: "#FFFFFF", uiFont: defaultFont, visualEffect: "none" },
+            light: { accent: "#339CFF", background: "#FFFFFF", codeFont: defaultCodeFont, foreground: "#1A1C1F", uiFont: defaultFont, visualEffect: "none" },
+            reduceMotion: "system",
+            uiFontSize: 14,
+            usePointerCursor: true,
+          };
+          const rawAppearance = storedAppearance ? JSON.parse(storedAppearance) : {};
+          const parsedAppearance = rawAppearance && typeof rawAppearance === "object" ? rawAppearance : {};
+          const appearance = {
+            ...defaults,
+            ...parsedAppearance,
+            dark: { ...defaults.dark, ...(parsedAppearance.dark || {}) },
+            light: { ...defaults.light, ...(parsedAppearance.light || {}) },
+          };
+          const theme = appearance[resolvedTheme] || defaults[resolvedTheme];
+          const componentColors = theme.componentColors && typeof theme.componentColors === "object" ? theme.componentColors : {};
+          const component = (key, fallback) => (typeof componentColors[key] === "string" ? componentColors[key] : fallback);
+          const effectNames = new Set(["aurora", "circuit", "confetti", "constellation", "dawn", "embers", "matrix", "neon", "none", "ocean", "prism", "scanlines", "spotlight"]);
+          const visualEffect = effectNames.has(theme.visualEffect) ? theme.visualEffect : "none";
+          const setVar = (name, value) => document.documentElement.style.setProperty(name, value);
 
           document.documentElement.dataset.theme = resolvedTheme;
           document.documentElement.dataset.themePreference = mode;
+          document.documentElement.dataset.pointerCursors = appearance.usePointerCursor === false ? "false" : "true";
+          document.documentElement.dataset.reduceMotion = appearance.reduceMotion === "on" || appearance.reduceMotion === "off" ? appearance.reduceMotion : "system";
+          document.documentElement.dataset.themeEffect = visualEffect;
           document.documentElement.style.colorScheme = resolvedTheme;
+          document.documentElement.style.color = theme.foreground;
+          document.documentElement.style.background = theme.background;
+          setVar("--font-ui", theme.uiFont);
+          setVar("--font-display", theme.uiFont);
+          setVar("--font-mono", theme.codeFont);
+          setVar("--ui-font-size", `${appearance.uiFontSize || 14}px`);
+          setVar("--code-font-size", `${appearance.codeFontSize || 12}px`);
+          setVar("--blue", theme.accent);
+          setVar("--accent", "var(--blue)");
+          setVar("--app-bg", component("appBackground", theme.background));
+          setVar("--apps-bg", component("appsBackground", theme.background));
+          setVar("--apps-bg-glow", component("appsBackgroundGlow", component("warning", theme.accent)));
+          setVar("--apps-panel", component("appsPanel", component("panel", theme.background)));
+          setVar("--apps-panel-raised", component("appsPanelRaised", component("surfaceRaised", theme.background)));
+          setVar("--apps-border", component("appsBorder", component("border", theme.background)));
+          setVar("--apps-control-bg", component("appsControl", component("field", theme.background)));
+          setVar("--apps-control-hover", component("appsControlHover", component("surfaceSoft", theme.background)));
+          setVar("--apps-accent", component("appsAccent", theme.accent));
+          setVar("--apps-accent-soft", component("appsAccentSoft", component("surfaceSoft", theme.background)));
+          setVar("--apps-primary-text", component("appsPrimaryText", theme.foreground));
+          setVar("--apps-success", component("appsSuccess", component("success", theme.accent)));
+          setVar("--apps-warning", component("appsWarning", component("warning", theme.accent)));
+          setVar("--apps-installed", component("appsInstalled", component("violet", theme.accent)));
+          setVar("--apps-danger", component("appsDanger", component("danger", theme.accent)));
+          setVar("--workspace-bg", component("appBackground", theme.background));
+          setVar("--chat-page-bg", component("pageBackground", theme.background));
+          setVar("--chat-page-bg-2", component("pageBackgroundAlt", theme.background));
+          setVar("--chrome", component("chrome", theme.background));
+          setVar("--chrome-border", component("chromeBorder", theme.background));
+          setVar("--sidebar", component("sidebar", theme.background));
+          setVar("--sidebar-warm", component("sidebarWarm", theme.background));
+          setVar("--sidebar-border", component("sidebarBorder", theme.background));
+          setVar("--surface", component("surface", theme.background));
+          setVar("--surface-panel", component("panel", theme.background));
+          setVar("--surface-raised", component("surfaceRaised", theme.background));
+          setVar("--surface-soft", component("surfaceSoft", theme.background));
+          setVar("--terminal-panel-bg", component("terminalPanel", component("panel", theme.background)));
+          setVar("--terminal-border", component("terminalBorder", component("border", theme.background)));
+          setVar("--terminal-rail-bg", component("terminalRail", component("sidebar", theme.background)));
+          setVar("--terminal-toolbar-bg", component("terminalToolbar", component("surfaceRaised", theme.background)));
+          setVar("--terminal-output-bg", component("terminalOutput", component("field", theme.background)));
+          setVar("--terminal-control-bg", component("terminalControl", component("field", theme.background)));
+          setVar("--terminal-control-hover", component("terminalControlHover", component("surfaceSoft", theme.background)));
+          setVar("--terminal-text", component("terminalText", theme.foreground));
+          setVar("--terminal-muted", component("terminalMuted", component("textDim", theme.foreground)));
+          setVar("--terminal-accent", component("terminalAccent", theme.accent));
+          setVar("--terminal-command", component("terminalCommand", component("cyan", theme.accent)));
+          setVar("--terminal-error", component("terminalError", component("danger", theme.accent)));
+          setVar("--terminal-success", component("success", theme.accent));
+          setVar("--terminal-warning", component("warning", theme.accent));
+          setVar("--terminal-cursor", component("terminalCursor", theme.accent));
+          setVar("--terminal-cursor-accent", component("terminalOutput", theme.background));
+          setVar("--terminal-selection-bg", component("terminalSelection", theme.accent));
+          setVar("--terminal-selection-fg", component("terminalText", theme.foreground));
+          setVar("--terminal-scrollbar-thumb", `color-mix(in srgb, ${component("terminalText", theme.foreground)} ${resolvedTheme === "light" ? 24 : 30}%, transparent)`);
+          setVar("--field-bg", component("field", theme.background));
+          setVar("--field-border", component("fieldBorder", theme.background));
+          setVar("--composer-bg", component("composer", theme.background));
+          setVar("--composer-bg-2", component("composerAlt", theme.background));
+          setVar("--composer-border", component("composerBorder", theme.background));
+          setVar("--popover-bg", component("popover", theme.background));
+          setVar("--popover-border", component("popoverBorder", theme.background));
+          setVar("--line", component("border", theme.background));
+          setVar("--line-soft", component("borderSoft", theme.background));
+          setVar("--border", component("border", theme.background));
+          setVar("--theme-effect-blend", resolvedTheme === "light" ? "multiply" : "screen");
+          setVar("--theme-effect-color", theme.accent);
+          setVar("--theme-effect-color-2", component("cyan", theme.accent));
+          setVar("--theme-effect-color-3", component("rose", theme.accent));
+          setVar("--theme-effect-opacity", visualEffect === "none" ? "0" : resolvedTheme === "light" ? "0.12" : "0.17");
+          setVar("--theme-effect-speed", "24s");
+          setVar("--text", theme.foreground);
+          setVar("--text-muted", component("textMuted", theme.foreground));
+          setVar("--text-dim", component("textDim", theme.foreground));
+          setVar("--chrome-text", theme.foreground);
         } catch {
           document.documentElement.dataset.theme = "dark";
           document.documentElement.dataset.themePreference = "system";
+          document.documentElement.dataset.pointerCursors = "true";
+          document.documentElement.dataset.reduceMotion = "system";
+          document.documentElement.dataset.themeEffect = "none";
           document.documentElement.style.colorScheme = "dark";
         }
       })();

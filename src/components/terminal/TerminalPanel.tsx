@@ -6,11 +6,13 @@ import "../../styles/terminal.css";
 import { ChevronsUpDown, FolderOpen, PanelBottomClose, Plus, RotateCw, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { createTerminalSession, drainTerminalSession, killTerminalSession, resizeTerminalSession, writeTerminalSession } from "../../app/tauriClient";
 import { listComputerDrives, pickComputerFolder } from "../../localWorkspace/files";
+import { subscribeBackgroundTerminalSessionOutput } from "../../lib/terminalSessions";
 import { getAvailableTerminalShells, getDefaultTerminalShell, getHostPlatform, terminalShellLabel } from "../../lib/terminalShells";
 import type { TerminalAttachedSession, TerminalOutputChunk, TerminalShellId } from "../../types/terminal";
 
 interface TerminalPanelProps {
   attachedSession?: TerminalAttachedSession | null;
+  defaultShell?: TerminalShellId;
   desktopRuntime: boolean;
   height: number;
   open: boolean;
@@ -48,7 +50,7 @@ const MAX_REPLAY_BUFFER_CHARS = 2_000_000;
 
 let terminalTabCounter = 0;
 
-const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
+const TERMINAL_THEME_FALLBACKS: Record<ResolvedTerminalTheme, ITheme> = {
   dark: {
     background: "#0d1117",
     black: "#141a22",
@@ -102,8 +104,9 @@ const XTERM_THEMES: Record<ResolvedTerminalTheme, ITheme> = {
   },
 };
 
-export function TerminalPanel({ attachedSession, desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
-  const [workspace, setWorkspaceState] = useState<TerminalWorkspaceState>(() => createInitialWorkspace(workingDirectory));
+export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, height, open, onClose, onHeightChange, workingDirectory }: TerminalPanelProps) {
+  const fallbackShell = defaultShell ?? getDefaultTerminalShell();
+  const [workspace, setWorkspaceState] = useState<TerminalWorkspaceState>(() => createInitialWorkspace(workingDirectory, fallbackShell));
   const [cwdMenuOpen, setCwdMenuOpen] = useState(false);
   const [cwdDraft, setCwdDraft] = useState("");
   const [cwdMenuError, setCwdMenuError] = useState<string | null>(null);
@@ -119,7 +122,6 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   const fitAddonRef = useRef<FitAddon | null>(null);
   const ownedSessionIdsRef = useRef(new Set<string>());
   const replayedAttachedSessionRef = useRef(new Set<string>());
-  const resolvedTerminalThemeRef = useRef<ResolvedTerminalTheme>(resolvedTerminalTheme);
   const startingTabIdsRef = useRef(new Set<string>());
   const tabOutputRef = useRef<Record<string, string>>(
     Object.fromEntries(workspace.tabs.map((tab) => [tab.id, ""])),
@@ -140,9 +142,8 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   }, [workspace.activeTabId]);
 
   useEffect(() => {
-    resolvedTerminalThemeRef.current = resolvedTerminalTheme;
     if (terminalRef.current) {
-      terminalRef.current.options.theme = { ...XTERM_THEMES[resolvedTerminalTheme] };
+      terminalRef.current.options.theme = readTerminalCssTheme();
     }
   }, [resolvedTerminalTheme]);
 
@@ -151,12 +152,19 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       return;
     }
 
-    const syncResolvedTheme = () => setResolvedTerminalTheme(readResolvedTerminalTheme());
+    const syncResolvedTheme = () => {
+      const nextTheme = readResolvedTerminalTheme();
+      setResolvedTerminalTheme(nextTheme);
+
+      if (terminalRef.current) {
+        terminalRef.current.options.theme = readTerminalCssTheme();
+      }
+    };
     const observer = new MutationObserver(syncResolvedTheme);
     const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
 
     syncResolvedTheme();
-    observer.observe(document.documentElement, { attributeFilter: ["data-theme"], attributes: true });
+    observer.observe(document.documentElement, { attributeFilter: ["data-theme", "style"], attributes: true });
     mediaQuery.addEventListener("change", syncResolvedTheme);
 
     return () => {
@@ -420,7 +428,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       rightClickSelectsWord: true,
       scrollback: 12_000,
       scrollOnUserInput: true,
-      theme: { ...XTERM_THEMES[resolvedTerminalThemeRef.current] },
+      theme: readTerminalCssTheme(),
       windowsPty: getHostPlatform() === "windows" ? { backend: "conpty" } : undefined,
     });
     const fitAddon = new FitAddon();
@@ -575,7 +583,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       .find((tab) => tab.sessionId === attachedSession.sessionId);
     const attachedTab =
       existingAttachedTab ??
-      createTerminalTab(attachedSession.workingDirectory ?? workingDirectory ?? "", attachedSession.shell ?? getDefaultTerminalShell(), {
+      createTerminalTab(attachedSession.workingDirectory ?? workingDirectory ?? "", attachedSession.shell ?? fallbackShell, {
         activeCommand: attachedSession.command ?? null,
         attached: true,
         owned: false,
@@ -616,6 +624,28 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   }, [attachedSession, desktopRuntime, replayTabOutput, selectTab, updateTab, workingDirectory]);
 
   useEffect(() => {
+    const attachedTabs = Object.values(workspaceCacheRef.current)
+      .flatMap((projectWorkspace) => projectWorkspace.tabs)
+      .filter((tab) => tab.attached && tab.sessionId);
+
+    if (attachedTabs.length === 0) {
+      return;
+    }
+
+    const unsubscribe = attachedTabs.map((tab) =>
+      subscribeBackgroundTerminalSessionOutput(tab.sessionId!, (chunks) => {
+        appendTabChunks(tab.id, chunks);
+      }),
+    );
+
+    return () => {
+      for (const stop of unsubscribe) {
+        stop();
+      }
+    };
+  }, [appendTabChunks, workspace]);
+
+  useEffect(() => {
     workspaceCacheRef.current[activeProjectKeyRef.current] = workspace;
   }, [workspace]);
 
@@ -627,7 +657,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       return;
     }
 
-    const nextWorkspace = workspaceCacheRef.current[nextProjectKey] ?? createInitialWorkspace(nextWorkingDirectory);
+    const nextWorkspace = workspaceCacheRef.current[nextProjectKey] ?? createInitialWorkspace(nextWorkingDirectory, fallbackShell);
     workspaceCacheRef.current[nextProjectKey] = nextWorkspace;
     activeProjectKeyRef.current = nextProjectKey;
     activeTabIdRef.current = nextWorkspace.activeTabId;
@@ -735,7 +765,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
     terminalRef.current?.clear();
   }
 
-  function createNewTab(startDirectory = activeTab?.workingDirectory ?? workingDirectory ?? "", shell = activeTab?.shell ?? getDefaultTerminalShell()) {
+  function createNewTab(startDirectory = activeTab?.workingDirectory ?? workingDirectory ?? "", shell = activeTab?.shell ?? fallbackShell) {
     const tab = createTerminalTab(startDirectory, shell);
     tabOutputRef.current[tab.id] = "";
     activeTabIdRef.current = tab.id;
@@ -771,7 +801,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
       const nextTabs = current.tabs.filter((candidate) => candidate.id !== tabId);
 
       if (nextTabs.length === 0) {
-        const replacement = createTerminalTab(workingDirectory ?? "", getDefaultTerminalShell());
+        const replacement = createTerminalTab(workingDirectory ?? "", fallbackShell);
         tabOutputRef.current[replacement.id] = "";
         activeTabIdRef.current = replacement.id;
         return { activeTabId: replacement.id, tabs: [replacement] };
@@ -1006,7 +1036,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
             <label className="terminal-shell-select">
               <span className="sr-only">Shell</span>
               <select
-                value={activeTab?.shell ?? getDefaultTerminalShell()}
+                value={activeTab?.shell ?? fallbackShell}
                 onChange={(event) => {
                   if (activeTab) {
                     updateTab(activeTab.id, { shell: event.target.value as TerminalShellId });
@@ -1031,7 +1061,7 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
               <button type="button" aria-label="Clear terminal output" title="Clear terminal output" disabled={!activeTab} onClick={clearActiveTerminal}>
                 <Trash2 size={16} aria-hidden="true" />
               </button>
-              <button type="button" aria-label="Close terminal" title="Close terminal" onClick={onClose}>
+              <button type="button" aria-label="Hide terminal" title="Hide terminal" onClick={onClose}>
                 <PanelBottomClose size={17} aria-hidden="true" />
               </button>
             </div>
@@ -1045,8 +1075,8 @@ export function TerminalPanel({ attachedSession, desktopRuntime, height, open, o
   );
 }
 
-function createInitialWorkspace(workingDirectory?: string): TerminalWorkspaceState {
-  const tab = createTerminalTab(workingDirectory ?? "");
+function createInitialWorkspace(workingDirectory?: string, shell: TerminalShellId = getDefaultTerminalShell()): TerminalWorkspaceState {
+  const tab = createTerminalTab(workingDirectory ?? "", shell);
 
   return {
     activeTabId: tab.id,
@@ -1194,6 +1224,56 @@ function readResolvedTerminalTheme(): ResolvedTerminalTheme {
   }
 
   return "dark";
+}
+
+function readTerminalCssTheme(): ITheme {
+  const resolvedTheme = readResolvedTerminalTheme();
+  const fallback = TERMINAL_THEME_FALLBACKS[resolvedTheme];
+
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return { ...fallback };
+  }
+
+  const styles = window.getComputedStyle(document.documentElement);
+  const readColor = (name: string, fallbackColor: string | undefined) => styles.getPropertyValue(name).trim() || fallbackColor || "";
+  const background = readColor("--terminal-output-bg", fallback.background);
+  const foreground = readColor("--terminal-text", fallback.foreground);
+  const muted = readColor("--terminal-muted", fallback.brightBlack);
+  const accent = readColor("--terminal-accent", fallback.blue);
+  const command = readColor("--terminal-command", fallback.cyan);
+  const success = readColor("--terminal-success", fallback.green);
+  const warning = readColor("--terminal-warning", fallback.yellow);
+  const danger = readColor("--terminal-error", fallback.red);
+  const violet = readColor("--violet", fallback.magenta);
+  const scrollbar = readColor("--terminal-scrollbar-thumb", fallback.scrollbarSliderBackground);
+
+  return {
+    ...fallback,
+    background,
+    black: readColor("--terminal-panel-bg", fallback.black),
+    blue: accent,
+    brightBlack: muted,
+    brightBlue: accent,
+    brightCyan: command,
+    brightGreen: success,
+    brightMagenta: violet,
+    brightRed: danger,
+    brightWhite: foreground,
+    brightYellow: warning,
+    cursor: readColor("--terminal-cursor", fallback.cursor),
+    cursorAccent: readColor("--terminal-cursor-accent", background),
+    cyan: command,
+    foreground,
+    green: success,
+    magenta: violet,
+    red: danger,
+    scrollbarSliderBackground: scrollbar,
+    scrollbarSliderHoverBackground: scrollbar,
+    selectionBackground: readColor("--terminal-selection-bg", fallback.selectionBackground),
+    selectionForeground: readColor("--terminal-selection-fg", fallback.selectionForeground),
+    white: foreground,
+    yellow: warning,
+  };
 }
 
 function trimReplayBuffer(value: string) {

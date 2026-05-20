@@ -8,6 +8,7 @@
 @import "./model-selector.css";
 @import "./thinking.css";
 @import "./inspector.css";
+@import "./coding-sidecar.css";
 @import "./git-review.css";
 @import "./browser-preview.css";
 @import "./search.css";
@@ -28,6 +29,25 @@
   display: none;
   width: 0;
   height: 0;
+}
+
+.coding-sidecar-content,
+.coding-file-list {
+  scrollbar-width: thin;
+  -ms-overflow-style: auto;
+}
+
+.coding-sidecar-content::-webkit-scrollbar,
+.coding-file-list::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.coding-sidecar-content::-webkit-scrollbar-thumb,
+.coding-file-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 72%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,3 +1,4 @@
+use crate::commands::auth;
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1032,6 +1033,7 @@ fn uninstall_nine_router_blocking(
 
     remove_app_data_path_if_exists(app, &nine_router_install_dir(app)?, "subscription runtime")?;
     remove_app_data_path_if_exists(app, &nine_router_data_dir(app)?, "subscription data")?;
+    remove_legacy_nine_router_data(app)?;
     remove_app_data_path_if_exists(
         app,
         &nine_router_preferences_path(app)?,
@@ -1039,8 +1041,18 @@ fn uninstall_nine_router_blocking(
     )?;
     remove_app_data_path_if_exists(
         app,
+        &legacy_nine_router_preferences_path(app)?,
+        "legacy subscription preferences",
+    )?;
+    remove_app_data_path_if_exists(
+        app,
         &nine_router_pid_path(app)?,
         "subscription process marker",
+    )?;
+    remove_app_data_path_if_exists(
+        app,
+        &legacy_nine_router_pid_path(app)?,
+        "legacy subscription process marker",
     )?;
 
     let running = is_nine_router_listening();
@@ -1207,9 +1219,12 @@ fn parse_nine_router_http_method(method: &str) -> Result<reqwest::Method, String
     match method.trim().to_ascii_uppercase().as_str() {
         "DELETE" => Ok(reqwest::Method::DELETE),
         "GET" => Ok(reqwest::Method::GET),
+        "PATCH" => Ok(reqwest::Method::PATCH),
         "POST" => Ok(reqwest::Method::POST),
+        "PUT" => Ok(reqwest::Method::PUT),
         _ => Err(
-            "9Router Local only supports GET, POST, and DELETE requests from Gilbert.".to_string(),
+            "9Router Local only supports GET, POST, PATCH, PUT, and DELETE requests from Gilbert."
+                .to_string(),
         ),
     }
 }
@@ -1291,20 +1306,207 @@ fn nine_router_install_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn nine_router_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = account_scoped_app_data_dir(app, "9router-data")?;
+    migrate_legacy_nine_router_data_dir(app, &data_dir)?;
+    Ok(data_dir)
+}
+
+fn nine_router_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let preferences_path =
+        account_scoped_app_data_dir(app, "nine-router")?.join("nine-router-local.json");
+    migrate_legacy_nine_router_preferences(app, &preferences_path)?;
+    Ok(preferences_path)
+}
+
+fn nine_router_pid_path(app: &AppHandle) -> Result<PathBuf, String> {
+    account_scoped_app_data_dir(app, "nine-router").map(|path| path.join("nine-router-local.pid"))
+}
+
+fn account_scoped_app_data_dir(app: &AppHandle, folder: &str) -> Result<PathBuf, String> {
+    let scope = active_nine_router_account_scope(app)?;
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(folder).join("accounts").join(scope))
+        .map_err(|error| format!("Could not resolve app data folder: {error}"))
+}
+
+fn active_nine_router_account_scope(app: &AppHandle) -> Result<String, String> {
+    auth::current_user_storage_namespace(app).map(|namespace| sanitize_path_component(&namespace))
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let mut sanitized = String::new();
+
+    for character in value.trim().chars() {
+        if sanitized.len() >= 96 {
+            break;
+        }
+
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            sanitized.push(character);
+        } else {
+            sanitized.push('-');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "local".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn migrate_legacy_nine_router_data_dir(app: &AppHandle, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        return Ok(());
+    }
+
+    let legacy_dir = legacy_nine_router_data_dir(app)?;
+    if !legacy_dir.exists() {
+        return Ok(());
+    }
+
+    copy_dir_contents(&legacy_dir, target, &["accounts"]).map_err(|error| {
+        format!(
+            "Could not migrate legacy subscription data into the signed-in account folder: {error}"
+        )
+    })
+}
+
+fn migrate_legacy_nine_router_preferences(app: &AppHandle, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        return Ok(());
+    }
+
+    let legacy_path = legacy_nine_router_preferences_path(app)?;
+    if !legacy_path.is_file() {
+        return Ok(());
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("Could not create subscription preferences folder: {error}")
+        })?;
+    }
+
+    fs::copy(&legacy_path, target)
+        .map(|_| ())
+        .map_err(|error| format!("Could not migrate subscription preferences: {error}"))
+}
+
+fn copy_dir_contents(source: &Path, target: &Path, skip_names: &[&str]) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "Could not create target folder {}: {error}",
+            path_to_string(target)
+        )
+    })?;
+
+    for entry in fs::read_dir(source).map_err(|error| {
+        format!(
+            "Could not read source folder {}: {error}",
+            path_to_string(source)
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not inspect source folder {}: {error}",
+                path_to_string(source)
+            )
+        })?;
+        let name = entry.file_name();
+        if name.to_str().is_some_and(|name| {
+            skip_names
+                .iter()
+                .any(|skip| skip.eq_ignore_ascii_case(name))
+        }) {
+            continue;
+        }
+
+        let source_path = entry.path();
+        let target_path = target.join(&name);
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
+            format!(
+                "Could not inspect subscription data path {}: {error}",
+                path_to_string(&source_path)
+            )
+        })?;
+
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        if metadata.is_dir() {
+            copy_dir_contents(&source_path, &target_path, &[])?;
+        } else if metadata.is_file() {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "Could not create target folder {}: {error}",
+                        path_to_string(parent)
+                    )
+                })?;
+            }
+            fs::copy(&source_path, &target_path).map_err(|error| {
+                format!(
+                    "Could not copy subscription data from {} to {}: {error}",
+                    path_to_string(&source_path),
+                    path_to_string(&target_path)
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_legacy_nine_router_data(app: &AppHandle) -> Result<(), String> {
+    let legacy_dir = legacy_nine_router_data_dir(app)?;
+    if !legacy_dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(&legacy_dir).map_err(|error| {
+        format!(
+            "Could not read legacy subscription data folder {}: {error}",
+            path_to_string(&legacy_dir)
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not inspect legacy subscription data folder {}: {error}",
+                path_to_string(&legacy_dir)
+            )
+        })?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("accounts"))
+        {
+            continue;
+        }
+
+        remove_app_data_path_if_exists(app, &entry.path(), "legacy subscription data")?;
+    }
+
+    Ok(())
+}
+
+fn legacy_nine_router_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("9router-data"))
         .map_err(|error| format!("Could not resolve app data folder: {error}"))
 }
 
-fn nine_router_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn legacy_nine_router_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("nine-router-local.json"))
         .map_err(|error| format!("Could not resolve app data folder: {error}"))
 }
 
-fn nine_router_pid_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn legacy_nine_router_pid_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("nine-router-local.pid"))

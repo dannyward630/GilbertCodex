@@ -8,9 +8,9 @@ Roadmap items are not release promises or fixed dates. They are the current area
 
 ### Apps, Plugins, And Skills
 
-v0.5.0 makes the main chat workspace feel far more complete. The next missing product surface is the Apps page.
+v0.5.0 makes the main chat workspace feel far more complete. Gmail and MCP now have live Apps-page management surfaces; the remaining work is turning the rest of the catalog into a polished hub.
 
-- Build a real Apps / Plugins / Skills hub instead of a placeholder.
+- Build the Skills catalog and broader plugin marketplace on top of the live Apps-page foundation.
 - Show installed, available, and coming-soon capabilities with clear permission language.
 - Let users discover useful integrations without mixing them into core settings.
 - Keep high-impact app actions reviewable before they can affect local files, GitHub, terminals, or external accounts.

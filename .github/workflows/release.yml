@@ -56,6 +56,24 @@ jobs:
             throw "Missing TAURI_SIGNING_PRIVATE_KEY. Add the Tauri updater private key as a repository secret before publishing an auto-update release."
           }
 
+      - name: Check Gmail OAuth client ID
+        shell: pwsh
+        env:
+          VITE_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.VITE_GOOGLE_OAUTH_CLIENT_ID || secrets.VITE_GOOGLE_OAUTH_CLIENT_ID }}
+        run: |
+          if (-not $env:VITE_GOOGLE_OAUTH_CLIENT_ID) {
+            throw "Missing VITE_GOOGLE_OAUTH_CLIENT_ID. Add the public Google OAuth desktop client ID as a repository variable or secret before publishing a release."
+          }
+
+      - name: Check Gmail OAuth client secret
+        shell: pwsh
+        env:
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: |
+          if (-not $env:GOOGLE_OAUTH_CLIENT_SECRET) {
+            throw "Missing GOOGLE_OAUTH_CLIENT_SECRET. Add the Google OAuth desktop client secret as a repository secret before publishing a Gmail-enabled release."
+          }
+
       - name: Resolve release tag
         id: release_tag
         shell: pwsh
@@ -101,8 +119,10 @@ jobs:
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.VITE_GOOGLE_OAUTH_CLIENT_ID || secrets.VITE_GOOGLE_OAUTH_CLIENT_ID }}
         with:
           tagName: ${{ steps.release_tag.outputs.tag }}
           releaseName: Gilbert Codex ${{ steps.release_tag.outputs.tag }}

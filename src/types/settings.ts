@@ -1,7 +1,31 @@
 import type { ToolRegistrySettings } from "./tools";
+import type { ProjectOpenTargetId } from "./projectOpen";
+import type { TerminalShellId } from "./terminal";
 
 export type ReasoningEffort = "low" | "medium" | "high";
 export type AppearanceMode = "system" | "dark" | "light";
+export type AppearanceMotionPreference = "system" | "on" | "off";
+export type AppWorkMode = "coding" | "everyday";
+export type AppAgentEnvironment = "auto" | "windows-native" | "wsl";
+export type AppLanguageMode = "auto";
+export type AppInferenceSpeed = "standard" | "fast";
+export type AppFollowUpBehavior = "queue" | "steer";
+export type AppCodeReviewBehavior = "inline" | "detached";
+export type AppTurnCompletionNotificationMode = "always" | "off" | "unfocused";
+export type AppThemeVisualEffect =
+  | "none"
+  | "aurora"
+  | "circuit"
+  | "confetti"
+  | "constellation"
+  | "dawn"
+  | "embers"
+  | "matrix"
+  | "neon"
+  | "ocean"
+  | "prism"
+  | "scanlines"
+  | "spotlight";
 export type ModelProviderId = "9router" | "anthropic" | "deepseek" | "google" | "groq" | "lmstudio" | "mistral" | "ollama" | "openai" | "openrouter" | "vllm" | "xai";
 export type ProviderContextWindowMap = Partial<Record<ModelProviderId, number>>;
 export interface ProviderModelBudgetOverride {
@@ -11,6 +35,13 @@ export interface ProviderModelBudgetOverride {
 export type ProviderModelBudgetOverrideMap = Partial<Record<ModelProviderId, Record<string, ProviderModelBudgetOverride>>>;
 export type ProviderModelVisibilityMap = Partial<Record<ModelProviderId, string[]>>;
 export type ProviderSecretMap = Partial<Record<ModelProviderId, string>>;
+export type SubscriptionFallbackMode = "off" | "smart-saver" | "always-free";
+export type SubscriptionTokenSaverLevel = "off" | "low" | "medium" | "high" | "max";
+
+export interface SubscriptionOptimizationSettings {
+  fallbackMode: SubscriptionFallbackMode;
+  tokenSaverLevel: SubscriptionTokenSaverLevel;
+}
 
 export interface ThinkingSettings {
   effort: ReasoningEffort;
@@ -149,6 +180,120 @@ export interface AppPersonalizationSettings {
   locationServicesEnabled: boolean;
 }
 
+export interface AppDictationSettings {
+  dictionary: string;
+  holdHotkey: string;
+  toggleHotkey: string;
+}
+
+export interface AppNotificationSettings {
+  permissionNotifications: boolean;
+  questionNotifications: boolean;
+  turnCompletion: AppTurnCompletionNotificationMode;
+}
+
+export interface AppGeneralSettings {
+  agentEnvironment: AppAgentEnvironment;
+  codeReviewBehavior: AppCodeReviewBehavior;
+  defaultOpenTarget: ProjectOpenTargetId;
+  defaultProjectlessChat: boolean;
+  dictation: AppDictationSettings;
+  followUpBehavior: AppFollowUpBehavior;
+  inferenceSpeed: AppInferenceSpeed;
+  language: AppLanguageMode;
+  popoutWindowHotkey: string;
+  requireCtrlEnterForLongPrompts: boolean;
+  terminalShell: TerminalShellId;
+  notifications: AppNotificationSettings;
+}
+
+export interface AppThemeComponentColors {
+  appBackground: string;
+  appsAccent: string;
+  appsAccentSoft: string;
+  appsBackground: string;
+  appsBackgroundGlow: string;
+  appsBorder: string;
+  appsControl: string;
+  appsControlHover: string;
+  appsDanger: string;
+  appsInstalled: string;
+  appsPanel: string;
+  appsPanelRaised: string;
+  appsPrimaryText: string;
+  appsSuccess: string;
+  appsWarning: string;
+  border: string;
+  borderSoft: string;
+  chrome: string;
+  chromeBorder: string;
+  composer: string;
+  composerAlt: string;
+  composerBorder: string;
+  composerControl: string;
+  composerControlHover: string;
+  composerFocus: string;
+  composerMuted: string;
+  cyan: string;
+  danger: string;
+  field: string;
+  fieldBorder: string;
+  pageBackground: string;
+  pageBackgroundAlt: string;
+  panel: string;
+  popover: string;
+  popoverBorder: string;
+  rose: string;
+  sidebar: string;
+  sidebarActive: string;
+  sidebarBorder: string;
+  sidebarHover: string;
+  sidebarWarm: string;
+  success: string;
+  surface: string;
+  surfaceRaised: string;
+  surfaceSoft: string;
+  terminalAccent: string;
+  terminalBorder: string;
+  terminalCommand: string;
+  terminalControl: string;
+  terminalControlHover: string;
+  terminalCursor: string;
+  terminalError: string;
+  terminalMuted: string;
+  terminalOutput: string;
+  terminalPanel: string;
+  terminalRail: string;
+  terminalSelection: string;
+  terminalText: string;
+  terminalToolbar: string;
+  textDim: string;
+  textMuted: string;
+  violet: string;
+  warning: string;
+}
+
+export interface AppThemeSettings {
+  accent: string;
+  background: string;
+  codeFont: string;
+  componentColors: AppThemeComponentColors;
+  contrast: number;
+  foreground: string;
+  translucentSidebar: boolean;
+  uiFont: string;
+  visualEffect: AppThemeVisualEffect;
+}
+
+export interface AppAppearanceSettings {
+  codeFontSize: number;
+  dark: AppThemeSettings;
+  light: AppThemeSettings;
+  reduceMotion: AppearanceMotionPreference;
+  uiFontSize: number;
+  usePointerCursor: boolean;
+}
+
 export interface ProviderSettings {
   apiKeys: ProviderSecretMap;
   baseUrls: ProviderSecretMap;
@@ -160,6 +305,7 @@ export interface ProviderSettings {
   openRouterApiKey: string;
   provider: ModelProviderId;
   providerModels: ProviderSecretMap;
+  subscriptionOptimization: SubscriptionOptimizationSettings;
   systemPrompt: string;
   thinking: ThinkingSettings;
   temperature: number;
@@ -168,6 +314,8 @@ export interface ProviderSettings {
   tools: ToolRegistrySettings;
   userInstructions: string;
   webSearch: WebSearchSettings;
+  agentEnvironment?: AppAgentEnvironment;
+  workMode?: AppWorkMode;
   workspaceDependencies: WorkspaceDependencySettings;
 }
 

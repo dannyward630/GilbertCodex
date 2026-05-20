@@ -1,4 +1,4 @@
-export type TerminalShellId = "powershell" | "cmd" | "bash" | "zsh" | "sh";
+export type TerminalShellId = "powershell" | "cmd" | "bash" | "zsh" | "sh" | "wsl";
 
 export type TerminalOutputStream = "stderr" | "stdout" | "stdin" | "system";
 

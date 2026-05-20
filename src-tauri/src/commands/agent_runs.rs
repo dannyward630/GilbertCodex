@@ -73,6 +73,8 @@ pub struct AgentRunRecord {
     pub approvals: Vec<AgentApprovalRecord>,
     pub artifacts: Vec<Value>,
     pub chat_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding: Option<Value>,
     pub completed_at: Option<String>,
     pub created_at: String,
     pub events: Vec<AgentRunEventRecord>,

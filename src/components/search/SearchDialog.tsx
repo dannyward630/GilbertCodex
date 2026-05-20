@@ -1,16 +1,18 @@
 import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { isEmptyChat } from "../../lib/chatUtils";
+import { formatShortcutForPlatform, type HostPlatform } from "../../lib/hostPlatform";
 import type { ChatSummary } from "../../types/chat";
 
 interface SearchDialogProps {
   chats: ChatSummary[];
+  hostPlatform: HostPlatform;
   onClose: () => void;
   onSelectChat: (chatId: string) => void;
   open: boolean;
 }
 
-export function SearchDialog({ chats, onClose, onSelectChat, open }: SearchDialogProps) {
+export function SearchDialog({ chats, hostPlatform, onClose, onSelectChat, open }: SearchDialogProps) {
   const [query, setQuery] = useState("");
 
   const filteredChats = useMemo(() => {
@@ -86,8 +88,8 @@ export function SearchDialog({ chats, onClose, onSelectChat, open }: SearchDialo
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <SearchGroup title="Pinned chats" chats={pinnedChats} offset={1} onSelectChat={onSelectChat} />
-        <SearchGroup title="Recent chats" chats={recentChats} offset={pinnedChats.length + 1} onSelectChat={onSelectChat} />
+        <SearchGroup title="Pinned chats" chats={pinnedChats} hostPlatform={hostPlatform} offset={1} onSelectChat={onSelectChat} />
+        <SearchGroup title="Recent chats" chats={recentChats} hostPlatform={hostPlatform} offset={pinnedChats.length + 1} onSelectChat={onSelectChat} />
       </section>
     </div>
   );
@@ -95,12 +97,13 @@ export function SearchDialog({ chats, onClose, onSelectChat, open }: SearchDialo
 
 interface SearchGroupProps {
   chats: ChatSummary[];
+  hostPlatform: HostPlatform;
   offset: number;
   onSelectChat: (chatId: string) => void;
   title: string;
 }
 
-function SearchGroup({ chats, offset, onSelectChat, title }: SearchGroupProps) {
+function SearchGroup({ chats, hostPlatform, offset, onSelectChat, title }: SearchGroupProps) {
   if (chats.length === 0) {
     return null;
   }
@@ -114,7 +117,7 @@ function SearchGroup({ chats, offset, onSelectChat, title }: SearchGroupProps) {
             <span>{chat.title}</span>
             <span className="search-result-meta">
               {chat.project}
-              {offset + index <= 9 ? <kbd>Ctrl+{offset + index}</kbd> : null}
+              {offset + index <= 9 ? <kbd>{formatShortcutForPlatform(`Ctrl+${offset + index}`, hostPlatform)}</kbd> : null}
             </span>
           </button>
         ))}

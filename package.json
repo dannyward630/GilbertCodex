@@ -24,6 +24,8 @@
     "dev": "vite --host localhost --port 1420",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
+        "test": "vitest run",
+    "test:tool-bridge": "vitest run src/toolBridge src/coding src/components/coding",
     "preview": "vite preview --host localhost --port 4173",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
@@ -31,10 +33,15 @@
     "check": "npm run build && npm run rust:fmt:check && npm run rust:check",
     "tauri": "tauri",
     "app:dev": "tauri dev",
+    "app:dev:macos": "tauri dev --config src-tauri/tauri.macos.conf.json",
     "app:build": "tauri build",
+    "app:build:windows": "tauri build --bundles nsis",
+    "app:build:macos": "tauri build --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
     "installer:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-installer-assets.ps1",
     "app:installer": "npm run installer:assets && tauri build --bundles nsis",
-    "app:release": "npm run installer:assets && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json"
+    "app:release": "npm run installer:assets && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json",
+    "app:release:windows": "npm run installer:assets && tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json",
+    "app:release:macos": "tauri build --bundles app,dmg --config src-tauri/tauri.macos.conf.json"
   },
   "engines": {
     "node": ">=18"

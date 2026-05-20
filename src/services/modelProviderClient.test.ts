@@ -355,7 +355,7 @@ describe("subscription route request errors", () => {
     }));
 
     await expect(sendProviderMessage(createNineRouterSettings("cx/gpt-5.5"), [createMessage()])).rejects.toThrow(
-      "Could not reach subscriptions at http://127.0.0.1:20128/v1/chat/completions.",
+      "Could not reach subscriptions. Open Subscriptions, then retry.",
     );
   });
 
@@ -898,6 +898,40 @@ describe("Anthropic thinking budget mapping", () => {
 });
 
 describe("provider reasoning request parameters", () => {
+  it("preserves selected Low, Medium, and High thinking effort in provider request bodies", () => {
+    const efforts: ReasoningEffort[] = ["low", "medium", "high"];
+    const openAiEfforts = efforts.map((effort) => {
+      const body = createProviderRequestBody(withThinking({
+        ...createSettings(),
+        model: "gpt-5.5",
+      }, effort), [createMessage()], undefined, false) as Record<string, unknown>;
+
+      return (body.reasoning as { effort?: string } | undefined)?.effort;
+    });
+    const openRouterEfforts = efforts.map((effort) => {
+      const body = createProviderRequestBody(withThinking(createOpenRouterSettings(), effort), [createMessage()], undefined, false) as Record<string, unknown>;
+
+      return (body.reasoning as { effort?: string } | undefined)?.effort;
+    });
+    const googleBudgets = efforts.map((effort) => {
+      const body = createProviderRequestBody(withThinking({
+        ...createSettings(),
+        apiKeys: { ...defaultProviderSettings.apiKeys, google: "google-key" },
+        model: "gemini-2.5-pro",
+        provider: "google",
+      }, effort), [createMessage()], undefined, false) as Record<string, unknown>;
+      const extraBody = body.extra_body as { google?: { thinking_config?: { thinking_budget?: number } } } | undefined;
+
+      return extraBody?.google?.thinking_config?.thinking_budget ?? 0;
+    });
+
+    expect(openAiEfforts).toEqual(efforts);
+    expect(openRouterEfforts).toEqual(efforts);
+    expect(googleBudgets[0]).toBeGreaterThan(0);
+    expect(googleBudgets[1]).toBeGreaterThan(googleBudgets[0] ?? 0);
+    expect(googleBudgets[2]).toBeGreaterThan(googleBudgets[1] ?? 0);
+  });
+
   it("uses provider-specific documented thinking controls without exposing UI reasoning text", () => {
     const googleBody = createProviderRequestBody(withThinking({
       ...createSettings(),

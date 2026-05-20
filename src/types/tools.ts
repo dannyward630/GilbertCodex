@@ -29,7 +29,7 @@ export type ToolRegistryId =
 
 export type ToolRegistrySettings = Record<ToolRegistryId, boolean>;
 
-/** New installs keep the core provider, planning/thinking UI, local workspace, image generation, web search, terminal, and preview tools enabled. */
+/** New installs keep the core provider, planning/thinking UI, local workspace, image generation, MCP, web search, terminal, and preview tools enabled. */
 export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   browserPreview: true,
   codeEdit: true,
@@ -42,7 +42,7 @@ export const DEFAULT_TOOL_REGISTRY_SETTINGS: ToolRegistrySettings = {
   fileCreation: true,
   fileBrowser: true,
   fileSearch: true,
-  mcpServers: false,
+  mcpServers: true,
   pdfTools: false,
   permissions: false,
   planning: true,
@@ -70,6 +70,7 @@ const ACTIVE_TOOL_REGISTRY_IDS = new Set<ToolRegistryId>([
   "fileSafety",
   "imageGeneration",
   "fileSearch",
+  "mcpServers",
   "planning",
   "provider",
   "sourceControl",

@@ -1,6 +1,7 @@
 import { type CSSProperties, type RefObject, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { BrainCircuit, Check, ChevronLeft, ChevronRight, Gauge, Route, Search, Sparkles, Zap } from "lucide-react";
+import { ThinkingModeControls } from "../thinking/ThinkingModeControls";
 import {
   DEEPSEEK_V4_FLASH_FREE_MODEL,
   GLM_45_AIR_FREE_MODEL,
@@ -20,7 +21,7 @@ import {
   type ProviderModelMetadata,
 } from "../../lib/models";
 import { formatTokenCount, getFallbackModelContextWindow, type ModelContextWindow, type ModelContextWindowMap } from "../../lib/contextWindow";
-import type { ModelProviderId, ProviderSettings } from "../../types/settings";
+import type { ModelProviderId, ProviderSettings, ThinkingSettings } from "../../types/settings";
 
 export type LiveModelCatalogStatus = "error" | "idle" | "loading" | "ready";
 
@@ -32,8 +33,10 @@ interface ModelSelectorPopoverProps {
   modelContextWindows: ModelContextWindowMap;
   onClose: () => void;
   onModelChange: (model: string, provider: ChatModelOption["provider"]) => void;
+  onThinkingChange: (thinking: ThinkingSettings) => void;
   providerSettings: ProviderSettings;
   selectedModel: ChatModelOption;
+  thinking: ThinkingSettings;
 }
 
 interface ModelSelectorEntry {
@@ -49,7 +52,8 @@ interface ModelSelectorEntryGroup {
   label: string;
 }
 
-const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["9router", "lmstudio", "ollama", "vllm"]);
+const SUBSCRIPTION_PROVIDER_ID: ModelProviderId = "9router";
+const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["lmstudio", "ollama", "vllm"]);
 const RECOMMENDED_HOSTED_MODEL_ORDER = [
   OPENROUTER_FREE_AUTO_MODEL,
   LAGUNA_M1_FREE_MODEL,
@@ -71,8 +75,10 @@ export function ModelSelectorPopover({
   modelContextWindows,
   onClose,
   onModelChange,
+  onThinkingChange,
   providerSettings,
   selectedModel,
+  thinking,
 }: ModelSelectorPopoverProps) {
   const [query, setQuery] = useState("");
   const [allModelsOpen, setAllModelsOpen] = useState(false);
@@ -166,6 +172,21 @@ export function ModelSelectorPopover({
               <strong>Model</strong>
               <span>{createQuickModelSubtitle(providerSettings.provider, quickEntries)}</span>
             </div>
+            <button
+              className="model-selector-quick-more"
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setAllModelsOpen(true);
+              }}
+            >
+              <span>More models</span>
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="model-selector-thinking-panel">
+            <ThinkingModeControls settings={thinking} onChange={onThinkingChange} variant="panel" />
           </div>
 
           <div className="model-selector-quick-list">
@@ -187,17 +208,6 @@ export function ModelSelectorPopover({
             ) : (
               <div className="model-selector-empty">No quick models ready.</div>
             )}
-            <button
-              className="model-selector-more-button"
-              type="button"
-              onClick={() => {
-                setQuery("");
-                setAllModelsOpen(true);
-              }}
-            >
-              <span>More models</span>
-              <ChevronRight size={18} aria-hidden="true" />
-            </button>
           </div>
         </>
       )}
@@ -227,7 +237,7 @@ function ModelSelectorQuickRow({ entry, onSelect }: { entry: ModelSelectorEntry;
   return (
     <button className="model-selector-quick-row" type="button" aria-pressed={entry.selected} data-selected={entry.selected} onClick={onSelect}>
       <span>
-        <strong>{entry.option.label}</strong>
+        <strong>{formatDisplayModelLabel(entry.option.label)}</strong>
         <small>{createQuickModelDescription(entry)}</small>
       </span>
       {entry.selected ? <Check size={18} aria-hidden="true" /> : null}
@@ -247,7 +257,7 @@ function ModelSelectorRow({ entry, onSelect }: { entry: ModelSelectorEntry; onSe
       </span>
       <span className="model-selector-row-main">
         <strong>
-          <span>{entry.option.label}</span>
+          <span>{formatDisplayModelLabel(entry.option.label)}</span>
           <em>{sourceLabel}</em>
         </strong>
         <small>{useCase}</small>
@@ -290,7 +300,6 @@ function useModelSelectorPosition(anchorRef: RefObject<HTMLElement>, expanded: b
       const width = Math.min(preferredWidth, availableWidth);
       const preferredLeft = anchorRect.right - width;
       const left = clamp(preferredLeft, bounds.left, bounds.right - width);
-      const viewportHeight = Math.max(320, bounds.bottom - bounds.top);
 
       const availableAbove = anchorRect.top - bounds.top - gap;
       const availableBelow = bounds.bottom - anchorRect.bottom - gap;
@@ -357,6 +366,7 @@ function getModelSelectorBounds(anchor: HTMLElement) {
   const rightOverlayRect =
     getVisibleRect(document.querySelector(".right-rail")) ??
     getVisibleRect(document.querySelector(".browser-preview-panel")) ??
+    getVisibleRect(document.querySelector(".coding-sidecar-panel")) ??
     getVisibleRect(document.querySelector(".git-review-panel"));
   const rawBounds = workspaceRect
     ? {
@@ -393,7 +403,7 @@ function getVisibleRect(element: Element | null) {
   return rect.width > 0 && rect.height > 0 ? rect : null;
 }
 
-function buildSelectorEntries(
+export function buildSelectorEntries(
   providerSettings: ProviderSettings,
   currentModel: string,
   liveModelCatalogs: Partial<Record<ModelProviderId, ProviderModelMetadata[]>>,
@@ -401,13 +411,14 @@ function buildSelectorEntries(
   modelContextWindows: ModelContextWindowMap,
 ): ModelSelectorEntry[] {
   return MODEL_PROVIDERS.flatMap((provider) => {
-    const liveModels = liveModelCatalogs[provider.id];
+    const rawLiveModels = liveModelCatalogs[provider.id];
+    const liveModels = provider.id === SUBSCRIPTION_PROVIDER_ID && liveModelCatalogStatus[provider.id] !== "ready" ? undefined : rawLiveModels;
+    const providerModel = provider.id === providerSettings.provider ? currentModel : providerSettings.providerModels[provider.id] || provider.defaultModel;
 
-    if (isLocalRuntimeProvider(provider.id) && (liveModelCatalogStatus[provider.id] !== "ready" || !liveModels || liveModels.length === 0)) {
+    if (isLocalRuntimeProvider(provider.id) && !hasReadyLiveModelCatalog(rawLiveModels, liveModelCatalogStatus[provider.id])) {
       return [];
     }
 
-    const providerModel = provider.id === providerSettings.provider ? currentModel : providerSettings.providerModels[provider.id] || provider.defaultModel;
     const providerOptions = filterEnabledProviderModelOptions(buildProviderModelOptions(provider.id, liveModels, providerModel), providerSettings.disabledModels[provider.id]);
 
     return providerOptions.map((option) => ({
@@ -424,6 +435,10 @@ function buildSelectorEntries(
       selected: option.value === currentModel.trim() && option.provider === providerSettings.provider,
     }));
   });
+}
+
+function hasReadyLiveModelCatalog(liveModels: ProviderModelMetadata[] | undefined, liveStatus: LiveModelCatalogStatus | undefined) {
+  return liveStatus === "ready" && Boolean(liveModels && liveModels.length > 0);
 }
 
 function sortRecommendedEntries(entries: ModelSelectorEntry[]) {
@@ -478,6 +493,10 @@ function createQuickModelSubtitle(provider: ModelProviderId, entries: ModelSelec
 
 function createQuickModelDescription(entry: ModelSelectorEntry) {
   return formatModelEntryDescription(entry);
+}
+
+function formatDisplayModelLabel(label: string) {
+  return label.replace(/^Codex\s+/i, "").trim() || label;
 }
 
 function dedupeEntries(entries: ModelSelectorEntry[]) {

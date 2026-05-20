@@ -180,7 +180,7 @@ export async function runAppOwnedCodingAgent(deps: WorkspaceRuntimeDeps, {
       });
 
       const toolRun = await runLocalComputerToolCalls({
-        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings),
+        approvalDecisions: createRuntimeApprovalDecisions(workspaceSettings, undefined, chatId),
         assistantContent: toolContent,
         executionPolicy: toolExecutionPolicy,
         onRunSubagents: (tasks) => runParallelSubagents(tasks, runtimeMessages, prompt, controller.signal, runtimeChat),

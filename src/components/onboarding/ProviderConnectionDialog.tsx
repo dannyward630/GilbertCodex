@@ -27,6 +27,7 @@ type ProviderConnectionBusy = "activate-subscriptions" | "fallback" | "refresh" 
 interface ProviderConnectionDialogProps {
   onActivateProvider: (provider: ModelProviderId, model: string) => void;
   onClose: () => void;
+  onNeverShowAgain: () => void;
   onOpenNineRouterSettings: () => void;
   onOpenProviderSettings: () => void;
   open: boolean;
@@ -42,6 +43,7 @@ interface AccountRow {
 export function ProviderConnectionDialog({
   onActivateProvider,
   onClose,
+  onNeverShowAgain,
   onOpenNineRouterSettings,
   onOpenProviderSettings,
   open,
@@ -56,7 +58,6 @@ export function ProviderConnectionDialog({
   const [statusMessage, setStatusMessage] = useState<NineRouterStatusMessage | null>(null);
   const nineRouterBaseUrl = settings.baseUrls[NINE_ROUTER_PROVIDER_ID]?.trim() || runtimeStatus?.baseUrl || getDefaultBaseUrlForProvider(NINE_ROUTER_PROVIDER_ID);
   const savedNineRouterModel = settings.providerModels[NINE_ROUTER_PROVIDER_ID]?.trim() || "";
-  const selectedNineRouterModel = chooseNineRouterModel(savedNineRouterModel, models);
   const openRouterHasKey = Boolean((settings.apiKeys.openrouter || settings.openRouterApiKey || "").trim());
   const openRouterFallbackModel = openRouterHasKey ? OPENROUTER_AUTO_MODEL : OPENROUTER_FREE_AUTO_MODEL;
   const activeConnectionCount = connections.filter(isConnectionActive).length;
@@ -269,7 +270,7 @@ export function ProviderConnectionDialog({
   const runtimeReady = Boolean(runtimeStatus?.running);
   const runtimeInstalled = Boolean(runtimeStatus?.installed);
   const subscriptionSetupNeeded = isTauriDesktopRuntime() && Boolean(runtimeStatus) && !runtimeInstalled;
-  const useSubscriptionsAsPrimaryAction = runtimeReady && activeConnectionCount > 0;
+  const useSubscriptionsAsPrimaryAction = runtimeReady && (activeConnectionCount > 0 || models.length > 0);
   const primaryActionLabel = subscriptionSetupNeeded ? "Set up subscriptions" : useSubscriptionsAsPrimaryAction ? "Use subscriptions" : openRouterHasKey ? "Use OpenRouter Auto" : "Use Free Fallback";
   const primaryBusyLabel = busy === "activate-subscriptions" ? "Using subscriptions" : busy === "fallback" ? "Switching" : primaryActionLabel;
   const displayStatusMessage = statusMessage
@@ -312,6 +313,9 @@ export function ProviderConnectionDialog({
           </button>
           <button className="dialog-button" type="button" onClick={onClose}>
             Later
+          </button>
+          <button className="dialog-button provider-connection-secondary-action" type="button" onClick={onNeverShowAgain}>
+            Do not show again
           </button>
           <button className="dialog-button dialog-button-primary provider-connection-primary-action" type="button" disabled={busy !== null} onClick={handlePrimaryAction}>
             {primaryBusyLabel}
@@ -393,6 +397,8 @@ function formatSubscriptionHelperText(text: string) {
     .replace(/\b[9]Router Local was started, but the API is not ready yet\./g, "Subscriptions are still starting. Try again in a moment.")
     .replace(/\b[9]Router Local\b/g, "subscriptions")
     .replace(/\b[9]Router\b/g, "subscriptions")
+    .replace(/\s+at\s+https?:\/\/(?:127\.0\.0\.1|localhost):20128(?:\/[^\s.]*)?/gi, "")
+    .replace(/\bhttps?:\/\/(?:127\.0\.0\.1|localhost):20128(?:\/[^\s.]*)?/gi, "Subscriptions")
     .replace(/\b(from|in) subscriptions settings\b/gi, "$1 Subscriptions settings")
     .replace(/\bStart subscriptions, then retry\b/g, "Open Subscriptions, then retry")
     .replace(/\bsubscription helper\b/gi, "subscriptions");

@@ -12,8 +12,10 @@ import {
   LING_26_FLASH_MODEL,
   MINIMAX_M25_FREE_MODEL,
   NEMOTRON_3_SUPER_MODEL,
+  NINE_ROUTER_ALWAYS_FREE_MODEL,
   NINE_ROUTER_CODEX_MODEL_IDS,
   NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+  NINE_ROUTER_SMART_SAVER_MODEL,
   OPENROUTER_AUTO_MODEL,
   OPENROUTER_CURATED_FREE_MODELS,
   OPENROUTER_FREE_AUTO_MODEL,
@@ -148,17 +150,29 @@ describe("model catalog", () => {
     });
   });
 
-  it("keeps Codex defaults but allows live 9Router subscription routes", () => {
+  it("keeps subscription defaults but allows live 9Router subscription routes", () => {
     const optionValues = buildProviderModelOptions("9router", undefined).map((option) => option.value);
+    const subscriptionDefaults = [
+      ...NINE_ROUTER_CODEX_MODEL_IDS,
+      NINE_ROUTER_SMART_SAVER_MODEL,
+      NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+    ];
 
     expect(getDefaultModelForProvider("9router")).toBe("cx/gpt-5.5");
-    expect(optionValues).toEqual([...NINE_ROUTER_CODEX_MODEL_IDS]);
+    expect(optionValues).toEqual(subscriptionDefaults);
     expect(buildProviderModelOptions("9router", [
       { id: "custom-combo" },
       { id: "cx/gpt-5.3-codex-xhigh" },
-    ]).map((option) => option.value)).toEqual([...NINE_ROUTER_CODEX_MODEL_IDS, "custom-combo"]);
+    ]).map((option) => option.value)).toEqual([...subscriptionDefaults, "custom-combo"]);
     expect(normalizeProviderModelId("9router", " free-combo ")).toBe("free-combo");
-    expect(buildProviderModelOptions("9router", undefined, "free-combo").map((option) => option.value)).toEqual([...NINE_ROUTER_CODEX_MODEL_IDS, "free-combo"]);
+    expect(buildProviderModelOptions("9router", undefined, "free-combo").map((option) => option.value)).toEqual([
+      ...NINE_ROUTER_CODEX_MODEL_IDS,
+      "free-combo",
+      NINE_ROUTER_SMART_SAVER_MODEL,
+      NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+    ]);
   });
 
   it("keeps GitHub Copilot subscription routes on supported 9Router ids", () => {
@@ -188,8 +202,9 @@ describe("model catalog", () => {
       { id: "gh/gemini-3.1-pro-preview" },
     ]).map((option) => option.value)).toEqual([
       ...NINE_ROUTER_CODEX_MODEL_IDS,
-      "gh/gpt-4o",
-      "gh/gpt-4.1",
+      NINE_ROUTER_SMART_SAVER_MODEL,
+      NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
     ]);
   });
 

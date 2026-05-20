@@ -1,5 +1,5 @@
 import { CloudSun, Database, RotateCcw, ServerCog, Settings2, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/dialogs/AppDialog";
 import "../../styles/settings.css";
 import {
@@ -40,27 +40,71 @@ import { fetchProviderModels, validateProviderSettings } from "../../services/mo
 import type { GithubConnectionState, GithubDeviceLoginSession, GithubRepository } from "../../types/github";
 import type { LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ModelProviderId, ProviderSettings } from "../../types/settings";
-import { AppearanceSettingsPage } from "./sections/AppearanceSettingsPage";
-import { BraveSearchSettingsPage } from "./brave-search/BraveSearchSettingsPage";
-import { ConfigurationSettingsPage } from "./sections/ConfigurationSettingsPage";
-import { DatabaseSettingsPage } from "./sections/DatabaseSettingsPage";
-import { DiscordSettingsPage } from "./sections/DiscordSettingsPage";
-import { GeneralSettingsPage } from "./sections/GeneralSettingsPage";
-import { GithubSettingsPage } from "./sections/GithubSettingsPage";
-import { MapboxSettingsPage } from "./mapbox/MapboxSettingsPage";
-import { ModelSettingsPage } from "./sections/ModelSettingsPage";
-import { NineRouterSettingsPage } from "./nine-router/NineRouterSettingsPage";
-import { PersonalizationSettingsPage } from "./sections/PersonalizationSettingsPage";
-import { PdfSettingsPage } from "./sections/PdfSettingsPage";
-import { ProvidersSettingsPage } from "./sections/ProvidersSettingsPage";
-import { WeatherSourcesSettingsPage } from "./weather-sources/WeatherSourcesSettingsPage";
 import { SettingsSectionHeading } from "./components/SettingsSectionHeading";
 import { resolveSettingsNavSection } from "./settingsNavigation";
-import type { LiveModelCatalogStatus, SettingsPageProps, SettingsStatusMessage } from "./types";
+import type { LiveModelCatalogStatus, SettingsPageProps, SettingsSectionId, SettingsStatusMessage } from "./types";
 
 const GITHUB_FULL_ACCESS_SCOPES = getRequiredGithubOAuthScopes();
 type GithubActionState = "disconnect" | "idle" | "login" | "refresh";
 const GITHUB_DEVICE_LOGIN_START_TIMEOUT_MS = 18_000;
+const EMPTY_DISABLED_MODELS: string[] = [];
+
+const loadAppearanceSettingsPage = () => import("./sections/AppearanceSettingsPage");
+const loadBrowserSettingsPage = () => import("./browser/BrowserSettingsPage");
+const loadBraveSearchSettingsPage = () => import("./brave-search/BraveSearchSettingsPage");
+const loadConfigurationSettingsPage = () => import("./sections/ConfigurationSettingsPage");
+const loadDatabaseSettingsPage = () => import("./sections/DatabaseSettingsPage");
+const loadDiscordSettingsPage = () => import("./sections/DiscordSettingsPage");
+const loadGeneralSettingsPage = () => import("./sections/GeneralSettingsPage");
+const loadGithubSettingsPage = () => import("./sections/GithubSettingsPage");
+const loadMapboxSettingsPage = () => import("./mapbox/MapboxSettingsPage");
+const loadModelSettingsPage = () => import("./sections/ModelSettingsPage");
+const loadNineRouterSettingsPage = () => import("./nine-router/NineRouterSettingsPage");
+const loadPersonalizationSettingsPage = () => import("./sections/PersonalizationSettingsPage");
+const loadPdfSettingsPage = () => import("./sections/PdfSettingsPage");
+const loadProvidersSettingsPage = () => import("./sections/ProvidersSettingsPage");
+const loadUsageSettingsPage = () => import("./sections/UsageSettingsPage");
+const loadWeatherSourcesSettingsPage = () => import("./weather-sources/WeatherSourcesSettingsPage");
+
+const AppearanceSettingsPage = lazy(() => loadAppearanceSettingsPage().then((module) => ({ default: module.AppearanceSettingsPage })));
+const BrowserSettingsPage = lazy(() => loadBrowserSettingsPage().then((module) => ({ default: module.BrowserSettingsPage })));
+const BraveSearchSettingsPage = lazy(() => loadBraveSearchSettingsPage().then((module) => ({ default: module.BraveSearchSettingsPage })));
+const ConfigurationSettingsPage = lazy(() => loadConfigurationSettingsPage().then((module) => ({ default: module.ConfigurationSettingsPage })));
+const DatabaseSettingsPage = lazy(() => loadDatabaseSettingsPage().then((module) => ({ default: module.DatabaseSettingsPage })));
+const DiscordSettingsPage = lazy(() => loadDiscordSettingsPage().then((module) => ({ default: module.DiscordSettingsPage })));
+const GeneralSettingsPage = lazy(() => loadGeneralSettingsPage().then((module) => ({ default: module.GeneralSettingsPage })));
+const GithubSettingsPage = lazy(() => loadGithubSettingsPage().then((module) => ({ default: module.GithubSettingsPage })));
+const MapboxSettingsPage = lazy(() => loadMapboxSettingsPage().then((module) => ({ default: module.MapboxSettingsPage })));
+const ModelSettingsPage = lazy(() => loadModelSettingsPage().then((module) => ({ default: module.ModelSettingsPage })));
+const NineRouterSettingsPage = lazy(() => loadNineRouterSettingsPage().then((module) => ({ default: module.NineRouterSettingsPage })));
+const PersonalizationSettingsPage = lazy(() => loadPersonalizationSettingsPage().then((module) => ({ default: module.PersonalizationSettingsPage })));
+const PdfSettingsPage = lazy(() => loadPdfSettingsPage().then((module) => ({ default: module.PdfSettingsPage })));
+const ProvidersSettingsPage = lazy(() => loadProvidersSettingsPage().then((module) => ({ default: module.ProvidersSettingsPage })));
+const UsageSettingsPage = lazy(() => loadUsageSettingsPage().then((module) => ({ default: module.UsageSettingsPage })));
+const WeatherSourcesSettingsPage = lazy(() => loadWeatherSourcesSettingsPage().then((module) => ({ default: module.WeatherSourcesSettingsPage })));
+
+const SETTINGS_SECTION_PRELOADERS: Record<SettingsSectionId, () => Promise<unknown>> = {
+  appearance: loadAppearanceSettingsPage,
+  browser: loadBrowserSettingsPage,
+  braveSearch: loadBraveSearchSettingsPage,
+  configuration: loadConfigurationSettingsPage,
+  database: () => Promise.all([loadPdfSettingsPage(), loadDatabaseSettingsPage()]),
+  discord: loadDiscordSettingsPage,
+  general: () => Promise.all([loadGeneralSettingsPage(), loadPersonalizationSettingsPage()]),
+  github: loadGithubSettingsPage,
+  mapbox: () => Promise.all([loadWeatherSourcesSettingsPage(), loadMapboxSettingsPage()]),
+  model: () => Promise.all([loadProvidersSettingsPage(), loadModelSettingsPage()]),
+  nineRouter: loadNineRouterSettingsPage,
+  pdf: () => Promise.all([loadPdfSettingsPage(), loadDatabaseSettingsPage()]),
+  personalization: () => Promise.all([loadGeneralSettingsPage(), loadPersonalizationSettingsPage()]),
+  providers: () => Promise.all([loadProvidersSettingsPage(), loadModelSettingsPage()]),
+  usage: loadUsageSettingsPage,
+  weatherSources: () => Promise.all([loadWeatherSourcesSettingsPage(), loadMapboxSettingsPage()]),
+};
+
+export function preloadSettingsSection(section: SettingsSectionId) {
+  return SETTINGS_SECTION_PRELOADERS[resolveSettingsNavSection(section)]?.();
+}
 
 function isOfflineCatalogError(error: string | null | undefined) {
   const normalizedError = error?.toLowerCase().trim();
@@ -96,14 +140,19 @@ function formatLiveCatalogStatus(providerLabel: string, baseUrl: string, status:
   return `Start ${providerLabel} to load its real model list.`;
 }
 
-export function SettingsPage({
+function SettingsPageComponent({
   activeSection,
   appearanceMode,
+  appearanceSettings,
   appInfo,
   discordBridge,
+  generalSettings,
   localWorkspace,
+  onActiveSectionChange,
   onAppearanceModeChange,
+  onAppearanceSettingsChange,
   onDiscordBridgeChange,
+  onGeneralSettingsChange,
   onLocalWorkspaceChange,
   onPersonalizationChange,
   onSettingsChange,
@@ -122,7 +171,7 @@ export function SettingsPage({
   const [githubDisconnectConfirmOpen, setGithubDisconnectConfirmOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [githubActionState, setGithubActionState] = useState<GithubActionState>("idle");
-  const [githubConnection, setGithubConnection] = useState<GithubConnectionState>({ connected: false, scopes: [] });
+  const [githubConnection, setGithubConnection] = useState<GithubConnectionState>({ connected: false, pluginInstalled: false, scopes: [] });
   const [githubDeviceLogin, setGithubDeviceLogin] = useState<GithubDeviceLoginSession | null>(null);
   const [githubDevicePolling, setGithubDevicePolling] = useState(false);
   const [githubOauthClientId, setGithubOauthClientId] = useState(() => loadGithubOAuthClientId(getDefaultGithubOAuthClientId()));
@@ -138,24 +187,33 @@ export function SettingsPage({
   const [dependencyStatus, setDependencyStatus] = useState<SettingsStatusMessage | null>(null);
   const [testStatus, setTestStatus] = useState<SettingsStatusMessage | null>(null);
   const [testing, setTesting] = useState(false);
-  const activeProvider = getModelProvider(settings.provider);
+  const activeProvider = useMemo(() => getModelProvider(settings.provider), [settings.provider]);
   const activeProviderApiKey = getProviderApiKey(settings);
   const activeProviderBaseUrl = getProviderBaseUrl(settings);
   const activeProviderUsesLiveCatalog = usesLiveModelCatalog(settings.provider);
   const activeProviderPrefersLiveCatalog = prefersLiveModelCatalog(settings.provider);
-  const activeProviderAllModels = buildProviderModelOptions(settings.provider, activeProviderUsesLiveCatalog ? liveProviderModels : undefined, settings.model);
-  const activeProviderDisabledModels = settings.disabledModels[settings.provider] ?? [];
-  const activeProviderModels = filterEnabledProviderModelOptions(activeProviderAllModels, activeProviderDisabledModels);
+  const activeProviderAllModels = useMemo(
+    () => buildProviderModelOptions(settings.provider, activeProviderUsesLiveCatalog ? liveProviderModels : undefined, settings.model),
+    [activeProviderUsesLiveCatalog, liveProviderModels, settings.model, settings.provider],
+  );
+  const activeProviderDisabledModels = settings.disabledModels[settings.provider] ?? EMPTY_DISABLED_MODELS;
+  const activeProviderModels = useMemo(
+    () => filterEnabledProviderModelOptions(activeProviderAllModels, activeProviderDisabledModels),
+    [activeProviderAllModels, activeProviderDisabledModels],
+  );
   const activeModelSupportsThinking = supportsProviderThinking(settings.provider, settings.thinking.effort, settings.model);
   const liveProviderModelCount = settings.provider === "openrouter" ? activeProviderAllModels.length : (liveProviderModels?.length ?? 0);
   const githubRequestedScope = getDefaultGithubOAuthScope();
-  const missingGithubScopes = getMissingGithubFullAccessScopes(githubConnection);
+  const missingGithubScopes = useMemo(() => getMissingGithubFullAccessScopes(githubConnection), [githubConnection]);
   const hasFullGithubAccess = githubConnection.connected && missingGithubScopes.length === 0;
   const displaySection = resolveSettingsNavSection(activeSection);
   const githubStartingLogin = githubActionState === "login";
   const githubCheckingAccess = githubActionState === "refresh";
   const githubDisconnecting = githubActionState === "disconnect";
-  const liveProviderModelStatusText = formatLiveCatalogStatus(activeProvider.label, activeProviderBaseUrl, liveProviderModelStatus, liveProviderModelError, liveProviderModelCount);
+  const liveProviderModelStatusText = useMemo(
+    () => formatLiveCatalogStatus(activeProvider.label, activeProviderBaseUrl, liveProviderModelStatus, liveProviderModelError, liveProviderModelCount),
+    [activeProvider.label, activeProviderBaseUrl, liveProviderModelError, liveProviderModelCount, liveProviderModelStatus],
+  );
   const githubAccountDetail = githubConnection.connected ? formatGithubAccountDetail(githubConnection) : "";
 
   useEffect(() => {
@@ -166,6 +224,20 @@ export function SettingsPage({
       modelCatalogRunRef.current += 1;
       validationRunRef.current += 1;
     };
+  }, []);
+
+  useEffect(() => {
+    void SETTINGS_SECTION_PRELOADERS[displaySection]?.();
+  }, [displaySection]);
+
+  useEffect(() => {
+    return scheduleSettingsIdleTask(() => {
+      const uniquePreloaders = new Set(Object.values(SETTINGS_SECTION_PRELOADERS));
+
+      uniquePreloaders.forEach((preloadSection) => {
+        void preloadSection();
+      });
+    }, 650);
   }, []);
 
   useEffect(() => {
@@ -237,7 +309,7 @@ export function SettingsPage({
       });
 
     return () => controller.abort();
-  }, [activeProvider.label, activeProviderBaseUrl, activeProviderApiKey, activeProviderUsesLiveCatalog, settings, settings.provider]);
+  }, [activeProvider.label, activeProviderBaseUrl, activeProviderApiKey, activeProviderUsesLiveCatalog, settings.provider]);
 
   function updateSettings(nextSettings: Partial<ProviderSettings>) {
     validationRunRef.current += 1;
@@ -375,16 +447,24 @@ export function SettingsPage({
 
       setGithubDeviceLogin(session);
       setGithubDevicePolling(true);
-      setGithubStatus({ kind: "success", text: `Enter code ${session.userCode} in GitHub to finish signing in.` });
+      setGithubStatus({ kind: "success", text: `Your GitHub code is ${session.userCode}. Enter it in the browser to finish signing in.` });
       scheduleGithubDevicePoll(session, clientId, runId, session.interval);
+
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(session.userCode).then(() => {
+          if (mountedRef.current && githubDeviceRunRef.current === runId) {
+            setGithubStatus({ kind: "success", text: `Your GitHub code is ${session.userCode}. It was copied for the browser.` });
+          }
+        }).catch(() => {});
+      }
 
       try {
         await openGithubDeviceLogin(session.verificationUri);
-      } catch (error) {
+      } catch {
         if (mountedRef.current && githubDeviceRunRef.current === runId) {
           setGithubStatus({
             kind: "success",
-            text: `Enter code ${session.userCode} at ${session.verificationUri}.`,
+            text: `Your GitHub code is ${session.userCode}. Open ${session.verificationUri} and enter it to finish signing in.`,
           });
         }
       }
@@ -415,9 +495,9 @@ export function SettingsPage({
 
     try {
       await navigator.clipboard.writeText(githubDeviceLogin.userCode);
-      setGithubStatus({ kind: "success", text: "GitHub code copied." });
+      setGithubStatus({ kind: "success", text: `GitHub code ${githubDeviceLogin.userCode} copied.` });
     } catch {
-      setGithubStatus({ kind: "error", text: "Could not copy the GitHub code." });
+      setGithubStatus({ kind: "error", text: `Could not copy the GitHub code. Enter ${githubDeviceLogin.userCode} manually.` });
     }
   }
 
@@ -731,18 +811,34 @@ export function SettingsPage({
     if (displaySection === "general") {
       return (
         <>
-          <SettingsSectionHeading detail="App details, theme, user instructions, and reset controls." icon={Settings2} title="General" />
+          <SettingsSectionHeading detail="Work mode, permissions, app behavior, dictation, notifications, and runtime defaults." icon={Settings2} title="General" />
           <GeneralSettingsPage
             activeProviderLabel={activeProvider.label}
             appInfo={appInfo}
+            generalSettings={generalSettings}
             localWorkspace={localWorkspace}
             settings={settings}
             showHeading={false}
+            onGeneralSettingsChange={onGeneralSettingsChange}
+            onOpenLibraryData={() => onActiveSectionChange("database")}
             onResetSettings={() => setResetConfirmOpen(true)}
+            onSelectApprovalPolicy={selectApprovalPolicy}
+            onSelectSandboxMode={selectSandboxMode}
+            onSettingsPatch={updateSettings}
           />
-          <AppearanceSettingsPage appearanceMode={appearanceMode} showHeading={false} onAppearanceModeChange={onAppearanceModeChange} />
           <PersonalizationSettingsPage settings={settings} showHeading={false} onSettingsPatch={updateSettings} />
         </>
+      );
+    }
+
+    if (displaySection === "appearance") {
+      return (
+        <AppearanceSettingsPage
+          appearanceMode={appearanceMode}
+          appearanceSettings={appearanceSettings}
+          onAppearanceModeChange={onAppearanceModeChange}
+          onAppearanceSettingsChange={onAppearanceSettingsChange}
+        />
       );
     }
 
@@ -754,13 +850,10 @@ export function SettingsPage({
           dependencyBusy={dependencyBusy}
           dependencyDiagnostic={dependencyDiagnostic}
           dependencyStatus={dependencyStatus}
-          localWorkspace={localWorkspace}
           settings={settings}
           onDiagnoseDependencies={handleDiagnoseDependencies}
           onOpenConfig={handleOpenConfig}
           onReinstallDependencies={handleReinstallDependencies}
-          onSelectApprovalPolicy={selectApprovalPolicy}
-          onSelectSandboxMode={selectSandboxMode}
           onSettingsPatch={updateSettings}
         />
       );
@@ -768,6 +861,10 @@ export function SettingsPage({
 
     if (displaySection === "braveSearch") {
       return <BraveSearchSettingsPage locationServicesEnabled={personalization.locationServicesEnabled} settings={settings} onSettingsPatch={updateSettings} />;
+    }
+
+    if (displaySection === "browser") {
+      return <BrowserSettingsPage settings={settings} onSettingsPatch={updateSettings} />;
     }
 
     if (displaySection === "database") {
@@ -813,6 +910,10 @@ export function SettingsPage({
 
     if (displaySection === "nineRouter") {
       return <NineRouterSettingsPage settings={settings} onSettingsChange={onSettingsChange} onSubscriptionSandboxUninstalled={onSubscriptionSandboxUninstalled} />;
+    }
+
+    if (displaySection === "usage") {
+      return <UsageSettingsPage settings={settings} onSettingsChange={onSettingsChange} />;
     }
 
     if (displaySection === "model") {
@@ -873,7 +974,7 @@ export function SettingsPage({
     <div className="settings-page">
       <section className="settings-shell" aria-labelledby="settings-section-title" data-section={displaySection}>
         <div className="settings-section-panel" key={displaySection}>
-          {renderActiveSection()}
+          <Suspense fallback={null}>{renderActiveSection()}</Suspense>
         </div>
       </section>
 
@@ -913,6 +1014,28 @@ export function SettingsPage({
   );
 }
 
+export const SettingsPage = memo(SettingsPageComponent, areSettingsPagePropsEqual);
+
+function areSettingsPagePropsEqual(previous: SettingsPageProps, next: SettingsPageProps) {
+  return (
+    previous.activeSection === next.activeSection &&
+    previous.appearanceMode === next.appearanceMode &&
+    previous.appearanceSettings === next.appearanceSettings &&
+    previous.appInfo.name === next.appInfo.name &&
+    previous.appInfo.version === next.appInfo.version &&
+    previous.appInfo.phase === next.appInfo.phase &&
+    previous.appInfo.runtime === next.appInfo.runtime &&
+    previous.appInfo.platform === next.appInfo.platform &&
+    previous.appInfo.arch === next.appInfo.arch &&
+    previous.discordBridge === next.discordBridge &&
+    previous.generalSettings === next.generalSettings &&
+    previous.localWorkspace === next.localWorkspace &&
+    previous.personalization === next.personalization &&
+    previous.projects === next.projects &&
+    previous.settings === next.settings
+  );
+}
+
 function formatGithubAccountDetail(connection: GithubConnectionState) {
   const connected = connection.connectedAt ? new Date(connection.connectedAt).toLocaleDateString() : "connected";
   const missingScopes = getMissingGithubFullAccessScopes(connection);
@@ -939,4 +1062,23 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
       .catch(reject)
       .finally(() => window.clearTimeout(timeoutId));
   });
+}
+
+function scheduleSettingsIdleTask(callback: () => void, timeoutMs: number) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const idleWindow = window as Window & {
+    cancelIdleCallback?: (id: number) => void;
+    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  };
+
+  if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+    const idleId = idleWindow.requestIdleCallback(callback, { timeout: timeoutMs });
+    return () => idleWindow.cancelIdleCallback?.(idleId);
+  }
+
+  const timeoutId = window.setTimeout(callback, timeoutMs);
+  return () => window.clearTimeout(timeoutId);
 }

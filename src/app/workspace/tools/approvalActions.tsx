@@ -67,7 +67,7 @@ export async function handleResolveToolApproval(deps: WorkspaceRuntimeDeps, mess
       status: decision.status,
     };
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, run?.localWorkspace ?? localWorkspaceRef.current);
-    rememberSessionApprovalDecision(approval, decision, workspaceSettings);
+    rememberSessionApprovalDecision(approval, decision, workspaceSettings, currentChat.id);
     const prompt = run?.prompt ?? getLatestUserPrompt(currentChat.messages.slice(0, assistantMessageIndex));
     const resolvedPlanContent = approval.tool === "planning_handoff"
       ? typeof decision.editedArgs?.plan === "string"
@@ -244,6 +244,7 @@ export async function handleResolveToolApproval(deps: WorkspaceRuntimeDeps, mess
         previousToolCalls: approval.tool === "planning_handoff" ? undefined : assistantMessage.toolCalls,
         prompt: executionPrompt,
         requestId,
+        runId: assistantMessage.agentRunId,
         resumeToolCallContent: approval.tool === "planning_handoff" ? undefined : resumeToolCallContent,
         runtimeToolOverrides: approvedPlanExecution
           ? {

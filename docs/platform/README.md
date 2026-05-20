@@ -2,14 +2,14 @@
 
 This document tracks what is known about running Gilbert Codex on Windows, macOS, and Linux.
 
-Last updated: May 14, 2026.
+Last updated: May 20, 2026.
 
 ## Current Support State
 
 | Platform | Status | Notes |
 | --- | --- | --- |
 | Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
-| macOS | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for macOS, but the desktop app still needs someone on macOS to run, package, and finish any native issues. |
+| macOS arm64 | Port-ready, pending native verification | Frontend platform detection, Mac shortcut labels, left-side traffic-light window controls, Keychain-backed secure storage, and app/DMG build scripts are in place. A maintainer on Apple Silicon still needs to run the packaged app and complete the native QA checklist before this becomes verified support. |
 | Linux | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for Linux, but the desktop app still needs someone on Linux to run, package, and finish any native issues. |
 
 The macOS and Linux port is intentionally marked partial. The codebase should no longer be Windows-locked, but native desktop behavior needs real OS coverage before the project should promise official support.
@@ -18,8 +18,12 @@ The macOS and Linux port is intentionally marked partial. The codebase should no
 
 - Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
-- Tauri bundle targets are configured broadly so host-platform packages can be produced by each OS.
+- Tauri bundle scripts are platform-specific: Windows uses NSIS, and macOS uses the `app` and `dmg` targets with `src-tauri/tauri.macos.conf.json`.
+- Main and detached chat windows use Tauri window-state persistence so the next launch restores the user's last size, screen position, maximized state, and fullscreen state instead of forcing a fresh maximize.
+- First-launch window defaults are centered, resizable, constrained to the working area, and sized to fit common laptop and snapped-window layouts.
 - The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
+- macOS secure secrets use Keychain through the native `security` tool.
+- The frontend renders Mac-appropriate shortcut labels and window controls when the host platform is macOS.
 - Native terminal, browser preview, file picker, source context, and packaging behavior still need OS-specific verification.
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
 - Browser automation uses a platform-appropriate user agent.
@@ -41,9 +45,9 @@ Someone with access to macOS and Linux should verify:
 
 - `npm install`
 - `npm run dev`
-- `npm run app:dev`
+- `npm run app:dev:macos`
 - `npm run check`
-- `npm run app:build`
+- `npm run app:build:macos`
 - First launch, local account creation, sign-in, and local app storage.
 - File picker, selected workspace roots, file indexing, read/write/delete safeguards, and full-computer scope behavior.
 - Terminal execution, browser preview, local Git, GitHub, and source-context behavior.
@@ -67,17 +71,18 @@ Useful commands:
 
 ```bash
 npm install
-npm run app:dev
+npm run app:dev:macos
 npm run check
-npm run app:build
+npm run app:build:macos
+./scripts/macos-verify.sh
 ```
 
 Potential follow-up work:
 
-- Confirm whether custom window chrome feels native enough on macOS.
+- Confirm the custom traffic-light window chrome works correctly in dev and packaged app windows.
 - Add signing/notarization before any public macOS release.
 - Verify whether `zsh`, `bash`, and `sh` shells should all remain visible in the terminal selector.
-- Validate app data paths, file picker permissions, notifications, and security prompts.
+- Validate app data paths, Keychain prompts, file picker permissions, notifications, and security prompts.
 
 ## Linux Notes
 

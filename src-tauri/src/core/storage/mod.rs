@@ -20,6 +20,7 @@ const PROVIDER_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.provider-settings.v1"
 const DISCORD_BRIDGE_STORAGE_KEY: &str = "gilbert-codex.discord-bridge.v1";
 const MAPBOX_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.mapbox-settings.v1";
 const GITHUB_ACCOUNT_STORAGE_KEY: &str = "github-account.v1";
+const MCP_SERVERS_STORAGE_KEY: &str = "mcp-servers.v1";
 const AGENT_RUNS_STORAGE_KEY: &str = "agent-runs.v1";
 const CHAT_MEMORY_STORAGE_PREFIX: &str = "gilbert-codex.chat-memory.v1.";
 const PROJECT_MEMORY_STORAGE_PREFIX: &str = "gilbert-codex.project-memory.v1.";
@@ -772,6 +773,7 @@ fn prepare_storage_value(
         GITHUB_ACCOUNT_STORAGE_KEY => {
             protect_github_account(namespace, key, value, &mut references)?
         }
+        MCP_SERVERS_STORAGE_KEY => protect_mcp_servers(namespace, key, value, &mut references)?,
         _ => value.to_string(),
     };
 
@@ -787,6 +789,7 @@ fn hydrate_storage_value(namespace: &str, key: &str, value: &str) -> Result<Stri
         DISCORD_BRIDGE_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         MAPBOX_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         GITHUB_ACCOUNT_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
+        MCP_SERVERS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         _ => Ok(value.to_string()),
     }
 }
@@ -897,6 +900,73 @@ fn protect_github_account(
 
     serde_json::to_string(&json_value)
         .map_err(|error| format!("Could not serialize protected GitHub account: {error}"))
+}
+
+fn protect_mcp_servers(
+    namespace: &str,
+    storage_key: &str,
+    value: &str,
+    references: &mut Vec<SecureSecretReference>,
+) -> Result<String, String> {
+    let Ok(mut json_value) = serde_json::from_str::<Value>(value) else {
+        return Ok(value.to_string());
+    };
+
+    if let Some(servers) = json_value.get_mut("servers").and_then(Value::as_array_mut) {
+        for (index, server) in servers.iter_mut().enumerate() {
+            let Some(server_object) = server.as_object_mut() else {
+                continue;
+            };
+            let server_id = server_object
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| index.to_string());
+
+            if let Some(token) = server_object.get_mut("authorizationToken") {
+                protect_json_string_secret(
+                    namespace,
+                    storage_key,
+                    &format!("servers.{server_id}.authorizationToken"),
+                    token,
+                    references,
+                )?;
+            }
+
+            if let Some(environment) = server_object
+                .get_mut("environment")
+                .and_then(Value::as_array_mut)
+            {
+                for (environment_index, item) in environment.iter_mut().enumerate() {
+                    let Some(item_object) = item.as_object_mut() else {
+                        continue;
+                    };
+                    let environment_name = item_object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| environment_index.to_string());
+
+                    if let Some(environment_value) = item_object.get_mut("value") {
+                        protect_json_string_secret(
+                            namespace,
+                            storage_key,
+                            &format!("servers.{server_id}.environment.{environment_name}"),
+                            environment_value,
+                            references,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    serde_json::to_string(&json_value)
+        .map_err(|error| format!("Could not serialize protected MCP server settings: {error}"))
 }
 
 fn protect_json_string_secret(
@@ -1921,7 +1991,7 @@ fn open_database_at(path: &PathBuf) -> Result<Connection, String> {
         .execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
+            PRAGMA synchronous = FULL;
             PRAGMA foreign_keys = ON;
             PRAGMA wal_autocheckpoint = 8192;
             PRAGMA journal_size_limit = 67108864;

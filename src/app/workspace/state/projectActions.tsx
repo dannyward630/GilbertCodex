@@ -21,11 +21,12 @@ import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import { getBackgroundTerminalSessions } from "../../../lib/terminalSessions";
 
 export function handleNewChat(deps: WorkspaceRuntimeDeps, project: string) {
-  const { activeChat, activeChatIdRef, createEmptyChat, isDiscardableEmptyChat, normalizeProjectName, pendingChatsRef, pruneEmptyChats, restoreProjectLocalWorkspace, sameProjectName, setActiveChatId, setActiveRoute, setChats, setSearchOpen, sortChatsByUpdatedAt, touchProject } = deps;
+  const { activeChat, activeChatIdRef, createEmptyChat, DEFAULT_PROJECT, generalSettings, isDiscardableEmptyChat, normalizeProjectName, pendingChatsRef, pruneEmptyChats, restoreProjectLocalWorkspace, sameProjectName, setActiveChatId, setActiveRoute, setChats, setSearchOpen, sortChatsByUpdatedAt, touchProject } = deps;
 
-    const projectName = normalizeProjectName(project ?? activeChat.project);
+    const projectName = normalizeProjectName(project ?? (generalSettings?.defaultProjectlessChat ? DEFAULT_PROJECT : activeChat.project));
     const currentActiveChat = pendingChatsRef.current.find((chat) => chat.id === activeChatIdRef.current && !chat.archived);
     const nextChat = currentActiveChat && isDiscardableEmptyChat(currentActiveChat) && sameProjectName(currentActiveChat.project, projectName)
       ? currentActiveChat
@@ -428,7 +429,7 @@ export function handleToggleTerminal(deps: WorkspaceRuntimeDeps) {
   }
 
 export function attachLiveTerminalSession(deps: WorkspaceRuntimeDeps, toolCalls: ChatToolCall[]) {
-  const { setTerminalAttachedSession, setTerminalOpen } = deps;
+  const { setTerminalAttachedSession, setTerminalOpen, terminalAttachedSession } = deps;
 
     const liveTerminalCall = [...(toolCalls ?? [])].reverse().find((toolCall) => toolCall.terminal?.live && toolCall.terminal.sessionId);
     const terminal = liveTerminalCall?.terminal;
@@ -437,9 +438,16 @@ export function attachLiveTerminalSession(deps: WorkspaceRuntimeDeps, toolCalls:
       return;
     }
 
+    if (terminalAttachedSession?.sessionId === terminal.sessionId) {
+      setTerminalOpen(true);
+      return;
+    }
+
+    const backgroundSession = getBackgroundTerminalSessions().find((session) => session.sessionId === terminal.sessionId);
+
     setTerminalAttachedSession({
       command: terminal.command ?? liveTerminalCall.label,
-      initialOutput: liveTerminalCall.output,
+      initialOutput: backgroundSession?.outputPreview ?? liveTerminalCall.output,
       sessionId: terminal.sessionId,
       shell: terminal.shell,
       workingDirectory: terminal.workingDirectory,
@@ -592,6 +600,67 @@ export function handleForkActiveChatLocal(deps: WorkspaceRuntimeDeps) {
     });
   }
 
+export function handleForkChatFromMessage(deps: WorkspaceRuntimeDeps, messageId: string) {
+  const { activateForkedChat, activeChat, createForkedChat, localWorkspaceRef, resolveWorkspaceForChatProject, setNoticeDialog } = deps;
+  const sourceMessage = activeChat.messages.find((message) => message.id === messageId);
+
+    if (!sourceMessage) {
+      setNoticeDialog({
+        description: "That message is no longer available in the active chat.",
+        title: "Could not fork chat",
+      });
+      return;
+    }
+
+    if (sourceMessage.role !== "assistant" || sourceMessage.isStreaming || sourceMessage.status === "queued") {
+      setNoticeDialog({
+        description: "Branch from a completed assistant response.",
+        title: "Could not fork chat",
+      });
+      return;
+    }
+
+    const forkedChat = createForkedChat(activeChat, activeChat.project, `Fork: ${activeChat.title || "New chat"}`, { throughMessageId: messageId });
+    activateForkedChat(forkedChat, resolveWorkspaceForChatProject(activeChat.project, localWorkspaceRef.current));
+    setNoticeDialog({
+      description: `${forkedChat.title} continues from that response.`,
+      title: "Branched in a new chat",
+    });
+  }
+
+export function handleMessageFeedback(deps: WorkspaceRuntimeDeps, messageId: string, feedback: ChatMessage["feedback"]) {
+  const { activeChat, setChats } = deps;
+
+    setChats((currentChats) =>
+      currentChats.map((chat) => {
+        if (chat.id !== activeChat.id) {
+          return chat;
+        }
+
+        let changed = false;
+        const messages = chat.messages.map((message) => {
+          if (message.id !== messageId || message.role !== "assistant" || message.isStreaming) {
+            return message;
+          }
+
+          const nextFeedback = message.feedback === feedback ? undefined : feedback;
+
+          if (message.feedback === nextFeedback) {
+            return message;
+          }
+
+          changed = true;
+          return {
+            ...message,
+            feedback: nextFeedback,
+          };
+        });
+
+        return changed ? { ...chat, messages } : chat;
+      }),
+    );
+  }
+
 export async function handleForkActiveChatWorktree(deps: WorkspaceRuntimeDeps) {
   const { activateForkedChat, activeChat, createComputerGitWorktree, createForkedChat, createProjectFromFolder, localWorkspaceRef, projectNameFromPath, readErrorMessage, resolveWorkspaceForChatProject, setNoticeDialog } = deps;
 
@@ -707,26 +776,29 @@ export function activateForkedChat(deps: WorkspaceRuntimeDeps, forkedChat: ChatS
     setSearchOpen(false);
   }
 
-export function notifyPlanningInputNeeded(deps: WorkspaceRuntimeDeps, inputRequest: ChatPlanningInputRequest) {
-  const { createNeedsInputNotification, notifyAgentRunStatus } = deps;
+export function notifyPlanningInputNeeded(deps: WorkspaceRuntimeDeps, inputRequest: ChatPlanningInputRequest, chatId?: string) {
+  const { activeChat, createNeedsInputNotification, notifyAgentRunStatus } = deps;
 
     notifyAgentRunStatus({
+      chatId: chatId ?? activeChat.id,
       notification: createNeedsInputNotification(inputRequest.detail || inputRequest.title),
     });
   }
 
-export function notifyRunNeedsAttention(deps: WorkspaceRuntimeDeps, detail: string) {
-  const { createNeedsAttentionNotification, notifyAgentRunStatus } = deps;
+export function notifyRunNeedsAttention(deps: WorkspaceRuntimeDeps, detail?: string, chatId?: string) {
+  const { activeChat, createNeedsAttentionNotification, notifyAgentRunStatus } = deps;
 
     notifyAgentRunStatus({
+      chatId: chatId ?? activeChat.id,
       notification: createNeedsAttentionNotification(detail),
     });
   }
 
-export function notifyRunComplete(deps: WorkspaceRuntimeDeps, message: ChatMessage) {
-  const { notifyAgentRunStatus } = deps;
+export function notifyRunComplete(deps: WorkspaceRuntimeDeps, message: ChatMessage, chatId?: string) {
+  const { activeChat, notifyAgentRunStatus } = deps;
 
     notifyAgentRunStatus({
+      chatId: chatId ?? activeChat.id,
       message,
     });
   }

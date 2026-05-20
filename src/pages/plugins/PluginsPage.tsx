@@ -72,6 +72,38 @@ const componentChoices: Array<{ id: PluginComponentKind; label: string }> = [
   { id: "monitor", label: "Monitors" },
 ];
 
+const PLUGIN_ICON_DOMAINS: Record<string, string> = {
+  "chrome-devtools": "developer.chrome.com",
+  "code-review": "github.com",
+  "code-simplifier": "github.com",
+  coderabbit: "coderabbit.ai",
+  "commit-commands": "git-scm.com",
+  context7: "upstash.com",
+  "feature-dev": "github.com",
+  figma: "figma.com",
+  "frontend-design": "react.dev",
+  github: "github.com",
+  "go-lsp": "go.dev",
+  "mcp-server-dev": "modelcontextprotocol.io",
+  "plugin-developer-toolkit": "modelcontextprotocol.io",
+  playwright: "playwright.dev",
+  "playwright-browser": "playwright.dev",
+  "pr-review-toolkit": "github.com",
+  "pyright-lsp": "microsoft.github.io",
+  "rust-analyzer-lsp": "rust-lang.org",
+  security: "owasp.org",
+  "security-guidance": "owasp.org",
+  semgrep: "semgrep.dev",
+  serena: "github.com",
+  "skill-creator": "openai.com",
+  slack: "slack.com",
+  stripe: "stripe.com",
+  superpowers: "github.com",
+  supabase: "supabase.com",
+  "typescript-lsp": "typescriptlang.org",
+  vercel: "vercel.com",
+};
+
 export function PluginsPage({ onBackToChat }: PluginsPageProps) {
   return <PluginDirectory onBackToChat={onBackToChat} />;
 }
@@ -415,14 +447,11 @@ function PluginCardGrid({
         const expanded = expandedPluginIds.has(plugin.id);
         const installed = installedPluginIds.has(plugin.id);
         const status: PluginListingStatus = installed ? "installed" : plugin.status;
-        const PluginIcon = getPluginIcon(plugin);
 
         return (
           <article key={plugin.id} className="plugin-card" data-expanded={expanded} data-selected={selectedPluginId === plugin.id} data-status={status}>
             <div className="plugin-card-top">
-              <div className="plugin-card-icon">
-                <PluginIcon size={24} aria-hidden="true" />
-              </div>
+              <PluginLogo plugin={plugin} />
               <div className="plugin-card-title">
                 <span>
                   <strong>{plugin.name}</strong>
@@ -434,32 +463,42 @@ function PluginCardGrid({
 
             <p>{plugin.description}</p>
 
-            <ComponentBadges components={plugin.components} />
+            <ComponentBadges components={plugin.components} limit={expanded ? undefined : 2} />
 
-            <div className="plugin-skill-row" aria-label={`${plugin.name} skills`}>
-              {plugin.skills.length > 0 ? plugin.skills.slice(0, expanded ? 8 : 3).map((skill) => <code key={skill.id}>{skill.mention}</code>) : <code>No skill trigger</code>}
+            <div className="plugin-card-meta" aria-label={`${plugin.name} summary`}>
+              <span>{plugin.trust}</span>
+              <span>{formatInstallCount(plugin.installCount)} installs</span>
+              <span>{PLUGIN_COMPONENT_LABELS[plugin.components[0]] ?? "Plugin"}</span>
             </div>
 
-            <dl className="plugin-card-details">
-              <div>
-                <dt>Source</dt>
-                <dd title={plugin.source}>{plugin.source}</dd>
-              </div>
-              <div>
-                <dt>Trust</dt>
-                <dd>{plugin.trust}</dd>
-              </div>
-              <div>
-                <dt>Version</dt>
-                <dd>{plugin.version}</dd>
-              </div>
-              <div>
-                <dt>Installs</dt>
-                <dd>{formatInstallCount(plugin.installCount)}</dd>
-              </div>
-            </dl>
+            {expanded ? (
+              <>
+                <div className="plugin-skill-row" aria-label={`${plugin.name} skills`}>
+                  {plugin.skills.length > 0 ? plugin.skills.slice(0, 8).map((skill) => <code key={skill.id}>{skill.mention}</code>) : <code>No skill trigger</code>}
+                </div>
 
-            {expanded ? <ExpandedPluginDetails plugin={plugin} /> : null}
+                <dl className="plugin-card-details">
+                  <div>
+                    <dt>Source</dt>
+                    <dd title={plugin.source}>{plugin.source}</dd>
+                  </div>
+                  <div>
+                    <dt>Trust</dt>
+                    <dd>{plugin.trust}</dd>
+                  </div>
+                  <div>
+                    <dt>Version</dt>
+                    <dd>{plugin.version}</dd>
+                  </div>
+                  <div>
+                    <dt>Installs</dt>
+                    <dd>{formatInstallCount(plugin.installCount)}</dd>
+                  </div>
+                </dl>
+
+                <ExpandedPluginDetails plugin={plugin} />
+              </>
+            ) : null}
 
             <div className="plugin-card-actions">
               <a href={plugin.homepage} aria-label={`Open ${plugin.name} source`} title="Open source">
@@ -470,8 +509,8 @@ function PluginCardGrid({
                 <ShieldCheck size={15} aria-hidden="true" />
                 <span>Review</span>
               </button>
-              <button type="button" onClick={() => onExpandToggle(plugin.id)}>
-                {expanded ? <Minimize2 size={15} aria-hidden="true" /> : <Maximize2 size={15} aria-hidden="true" />}
+              <button className="plugin-card-expand-button" type="button" aria-expanded={expanded} onClick={() => onExpandToggle(plugin.id)}>
+                <ChevronDown size={15} aria-hidden="true" />
                 <span>{expanded ? "Collapse" : "Details"}</span>
               </button>
               <button type="button" data-installed={installed} onClick={() => onInstallToggle(plugin.id)}>
@@ -482,6 +521,21 @@ function PluginCardGrid({
           </article>
         );
       })}
+    </div>
+  );
+}
+
+function PluginLogo({ plugin }: { plugin: PluginListing }) {
+  const [failed, setFailed] = useState(false);
+  const FallbackIcon = getPluginFallbackIcon(plugin);
+
+  return (
+    <div className="plugin-card-icon">
+      {failed ? (
+        <FallbackIcon size={21} aria-hidden="true" />
+      ) : (
+        <img src={getPluginIconUrl(plugin)} alt="" aria-hidden="true" draggable={false} referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+      )}
     </div>
   );
 }
@@ -790,15 +844,19 @@ function CreatePluginPanel({
   );
 }
 
-function ComponentBadges({ components }: { components: PluginComponentKind[] }) {
+function ComponentBadges({ components, limit }: { components: PluginComponentKind[]; limit?: number }) {
+  const visibleComponents = typeof limit === "number" ? components.slice(0, limit) : components;
+  const hiddenCount = components.length - visibleComponents.length;
+
   return (
     <div className="plugin-component-badges">
-      {components.map((component) => (
+      {visibleComponents.map((component) => (
         <span key={component}>
           {getComponentIcon(component)}
           {PLUGIN_COMPONENT_LABELS[component]}
         </span>
       ))}
+      {hiddenCount > 0 ? <span>+{hiddenCount}</span> : null}
     </div>
   );
 }
@@ -901,7 +959,13 @@ function getTabIcon(tabId: PluginTab) {
   return <Puzzle size={16} aria-hidden="true" />;
 }
 
-function getPluginIcon(plugin: PluginListing) {
+function getPluginIconUrl(plugin: PluginListing) {
+  const domain = PLUGIN_ICON_DOMAINS[plugin.id] ?? PLUGIN_ICON_DOMAINS[plugin.category.toLowerCase()] ?? "github.com";
+
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=96`;
+}
+
+function getPluginFallbackIcon(plugin: PluginListing) {
   if (plugin.components.includes("mcp") && plugin.category === "Apps & data") {
     return Globe2;
   }

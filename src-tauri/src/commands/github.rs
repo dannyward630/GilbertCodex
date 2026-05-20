@@ -1,7 +1,7 @@
 //! GitHub desktop commands for token storage, OAuth device flow, REST normalization, and API-backed source control.
 
 use crate::{
-    commands::auth,
+    commands::{app_info, auth},
     core::{
         fs_utils::{delete_legacy_file_and_empty_parent as delete_legacy_file, path_to_string},
         storage::{self, SYSTEM_NAMESPACE},
@@ -13,15 +13,16 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::Write,
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 
 const GITHUB_API_URL: &str = "https://api.github.com";
-const GITHUB_API_VERSION: &str = "2022-11-28";
+const GITHUB_API_VERSION: &str = "2026-03-10";
 const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_DEVICE_VERIFICATION_URL: &str = "https://github.com/login/device";
 const GITHUB_OAUTH_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
@@ -34,6 +35,9 @@ const DEFAULT_PER_PAGE: usize = 30;
 const MAX_PER_PAGE: usize = 100;
 const GITHUB_HTTP_TIMEOUT_SECS: u64 = 18;
 const GITHUB_HTTP_CONNECT_TIMEOUT_SECS: u64 = 8;
+const GITHUB_DEVICE_CODE_TIMEOUT_SECS: u64 = 6;
+const GITHUB_DEVICE_CODE_CONNECT_TIMEOUT_SECS: u64 = 3;
+const GITHUB_DEVICE_CODE_CURL_TIMEOUT_SECS: u64 = 10;
 
 /// Shared lock for the local GitHub account store.
 #[derive(Default)]
@@ -43,9 +47,12 @@ pub struct GithubState {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 struct GithubDatabase {
     connected_at: Option<u64>,
     database_generation: u32,
+    plugin_installed: bool,
+    plugin_installed_at: Option<u64>,
     scopes: Vec<String>,
     token: Option<String>,
     user: Option<GithubUser>,
@@ -66,6 +73,8 @@ pub struct GithubUser {
 pub struct GithubConnectionState {
     pub connected: bool,
     pub connected_at: Option<u64>,
+    pub plugin_installed: bool,
+    pub plugin_installed_at: Option<u64>,
     pub scopes: Vec<String>,
     pub user: Option<GithubUser>,
 }
@@ -131,16 +140,24 @@ pub struct GithubListRepositoriesRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubRepository {
+    pub archived: Option<bool>,
     pub default_branch: String,
     pub description: Option<String>,
+    pub disabled: Option<bool>,
+    pub fork: Option<bool>,
+    pub forks_count: Option<u64>,
     pub full_name: String,
     pub html_url: String,
+    pub language: Option<String>,
     pub name: String,
+    pub open_issues_count: Option<u64>,
     pub owner_login: String,
     pub permissions: GithubRepositoryPermissions,
     pub private: bool,
     pub pushed_at: Option<String>,
+    pub stargazers_count: Option<u64>,
     pub updated_at: Option<String>,
+    pub watchers_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -457,6 +474,25 @@ pub struct GithubWorkflowRun {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubApiRequest {
+    pub body: Option<Value>,
+    pub method: String,
+    pub path: String,
+    pub query: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubApiResponse {
+    pub data: Value,
+    pub message: String,
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubUserApi {
     avatar_url: Option<String>,
     html_url: String,
@@ -485,16 +521,24 @@ struct GithubOAuthTokenApi {
 
 #[derive(Debug, Deserialize)]
 struct GithubRepositoryApi {
+    archived: Option<bool>,
     default_branch: Option<String>,
     description: Option<String>,
+    disabled: Option<bool>,
+    fork: Option<bool>,
+    forks_count: Option<u64>,
     full_name: String,
     html_url: String,
+    language: Option<String>,
     name: String,
+    open_issues_count: Option<u64>,
     owner: GithubOwnerApi,
     permissions: Option<GithubRepositoryPermissions>,
     private: bool,
     pushed_at: Option<String>,
+    stargazers_count: Option<u64>,
     updated_at: Option<String>,
+    watchers_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -654,6 +698,24 @@ pub fn github_get_state(
     Ok(create_connection_state(&database))
 }
 
+/// Marks the first-party GitHub plugin installed without changing the current account token.
+#[tauri::command]
+pub fn github_install_plugin(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+) -> Result<GithubConnectionState, String> {
+    let _guard = state
+        .lock
+        .lock()
+        .map_err(|_| "The GitHub account store is busy. Try again in a moment.".to_string())?;
+    let mut database = load_database(&app)?;
+
+    mark_plugin_installed(&mut database);
+    save_database(&app, &database)?;
+
+    Ok(create_connection_state(&database))
+}
+
 /// Validates a manually supplied token and persists the normalized account state.
 #[tauri::command]
 pub async fn github_connect_token(
@@ -683,26 +745,45 @@ pub async fn github_begin_device_login(
 ) -> Result<GithubDeviceLoginSession, String> {
     let client_id = normalize_oauth_client_id(&request.client_id)?;
     let scope = normalize_oauth_scope(request.scope.as_deref())?;
-    let client = github_client()?;
     let body = encode_form_body(&[("client_id", client_id.as_str()), ("scope", scope.as_str())]);
-    let response = client
-        .post(GITHUB_DEVICE_CODE_URL)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await
-        .map_err(|error| {
-            format!("GitHub browser login could not reach {GITHUB_DEVICE_CODE_URL}: {error}")
-        })?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Could not read GitHub browser login response: {error}"))?;
+    let curl_body = body.clone();
+    let response_result = tauri::async_runtime::spawn_blocking(move || {
+        post_github_form_with_curl(
+            GITHUB_DEVICE_CODE_URL,
+            &curl_body,
+            GITHUB_DEVICE_CODE_CURL_TIMEOUT_SECS,
+            "GitHub browser login",
+        )
+    })
+    .await
+    .map_err(|error| format!("GitHub browser login task failed: {error}"))?;
 
-    if !status.is_success() {
-        return Err(format_github_error(status.as_u16(), &body));
+    let (status, body) = match response_result {
+        Ok(response) => response,
+        Err(primary_error) => {
+            let client = github_device_code_client()?;
+            let response = client
+                .post(GITHUB_DEVICE_CODE_URL)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(body)
+                .send()
+                .await
+                .map_err(|fallback_error| {
+                    format!(
+                        "GitHub browser login fallback failed after curl failed: {primary_error}. Fallback request failed: {fallback_error}"
+                    )
+                })?;
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|error| {
+                format!("Could not read GitHub browser login response: {error}")
+            })?;
+            (status, body)
+        }
+    };
+
+    if !(200..300).contains(&status) {
+        return Err(format_github_error(status, &body));
     }
 
     let session = serde_json::from_str::<GithubDeviceCodeApi>(&body)
@@ -735,7 +816,8 @@ pub fn github_open_device_login(request: GithubOpenDeviceLoginRequest) -> Result
         );
     }
 
-    open_external_url(GITHUB_DEVICE_VERIFICATION_URL)
+    app_info::open_external_url(GITHUB_DEVICE_VERIFICATION_URL.to_string())
+        .map_err(|error| format!("Could not open the GitHub browser login page: {error}"))
 }
 
 /// Polls device-flow authorization and stores the token once GitHub authorizes it.
@@ -819,7 +901,11 @@ pub fn github_disconnect(
         .lock
         .lock()
         .map_err(|_| "The GitHub account store is busy. Try again in a moment.".to_string())?;
-    let database = fresh_database();
+    let previous_database = load_database(&app)?;
+    let mut database = fresh_database();
+
+    database.plugin_installed = previous_database.plugin_installed;
+    database.plugin_installed_at = previous_database.plugin_installed_at;
 
     save_database(&app, &database)?;
     Ok(create_connection_state(&database))
@@ -866,11 +952,12 @@ pub async fn github_list_repositories(
         query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
     }
 
-    let repos = github_api::<Vec<GithubRepositoryApi>>(&client, &token, Method::GET, url, None)
-        .await?
-        .into_iter()
-        .map(GithubRepository::from)
-        .collect::<Vec<_>>();
+    let repos =
+        github_api_json::<Vec<GithubRepositoryApi>>(&client, &token, Method::GET, url, None)
+            .await?
+            .into_iter()
+            .map(GithubRepository::from)
+            .collect::<Vec<_>>();
     let query = request.query.unwrap_or_default().trim().to_lowercase();
 
     if query.is_empty() {
@@ -904,7 +991,7 @@ pub async fn github_get_repository(
     let repo = normalize_repo(&request.repo)?;
     let url = parse_api_url(&format!("/repos/{owner}/{repo}"))?;
     let repository =
-        github_api::<GithubRepositoryApi>(&client, &token, Method::GET, url, None).await?;
+        github_api_json::<GithubRepositoryApi>(&client, &token, Method::GET, url, None).await?;
 
     Ok(repository.into())
 }
@@ -928,7 +1015,7 @@ pub async fn github_list_branches(
         query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
     }
 
-    let branches = github_api::<Vec<GithubBranchApi>>(&client, &token, Method::GET, url, None)
+    let branches = github_api_json::<Vec<GithubBranchApi>>(&client, &token, Method::GET, url, None)
         .await?
         .into_iter()
         .map(GithubBranch::from)
@@ -960,7 +1047,7 @@ pub async fn github_list_tree(
         url.query_pairs_mut().append_pair("recursive", "1");
     }
 
-    let tree = github_api::<GithubTreeApi>(&client, &token, Method::GET, url, None).await?;
+    let tree = github_api_json::<GithubTreeApi>(&client, &token, Method::GET, url, None).await?;
     let limit = request.limit.filter(|value| *value > 0);
     let truncated_by_limit = limit.is_some_and(|max_entries| tree.tree.len() > max_entries);
     let mut entries = Vec::new();
@@ -1004,7 +1091,8 @@ pub async fn github_read_file(
         url.query_pairs_mut().append_pair("ref", branch);
     }
 
-    let file = github_api::<GithubContentFileApi>(&client, &token, Method::GET, url, None).await?;
+    let file =
+        github_api_json::<GithubContentFileApi>(&client, &token, Method::GET, url, None).await?;
 
     if file.kind != "file" {
         return Err(format!("GitHub path is not a file: {}", file.path));
@@ -1070,7 +1158,7 @@ pub async fn github_search_code(
     }
 
     let response =
-        github_api::<GithubCodeSearchApi>(&client, &token, Method::GET, url, None).await?;
+        github_api_json::<GithubCodeSearchApi>(&client, &token, Method::GET, url, None).await?;
 
     Ok(GithubSearchCodeResponse {
         incomplete_results: response.incomplete_results,
@@ -1104,7 +1192,7 @@ pub async fn github_create_branch(
         "sha": base.commit_sha,
     });
     let branch_ref =
-        github_api::<GithubRefApi>(&client, &token, Method::POST, url, Some(payload)).await?;
+        github_api_json::<GithubRefApi>(&client, &token, Method::POST, url, Some(payload)).await?;
 
     Ok(GithubBranch {
         commit_sha: branch_ref.object.sha,
@@ -1144,16 +1232,21 @@ pub async fn github_commit_files(
         "base_tree": head_commit.tree.sha,
         "tree": tree_entries,
     });
-    let new_tree =
-        github_api::<GithubShaApi>(&client, &token, Method::POST, tree_url, Some(tree_payload))
-            .await?;
+    let new_tree = github_api_json::<GithubShaApi>(
+        &client,
+        &token,
+        Method::POST,
+        tree_url,
+        Some(tree_payload),
+    )
+    .await?;
     let commit_url = parse_api_url(&format!("/repos/{owner}/{repo}/git/commits"))?;
     let commit_payload = json!({
         "message": message,
         "tree": new_tree.sha,
         "parents": [branch_head.commit_sha],
     });
-    let new_commit = github_api::<GithubCommitApi>(
+    let new_commit = github_api_json::<GithubCommitApi>(
         &client,
         &token,
         Method::POST,
@@ -1167,7 +1260,7 @@ pub async fn github_commit_files(
         "force": false,
     });
     let _updated_ref =
-        github_api::<GithubRefApi>(&client, &token, Method::PATCH, ref_url, Some(ref_payload))
+        github_api_json::<GithubRefApi>(&client, &token, Method::PATCH, ref_url, Some(ref_payload))
             .await?;
 
     Ok(GithubCommitFilesResponse {
@@ -1216,7 +1309,7 @@ pub async fn github_create_pull_request(
         "draft": request.draft.unwrap_or(true),
     });
     let pull_request =
-        github_api::<GithubPullRequestApi>(&client, &token, Method::POST, url, Some(payload))
+        github_api_json::<GithubPullRequestApi>(&client, &token, Method::POST, url, Some(payload))
             .await?;
 
     Ok(GithubPullRequestResponse {
@@ -1261,7 +1354,7 @@ pub async fn github_generate_release_notes(
     );
 
     let notes =
-        github_api::<GithubReleaseNotesApi>(&client, &token, Method::POST, url, Some(payload))
+        github_api_json::<GithubReleaseNotesApi>(&client, &token, Method::POST, url, Some(payload))
             .await?;
 
     Ok(GithubReleaseNotesResponse {
@@ -1304,7 +1397,8 @@ pub async fn github_create_release(
     );
 
     let release =
-        github_api::<GithubReleaseApi>(&client, &token, Method::POST, url, Some(payload)).await?;
+        github_api_json::<GithubReleaseApi>(&client, &token, Method::POST, url, Some(payload))
+            .await?;
 
     Ok(release.into())
 }
@@ -1328,11 +1422,12 @@ pub async fn github_list_releases(
         query.append_pair("page", &request.page.unwrap_or(1).max(1).to_string());
     }
 
-    let releases = github_api::<Vec<GithubReleaseApi>>(&client, &token, Method::GET, url, None)
-        .await?
-        .into_iter()
-        .map(GithubReleaseResponse::from)
-        .collect();
+    let releases =
+        github_api_json::<Vec<GithubReleaseApi>>(&client, &token, Method::GET, url, None)
+            .await?
+            .into_iter()
+            .map(GithubReleaseResponse::from)
+            .collect();
 
     Ok(releases)
 }
@@ -1357,7 +1452,7 @@ pub async fn github_list_workflows(
     }
 
     let workflows =
-        github_api::<GithubWorkflowListApi>(&client, &token, Method::GET, url, None).await?;
+        github_api_json::<GithubWorkflowListApi>(&client, &token, Method::GET, url, None).await?;
 
     Ok(GithubWorkflowListResponse {
         total_count: workflows.total_count,
@@ -1437,8 +1532,8 @@ pub async fn github_list_workflow_runs(
         }
     }
 
-    let runs =
-        github_api::<GithubWorkflowRunListApi>(&client, &token, Method::GET, url, None).await?;
+    let runs = github_api_json::<GithubWorkflowRunListApi>(&client, &token, Method::GET, url, None)
+        .await?;
 
     Ok(GithubWorkflowRunListResponse {
         runs: runs
@@ -1447,6 +1542,38 @@ pub async fn github_list_workflow_runs(
             .map(GithubWorkflowRun::from)
             .collect(),
         total_count: runs.total_count,
+    })
+}
+
+/// Runs an advanced GitHub REST API request through the connected account.
+#[tauri::command]
+pub async fn github_api(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GithubState>,
+    request: GithubApiRequest,
+) -> Result<GithubApiResponse, String> {
+    let token = load_access_token(&app, &state)?;
+    let client = github_client()?;
+    let method = normalize_api_method(&request.method)?;
+    let path = normalize_api_path(&request.path)?;
+    let mut url = parse_api_url(&path)?;
+
+    append_github_query(&mut url, request.query)?;
+
+    let (status, data) =
+        github_api_value(&client, &token, method.clone(), url, request.body).await?;
+
+    Ok(GithubApiResponse {
+        data,
+        message: format!(
+            "GitHub API {} {} returned HTTP {}.",
+            method.as_str(),
+            path,
+            status
+        ),
+        method: method.as_str().to_string(),
+        path,
+        status,
     })
 }
 
@@ -1470,18 +1597,26 @@ impl From<GithubUserApi> for GithubUser {
 impl From<GithubRepositoryApi> for GithubRepository {
     fn from(repository: GithubRepositoryApi) -> Self {
         Self {
+            archived: repository.archived,
             default_branch: repository
                 .default_branch
                 .unwrap_or_else(|| "main".to_string()),
             description: repository.description,
+            disabled: repository.disabled,
+            fork: repository.fork,
+            forks_count: repository.forks_count,
             full_name: repository.full_name,
             html_url: repository.html_url,
+            language: repository.language,
             name: repository.name,
+            open_issues_count: repository.open_issues_count,
             owner_login: repository.owner.login,
             permissions: repository.permissions.unwrap_or_default(),
             private: repository.private,
             pushed_at: repository.pushed_at,
+            stargazers_count: repository.stargazers_count,
             updated_at: repository.updated_at,
+            watchers_count: repository.watchers_count,
         }
     }
 }
@@ -1571,9 +1706,13 @@ impl From<GithubCodeSearchItemApi> for GithubCodeSearchItem {
 }
 
 fn create_connection_state(database: &GithubDatabase) -> GithubConnectionState {
+    let connected = database.token.is_some() && database.user.is_some();
+
     GithubConnectionState {
-        connected: database.token.is_some() && database.user.is_some(),
+        connected,
         connected_at: database.connected_at,
+        plugin_installed: database.plugin_installed || connected,
+        plugin_installed_at: database.plugin_installed_at.or(database.connected_at),
         scopes: database.scopes.clone(),
         user: database.user.clone(),
     }
@@ -1611,9 +1750,13 @@ async fn validate_and_create_database(
         .map(GithubUser::from)
         .map_err(|error| format!("Could not parse GitHub account response: {error}"))?;
 
+    let now = now_millis();
+
     Ok(GithubDatabase {
-        connected_at: Some(now_millis()),
+        connected_at: Some(now),
         database_generation: GITHUB_DATABASE_GENERATION,
+        plugin_installed: true,
+        plugin_installed_at: Some(now),
         scopes,
         token: Some(token),
         user: Some(user),
@@ -1645,7 +1788,16 @@ fn github_client() -> Result<reqwest::Client, String> {
         .map_err(|error| format!("Could not create GitHub client: {error}"))
 }
 
-async fn github_api<T: DeserializeOwned>(
+fn github_device_code_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(GITHUB_DEVICE_CODE_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(GITHUB_DEVICE_CODE_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("Could not create GitHub browser login client: {error}"))
+}
+
+async fn github_api_json<T: DeserializeOwned>(
     client: &reqwest::Client,
     token: &str,
     method: Method,
@@ -1718,6 +1870,51 @@ async fn github_api_empty(
     Ok(())
 }
 
+async fn github_api_value(
+    client: &reqwest::Client,
+    token: &str,
+    method: Method,
+    url: reqwest::Url,
+    body: Option<Value>,
+) -> Result<(u16, Value), String> {
+    let mut request = client
+        .request(method, url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .bearer_auth(token);
+
+    if let Some(body) = body {
+        request = request
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("GitHub request failed: {error}"))?;
+    let status = response.status();
+    let status_code = status.as_u16();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read GitHub response: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format_github_error(status_code, &text));
+    }
+
+    if text.trim().is_empty() {
+        return Ok((status_code, json!({})));
+    }
+
+    let data = serde_json::from_str::<Value>(&text).map_err(|error| {
+        format!("Could not parse GitHub response: {error}. Full response: {text}")
+    })?;
+
+    Ok((status_code, data))
+}
+
 async fn resolve_branch_name(
     client: &reqwest::Client,
     token: &str,
@@ -1731,7 +1928,8 @@ async fn resolve_branch_name(
 
     let repository_url = parse_api_url(&format!("/repos/{owner}/{repo}"))?;
     let repository =
-        github_api::<GithubRepositoryApi>(client, token, Method::GET, repository_url, None).await?;
+        github_api_json::<GithubRepositoryApi>(client, token, Method::GET, repository_url, None)
+            .await?;
 
     Ok(repository
         .default_branch
@@ -1749,7 +1947,7 @@ async fn fetch_branch(
         "/repos/{owner}/{repo}/branches/{}",
         encode_path_segment(branch)
     ))?;
-    let branch = github_api::<GithubBranchApi>(client, token, Method::GET, url, None).await?;
+    let branch = github_api_json::<GithubBranchApi>(client, token, Method::GET, url, None).await?;
 
     Ok(branch.into())
 }
@@ -1766,7 +1964,7 @@ async fn fetch_git_commit(
         encode_path_segment(sha)
     ))?;
 
-    github_api::<GithubCommitApi>(client, token, Method::GET, url, None).await
+    github_api_json::<GithubCommitApi>(client, token, Method::GET, url, None).await
 }
 
 fn create_commit_tree_entry(file: &GithubCommitFileRequest) -> Result<Value, String> {
@@ -1981,6 +2179,83 @@ fn normalize_workflow_inputs(inputs: Option<Value>) -> Result<Option<Value>, Str
     Err("GitHub workflow inputs must be a JSON object.".to_string())
 }
 
+fn normalize_api_method(method: &str) -> Result<Method, String> {
+    match method.trim().to_ascii_uppercase().as_str() {
+        "DELETE" => Ok(Method::DELETE),
+        "GET" => Ok(Method::GET),
+        "PATCH" => Ok(Method::PATCH),
+        "POST" => Ok(Method::POST),
+        "PUT" => Ok(Method::PUT),
+        _ => Err("GitHub API method must be GET, POST, PATCH, PUT, or DELETE.".to_string()),
+    }
+}
+
+fn normalize_api_path(path: &str) -> Result<String, String> {
+    let path = path.trim();
+
+    if path.is_empty() {
+        return Err("GitHub API path is required.".to_string());
+    }
+
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("://")
+        || path.contains('\0')
+    {
+        return Err(
+            "GitHub API path must be a relative REST path such as /repos/OWNER/REPO/issues."
+                .to_string(),
+        );
+    }
+
+    if path.len() > 1_200 {
+        return Err("GitHub API path is too long.".to_string());
+    }
+
+    Ok(path.to_string())
+}
+
+fn append_github_query(url: &mut reqwest::Url, query: Option<Value>) -> Result<(), String> {
+    let Some(query) = query else {
+        return Ok(());
+    };
+
+    let Value::Object(query) = query else {
+        return Err("GitHub API query must be a JSON object.".to_string());
+    };
+
+    for (key, value) in query {
+        if key.trim().is_empty() || key.contains('\0') {
+            return Err("GitHub API query keys must be non-empty strings.".to_string());
+        }
+
+        for query_value in github_query_values(&value)? {
+            url.query_pairs_mut().append_pair(&key, &query_value);
+        }
+    }
+
+    Ok(())
+}
+
+fn github_query_values(value: &Value) -> Result<Vec<String>, String> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Bool(value) => Ok(vec![(if *value { "true" } else { "false" }).to_string()]),
+        Value::Number(value) => Ok(vec![value.to_string()]),
+        Value::String(value) => Ok(vec![value.to_string()]),
+        Value::Array(values) => {
+            let mut flattened = Vec::new();
+
+            for value in values {
+                flattened.extend(github_query_values(value)?);
+            }
+
+            Ok(flattened)
+        }
+        Value::Object(_) => Err("GitHub API query values cannot be nested objects.".to_string()),
+    }
+}
+
 fn insert_optional_payload_string(payload: &mut Value, key: &str, value: Option<String>) {
     if let Some(value) = value {
         payload[key] = Value::String(value);
@@ -2126,19 +2401,91 @@ fn encode_form_body(pairs: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-fn open_external_url(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let command = Command::new("cmd").args(["/C", "start", "", url]).spawn();
-
-    #[cfg(target_os = "macos")]
-    let command = Command::new("open").arg(url).spawn();
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let command = Command::new("xdg-open").arg(url).spawn();
-
+fn post_github_form_with_curl(
+    url: &str,
+    body: &str,
+    timeout_secs: u64,
+    context: &str,
+) -> Result<(u16, String), String> {
+    let timeout = timeout_secs.clamp(1, 60).to_string();
+    let mut command = Command::new(curl_binary());
     command
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the GitHub browser login page: {error}"))
+        .args([
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            timeout.as_str(),
+            "--request",
+            "POST",
+            "--header",
+            "Accept: application/json",
+            "--header",
+            "Content-Type: application/x-www-form-urlencoded",
+            "--data-binary",
+            "@-",
+            "--write-out",
+            "\nGILBERT_CODEX_HTTP_STATUS:%{http_code}",
+            url,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("{context} fallback could not start curl: {error}"))?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| format!("{context} fallback could not open curl stdin."))?;
+        stdin
+            .write_all(body.as_bytes())
+            .map_err(|error| format!("{context} fallback could not write request body: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("{context} fallback curl failed: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        return Err(if stderr.is_empty() {
+            format!(
+                "{context} fallback curl exited with status {:?}.",
+                output.status.code()
+            )
+        } else {
+            format!(
+                "{context} fallback curl exited with status {:?}: {stderr}",
+                output.status.code()
+            )
+        });
+    }
+
+    let Some((response_body, status_text)) = stdout.rsplit_once("\nGILBERT_CODEX_HTTP_STATUS:")
+    else {
+        return Err(format!(
+            "{context} fallback curl response was missing its HTTP status."
+        ));
+    };
+    let status = status_text
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| format!("{context} fallback curl returned an invalid HTTP status."))?;
+
+    Ok((status, response_body.to_string()))
+}
+
+fn curl_binary() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "curl"
+    }
 }
 
 fn encode_repo_path(path: &str) -> String {
@@ -2269,9 +2616,21 @@ fn fresh_database() -> GithubDatabase {
     GithubDatabase {
         connected_at: None,
         database_generation: GITHUB_DATABASE_GENERATION,
+        plugin_installed: false,
+        plugin_installed_at: None,
         scopes: Vec::new(),
         token: None,
         user: None,
+    }
+}
+
+fn mark_plugin_installed(database: &mut GithubDatabase) {
+    if !database.plugin_installed {
+        database.plugin_installed = true;
+    }
+
+    if database.plugin_installed_at.is_none() {
+        database.plugin_installed_at = Some(now_millis());
     }
 }
 

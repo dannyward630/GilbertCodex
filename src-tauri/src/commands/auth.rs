@@ -29,6 +29,7 @@ struct AuthDatabase {
     current_session: Option<AuthSessionRecord>,
     #[serde(default)]
     database_generation: u32,
+    #[serde(default)]
     users: Vec<AuthUserRecord>,
 }
 
@@ -440,9 +441,12 @@ fn normalize_password_material(
 
 fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     if let Some(content) = storage::read_value(app, SYSTEM_NAMESPACE, AUTH_DATABASE_STORAGE_KEY)? {
-        let database = parse_database_content(app, &content, "Gilbert Database auth record")?;
+        let parsed = parse_database_content(&content, "Gilbert Database auth record")?;
+        if parsed.repaired {
+            save_database(app, &parsed.database)?;
+        }
         cleanup_legacy_database(app);
-        return Ok(database);
+        return Ok(parsed.database);
     }
 
     let database_path = legacy_database_path(app)?;
@@ -454,7 +458,9 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     let content = match fs::read_to_string(&database_path) {
         Ok(content) => content,
         Err(_) => {
-            let _ = delete_legacy_file(&database_path, "local auth database");
+            if preserve_legacy_database_copy(&database_path, "unreadable").is_ok() {
+                let _ = delete_legacy_file(&database_path, "local auth database");
+            }
             return Ok(fresh_database());
         }
     };
@@ -464,8 +470,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
         return Ok(fresh_database());
     }
 
-    let database = match parse_database_content(
-        app,
+    let parsed = match parse_database_content(
         &content,
         &format!(
             "legacy local auth database at {}",
@@ -474,11 +479,13 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     ) {
         Ok(database) => database,
         Err(_) => {
-            let _ = delete_legacy_file(&database_path, "local auth database");
+            if preserve_legacy_database_copy(&database_path, "invalid").is_ok() {
+                let _ = delete_legacy_file(&database_path, "local auth database");
+            }
             return Ok(fresh_database());
         }
     };
-    let migrated_content = serde_json::to_string_pretty(&database).map_err(|error| {
+    let migrated_content = serde_json::to_string_pretty(&parsed.database).map_err(|error| {
         format!("Could not serialize the migrated local auth database: {error}")
     })?;
     storage::write_value(
@@ -489,7 +496,7 @@ fn load_database(app: &tauri::AppHandle) -> Result<AuthDatabase, String> {
     )?;
     let _ = delete_legacy_file(&database_path, "local auth database");
 
-    Ok(database)
+    Ok(parsed.database)
 }
 
 fn save_database(app: &tauri::AppHandle, database: &AuthDatabase) -> Result<(), String> {
@@ -501,22 +508,38 @@ fn save_database(app: &tauri::AppHandle, database: &AuthDatabase) -> Result<(), 
     )
 }
 
-fn parse_database_content(
-    app: &tauri::AppHandle,
-    content: &str,
-    source: &str,
-) -> Result<AuthDatabase, String> {
+struct ParsedAuthDatabase {
+    database: AuthDatabase,
+    repaired: bool,
+}
+
+fn parse_database_content(content: &str, source: &str) -> Result<ParsedAuthDatabase, String> {
     let database = serde_json::from_str::<AuthDatabase>(content).map_err(|error| {
         format!("Could not parse the local auth database from {source}: {error}")
     })?;
 
-    if database.database_generation != AUTH_DATABASE_GENERATION {
-        let fresh_database = fresh_database();
-        save_database(app, &fresh_database)?;
-        return Ok(fresh_database);
+    Ok(repair_database(database))
+}
+
+fn repair_database(mut database: AuthDatabase) -> ParsedAuthDatabase {
+    let mut repaired = false;
+
+    if database.database_generation < AUTH_DATABASE_GENERATION {
+        database.database_generation = AUTH_DATABASE_GENERATION;
+        repaired = true;
     }
 
-    Ok(database)
+    if let Some(session) = database.current_session.as_ref() {
+        let session_has_user = database.users.iter().any(|user| user.id == session.user_id);
+        let session_has_token = !session.session_token.trim().is_empty();
+
+        if !session_has_user || !session_has_token {
+            database.current_session = None;
+            repaired = true;
+        }
+    }
+
+    ParsedAuthDatabase { database, repaired }
 }
 
 fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -524,6 +547,20 @@ fn legacy_database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|path| path.join("auth").join(AUTH_DATABASE_FILE))
         .map_err(|error| format!("Could not resolve the local app data folder: {}", error))
+}
+
+fn preserve_legacy_database_copy(path: &PathBuf, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let backup_path = path.with_file_name(format!("local-auth-db.{label}.{}.json", now_millis()));
+    fs::copy(path, &backup_path).map(|_| ()).map_err(|error| {
+        format!(
+            "Could not preserve a recovery copy of the local auth database at {}: {error}",
+            path_to_string(&backup_path)
+        )
+    })
 }
 
 fn cleanup_legacy_database(app: &tauri::AppHandle) {
@@ -545,4 +582,81 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auth_user(id: &str) -> AuthUserRecord {
+        AuthUserRecord {
+            created_at: 1,
+            display_name: "Test User".to_string(),
+            email: format!("{id}@example.com"),
+            id: id.to_string(),
+            last_login_at: Some(1),
+            password_hash: "x".repeat(44),
+            password_hash_algorithm: PASSWORD_ALGORITHM.to_string(),
+            password_iterations: MIN_PASSWORD_ITERATIONS,
+            password_salt: "s".repeat(24),
+            updated_at: 1,
+            username: id.to_string(),
+        }
+    }
+
+    #[test]
+    fn older_auth_generation_is_upgraded_without_dropping_users() {
+        let content = serde_json::json!({
+            "currentSession": {
+                "createdAt": 1,
+                "sessionToken": "session-existing",
+                "userId": "user-a"
+            },
+            "databaseGeneration": 1,
+            "users": [{
+                "createdAt": 1,
+                "displayName": "Test User",
+                "email": "user-a@example.com",
+                "id": "user-a",
+                "lastLoginAt": 1,
+                "passwordHash": "x".repeat(44),
+                "passwordHashAlgorithm": PASSWORD_ALGORITHM,
+                "passwordIterations": MIN_PASSWORD_ITERATIONS,
+                "passwordSalt": "s".repeat(24),
+                "updatedAt": 1,
+                "username": "user-a"
+            }]
+        })
+        .to_string();
+
+        let parsed = parse_database_content(&content, "test auth db").unwrap();
+
+        assert!(parsed.repaired);
+        assert_eq!(
+            parsed.database.database_generation,
+            AUTH_DATABASE_GENERATION
+        );
+        assert_eq!(parsed.database.users.len(), 1);
+        assert_eq!(parsed.database.current_session.unwrap().user_id, "user-a");
+    }
+
+    #[test]
+    fn dangling_auth_session_is_cleared_without_dropping_accounts() {
+        let database = AuthDatabase {
+            current_session: Some(AuthSessionRecord {
+                created_at: 1,
+                session_token: "session-missing-user".to_string(),
+                user_id: "user-missing".to_string(),
+            }),
+            database_generation: AUTH_DATABASE_GENERATION,
+            users: vec![auth_user("user-a")],
+        };
+        let content = serde_json::to_string(&database).unwrap();
+
+        let parsed = parse_database_content(&content, "test auth db").unwrap();
+
+        assert!(parsed.repaired);
+        assert_eq!(parsed.database.users.len(), 1);
+        assert!(parsed.database.current_session.is_none());
+    }
 }

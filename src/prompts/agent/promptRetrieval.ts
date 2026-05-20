@@ -43,7 +43,7 @@ export function createAgentPromptRetrievalContext(settings: ProviderSettings, me
   const recentMessages = messages.slice(-6);
   const latestUserPrompt = getLatestUserPrompt(messages);
   const mode = recentMessages.some((message) => message.mode === "plan" || message.planning || message.content.includes("Planning passes")) ? "planning" : "chat";
-  const hasLocalComputerContext = messages.some(hasLocalComputerContextMessage) || hasLocalWorkspaceTool(toolBridge?.tools);
+  const hasLocalComputerContext = messages.some(hasLocalComputerContextMessage) || hasLocalWorkspaceTool(getProviderVisibleTools(toolBridge));
   const hasWebContext = messages.some(hasWebContextMessage);
   const query = [
     latestUserPrompt,
@@ -260,7 +260,7 @@ function getLatestUserPrompt(messages: ChatMessage[]) {
 
 function getEnabledToolNames(settings: ProviderSettings, toolBridge?: ProviderToolBridgeOptions) {
   if (toolBridge?.tools) {
-    return toolBridge.tools.map((tool) => tool.id);
+    return getProviderVisibleTools(toolBridge).map((tool) => tool.id);
   }
 
   const tools = normalizeToolRegistrySettings(settings.tools);
@@ -271,6 +271,19 @@ function getEnabledToolNames(settings: ProviderSettings, toolBridge?: ProviderTo
     tools.webSearch ? "web_search" : "",
     tools.imageGeneration ? "image_generate" : "",
   ].filter(Boolean);
+}
+
+function getProviderVisibleTools(toolBridge?: ProviderToolBridgeOptions) {
+  if (!toolBridge?.tools) {
+    return [];
+  }
+
+  const providerVisibleToolIds = toolBridge.providerVisibleToolIds ?? toolBridge.capabilityPlan?.providerVisibleToolIds;
+  if (!providerVisibleToolIds) {
+    return toolBridge.tools;
+  }
+
+  return toolBridge.tools.filter((tool) => providerVisibleToolIds.includes(tool.id));
 }
 
 function isResearchLike(prompt: string, _settings: ProviderSettings) {

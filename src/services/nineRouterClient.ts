@@ -92,6 +92,61 @@ export interface NineRouterCodexPollResponse {
   status?: "done" | "error" | "pending" | "unknown" | string;
 }
 
+export type NineRouterUsagePeriod = "24h" | "30d" | "60d" | "7d" | "all" | "today";
+
+export interface NineRouterUsageBucket {
+  completionTokens?: number;
+  cost?: number;
+  lastUsed?: string;
+  promptTokens?: number;
+  provider?: string;
+  rawModel?: string;
+  requests?: number;
+}
+
+export interface NineRouterUsageRequest {
+  completionTokens?: number;
+  model?: string;
+  promptTokens?: number;
+  provider?: string;
+  status?: string;
+  timestamp?: string;
+}
+
+export interface NineRouterUsageStats {
+  activeRequests?: Array<{ account?: string; count?: number; model?: string; provider?: string }>;
+  byAccount?: Record<string, NineRouterUsageBucket>;
+  byEndpoint?: Record<string, NineRouterUsageBucket>;
+  byModel?: Record<string, NineRouterUsageBucket>;
+  byProvider?: Record<string, NineRouterUsageBucket>;
+  errorProvider?: string;
+  recentRequests?: NineRouterUsageRequest[];
+  totalCompletionTokens?: number;
+  totalCost?: number;
+  totalPromptTokens?: number;
+  totalRequests?: number;
+}
+
+export interface NineRouterUsageChartPoint {
+  cost?: number;
+  label?: string;
+  tokens?: number;
+}
+
+export interface NineRouterUsageProvider {
+  id: string;
+  name: string;
+}
+
+export interface NineRouterUsageSnapshot {
+  chart: NineRouterUsageChartPoint[];
+  logs: string[];
+  period: NineRouterUsagePeriod;
+  providers: NineRouterUsageProvider[];
+  stats: NineRouterUsageStats;
+  syncedAt: string;
+}
+
 export type NineRouterStatusMessage = {
   kind: "error" | "success" | "warning";
   text: string;
@@ -217,6 +272,25 @@ export async function loadNineRouterModels(baseUrl: string) {
   });
 }
 
+export async function loadNineRouterUsageSnapshot(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, period: NineRouterUsagePeriod = "7d"): Promise<NineRouterUsageSnapshot> {
+  const chartPeriod = period === "all" ? "60d" : period;
+  const [stats, chart, providers, logs] = await Promise.all([
+    fetchNineRouterJson<NineRouterUsageStats>(createNineRouterUrl(dashboardUrl, "/api/usage/stats", { period })),
+    fetchOptionalNineRouterJson<NineRouterUsageChartPoint[]>(createNineRouterUrl(dashboardUrl, "/api/usage/chart", { period: chartPeriod }), []),
+    fetchOptionalNineRouterJson<{ providers?: NineRouterUsageProvider[] }>(joinLocalUrl(dashboardUrl, "/api/usage/providers"), { providers: [] }),
+    fetchOptionalNineRouterJson<string[]>(joinLocalUrl(dashboardUrl, "/api/usage/logs"), []),
+  ]);
+
+  return {
+    chart: Array.isArray(chart) ? chart : [],
+    logs: Array.isArray(logs) ? logs : [],
+    period,
+    providers: Array.isArray(providers.providers) ? providers.providers : [],
+    stats,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
 export async function connectNineRouterAccount(provider: NineRouterAccountProvider, dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, options: NineRouterConnectOptions = {}) {
   if (provider.flow === "codex") {
     await connectCodexAccount(dashboardUrl, options);
@@ -306,6 +380,14 @@ export async function fetchNineRouterJson<T>(url: string) {
   return payload;
 }
 
+async function fetchOptionalNineRouterJson<T>(url: string, fallback: T): Promise<T> {
+  try {
+    return await fetchNineRouterJson<T>(url);
+  } catch {
+    return fallback;
+  }
+}
+
 export async function postNineRouterJson<T>(url: string, body: unknown) {
   const response = await fetchWithTimeout(url, {
     body: JSON.stringify(body),
@@ -313,6 +395,42 @@ export async function postNineRouterJson<T>(url: string, body: unknown) {
       "Content-Type": "application/json",
     },
     method: "POST",
+  });
+  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscriptions request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+export async function putNineRouterJson<T>(url: string, body: unknown) {
+  const response = await fetchWithTimeout(url, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "PUT",
+  });
+  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscriptions request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+export async function patchNineRouterJson<T>(url: string, body: unknown) {
+  const response = await fetchWithTimeout(url, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "PATCH",
   });
   const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
 

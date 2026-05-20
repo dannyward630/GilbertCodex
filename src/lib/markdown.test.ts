@@ -43,6 +43,19 @@ describe("normalizeMarkdownForDisplay", () => {
     expect(normalizeMarkdownForDisplay("```markdown\n| A | B |\n| - |\n| 1 | 2 |\n```")).toBe("| A | B |\n| --- | --- |\n| 1 | 2 |");
   });
 
+  it("unwraps an unclosed whole-message prose fence before rendering", () => {
+    const content = [
+      "```markdown",
+      "## Summary",
+      "- The answer should render as Markdown even if the provider forgot the closing fence.",
+    ].join("\n");
+
+    expect(normalizeMarkdownForDisplay(content)).toBe([
+      "## Summary",
+      "- The answer should render as Markdown even if the provider forgot the closing fence.",
+    ].join("\n"));
+  });
+
   it("repairs a two-backtick typo so following prose does not stay inside the code block", () => {
     const content = [
       "The main issue right now",
@@ -102,7 +115,7 @@ describe("normalizeMarkdownForDisplay", () => {
     expect(normalizeMarkdownForDisplay(diff)).toBe(diff);
   });
 
-  it("does not aggressively repair fences while streaming", () => {
+  it("repairs an obvious code-to-prose boundary while streaming", () => {
     const content = [
       "```ts",
       "const answer = 42;",
@@ -110,6 +123,57 @@ describe("normalizeMarkdownForDisplay", () => {
       "That means the model may still be streaming.",
     ].join("\n");
 
+    expect(normalizeMarkdownForDisplay(content, { final: false })).toBe([
+      "```ts",
+      "const answer = 42;",
+      "",
+      "```",
+      "That means the model may still be streaming.",
+    ].join("\n"));
+  });
+
+  it("keeps a still-active streaming code fence open at the tail", () => {
+    const content = [
+      "```ts",
+      "const answer = 42;",
+    ].join("\n");
+
     expect(normalizeMarkdownForDisplay(content, { final: false })).toBe(content);
+  });
+
+  it("keeps streamed JSON fenced without swallowing following prose", () => {
+    const content = [
+      "```json",
+      "{\"ok\":true}",
+      "",
+      "Here is what it means:",
+      "- The response should render as prose again.",
+    ].join("\n");
+
+    expect(normalizeMarkdownForDisplay(content, { final: false })).toBe([
+      "```json",
+      "{\"ok\":true}",
+      "",
+      "```",
+      "Here is what it means:",
+      "- The response should render as prose again.",
+    ].join("\n"));
+  });
+
+  it("closes a malformed streaming fence before a new fenced block starts", () => {
+    const content = [
+      "```json",
+      "{\"ok\":true}",
+      "```ts",
+      "const next = true;",
+    ].join("\n");
+
+    expect(normalizeMarkdownForDisplay(content, { final: false })).toBe([
+      "```json",
+      "{\"ok\":true}",
+      "```",
+      "```ts",
+      "const next = true;",
+    ].join("\n"));
   });
 });

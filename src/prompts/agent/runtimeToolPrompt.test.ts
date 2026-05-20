@@ -117,6 +117,8 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("files_write_many");
     expect(prompt).toContain("files_edit_many");
     expect(prompt).toContain("files_apply_patch");
+    expect(prompt).toContain("Do not say you have no tools when the manifest lists callable tools");
+    expect(prompt).toContain("use the closest attached tool in the same family");
     expect(prompt).toContain("including several changes in a single file");
     expect(prompt).toContain("Use files_edit_many as the default");
     expect(prompt).toContain("Use replace_range only with line numbers from a fresh read");
@@ -161,6 +163,33 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("read the browser console");
     expect(prompt).toContain("instead of merely saying it could be opened");
     expect(prompt).toContain("budget: passes 11/12; executions 47/48");
+  });
+
+  it("tells the model to reuse terminal sessions and localhost servers for run diagnostics", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "run app and debug browser error",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("terminal_list_sessions", "terminal"),
+          attachedTool("terminal_dev_server_status", "terminal"),
+          attachedTool("terminal_read_session", "terminal"),
+          attachedTool("terminal_run", "terminal"),
+          attachedTool("browser_preview_open", "browser"),
+          attachedTool("browser_console_read", "browser"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("terminal_list_sessions");
+    expect(prompt).toContain("terminal_dev_server_status");
+    expect(prompt).toContain("terminal_read_session");
+    expect(prompt).toContain("reuse only app-owned sessions or reachable localhost servers that match the requested command/cwd/preview target");
+    expect(prompt).toContain("Do not open or reuse unrelated common localhost ports");
+    expect(prompt).toContain("External Windows Terminal, PowerShell, cmd, or other non-Gilbert terminal scrollback is not readable");
   });
 
   it("tells the model to use attached image generation for visual creation", () => {
@@ -220,10 +249,35 @@ describe("createRuntimeToolPrompt", () => {
     });
 
     expect(prompt).toContain("- none");
+    expect(prompt).toContain("answer normally instead of volunteering a broad no-tools disclaimer");
     expect(prompt).not.toContain("terminal_run");
     expect(prompt).not.toContain("browser_preview_open");
     expect(prompt).not.toContain("web_search tool only");
     expect(prompt).not.toContain("memory_search");
+  });
+
+  it("adds plain-language guidance for tool and plugin inventory questions", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: false,
+      hasWebContext: false,
+      latestUserPrompt: "what tools do you have and plugins",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [],
+      },
+    });
+
+    expect(prompt).toContain("Capability inventory request detected");
+    expect(prompt).toContain("Answer the user directly and conversationally");
+    expect(prompt).toContain("Enabled app capability toggles");
+    expect(prompt).toContain("Bundled catalog default entries");
+    expect(prompt).toContain("not proof that each plugin is currently connected");
+    expect(prompt).toContain("Do not claim a plugin, skill, MCP server");
+    expect(prompt).toContain("Do not expose internal phrases");
+    expect(prompt).toContain("no_selected_tools");
+    expect(prompt).toContain("required_family_unavailable");
+    expect(prompt).toContain("blocked gates");
   });
 
   it("does not advertise globally enabled tools when no provider tools are attached", () => {
@@ -251,6 +305,46 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).not.toContain("web_search tool only");
   });
 
+  it("does not tell the model to call tools when the capability plan has no provider-visible tools", () => {
+    const readTool = attachedTool("files_read", "files");
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "inspect our app",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        capabilityPlan: {
+          blockedReasons: [{
+            code: "required_family_unavailable",
+            detail: "None of the required tool families are provider-visible for this pass: files.",
+          }],
+          canCallProvider: false,
+          intent: ["workspace_evidence"],
+          mustUseTools: true,
+          prompt: "inspect our app",
+          providerFormat: "openai-compatible",
+          providerVisibleToolIds: [],
+          requiredFamilies: ["files"],
+          selectedToolIds: ["files_read"],
+          selectedTools: [readTool],
+          toolChoice: "none",
+        },
+        providerVisibleToolIds: [],
+        tools: [readTool],
+      },
+    });
+
+    expect(prompt).toContain("- none");
+    expect(prompt).toContain("Internal tool capability note");
+    expect(prompt).toContain("no required provider-visible tools are attached");
+    expect(prompt).toContain("phrase the limitation in plain user language");
+    expect(prompt).not.toContain("Blocked gates");
+    expect(prompt).not.toContain("- files:");
+    expect(prompt).not.toContain("call files_read");
+    expect(prompt).not.toContain("Use the real provider tool-call channel");
+  });
+
   it("tells the model not to wrap ordinary answers in code fences", () => {
     const prompt = createRuntimeToolPrompt({
       hasLocalComputerContext: false,
@@ -264,7 +358,15 @@ describe("createRuntimeToolPrompt", () => {
     });
 
     expect(prompt).toContain("Do not wrap the whole answer in a fenced code block");
+    expect(prompt).toContain("latest user message as the success condition");
+    expect(prompt).toContain("call the tool instead of giving only a plan");
+    expect(prompt).toContain("Do not claim done, fixed, updated, verified");
+    expect(prompt).toContain("Be honest about uncertainty and limits");
+    expect(prompt).toContain("senior-developer clear");
+    expect(prompt).toContain("easy for non-experts to follow");
     expect(prompt).toContain("Use fenced code blocks only for actual code snippets");
+    expect(prompt).toContain("always close every fence");
+    expect(prompt).toContain("complete delimiter row");
     expect(prompt).toContain("ordinary summaries, plans, bullets, tables, or explanations");
     expect(prompt).toContain("Do not emit JSON envelopes, provider tool_calls");
   });

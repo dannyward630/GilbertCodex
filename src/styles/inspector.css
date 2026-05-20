@@ -428,9 +428,54 @@
   background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
 }
 
+.approval-card-rich {
+  gap: 10px;
+  padding: 10px;
+  border-color: color-mix(in srgb, var(--line) 58%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 76%, transparent), transparent),
+    color-mix(in srgb, var(--surface-panel) 82%, transparent);
+}
+
+.approval-card-rich[data-family="gmail"] {
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line) 76%);
+}
+
+.approval-card-rich[data-family="calendar"] {
+  border-color: color-mix(in srgb, var(--green) 22%, var(--line) 78%);
+}
+
 .approval-card-header {
   justify-content: space-between;
   gap: 8px;
+}
+
+.approval-card-header-rich {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.approval-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--line) 64%, transparent);
+  border-radius: 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+}
+
+.approval-card-rich[data-family="gmail"] .approval-card-icon {
+  color: color-mix(in srgb, var(--red) 82%, var(--text));
+  background: color-mix(in srgb, var(--red) 11%, var(--surface-raised) 89%);
+}
+
+.approval-card-rich[data-family="calendar"] .approval-card-icon {
+  color: color-mix(in srgb, var(--green) 82%, var(--text));
+  background: color-mix(in srgb, var(--green) 11%, var(--surface-raised) 89%);
 }
 
 .approval-card-header span {
@@ -486,15 +531,157 @@
   word-break: break-word;
 }
 
+.approval-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+}
+
+.approval-preview-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.approval-preview-heading svg {
+  color: var(--text-muted);
+}
+
+.approval-preview-heading span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.approval-preview-heading strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-preview-heading small,
+.approval-preview-body small,
+.approval-preview-fields dt,
+.approval-preview-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.approval-preview-fields {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.approval-preview-fields div {
+  display: grid;
+  grid-template-columns: minmax(68px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 42%, transparent);
+}
+
+.approval-preview-fields div:first-child {
+  border-top: 0;
+}
+
+.approval-preview-fields dt,
+.approval-preview-fields dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.approval-preview-fields dd {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.approval-preview-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
+}
+
+.approval-preview-body p,
+.approval-preview-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-editor {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--line) 76%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--blue-soft) 18%, var(--surface-panel) 82%);
+}
+
+.approval-editor textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 112px;
+  resize: vertical;
+  padding: 9px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 8px;
+  outline: none;
+  background: color-mix(in srgb, black 16%, transparent);
+  font: 12px/1.45 var(--font-mono);
+}
+
+.approval-editor[data-mode="request"] textarea {
+  font-family: inherit;
+}
+
+.approval-editor textarea:focus,
+.approval-editor textarea:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line) 58%);
+}
+
+.approval-editor-error {
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.approval-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .approval-actions {
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.approval-actions button {
+.approval-actions button,
+.approval-editor-actions button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 100%;
   min-height: 30px;
   padding: 0 9px;
   color: var(--text-muted);
@@ -505,15 +692,68 @@
   font-weight: 690;
 }
 
-.approval-actions button:hover {
+.approval-actions button span,
+.approval-editor-actions button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-actions button:hover,
+.approval-editor-actions button:hover {
   color: var(--text);
   border-color: color-mix(in srgb, var(--blue) 42%, var(--line) 58%);
   background: color-mix(in srgb, var(--blue-soft) 52%, var(--surface-raised) 48%);
 }
 
+.approval-actions button:disabled,
+.approval-editor-actions button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.approval-actions button[data-primary="true"],
+.approval-editor-actions button:first-child {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line) 66%);
+  background: color-mix(in srgb, var(--green) 14%, var(--surface-raised) 86%);
+}
+
+.approval-actions button[data-active="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--blue) 44%, var(--line) 56%);
+  background: color-mix(in srgb, var(--blue-soft) 56%, var(--surface-raised) 44%);
+}
+
 .approval-actions button[data-variant="session"] {
   border-color: color-mix(in srgb, var(--blue) 44%, var(--line) 56%);
   background: color-mix(in srgb, var(--blue-soft) 46%, var(--surface-raised) 54%);
+}
+
+.approval-actions button[data-variant="session"][data-connected-app="true"] {
+  flex: 1 1 100%;
+  justify-content: center;
+  min-height: 34px;
+  border-style: dashed;
+  color: var(--text);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 58%, transparent), transparent 68%),
+    color-mix(in srgb, var(--surface-raised) 76%, transparent);
+}
+
+.approval-card-rich[data-family="gmail"] .approval-actions button[data-variant="session"][data-connected-app="true"] {
+  border-color: color-mix(in srgb, var(--red) 35%, var(--line) 65%);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--red) 13%, transparent), transparent 68%),
+    color-mix(in srgb, var(--surface-raised) 78%, transparent);
+}
+
+.approval-card-rich[data-family="calendar"] .approval-actions button[data-variant="session"][data-connected-app="true"] {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--line) 65%);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--green) 13%, transparent), transparent 68%),
+    color-mix(in srgb, var(--surface-raised) 78%, transparent);
 }
 
 .rail-row-list {

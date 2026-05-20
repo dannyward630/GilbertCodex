@@ -1,19 +1,24 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { PanelLeft } from "lucide-react";
 import { AppTopBar } from "../chrome/AppTopBar";
 import { ShellSidebar } from "./ShellSidebar";
 import { SearchDialog } from "../search/SearchDialog";
 import { useAnimatedPresence } from "../../lib/useAnimatedPresence";
+import { scheduleIdleTask } from "../../lib/idleTask";
+import { getHostPlatform, normalizeHostPlatform } from "../../lib/hostPlatform";
+import { useInteractionLatencyProbe } from "../../lib/interactionLatencyProbe";
 import type { AppInfo } from "../../types/app";
 import type { AuthUser } from "../../types/auth";
 import type { ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
+import type { ProjectOpenTargetId } from "../../types/projectOpen";
 import type { AppearanceMode } from "../../types/settings";
-import type { TerminalAttachedSession } from "../../types/terminal";
+import type { TerminalAttachedSession, TerminalShellId } from "../../types/terminal";
 import type { SettingsSectionId } from "../../pages/settings/types";
 
-const TerminalPanel = lazy(() => import("../terminal/TerminalPanel").then((module) => ({ default: module.TerminalPanel })));
+const loadTerminalPanel = () => import("../terminal/TerminalPanel");
+const TerminalPanel = lazy(() => loadTerminalPanel().then((module) => ({ default: module.TerminalPanel })));
 
 interface AppShellProps {
   activeRoute: PrimaryRoute;
@@ -23,6 +28,8 @@ interface AppShellProps {
   authUser: AuthUser;
   chats: ChatSummary[];
   children: ReactNode;
+  defaultOpenTarget?: ProjectOpenTargetId;
+  defaultTerminalShell?: TerminalShellId;
   desktopRuntime: boolean;
   locationServicesEnabled: boolean;
   activeChatId: string;
@@ -33,8 +40,11 @@ interface AppShellProps {
   onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
   onOpenBulkDeleteChats: () => void;
+  onOpenProjectInTool: (projectName: string, target: ProjectOpenTargetId) => void | Promise<void>;
   onOpenSearch: () => void;
   onLogout: () => void;
+  onPreloadRoute?: (route: PrimaryRoute) => void;
+  onPreloadSettingsSection?: (section: SettingsSectionId) => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onShowAbout: () => void;
   onCloseTerminal: () => void;
@@ -62,6 +72,8 @@ export function AppShell({
   authUser,
   chats,
   children,
+  defaultOpenTarget,
+  defaultTerminalShell,
   desktopRuntime,
   locationServicesEnabled,
   onAppearanceModeChange,
@@ -71,8 +83,11 @@ export function AppShell({
   onDeleteProject,
   onNewChat,
   onOpenBulkDeleteChats,
+  onOpenProjectInTool,
   onOpenSearch,
   onLogout,
+  onPreloadRoute,
+  onPreloadSettingsSection,
   onRouteChange,
   onShowAbout,
   onCloseTerminal,
@@ -90,18 +105,31 @@ export function AppShell({
   terminalOpen,
   terminalWorkingDirectory,
 }: AppShellProps) {
+  useInteractionLatencyProbe("Gilbert UI", desktopRuntime);
+
   const sidebarPresence = useAnimatedPresence(sidebarOpen, 360);
   const sidebarState = sidebarOpen ? "open" : sidebarPresence.exiting ? "closing" : "closed";
-  const [terminalMounted, setTerminalMounted] = useState(terminalOpen);
+  const terminalPresence = useAnimatedPresence(terminalOpen, 160);
+  const terminalState = terminalOpen ? "open" : terminalPresence.exiting ? "closing" : "closed";
+  const terminalWasMountedRef = useRef(terminalPresence.mounted);
+  if (terminalPresence.mounted) {
+    terminalWasMountedRef.current = true;
+  }
+  const shouldRenderTerminalPanel = terminalPresence.mounted || terminalWasMountedRef.current;
+  const hostPlatform = normalizeHostPlatform(appInfo.platform ?? getHostPlatform());
   const rootStyle = {
     "--terminal-height": `${terminalHeight}px`,
   } as CSSProperties;
 
   useEffect(() => {
-    if (terminalOpen) {
-      setTerminalMounted(true);
+    if (!desktopRuntime) {
+      return undefined;
     }
-  }, [terminalOpen]);
+
+    return scheduleIdleTask(() => {
+      void loadTerminalPanel();
+    }, 250);
+  }, [desktopRuntime]);
 
   const closeSidebarOnSmallScreens = useCallback(() => {
     if (typeof window === "undefined" || !sidebarOpen) {
@@ -145,6 +173,13 @@ export function AppShell({
     onOpenBulkDeleteChats();
     closeSidebarOnSmallScreens();
   }, [closeSidebarOnSmallScreens, onOpenBulkDeleteChats]);
+  const handleSidebarOpenProjectInTool = useCallback(
+    (projectName: string, target: ProjectOpenTargetId) => {
+      void onOpenProjectInTool(projectName, target);
+      closeSidebarOnSmallScreens();
+    },
+    [closeSidebarOnSmallScreens, onOpenProjectInTool],
+  );
   const handleSidebarOpenSearch = useCallback(() => {
     onOpenSearch();
     closeSidebarOnSmallScreens();
@@ -172,18 +207,27 @@ export function AppShell({
   );
 
   return (
-    <div className="desktop-root" data-runtime={desktopRuntime ? "desktop" : "web"} data-terminal-open={terminalOpen} style={rootStyle}>
+    <div
+      className="desktop-root"
+      data-runtime={desktopRuntime ? "desktop" : "web"}
+      data-platform={hostPlatform}
+      data-terminal-open={terminalOpen}
+      data-terminal-state={terminalState}
+      style={rootStyle}
+    >
       <AppTopBar
         activeRoute={activeRoute}
         appInfo={appInfo}
         appearanceMode={appearanceMode}
         desktopRuntime={desktopRuntime}
+        hostPlatform={hostPlatform}
         locationServicesEnabled={locationServicesEnabled}
         sidebarOpen={sidebarOpen}
         terminalOpen={terminalOpen}
         onAppearanceModeChange={onAppearanceModeChange}
         onNewChat={onNewChat}
         onOpenSearch={onOpenSearch}
+        onPreloadRoute={onPreloadRoute}
         onRouteChange={onRouteChange}
         onShowAbout={onShowAbout}
         onToggleTerminal={onToggleTerminal}
@@ -208,6 +252,7 @@ export function AppShell({
               activeSettingsSection={activeSettingsSection}
               authUser={authUser}
               chats={chats}
+              defaultOpenTarget={defaultOpenTarget}
               locationServicesEnabled={locationServicesEnabled}
               open={sidebarOpen && !sidebarPresence.exiting}
               projects={projects}
@@ -216,8 +261,11 @@ export function AppShell({
               onDeleteProject={handleSidebarDeleteProject}
               onNewChat={handleSidebarNewChat}
               onOpenBulkDeleteChats={handleSidebarOpenBulkDeleteChats}
+              onOpenProjectInTool={handleSidebarOpenProjectInTool}
               onOpenSearch={handleSidebarOpenSearch}
               onLogout={onLogout}
+              onPreloadRoute={onPreloadRoute}
+              onPreloadSettingsSection={onPreloadSettingsSection}
               onRouteChange={handleSidebarRouteChange}
               onSelectChat={handleSidebarSelectChat}
               onSettingsSectionChange={handleSidebarSettingsSectionChange}
@@ -240,20 +288,23 @@ export function AppShell({
         />
         <main className="app-main">{children}</main>
       </div>
-      {terminalMounted ? (
-        <Suspense fallback={null}>
-          <TerminalPanel
-            attachedSession={terminalAttachedSession}
-            desktopRuntime={desktopRuntime}
-            height={terminalHeight}
-            open={terminalOpen}
-            workingDirectory={terminalWorkingDirectory}
-            onClose={onCloseTerminal}
-            onHeightChange={onTerminalHeightChange}
-          />
-        </Suspense>
+      {shouldRenderTerminalPanel ? (
+        <div className="terminal-presence" data-presence={terminalPresence.exiting ? "exit" : "enter"}>
+          <Suspense fallback={null}>
+            <TerminalPanel
+              attachedSession={terminalAttachedSession}
+              defaultShell={defaultTerminalShell}
+              desktopRuntime={desktopRuntime}
+              height={terminalHeight}
+              open={terminalPresence.mounted}
+              workingDirectory={terminalWorkingDirectory}
+              onClose={onCloseTerminal}
+              onHeightChange={onTerminalHeightChange}
+            />
+          </Suspense>
+        </div>
       ) : null}
-      <SearchDialog chats={chats} open={searchOpen} onClose={onCloseSearch} onSelectChat={onSelectChat} />
+      <SearchDialog chats={chats} hostPlatform={hostPlatform} open={searchOpen} onClose={onCloseSearch} onSelectChat={onSelectChat} />
     </div>
   );
 }

@@ -7,21 +7,6 @@ const AUTH_DATABASE_GENERATION = 2;
 const PASSWORD_ALGORITHM = "pbkdf2-sha256";
 const PASSWORD_ITERATIONS = 210_000;
 const PASSWORD_KEY_BITS = 256;
-const WORKSPACE_STORAGE_KEYS = [
-  "gilbert-codex.chats.v1",
-  "gilbert-codex.projects.v1",
-  "gilbert-codex.provider-settings.v1",
-  "gilbert-codex.thinking-settings.v1",
-  "gilbert-codex.appearance.v1",
-  "gilbert-codex.active-chat.v1",
-  "gilbert-codex.local-workspace.v1",
-  "gilbert-codex.tool-registry.v1",
-  "gilbert-codex.github-oauth-client-id.v1",
-  "gilbert-codex.discord-bridge.v1",
-  "gilbert-codex.browser-preview.v2",
-  "gilbert-codex.browser-preview.v1",
-  "gilbert-codex.agent-runs.v1",
-];
 
 interface AuthUserRecord {
   createdAt: number;
@@ -283,22 +268,28 @@ function loadBrowserDatabase(): BrowserAuthDatabase {
       return createEmptyBrowserDatabase();
     }
 
-    if (parsed.databaseGeneration !== AUTH_DATABASE_GENERATION) {
-      return resetBrowserAuthDatabase();
+    const normalized = normalizeBrowserDatabase(parsed);
+    if (normalized.repaired) {
+            persistBrowserDatabaseRepair(normalized.database);
     }
 
-    return {
-      currentSession: parsed.currentSession ?? null,
-      databaseGeneration: AUTH_DATABASE_GENERATION,
-      users: parsed.users.filter(isBrowserUserRecord),
-    };
+    return normalized.database;
   } catch {
-    return resetBrowserAuthDatabase();
+    return createEmptyBrowserDatabase();
   }
 }
 
 function saveBrowserDatabase(database: BrowserAuthDatabase) {
   window.localStorage.setItem(AUTH_DB_KEY, JSON.stringify(database));
+}
+
+function persistBrowserDatabaseRepair(database: BrowserAuthDatabase) {
+  try {
+    saveBrowserDatabase(database);
+  } catch {
+    // Auth reads should not discard otherwise valid accounts just because
+    // browser preview storage is temporarily unavailable or quota-limited.
+  }
 }
 
 function createEmptyBrowserDatabase(): BrowserAuthDatabase {
@@ -309,37 +300,29 @@ function createEmptyBrowserDatabase(): BrowserAuthDatabase {
   };
 }
 
-function resetBrowserAuthDatabase() {
-  const database = createEmptyBrowserDatabase();
+function normalizeBrowserDatabase(parsed: Partial<BrowserAuthDatabase>) {
+  const users = parsed.users?.filter(isBrowserUserRecord) ?? [];
+  let repaired = users.length !== (parsed.users?.length ?? 0);
+  let currentSession = isBrowserSessionRecord(parsed.currentSession) ? parsed.currentSession : null;
 
-  try {
-    removeBrowserWorkspaceStorage();
-    saveBrowserDatabase(database);
-  } catch {
-    return database;
+  if (parsed.databaseGeneration !== AUTH_DATABASE_GENERATION) {
+    repaired = true;
   }
 
-  return database;
-}
-
-function removeBrowserWorkspaceStorage() {
-  const keysToRemove: string[] = [];
-
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
-
-    if (!key) {
-      continue;
-    }
-
-    if (key === AUTH_DB_KEY || WORKSPACE_STORAGE_KEYS.some((storageKey) => key === storageKey || key.startsWith(`${storageKey}.user.`))) {
-      keysToRemove.push(key);
-    }
+  const currentSessionUserId = currentSession?.userId;
+  if (currentSessionUserId && !users.some((user) => user.id === currentSessionUserId)) {
+    currentSession = null;
+    repaired = true;
   }
 
-  for (const key of keysToRemove) {
-    window.localStorage.removeItem(key);
-  }
+  return {
+    database: {
+      currentSession,
+      databaseGeneration: AUTH_DATABASE_GENERATION,
+      users,
+    },
+    repaired,
+  };
 }
 
 function findBrowserUser(database: BrowserAuthDatabase, login: string) {
@@ -408,6 +391,23 @@ function isBrowserUserRecord(value: unknown): value is AuthUserRecord {
     typeof user.username === "string" &&
     typeof user.passwordHash === "string" &&
     typeof user.passwordSalt === "string"
+  );
+}
+
+function isBrowserSessionRecord(value: unknown): value is AuthSessionRecord {
+  if (typeof value !== "object" || !value) {
+    return false;
+  }
+
+  const session = value as Partial<AuthSessionRecord>;
+
+  return (
+    typeof session.createdAt === "number" &&
+    Number.isFinite(session.createdAt) &&
+    typeof session.sessionToken === "string" &&
+    session.sessionToken.trim().length > 0 &&
+    typeof session.userId === "string" &&
+    session.userId.trim().length > 0
   );
 }
 

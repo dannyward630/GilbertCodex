@@ -11,6 +11,8 @@ export interface GithubUser {
 export interface GithubConnectionState {
   connected: boolean;
   connectedAt?: number;
+  pluginInstalled: boolean;
+  pluginInstalledAt?: number;
   scopes: string[];
   user?: GithubUser;
 }
@@ -44,16 +46,42 @@ export interface GithubRepositoryPermissions {
 
 /** Repository summary normalized from GitHub REST responses for UI and tool output. */
 export interface GithubRepository {
+  archived?: boolean;
   defaultBranch: string;
   description?: string;
+  disabled?: boolean;
+  fork?: boolean;
+  forksCount?: number;
   fullName: string;
   htmlUrl: string;
+  language?: string;
   name: string;
+  openIssuesCount?: number;
   ownerLogin: string;
   permissions: GithubRepositoryPermissions;
   private: boolean;
   pushedAt?: string;
+  stargazersCount?: number;
   updatedAt?: string;
+  watchersCount?: number;
+}
+
+export type GithubApiMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+
+export interface GithubApiRequest {
+  body?: unknown;
+  method: GithubApiMethod;
+  path: string;
+  query?: Record<string, unknown>;
+}
+
+/** Generic GitHub REST response for advanced resources not modeled as dedicated contracts. */
+export interface GithubApiResponse {
+  data: unknown;
+  message: string;
+  method: GithubApiMethod;
+  path: string;
+  status: number;
 }
 
 /** Branch ref returned by list/create branch commands. */

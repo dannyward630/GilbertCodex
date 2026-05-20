@@ -263,6 +263,7 @@ export async function handleRegenerateResponse(deps: WorkspaceRuntimeDeps, messa
           messagesForProvider,
           prompt: regeneratePrompt,
           requestId,
+          runId: assistantMessage.agentRunId,
           workspaceSettings,
         });
 

@@ -39,8 +39,8 @@ body *::after {
 .model-selector-popover,
 .topbar-menu-panel,
 .sidebar-item-menu,
+.project-open-menu,
 .conversation-options-menu,
-.message-action-menu,
 .search-dialog,
 .app-dialog,
 .dialog-detail-list,
@@ -66,6 +66,7 @@ body *::after {
 .approval-card,
 .plan-review-response,
 .git-review-panel,
+.coding-sidecar-window,
 .git-review-summary,
 .git-review-control-panel,
 .browser-preview-panel,
@@ -122,7 +123,6 @@ body *::after {
 .topbar-menu-panel,
 .sidebar-item-menu,
 .conversation-options-menu,
-.message-action-menu,
 .search-dialog,
 .app-dialog {
   border-color: color-mix(in srgb, var(--popover-border) 82%, transparent);

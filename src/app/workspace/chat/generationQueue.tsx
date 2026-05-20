@@ -551,6 +551,7 @@ export function enqueueChatSend(deps: WorkspaceRuntimeDeps, input: ChatSendInput
       return nextChats;
     });
     touchProject(currentChat.project);
+    return userMessage.id;
   }
 
 export function handleDeleteQueuedMessage(deps: WorkspaceRuntimeDeps, messageId: string) {

@@ -944,19 +944,10 @@
   word-break: break-word;
 }
 
-:root[data-theme="light"] .git-review-panel {
-  --git-review-bg: #fbfdff;
-  --git-review-bg-strong: #f3f8fb;
-  --git-review-bg-soft: rgba(232, 241, 248, 0.74);
-  --git-review-bg-softer: rgba(240, 246, 250, 0.78);
-  --git-review-line: rgba(24, 34, 48, 0.11);
-  --git-review-line-strong: rgba(24, 34, 48, 0.15);
-}
-
 :root[data-theme="light"] .git-review-code-frame {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), transparent 92px),
-    #fbfdff;
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 84%, transparent), transparent 92px),
+    var(--surface-panel);
 }
 
 @container git-review (max-width: 900px) {

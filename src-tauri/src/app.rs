@@ -3,13 +3,27 @@ use tauri::Manager;
 
 /// Builds the Tauri app, registers shared command state, and exposes command handlers.
 pub fn builder() -> tauri::Builder<tauri::Wry> {
+    let window_state_flags = tauri_plugin_window_state::StateFlags::SIZE
+        | tauri_plugin_window_state::StateFlags::POSITION
+        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+        | tauri_plugin_window_state::StateFlags::FULLSCREEN
+        | tauri_plugin_window_state::StateFlags::VISIBLE;
+
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags)
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::auth::AuthState::default())
         .manage(commands::computer::files::ComputerFileIndexState::default())
         .manage(commands::discord::DiscordBridgeState::default())
+        .manage(commands::gmail::GmailState::default())
+        .manage(commands::google_calendar::CalendarState::default())
         .manage(commands::github::GithubState::default())
+        .manage(commands::mcp::McpState::default())
         .manage(commands::nine_router::NineRouterLocalState::default())
         .manage(commands::terminal::TerminalState::default())
         .manage(commands::updates::AppUpdateState::default())
@@ -18,10 +32,6 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
                 for window in app.webview_windows().values() {
                     window.set_icon(icon.clone())?;
                 }
-            }
-            if let Some(main_window) = app.get_webview_window("main") {
-                let _ = main_window.center();
-                let _ = main_window.maximize();
             }
             Ok(())
         })
@@ -36,6 +46,9 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::auth::auth_logout,
             commands::app_info::get_app_info,
             commands::browser::browser_automation,
+            commands::browser::browser_preview_get_url,
+            commands::browser::browser_preview_navigate,
+            commands::browser::browser_preview_reload,
             commands::computer::files::computer_build_file_index,
             commands::computer::files::computer_create_directory,
             commands::computer::files::computer_delete_file,
@@ -74,6 +87,42 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::discord::discord_bridge_status,
             commands::discord::discord_bridge_stop,
             commands::discord::discord_register_slash_command,
+            commands::gmail::gmail_connect_oauth,
+            commands::gmail::gmail_batch_modify_messages,
+            commands::gmail::gmail_create_draft,
+            commands::gmail::gmail_create_label,
+            commands::gmail::gmail_delete_draft,
+            commands::gmail::gmail_disconnect,
+            commands::gmail::gmail_disconnect_account,
+            commands::gmail::gmail_get_state,
+            commands::gmail::gmail_api,
+            commands::gmail::gmail_get_message,
+            commands::gmail::gmail_get_thread,
+            commands::gmail::gmail_install_plugin,
+            commands::gmail::gmail_list_labels,
+            commands::gmail::gmail_list_messages,
+            commands::gmail::gmail_modify_message_labels,
+            commands::gmail::gmail_send_draft,
+            commands::gmail::gmail_send_message,
+            commands::gmail::gmail_send_separate_messages,
+            commands::gmail::gmail_set_active_account,
+            commands::gmail::gmail_trash_message,
+            commands::gmail::gmail_untrash_message,
+            commands::google_calendar::calendar_connect_oauth,
+            commands::google_calendar::calendar_create_event,
+            commands::google_calendar::calendar_delete_event,
+            commands::google_calendar::calendar_disconnect,
+            commands::google_calendar::calendar_disconnect_account,
+            commands::google_calendar::calendar_free_busy,
+            commands::google_calendar::calendar_get_event,
+            commands::google_calendar::calendar_get_state,
+            commands::google_calendar::calendar_google_api,
+            commands::google_calendar::calendar_install_plugin,
+            commands::google_calendar::calendar_list_calendars,
+            commands::google_calendar::calendar_list_events,
+            commands::google_calendar::calendar_set_active_account,
+            commands::google_calendar::calendar_update_event,
+            commands::github::github_api,
             commands::github::github_commit_files,
             commands::github::github_begin_device_login,
             commands::github::github_connect_token,
@@ -85,6 +134,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::github::github_generate_release_notes,
             commands::github::github_get_repository,
             commands::github::github_get_state,
+            commands::github::github_install_plugin,
             commands::github::github_list_branches,
             commands::github::github_list_repositories,
             commands::github::github_list_releases,
@@ -95,6 +145,12 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::github::github_poll_device_login,
             commands::github::github_read_file,
             commands::github::github_search_code,
+            commands::mcp::mcp_call_tool,
+            commands::mcp::mcp_get_state,
+            commands::mcp::mcp_list_tools,
+            commands::mcp::mcp_remove_server,
+            commands::mcp::mcp_save_server,
+            commands::mcp::mcp_test_server,
             commands::nine_router::nine_router_local_http,
             commands::nine_router::nine_router_local_install,
             commands::nine_router::nine_router_local_ensure,
@@ -106,6 +162,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::nine_router::nine_router_oauth_callback_finish,
             commands::nine_router::nine_router_oauth_callback_start,
             commands::app_info::open_external_url,
+            commands::project_open::project_open_external_tool,
             commands::settings::settings_get_user_config,
             commands::settings::settings_open_user_config,
             commands::settings::workspace_dependencies_diagnose,

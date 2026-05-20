@@ -1,4 +1,5 @@
 import type { ChatArtifact, ChatSource, ChatToolCall } from "./chat";
+import type { AgentRunCodingEvidenceV1 } from "./coding";
 import type { LocalWorkspaceSettings } from "./localWorkspace";
 
 export type AgentRunStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
@@ -93,6 +94,7 @@ export interface AgentRun {
   approvals: AgentApproval[];
   artifacts: ChatArtifact[];
   chatId: string;
+  coding?: AgentRunCodingEvidenceV1;
   completedAt?: string;
   createdAt: string;
   events: AgentRunEvent[];

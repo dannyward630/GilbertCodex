@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
 import {
   createCompletedToolFallbackSummary,
+  createFreshLocalToolEvidenceInstruction,
+  createLocalToolFinalInstruction,
   createNeutralToolSynthesisFailureMessage,
   createToolProtocolNarrationRecoveryInstruction,
   isInterruptedAssistantMessage,
@@ -15,6 +17,7 @@ import {
   looksLikeUnnecessaryLocalActionConfirmation,
   looksLikeUnappliedFileEditAnswer,
   looksLikeUnexecutedToolActionPromise,
+  looksLikeCapabilityInventoryQuestion,
   needsFreshLocalToolEvidence,
   requiresWorkspaceToolCallForPrompt,
   createWebSearchProgress,
@@ -25,7 +28,7 @@ import {
 
 describe("tool protocol leak guards", () => {
   it("detects unterminated XML-style tool call fragments", () => {
-    const content = String.raw`<tool_call>files_read <arg_key>path</arg_key> <arg_value>C:\Users\Kobe Work\Documents\GilbertCodex\src\toolBridge/permissions.ts</arg_value`;
+    const content = String.raw`<tool_call>files_read <arg_key>path</arg_key> <arg_value>C:\Users\Example User\Documents\GilbertCodex\src\toolBridge/permissions.ts</arg_value`;
 
     expect(looksLikeToolProtocolNarration(content)).toBe(true);
   });
@@ -33,7 +36,7 @@ describe("tool protocol leak guards", () => {
   it("detects provider-native tool_calls JSON printed as visible text", () => {
     const content = String.raw`I'll continue examining more parts of this codebase to provide a comprehensive deep dive.
 
-{ "tool_calls": [ { "id": "chatcmpl-tool-new1", "function": "files_read", "parameters": { "path": "C:\Users\Kobe Work\Documents\GilbertCodex\src\localWorkspace\files.ts" } }, { "id": "chatcmpl-tool-new2", "function": "files_read", "parameters": { "path": "C:\Users\Kobe Work\Documents\GilbertCodex\src\services\modelProviderClient.ts" } } ] }`;
+{ "tool_calls": [ { "id": "chatcmpl-tool-new1", "function": "files_read", "parameters": { "path": "C:\Users\Example User\Documents\GilbertCodex\src\localWorkspace\files.ts" } }, { "id": "chatcmpl-tool-new2", "function": "files_read", "parameters": { "path": "C:\Users\Example User\Documents\GilbertCodex\src\services\modelProviderClient.ts" } } ] }`;
 
     expect(looksLikeToolProtocolNarration(content)).toBe(true);
     expect(looksLikeInternalToolRecoveryAnswer(content)).toBe(true);
@@ -62,6 +65,14 @@ describe("tool protocol leak guards", () => {
     expect(instruction).toContain("Do not emit visible tool-call syntax");
     expect(instruction).toContain("provider tool_calls");
     expect(instruction).toContain("whole-response code fence");
+  });
+
+  it("keeps final synthesis focused on the user request and evidence-backed claims", () => {
+    const instruction = createLocalToolFinalInstruction("fix the app and verify it");
+
+    expect(instruction).toContain("The original user request is the success condition");
+    expect(instruction).toContain("do not substitute a recap, plan, or adjacent task");
+    expect(instruction).toContain("Claim completed work only when current tool results prove it");
   });
 
   it("detects OpenAI-style function tool_calls JSON printed as visible text", () => {
@@ -110,7 +121,7 @@ describe("tool protocol leak guards", () => {
   it("strips unterminated XML-style tool call blocks from visible assistant content", () => {
     const content = [
       "Let me read that file.",
-      String.raw`<tool_call>files_read <arg_key>path</arg_key> <arg_value>C:\Users\Kobe Work\Documents\GilbertCodex\src\toolBridge/permissions.ts</arg_value`,
+      String.raw`<tool_call>files_read <arg_key>path</arg_key> <arg_value>C:\Users\Example User\Documents\GilbertCodex\src\toolBridge/permissions.ts</arg_value`,
     ].join("\n\n");
 
     expect(sanitizeLocalToolCallsForDisplay(content)).toBe("Let me read that file.");
@@ -259,6 +270,20 @@ describe("tool protocol leak guards", () => {
     expect(needsFreshLocalToolEvidence("thanks", true)).toBe(false);
   });
 
+  it("answers plain tool and plugin inventory questions without requiring workspace tools", () => {
+    expect(looksLikeCapabilityInventoryQuestion("what tools do you have and plugins")).toBe(true);
+    expect(needsFreshLocalToolEvidence("what tools do you have and plugins", true)).toBe(false);
+    expect(requiresWorkspaceToolCallForPrompt("what tools do you have and plugins", true)).toBe(false);
+  });
+
+  it("still requires workspace evidence when the user asks to inspect the app tooling implementation", () => {
+    const prompt = "look into our app tools and plugins in the codebase and explain how they work";
+
+    expect(looksLikeCapabilityInventoryQuestion(prompt)).toBe(false);
+    expect(needsFreshLocalToolEvidence(prompt, true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt(prompt, true)).toBe(true);
+  });
+
   it("requires fresh workspace evidence for local change review follow-ups", () => {
     const prompt = "Based on the files read, explain what changed and what the fixes appear to be.";
 
@@ -278,6 +303,18 @@ describe("tool protocol leak guards", () => {
     ].join("\n"), true)).toBe(true);
     expect(requiresWorkspaceToolCallForPrompt("make it better more readable better design and more party like", false)).toBe(false);
     expect(requiresWorkspaceToolCallForPrompt("thanks", true)).toBe(false);
+  });
+
+  it("does not ask for the provider tool-call channel when capability planning found no attached tools", () => {
+    const instruction = createFreshLocalToolEvidenceInstruction("inspect our app", "I checked it from memory.", {
+      blockedReasons: ["required_family_unavailable: None of the required tool families are provider-visible for this pass."],
+      canUseProviderTools: false,
+    });
+
+    expect(instruction).toContain("No provider workspace tools are attached for this retry");
+    expect(instruction).toContain("required_family_unavailable");
+    expect(instruction).not.toContain("Use the real provider tool-call channel now");
+    expect(instruction).not.toContain("call git_status");
   });
 
   it("rejects updated-file code dumps when no mutating edit tool succeeded", () => {
@@ -420,7 +457,7 @@ describe("final answer recovery guards", () => {
     const content = [
       "Latest completed result: Read workspace file",
       "",
-      "Read C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src-tauri\\src\\app.rs successfully.",
+      "Read C:\\Users\\Example User\\Documents\\GilbertCodex\\src-tauri\\src\\app.rs successfully.",
       "The full file content was kept with the tool result and was not pasted into chat.",
     ].join("\n");
 
@@ -429,7 +466,7 @@ describe("final answer recovery guards", () => {
 
   it("rejects read fallback summaries even without the legacy latest-result prefix", () => {
     const content = [
-      "Read C:\\Users\\Kobe Work\\Documents\\HelloWorld\\skyline-ridge.html successfully.",
+      "Read C:\\Users\\Example User\\Documents\\HelloWorld\\skyline-ridge.html successfully.",
       "Content size: 18,029 characters across 189 lines.",
       "The full file content was kept with the tool result and was not pasted into chat.",
     ].join("\n");
@@ -439,7 +476,7 @@ describe("final answer recovery guards", () => {
 
   it("rejects current file-read fallback summaries so they never become final answers", () => {
     const content = [
-      "I read `C:\\Users\\Kobe Work\\Documents\\HelloWorld\\src\\services\\database.js` successfully.",
+      "I read `C:\\Users\\Example User\\Documents\\HelloWorld\\src\\services\\database.js` successfully.",
       "It is 1,078 characters across 34 lines.",
       "The full file body was kept out of the visible chat so the response stays readable.",
     ].join("\n");
@@ -449,7 +486,7 @@ describe("final answer recovery guards", () => {
 
   it("rejects result-finalizer fallback text so it cannot become the final answer", () => {
     const oldFallback = [
-      "Read C:\\Users\\Kobe Work\\Documents\\GilbertCodex\\src\\toolBridge\\adapters\\index.ts.",
+      "Read C:\\Users\\Example User\\Documents\\GilbertCodex\\src\\toolBridge\\adapters\\index.ts.",
       "1,968 characters across 49 lines.",
       "Use the saved tool result to answer the request; do not paste the raw file body unless the user explicitly asked for it.",
     ].join(" ");
@@ -525,7 +562,7 @@ describe("final answer recovery guards", () => {
 
   it("rejects raw workspace tree summaries so they can be synthesized", () => {
     const content = [
-      "Workspace tree summary for C:\\Users\\Kobe Work\\Documents\\GilbertBusiness",
+      "Workspace tree summary for C:\\Users\\Example User\\Documents\\GilbertBusiness",
       "Scanned 2 directories and 6 files to depth 4.",
       "Top file types: jsx 2; css 1; html 1; js 1; json 1.",
       "GilbertBusiness/ (3 files)",

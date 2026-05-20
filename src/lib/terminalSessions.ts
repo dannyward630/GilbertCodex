@@ -1,4 +1,6 @@
+import { isTerminalShellId } from "./terminalShells";
 import type { TerminalShellId } from "../types/terminal";
+import type { TerminalOutputChunk } from "../types/terminal";
 
 export interface BackgroundTerminalSession {
   browserPreviewUrl?: string;
@@ -13,8 +15,10 @@ export interface BackgroundTerminalSession {
 
 const STORAGE_KEY = "gilbert-codex-background-terminal-sessions";
 const MAX_SESSION_AGE_MS = 8 * 60 * 60 * 1000;
+const MAX_OUTPUT_PREVIEW_CHARS = 24_000;
 
 let sessions = loadStoredSessions();
+const outputListeners = new Map<string, Set<(chunks: TerminalOutputChunk[]) => void>>();
 
 export function registerBackgroundTerminalSession(session: {
   browserPreviewUrl?: string;
@@ -62,6 +66,52 @@ export function updateBackgroundTerminalSession(sessionId: string, patch: Partia
   persistSessions();
 }
 
+export function appendBackgroundTerminalSessionOutput(sessionId: string, chunks: TerminalOutputChunk[]) {
+  if (chunks.length === 0) {
+    return;
+  }
+
+  const text = chunks.map((chunk) => chunk.text).join("");
+  const existing = sessions.get(sessionId);
+
+  if (existing) {
+    sessions.set(sessionId, {
+      ...existing,
+      lastSeenAt: Date.now(),
+      outputPreview: trimOutputPreview(`${existing.outputPreview ? `${existing.outputPreview}\n` : ""}${text}`),
+    });
+    pruneBackgroundTerminalSessions();
+    persistSessions();
+  }
+
+  const listeners = outputListeners.get(sessionId);
+  if (!listeners || listeners.size === 0) {
+    return;
+  }
+
+  for (const listener of [...listeners]) {
+    listener(chunks);
+  }
+}
+
+export function subscribeBackgroundTerminalSessionOutput(sessionId: string, listener: (chunks: TerminalOutputChunk[]) => void) {
+  const listeners = outputListeners.get(sessionId) ?? new Set<(chunks: TerminalOutputChunk[]) => void>();
+  listeners.add(listener);
+  outputListeners.set(sessionId, listeners);
+
+  return () => {
+    const currentListeners = outputListeners.get(sessionId);
+    if (!currentListeners) {
+      return;
+    }
+
+    currentListeners.delete(listener);
+    if (currentListeners.size === 0) {
+      outputListeners.delete(sessionId);
+    }
+  };
+}
+
 export function unregisterBackgroundTerminalSession(sessionId: string) {
   if (!sessions.delete(sessionId)) {
     return;
@@ -101,7 +151,15 @@ export function formatBackgroundTerminalSessionsForPrompt() {
 }
 
 function trimOutputPreview(value?: string) {
-  return value?.trim() || undefined;
+  const trimmed = value?.trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.length > MAX_OUTPUT_PREVIEW_CHARS
+    ? trimmed.slice(trimmed.length - MAX_OUTPUT_PREVIEW_CHARS)
+    : trimmed;
 }
 
 function pruneBackgroundTerminalSessions() {
@@ -184,8 +242,4 @@ function persistSessions() {
   } catch {
     // Session memory is convenience-only; storage failures must not break command execution.
   }
-}
-
-function isTerminalShellId(value: unknown): value is TerminalShellId {
-  return value === "powershell" || value === "cmd" || value === "bash" || value === "zsh" || value === "sh";
 }

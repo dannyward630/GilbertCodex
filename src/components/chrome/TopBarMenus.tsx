@@ -11,6 +11,7 @@ export interface TopBarMenuAction {
   danger?: boolean;
   disabled?: boolean;
   label: string;
+  onPreload?: () => void;
   onSelect: () => void | Promise<void>;
   separatorBefore?: boolean;
   shortcut?: string;
@@ -59,6 +60,7 @@ export function TopBarMenus<MenuId extends string>({
             aria-haspopup="menu"
             aria-expanded={openMenu === menu.id}
             data-active={openMenu === menu.id}
+            data-latency-label={`topbar-menu:${menu.id}`}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onOpenMenuChange((currentMenu) => (currentMenu === menu.id ? null : menu.id))}
             onKeyDown={(event) => handleMenuButtonKeyDown(event, menu.id)}
@@ -79,6 +81,9 @@ export function TopBarMenus<MenuId extends string>({
                   data-danger={item.danger}
                   data-disabled={item.disabled}
                   data-separator-before={item.separatorBefore}
+                  data-latency-label={`topbar:${menu.id}:${item.label}`}
+                  onFocus={item.onPreload}
+                  onMouseEnter={item.onPreload}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => selectMenuAction(item)}
                 >

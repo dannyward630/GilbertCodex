@@ -1,34 +1,48 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { GitBranch, Grid2X2, Image as ImageIcon, Sparkles } from "lucide-react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Code2, GitBranch, Grid2X2, Image as ImageIcon, Route, Search, Sparkles, type LucideIcon } from "lucide-react";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
 import { RightRail, chatHasPendingRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "../components/inspector/RightRail";
+import type { CodingSidecarTab } from "../components/coding/CodingSidecarPanel";
 import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
+import { DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../lib/chatUtils";
+import { getModelProvider } from "../lib/models";
+import { scheduleIdleTask } from "../lib/idleTask";
 import { useAnimatedPresence } from "../lib/useAnimatedPresence";
 import type { AppInfo } from "../types/app";
-import type { AgentApprovalDecision } from "../types/agentRun";
+import type { AgentApprovalDecision, AgentRun } from "../types/agentRun";
 import type { ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatSendInput, ChatSummary } from "../types/chat";
 import type { LocalWorkspaceSettings } from "../types/localWorkspace";
-import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../types/settings";
+import { WEB_SEARCH_PROVIDER_LABELS, type AppCodeReviewBehavior, type AppFollowUpBehavior, type ProviderSettings, type ThinkingSettings, type WebSearchSettings } from "../types/settings";
 import type { CreateProjectOptions, ProjectSummary } from "../types/project";
+import { getProjectOpenTarget, getRecommendedProjectOpenTarget, type ProjectOpenTargetId } from "../types/projectOpen";
 
-const BrowserPreviewPanel = lazy(() => import("../components/browser/BrowserPreviewPanel").then((module) => ({ default: module.BrowserPreviewPanel })));
-const GitReviewPanel = lazy(() => import("../components/git/GitReviewPanel").then((module) => ({ default: module.GitReviewPanel })));
+const loadBrowserPreviewPanel = () => import("../components/browser/BrowserPreviewPanel");
+const loadCodingSidecarPanel = () => import("../components/coding/CodingSidecarPanel");
+const BrowserPreviewPanel = lazy(() => loadBrowserPreviewPanel().then((module) => ({ default: module.BrowserPreviewPanel })));
+const CodingSidecarPanel = lazy(() => loadCodingSidecarPanel().then((module) => ({ default: module.CodingSidecarPanel })));
 
 interface ChatPageProps {
   active?: boolean;
+  agentRuns: AgentRun[];
   appInfo: AppInfo;
   browserPreviewEnabled: boolean;
   browserPreviewRequestId?: number;
   browserPreviewUrl?: string | null;
   chat: ChatSummary;
   chats: ChatSummary[];
+  codeReviewBehavior?: AppCodeReviewBehavior;
   composerDraft?: ChatComposerDraft | null;
   composerRestoreDraft?: ChatComposerDraft | null;
   composerRestoreDraftId?: string | null;
   contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
+  defaultOpenTarget?: ProjectOpenTargetId;
+  dictationDictionary?: string;
+  dictationHoldHotkey?: string;
+  dictationToggleHotkey?: string;
+  followUpBehavior?: AppFollowUpBehavior;
   hasApiKey: boolean;
   isSending: boolean;
   lastContextCompaction?: ContextCompactionNotice | null;
@@ -43,7 +57,6 @@ interface ChatPageProps {
   onModelChange: (model: string, provider: ProviderSettings["provider"]) => void;
   onDeleteQueuedMessage: (messageId: string) => void;
   onHoldQueuedMessage: (messageId: string, held: boolean) => void;
-  onUpdateQueuedMessage: (messageId: string, content: string) => void;
   onAddAutomation: () => void;
   onArchiveChat: () => void;
   onCopyChatDeeplink: () => void;
@@ -51,8 +64,12 @@ interface ChatPageProps {
   onCopySessionId: () => void;
   onCopyWorkingDirectory: () => void;
   onForkChatLocal: () => void;
+  onForkChatFromMessage: (messageId: string) => void;
   onForkChatWorktree: () => void | Promise<void>;
+  onMessageFeedback: (messageId: string, feedback: ChatMessage["feedback"]) => void;
   onOpenChatInNewWindow: () => void | Promise<void>;
+  onOpenProjectTool: (target: ProjectOpenTargetId) => void | Promise<void>;
+  onOpenProjectRun: () => void;
   onOpenSideChat: () => void;
   onRenameChat: () => void;
   onSelectProject: (project: string) => void;
@@ -68,31 +85,39 @@ interface ChatPageProps {
   providerSettings: ProviderSettings;
   projects: ProjectSummary[];
   queuedMessageCount?: number;
+  queuedMessageDetails?: ChatMessage[];
   heldQueuedMessageIds?: string[];
   onImageGenerationChange: (enabled: boolean) => void;
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
   thinking: ThinkingSettings;
   webSearch: WebSearchSettings;
-  onTogglePin: () => void;
   onToggleTerminal: () => void;
   terminalEnabled: boolean;
   terminalOpen: boolean;
+  requireCtrlEnterForLongPrompts?: boolean;
 }
 
-export function ChatPage({
+function ChatPageComponent({
   active = true,
+  agentRuns = [],
   appInfo,
   browserPreviewEnabled,
   browserPreviewRequestId = 0,
   browserPreviewUrl,
   chat,
   chats,
+  codeReviewBehavior = "inline",
   composerDraft,
   composerRestoreDraft,
   composerRestoreDraftId,
   contextWindowSource,
   contextWindowTokens,
+  defaultOpenTarget,
+  dictationDictionary = "",
+  dictationHoldHotkey = "",
+  dictationToggleHotkey = "",
+  followUpBehavior = "queue",
   hasApiKey,
   isSending,
   lastContextCompaction,
@@ -107,7 +132,6 @@ export function ChatPage({
   onModelChange,
   onDeleteQueuedMessage,
   onHoldQueuedMessage,
-  onUpdateQueuedMessage,
   onAddAutomation,
   onArchiveChat,
   onCopyChatDeeplink,
@@ -115,8 +139,12 @@ export function ChatPage({
   onCopySessionId,
   onCopyWorkingDirectory,
   onForkChatLocal,
+  onForkChatFromMessage,
   onForkChatWorktree,
+  onMessageFeedback,
   onOpenChatInNewWindow,
+  onOpenProjectTool,
+  onOpenProjectRun,
   onOpenSideChat,
   onRenameChat,
   onSelectChat,
@@ -132,38 +160,53 @@ export function ChatPage({
   providerSettings,
   projects,
   queuedMessageCount = 0,
+  queuedMessageDetails = [],
   heldQueuedMessageIds = [],
   onImageGenerationChange,
   onThinkingChange,
   onWebSearchChange,
   thinking,
   webSearch,
-  onTogglePin,
   onToggleTerminal,
   terminalEnabled,
   terminalOpen,
+  requireCtrlEnterForLongPrompts = false,
 }: ChatPageProps) {
   const conversationBodyRef = useRef<HTMLDivElement>(null);
   const [composerHeight, setComposerHeight] = useState(152);
-  const [headerBlurActive, setHeaderBlurActive] = useState(false);
   const [rightRailOpen, setRightRailOpen] = useState(false);
   const [activePlanReviewMessageId, setActivePlanReviewMessageId] = useState<string | null>(null);
   const [planReviewExpanded, setPlanReviewExpanded] = useState(false);
   const [browserPreviewOpen, setBrowserPreviewOpen] = useState(false);
   const [browserPreviewExpanded, setBrowserPreviewExpanded] = useState(false);
+  const [browserPreviewInitialUrl, setBrowserPreviewInitialUrl] = useState<string | null>(null);
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
   const [gitReviewOpen, setGitReviewOpen] = useState(false);
   const [gitReviewExpanded, setGitReviewExpanded] = useState(false);
   const [gitReviewResizing, setGitReviewResizing] = useState(false);
   const [gitReviewWidth, setGitReviewWidth] = useState(DEFAULT_GIT_REVIEW_WIDTH);
+  const [codingSidecarTab, setCodingSidecarTab] = useState<CodingSidecarTab>("codebase");
   const rightRailNeedsAction = useMemo(() => chatHasPendingRightRailAction(chat), [chat]);
   const rightRailHasContent = useMemo(
     () => chatHasRightRailContent(chat) || chatHasPlanReviewContent(chat, activePlanReviewMessageId),
     [activePlanReviewMessageId, chat],
   );
-  const queuedMessages = useMemo(() => getQueuedMessages(chat.messages), [chat.messages]);
+  const queuedMessages = useMemo(() => mergeQueuedMessages(getQueuedMessages(chat.messages), queuedMessageDetails), [chat.messages, queuedMessageDetails]);
   const emptyChat = chat.messages.length === 0;
+  const projectOpenVisible = !isNoProjectName(chat.project);
+  const projectOpenEnabled = projectOpenVisible && Boolean(localWorkspace.enabled && localWorkspace.roots[0]);
+  const recommendedProjectOpenTarget = useMemo(
+    () =>
+      defaultOpenTarget
+        ? getProjectOpenTarget(defaultOpenTarget, appInfo.platform)
+        : getRecommendedProjectOpenTarget({
+            platform: appInfo.platform,
+            projectName: chat.project,
+            projectRoot: localWorkspace.roots[0],
+          }),
+    [appInfo.platform, chat.project, defaultOpenTarget, localWorkspace.roots],
+  );
   const conversationMainStyle = useMemo(
     () =>
       ({
@@ -171,16 +214,34 @@ export function ChatPage({
       }) as CSSProperties,
     [composerHeight],
   );
-  const showGitReview = active && gitReviewOpen;
+  const showGitReview = active && projectOpenVisible && gitReviewOpen;
   const showRightRail = active && !showGitReview && rightRailOpen && rightRailHasContent;
   const showBrowserPreview = active && !showGitReview && browserPreviewOpen;
-  const gitReviewPresence = useAnimatedPresence(showGitReview, 320);
-  const rightRailPresence = useAnimatedPresence(showRightRail, 320);
-  const browserPreviewPresence = useAnimatedPresence(showBrowserPreview, 320);
+  const gitReviewPresence = useAnimatedPresence(showGitReview, 160);
+  const rightRailPresence = useAnimatedPresence(showRightRail, 160);
+  const browserPreviewPresence = useAnimatedPresence(showBrowserPreview, 160);
   const renderGitReview = gitReviewPresence.mounted;
   const renderRightRail = !renderGitReview && rightRailPresence.mounted;
   const renderBrowserPreview = !renderGitReview && browserPreviewPresence.mounted;
-  const sideLayout = renderGitReview ? "review" : renderRightRail && renderBrowserPreview ? "split" : renderBrowserPreview ? "preview" : renderRightRail ? "rail" : "none";
+  const sideLayout = renderGitReview
+    ? gitReviewPresence.exiting
+      ? "review-closing"
+      : "review"
+    : renderRightRail && renderBrowserPreview
+      ? browserPreviewPresence.exiting
+        ? "split-preview-closing"
+        : rightRailPresence.exiting
+          ? "split-rail-closing"
+          : "split"
+      : renderBrowserPreview
+        ? browserPreviewPresence.exiting
+          ? "preview-closing"
+          : "preview"
+        : renderRightRail
+          ? rightRailPresence.exiting
+            ? "rail-closing"
+            : "rail"
+          : "none";
   const planReviewActive = Boolean(activePlanReviewMessageId && renderRightRail);
   const conversationBodyStyle = useMemo(
     () =>
@@ -190,6 +251,36 @@ export function ChatPage({
       }) as CSSProperties,
     [browserPreviewWidth, gitReviewWidth],
   );
+
+  useEffect(() => {
+    if (!gitReviewPresence.mounted && gitReviewExpanded) {
+      setGitReviewExpanded(false);
+    }
+  }, [gitReviewExpanded, gitReviewPresence.mounted]);
+
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+
+    return scheduleIdleTask(() => {
+      void loadBrowserPreviewPanel();
+      void loadCodingSidecarPanel();
+    }, 250);
+  }, [active]);
+
+  useEffect(() => {
+    if (!browserPreviewPresence.mounted && browserPreviewExpanded) {
+      setBrowserPreviewExpanded(false);
+    }
+  }, [browserPreviewExpanded, browserPreviewPresence.mounted]);
+
+  useEffect(() => {
+    if (!projectOpenVisible && gitReviewOpen) {
+      setGitReviewExpanded(false);
+      setGitReviewOpen(false);
+    }
+  }, [gitReviewOpen, projectOpenVisible]);
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(Math.round(height), 0);
@@ -224,8 +315,9 @@ export function ChatPage({
     setGitReviewOpen(false);
     setGitReviewExpanded(false);
     setBrowserPreviewOpen((open) => {
-      if (open) {
+      if (!open) {
         setBrowserPreviewExpanded(false);
+        setBrowserPreviewInitialUrl(null);
       }
 
       return !open;
@@ -233,21 +325,48 @@ export function ChatPage({
   }, [browserPreviewEnabled]);
 
   const handleCloseBrowserPreview = useCallback(() => {
-    setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
+    setBrowserPreviewInitialUrl(null);
   }, []);
 
   const handleOpenGitReview = useCallback(() => {
+    if (!projectOpenVisible) {
+      return;
+    }
+
+    if (codeReviewBehavior === "detached") {
+      onOpenSideChat();
+      return;
+    }
+
+    setCodingSidecarTab("review");
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
+    setGitReviewExpanded(false);
     setGitReviewOpen(true);
-  }, []);
+  }, [codeReviewBehavior, onOpenSideChat, projectOpenVisible]);
+
+  const handleToggleCodingSidecar = useCallback(() => {
+    if (!projectOpenVisible) {
+      return;
+    }
+
+    setCodingSidecarTab("codebase");
+    setBrowserPreviewExpanded(false);
+    setBrowserPreviewOpen(false);
+    setRightRailOpen(false);
+    setActivePlanReviewMessageId(null);
+    setPlanReviewExpanded(false);
+    setGitReviewOpen((open) => {
+      if (!open) setGitReviewExpanded(false);
+      return !open;
+    });
+  }, [projectOpenVisible]);
 
   const handleCloseGitReview = useCallback(() => {
-    setGitReviewExpanded(false);
     setGitReviewOpen(false);
   }, []);
 
@@ -536,6 +655,7 @@ export function ChatPage({
   useEffect(() => {
     if (!browserPreviewEnabled && browserPreviewOpen) {
       setBrowserPreviewExpanded(false);
+      setBrowserPreviewInitialUrl(null);
       setBrowserPreviewOpen(false);
     }
   }, [browserPreviewEnabled, browserPreviewOpen]);
@@ -546,6 +666,7 @@ export function ChatPage({
     }
 
     setBrowserPreviewExpanded(false);
+    setBrowserPreviewInitialUrl(browserPreviewUrl);
     setBrowserPreviewOpen(true);
     setGitReviewOpen(false);
     setGitReviewExpanded(false);
@@ -558,10 +679,14 @@ export function ChatPage({
       active={active}
       contextWindowSource={contextWindowSource}
       contextWindowTokens={contextWindowTokens}
+      dictationDictionary={dictationDictionary}
+      dictationHoldHotkey={dictationHoldHotkey}
+      dictationToggleHotkey={dictationToggleHotkey}
       draft={composerDraft}
       restoreDraft={composerRestoreDraft}
       restoreDraftId={composerRestoreDraftId}
       isGenerating={isSending}
+      followUpBehavior={followUpBehavior}
       lastContextCompaction={lastContextCompaction}
       layout={emptyChat ? "center" : "dock"}
       localWorkspace={localWorkspace}
@@ -573,7 +698,6 @@ export function ChatPage({
       onDraftChange={(draft) => onComposerDraftChange?.(chat.id, draft)}
       onDeleteQueuedMessage={onDeleteQueuedMessage}
       onHoldQueuedMessage={onHoldQueuedMessage}
-      onUpdateQueuedMessage={onUpdateQueuedMessage}
       onHeightChange={handleComposerHeightChange}
       onLocalWorkspaceChange={onLocalWorkspaceChange}
       onModelChange={onModelChange}
@@ -587,6 +711,7 @@ export function ChatPage({
       providerSettings={providerSettings}
       queuedMessageCount={Math.max(queuedMessageCount, queuedMessages.length)}
       queuedMessages={queuedMessages}
+      requireCtrlEnterForLongPrompts={requireCtrlEnterForLongPrompts}
       heldQueuedMessageIds={heldQueuedMessageIds}
       onImageGenerationChange={onImageGenerationChange}
       onThinkingChange={onThinkingChange}
@@ -597,11 +722,15 @@ export function ChatPage({
   );
 
   return (
-    <div className="conversation-frame" data-header-blur={headerBlurActive}>
+    <div className="conversation-frame">
       <ConversationHeader
+        active={active}
         browserPreviewEnabled={browserPreviewEnabled}
         browserPreviewOpen={showBrowserPreview}
-        pinned={Boolean(chat.pinned)}
+        codingSidecarOpen={showGitReview}
+        projectOpenEnabled={projectOpenEnabled}
+        projectOpenVisible={projectOpenVisible}
+        recommendedProjectOpenTarget={recommendedProjectOpenTarget}
         title={chat.title}
         onAddAutomation={onAddAutomation}
         onArchive={onArchiveChat}
@@ -612,10 +741,12 @@ export function ChatPage({
         onForkLocal={onForkChatLocal}
         onForkWorktree={() => void onForkChatWorktree()}
         onOpenNewWindow={() => void onOpenChatInNewWindow()}
+        onOpenProjectTool={onOpenProjectTool}
+        onOpenProjectRun={onOpenProjectRun}
+        onToggleCodingSidecar={handleToggleCodingSidecar}
         onToggleBrowserPreview={handleToggleBrowserPreview}
         onOpenSideChat={onOpenSideChat}
         onRename={onRenameChat}
-        onTogglePin={onTogglePin}
         onToggleTerminal={onToggleTerminal}
         terminalEnabled={terminalEnabled}
         terminalOpen={terminalOpen}
@@ -637,12 +768,19 @@ export function ChatPage({
         <section className="conversation-main" aria-label="Chat thread" data-empty={emptyChat} style={conversationMainStyle}>
           {emptyChat ? (
             <EmptyChatStart
-              onSelectSuggestion={(content) =>
+              chat={chat}
+              hasApiKey={hasApiKey}
+              localWorkspace={localWorkspace}
+              model={model}
+              projects={projects}
+              providerSettings={providerSettings}
+              webSearch={webSearch}
+              onSelectSuggestion={(suggestion) =>
                 onSendMessage({
                   attachments: [],
-                  content,
+                  content: suggestion.prompt,
                   localWorkspace,
-                  webSearch: webSearch.enabled
+                  webSearch: suggestion.useWebSearch && webSearch.enabled
                     ? {
                         enabled: true,
                         maxResults: webSearch.maxResults,
@@ -663,13 +801,13 @@ export function ChatPage({
                 active={active}
                 hasApiKey={hasApiKey}
                 onEditUserMessage={onEditUserMessage}
-                onHeaderBlurChange={setHeaderBlurActive}
+                onForkFromMessage={onForkChatFromMessage}
+                onMessageFeedback={onMessageFeedback}
                 onOpenPlanReview={handleOpenPlanReview}
                 onRequestPlanRevision={onRequestPlanRevision}
                 onRegenerateResponse={onRegenerateResponse}
                 onResolveToolApproval={onResolveToolApproval}
                 onSelectChat={onSelectChat}
-                onStopGeneration={onStopGeneration}
               />
               {composer}
             </>
@@ -690,10 +828,14 @@ export function ChatPage({
           </div>
         ) : null}
         {renderGitReview ? (
-          <div className="side-panel-presence" data-panel="git-review" data-presence={gitReviewPresence.exiting ? "exit" : "enter"}>
+          <div className="side-panel-presence" data-panel="coding-sidecar" data-presence={gitReviewPresence.exiting ? "exit" : "enter"}>
             <Suspense fallback={null}>
-              <GitReviewPanel
+              <CodingSidecarPanel
+                agentRuns={agentRuns}
+                chat={chat}
                 expanded={gitReviewExpanded}
+                initialTab={codingSidecarTab}
+                localWorkspace={localWorkspace}
                 previewWidth={gitReviewWidth}
                 resizeMaxWidth={GIT_REVIEW_MAX_WIDTH}
                 resizeMinWidth={GIT_REVIEW_MIN_WIDTH}
@@ -701,7 +843,7 @@ export function ChatPage({
                 onClose={handleCloseGitReview}
                 onResizeKeyDown={handleGitReviewResizeKeyDown}
                 onResizeStart={handleGitReviewResizeStart}
-                onSubmitReview={handleSubmitGitReview}
+                onSubmitPrompt={handleSubmitGitReview}
                 onToggleExpanded={() => setGitReviewExpanded((expanded) => !expanded)}
               />
             </Suspense>
@@ -713,7 +855,7 @@ export function ChatPage({
               <BrowserPreviewPanel
                 closing={browserPreviewPresence.exiting}
                 expanded={browserPreviewExpanded}
-                initialUrl={browserPreviewUrl ?? undefined}
+                initialUrl={browserPreviewInitialUrl ?? undefined}
                 previewWidth={browserPreviewWidth}
                 resizeMaxWidth={BROWSER_PREVIEW_MAX_WIDTH}
                 resizeMinWidth={BROWSER_PREVIEW_MIN_WIDTH}
@@ -730,6 +872,49 @@ export function ChatPage({
   );
 }
 
+export const ChatPage = memo(ChatPageComponent, areChatPagePropsEqual);
+
+function areChatPagePropsEqual(previous: ChatPageProps, next: ChatPageProps) {
+  return (
+    previous.active === next.active &&
+    previous.agentRuns === next.agentRuns &&
+    previous.appInfo === next.appInfo &&
+    previous.browserPreviewEnabled === next.browserPreviewEnabled &&
+    previous.browserPreviewRequestId === next.browserPreviewRequestId &&
+    previous.browserPreviewUrl === next.browserPreviewUrl &&
+    previous.chat === next.chat &&
+    previous.chats === next.chats &&
+    previous.codeReviewBehavior === next.codeReviewBehavior &&
+    previous.composerDraft === next.composerDraft &&
+    previous.composerRestoreDraft === next.composerRestoreDraft &&
+    previous.composerRestoreDraftId === next.composerRestoreDraftId &&
+    previous.contextWindowSource === next.contextWindowSource &&
+    previous.contextWindowTokens === next.contextWindowTokens &&
+    previous.defaultOpenTarget === next.defaultOpenTarget &&
+    previous.dictationDictionary === next.dictationDictionary &&
+    previous.dictationHoldHotkey === next.dictationHoldHotkey &&
+    previous.dictationToggleHotkey === next.dictationToggleHotkey &&
+    previous.followUpBehavior === next.followUpBehavior &&
+    previous.hasApiKey === next.hasApiKey &&
+    previous.isSending === next.isSending &&
+    previous.lastContextCompaction === next.lastContextCompaction &&
+    previous.localWorkspace === next.localWorkspace &&
+    previous.lastProviderContextUsage === next.lastProviderContextUsage &&
+    previous.model === next.model &&
+    previous.modelContextWindows === next.modelContextWindows &&
+    previous.providerSettings === next.providerSettings &&
+    previous.projects === next.projects &&
+    previous.queuedMessageCount === next.queuedMessageCount &&
+    previous.queuedMessageDetails === next.queuedMessageDetails &&
+    previous.requireCtrlEnterForLongPrompts === next.requireCtrlEnterForLongPrompts &&
+    previous.heldQueuedMessageIds === next.heldQueuedMessageIds &&
+    previous.thinking === next.thinking &&
+    previous.webSearch === next.webSearch &&
+    previous.terminalEnabled === next.terminalEnabled &&
+    previous.terminalOpen === next.terminalOpen
+  );
+}
+
 const BROWSER_PREVIEW_MIN_WIDTH = 320;
 const BROWSER_PREVIEW_MAX_WIDTH = 1120;
 const DEFAULT_BROWSER_PREVIEW_WIDTH = 560;
@@ -742,44 +927,218 @@ const PREVIEW_ONLY_RESERVED_WIDTH = 320;
 const SPLIT_LAYOUT_RESERVED_WIDTH = 560;
 const GIT_REVIEW_RESERVED_WIDTH = 360;
 
-const starterSuggestions = [
-  {
-    icon: GitBranch,
-    label: "Think of a suitable starter task for me, implement it, and walk me through the solution",
-  },
-  {
-    icon: Sparkles,
-    label: "Explain this project to me",
-  },
-  {
-    icon: ImageIcon,
-    label: "Generate an image of a clean app icon for this project",
-  },
-  {
-    icon: Grid2X2,
-    label: "Connect your favorite apps to Gilbert Codex",
-  },
-];
+type EmptyChatTone = "access" | "creative" | "project" | "route" | "tools";
 
-function EmptyChatStart({ children, onSelectSuggestion }: { children: ReactNode; onSelectSuggestion: (content: string) => void }) {
+interface EmptyChatSuggestion {
+  detail: string;
+  icon: LucideIcon;
+  label: string;
+  prompt: string;
+  tone: EmptyChatTone;
+  useWebSearch?: boolean;
+}
+
+interface EmptyChatContext {
+  canGenerateImages: boolean;
+  hasProject: boolean;
+  imageStatus: string;
+  modelLabel: string;
+  projectLabel: string;
+  promptProjectName: string;
+  providerLabel: string;
+  routeStatus: string;
+  webSearchDetail: string;
+  webSearchEnabled: boolean;
+}
+
+interface EmptyChatStartProps {
+  chat: ChatSummary;
+  children: ReactNode;
+  hasApiKey: boolean;
+  localWorkspace: LocalWorkspaceSettings;
+  model: string;
+  onSelectSuggestion: (suggestion: EmptyChatSuggestion) => void;
+  projects: ProjectSummary[];
+  providerSettings: ProviderSettings;
+  webSearch: WebSearchSettings;
+}
+
+function EmptyChatStart({ chat, children, hasApiKey, localWorkspace, model, onSelectSuggestion, projects, providerSettings, webSearch }: EmptyChatStartProps) {
+  const context = createEmptyChatContext({
+    chat,
+    hasApiKey,
+    localWorkspace,
+    model,
+    projects,
+    providerSettings,
+    webSearch,
+  });
+  const suggestions = createEmptyChatSuggestions(context);
+
   return (
     <div className="empty-chat-start">
-      <h2>What should we work on?</h2>
-      {children}
+      <section className="empty-chat-hero" aria-label="Current chat setup">
+        <div className="empty-chat-kicker">
+          <Sparkles size={15} aria-hidden="true" />
+          <span>{context.hasProject ? `Ready in ${context.projectLabel}` : "Ready with chat context"}</span>
+        </div>
+        <h2>Start with the right context.</h2>
+      </section>
       <div className="empty-chat-suggestions" aria-label="Starter prompts">
-        {starterSuggestions.map((suggestion) => {
+        {suggestions.map((suggestion) => {
           const SuggestionIcon = suggestion.icon;
 
           return (
-            <button key={suggestion.label} type="button" onClick={() => onSelectSuggestion(suggestion.label)}>
-              <SuggestionIcon size={19} aria-hidden="true" />
-              <span>{suggestion.label}</span>
+            <button aria-label={`${suggestion.label}: ${suggestion.detail}`} data-tone={suggestion.tone} key={suggestion.label} title={suggestion.detail} type="button" onClick={() => onSelectSuggestion(suggestion)}>
+              <span className="empty-chat-suggestion-icon" aria-hidden="true">
+                <SuggestionIcon size={14} />
+              </span>
+              <span className="empty-chat-suggestion-copy">
+                <strong>{suggestion.label}</strong>
+                <small>{suggestion.detail}</small>
+              </span>
             </button>
           );
         })}
       </div>
+      {children}
     </div>
   );
+}
+
+function createEmptyChatContext({
+  chat,
+  hasApiKey,
+  localWorkspace,
+  model,
+  projects,
+  providerSettings,
+  webSearch,
+}: Omit<EmptyChatStartProps, "children" | "onSelectSuggestion">): EmptyChatContext {
+  const projectName = normalizeProjectName(chat.project);
+  const activeProject = projects.find((project) => normalizeProjectName(project.name).toLowerCase() === projectName.toLowerCase());
+  const workspaceRoot = localWorkspace.roots[0] || activeProject?.localWorkspace?.roots[0] || "";
+  const workspaceName = getPathBasename(workspaceRoot);
+  const hasProject = !isNoProjectName(projectName);
+  const projectLabel = hasProject ? projectName : workspaceName ? `${workspaceName} workspace` : DEFAULT_PROJECT;
+  const promptProjectName = hasProject ? projectName : workspaceRoot ? "the open workspace" : "this chat";
+  const providerDefinition = getModelProvider(providerSettings.provider);
+  const providerKey = providerSettings.apiKeys[providerSettings.provider]?.trim();
+  const legacyOpenRouterKey = providerSettings.provider === "openrouter" ? providerSettings.openRouterApiKey.trim() : "";
+  const providerHasKey = Boolean(providerKey || legacyOpenRouterKey || hasApiKey);
+  const routeStatus =
+    providerSettings.provider === "9router"
+      ? "Subscription route"
+      : isLocalProvider(providerSettings.provider)
+      ? "Local route"
+      : providerDefinition.requiresApiKey && !providerHasKey
+      ? "Needs API key"
+      : providerDefinition.requiresApiKey
+      ? "API key ready"
+      : "Ready";
+  const selectedModel = model.trim() || providerSettings.providerModels[providerSettings.provider]?.trim() || providerSettings.model.trim() || providerDefinition.defaultModel;
+  const modelLabel = formatModelName(selectedModel);
+  const webSearchProviderLabel = WEB_SEARCH_PROVIDER_LABELS[webSearch.provider] ?? "Web search";
+  const webSearchEnabled = Boolean(webSearch.enabled && providerSettings.tools.webSearch);
+  const canGenerateImages = Boolean(providerSettings.tools.imageGeneration);
+
+  return {
+    canGenerateImages,
+    hasProject,
+    imageStatus: canGenerateImages ? "Images on" : "Images off",
+    modelLabel,
+    projectLabel,
+    promptProjectName,
+    providerLabel: providerDefinition.label,
+    routeStatus,
+    webSearchDetail: webSearchEnabled ? `${webSearchProviderLabel} on` : "Web off",
+    webSearchEnabled,
+  };
+}
+
+function createEmptyChatSuggestions(context: EmptyChatContext): EmptyChatSuggestion[] {
+  const subject = context.promptProjectName;
+  const routeSummary = `${context.providerLabel} / ${context.routeStatus}`;
+
+  return [
+    {
+      detail: "Architecture, run path, important files",
+      icon: Code2,
+      label: "Explain this project",
+      prompt: `Use the active project context for ${subject}. Explain the architecture, where the important files live, how to run it, and the first risks or opportunities you see.`,
+      tone: "project",
+    },
+    {
+      detail: "Inspect, implement, verify",
+      icon: GitBranch,
+      label: "Pick a real starter task",
+      prompt: `Look through ${subject} with the available local context. Pick one high-impact starter task, make the change, run the most relevant check, and explain exactly what changed.`,
+      tone: "access",
+    },
+    {
+      detail: routeSummary,
+      icon: Route,
+      label: "Check my AI setup",
+      prompt: `Review the active AI setup for this chat: provider ${context.providerLabel}, model ${context.modelLabel}, subscription or API key readiness, enabled tools, local access, and project context. Tell me what is ready, what is missing, and what you would adjust before work starts.`,
+      tone: "route",
+    },
+    {
+      detail: context.webSearchDetail,
+      icon: Search,
+      label: context.webSearchEnabled ? "Research before coding" : "Plan from local context",
+      prompt: context.webSearchEnabled
+        ? `Use web search only where current docs matter, then inspect ${subject} and propose the safest next implementation step. Include sources when web results affect the answer.`
+        : `Use the current local project context only and propose the safest next implementation step for ${subject}.`,
+      tone: "tools",
+      useWebSearch: context.webSearchEnabled,
+    },
+    {
+      detail: context.imageStatus,
+      icon: ImageIcon,
+      label: context.canGenerateImages ? "Generate a project icon" : "Draft an icon brief",
+      prompt: context.canGenerateImages
+        ? `Generate a clean app icon concept for ${subject}. Use the image tool, then explain the direction and where it would fit in the app.`
+        : `Create a concise visual brief for a clean app icon for ${subject}, and tell me what to enable if I want Gilbert to generate the image artifact.`,
+      tone: "creative",
+    },
+    {
+      detail: "Useful apps and project tools",
+      icon: Grid2X2,
+      label: "Connect useful tools",
+      prompt: `Look at what ${subject} needs and recommend the most useful app, connector, or local tool connections for this chat. Prioritize connections that would actually help the current project workflow.`,
+      tone: "tools",
+    },
+  ];
+}
+
+function isLocalProvider(provider: ProviderSettings["provider"]) {
+  return provider === "lmstudio" || provider === "ollama" || provider === "vllm";
+}
+
+function formatModelName(model: string) {
+  const trimmed = model.trim();
+
+  if (!trimmed) {
+    return "Default model";
+  }
+
+  const parts = trimmed.split("/").filter(Boolean);
+  const leaf = parts.length > 0 ? parts[parts.length - 1] : trimmed;
+  const readable = leaf.replace(/[-_]+/g, " ");
+
+  return readable.length > 34 ? `${readable.slice(0, 31).trim()}...` : readable;
+}
+
+function getPathBasename(path: string) {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+
+  return parts.length > 0 ? parts[parts.length - 1] : "";
 }
 
 function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: number) {
@@ -809,4 +1168,14 @@ function clamp(value: number, min: number, max: number) {
 
 function getQueuedMessages(messages: ChatMessage[]) {
   return messages.filter((message) => message.role === "user" && message.status === "queued");
+}
+
+function mergeQueuedMessages(chatQueuedMessages: ChatMessage[], queueDetails: ChatMessage[]) {
+  if (queueDetails.length === 0) {
+    return chatQueuedMessages;
+  }
+
+  const chatMessageById = new Map(chatQueuedMessages.map((message) => [message.id, message]));
+
+  return queueDetails.map((message) => chatMessageById.get(message.id) ?? message);
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { defaultProviderSettings, loadChats, loadPersistentString, loadProviderSettings, saveChats, savePersistentString, saveProviderSettings, setStorageNamespace } from "./appStorage";
+import { appendUsageHistoryRecord, clearUsageHistory, defaultProviderSettings, loadChats, loadPersistentString, loadProjects, loadProviderSettings, loadUsageHistory, saveChats, savePersistentString, saveProjects, saveProviderSettings, setStorageNamespace } from "./appStorage";
 import { createEmptyChat } from "./chatUtils";
 import type { ChatSummary } from "../types/chat";
 
@@ -121,6 +121,82 @@ describe("app storage", () => {
       ],
       kind: "update",
       path: "src/app/App.tsx",
+    });
+  });
+
+  it("persists assistant message feedback across a chat reload", () => {
+    const chat: ChatSummary = {
+      id: "chat-feedback",
+      messages: [
+        {
+          content: "Done.",
+          createdAt: "2026-05-20T15:00:00.000Z",
+          feedback: "liked",
+          id: "message-feedback",
+          role: "assistant",
+        },
+      ],
+      project: "GilbertCodex",
+      title: "Feedback persistence",
+      updatedAt: "2026-05-20T15:00:00.000Z",
+    };
+
+    saveChats([chat]);
+
+    expect(loadChats()[0]?.messages[0]?.feedback).toBe("liked");
+  });
+
+  it("persists visible thinking work-trace notes across a chat reload", () => {
+    const chat: ChatSummary = {
+      id: "chat-thinking",
+      messages: [
+        {
+          content: "Done.",
+          createdAt: "2026-05-19T12:00:00.000Z",
+          id: "message-thinking",
+          role: "assistant",
+          workTrace: [
+            {
+              content: "Reading workspace evidence for `README.md`.",
+              id: "thinking-1",
+              kind: "thinking",
+              status: "active",
+            },
+            {
+              id: "tool-1",
+              kind: "tool",
+              toolCall: {
+                id: "bridge-call-1",
+                input: "{\"path\":\"README.md\"}",
+                label: "Read workspace file",
+                status: "complete",
+                toolId: "files_read",
+              },
+            },
+          ],
+        },
+      ],
+      project: "GilbertCodex",
+      title: "Thinking persistence",
+      updatedAt: "2026-05-19T12:00:00.000Z",
+    };
+
+    saveChats([chat]);
+
+    const loadedTrace = loadChats()[0]?.messages[0]?.workTrace;
+
+    expect(loadedTrace?.[0]).toMatchObject({
+      content: "Reading workspace evidence for `README.md`.",
+      id: "thinking-1",
+      kind: "thinking",
+      status: "complete",
+    });
+    expect(loadedTrace?.[1]).toMatchObject({
+      kind: "tool",
+      toolCall: {
+        label: "Read workspace file",
+        status: "complete",
+      },
     });
   });
 
@@ -349,6 +425,64 @@ describe("app storage", () => {
     expect(loadPersistentString(key)).toBe(value);
   });
 
+  it("persists project run config in app-local project storage", () => {
+    saveProjects([
+      {
+        createdAt: "2026-05-19T12:00:00.000Z",
+        id: "project-1",
+        localWorkspace: {
+          enabled: true,
+          indexStatus: "idle",
+          permissionMode: "default",
+          roots: ["C:/workspace/app"],
+          scope: "selected-folder",
+        },
+        name: "Run App",
+        runConfig: {
+          actions: [
+            {
+              background: true,
+              command: "npm run dev",
+              cwd: "C:/workspace/app",
+              id: "detected:dev-server",
+              kind: "dev-server",
+              label: "Run dev server",
+              previewUrl: "http://127.0.0.1:5173/",
+              source: "user",
+              updatedAt: "2026-05-19T12:00:00.000Z",
+            },
+          ],
+          lastRun: {
+            actionId: "detected:dev-server",
+            ranAt: "2026-05-19T12:01:00.000Z",
+            status: "running",
+          },
+          selectedActionId: "detected:dev-server",
+          version: 1,
+        },
+        updatedAt: "2026-05-19T12:00:00.000Z",
+      },
+    ]);
+
+    const loadedProject = loadProjects()[0];
+
+    expect(loadedProject?.runConfig).toMatchObject({
+      actions: [
+        expect.objectContaining({
+          command: "npm run dev",
+          previewUrl: "http://localhost:5173/",
+          source: "user",
+        }),
+      ],
+      lastRun: {
+        actionId: "detected:dev-server",
+        ranAt: "2026-05-19T12:01:00.000Z",
+        status: "running",
+      },
+      selectedActionId: "detected:dev-server",
+    });
+  });
+
   it("persists disabled provider models without disabling the selected model", () => {
     saveProviderSettings({
       ...defaultProviderSettings,
@@ -369,6 +503,120 @@ describe("app storage", () => {
     expect(loadedSettings.model).toBe("poolside/laguna-m.1:free");
     expect(loadedSettings.disabledModels.openrouter).toEqual(["inclusionai/ling-2.6-flash"]);
     expect(loadedSettings.disabledModels.anthropic).toEqual(["claude-opus-4-6"]);
+  });
+
+  it("persists subscription Token saver and fallback mode settings", () => {
+    saveProviderSettings({
+      ...defaultProviderSettings,
+      subscriptionOptimization: {
+        fallbackMode: "smart-saver",
+        tokenSaverLevel: "max",
+      },
+    });
+
+    const loadedSettings = loadProviderSettings();
+
+    expect(loadedSettings.subscriptionOptimization).toEqual({
+      fallbackMode: "smart-saver",
+      tokenSaverLevel: "max",
+    });
+  });
+
+  it("persists provider usage history in account-local app storage", () => {
+    appendUsageHistoryRecord({
+      completionTokens: 100,
+      costSource: "catalog",
+      createdAt: "2026-05-19T14:30:00.000Z",
+      dateKey: "2026-05-19",
+      dayKey: "2026-05-19",
+      id: "usage-1",
+      inputTokens: 900,
+      model: "gpt-5.4-mini",
+      monthKey: "2026-05",
+      outputTokens: 100,
+      provider: "openai",
+      providerLabel: "OpenAI",
+      reasoningTokens: 0,
+      requestCount: 1,
+      source: "provider",
+      totalCostUsd: 0.001125,
+      totalTokens: 1000,
+      unitCost: {
+        inputUsd: 0.000675,
+        outputUsd: 0.00045,
+        reasoningUsd: 0,
+        requestUsd: 0,
+        totalUsd: 0.001125,
+      },
+      weekKey: "2026-W21",
+    });
+
+    expect(loadUsageHistory().records[0]).toMatchObject({
+      id: "usage-1",
+      inputTokens: 900,
+      model: "gpt-5.4-mini",
+      provider: "openai",
+      totalCostUsd: 0.001125,
+      totalTokens: 1000,
+    });
+  });
+
+  it("keeps usage history isolated by account namespace", () => {
+    setStorageNamespace("usage-user-a");
+    appendUsageHistoryRecord({
+      completionTokens: 50,
+      costSource: "free",
+      createdAt: "2026-05-19T14:30:00.000Z",
+      dateKey: "2026-05-19",
+      dayKey: "2026-05-19",
+      id: "usage-user-a-record",
+      inputTokens: 450,
+      model: "openrouter/free",
+      monthKey: "2026-05",
+      outputTokens: 50,
+      provider: "openrouter",
+      providerLabel: "OpenRouter",
+      reasoningTokens: 0,
+      requestCount: 1,
+      source: "provider",
+      totalCostUsd: 0,
+      totalTokens: 500,
+      weekKey: "2026-W21",
+    });
+
+    setStorageNamespace("usage-user-b");
+    expect(loadUsageHistory().records).toEqual([]);
+
+    setStorageNamespace("usage-user-a");
+    expect(loadUsageHistory().records.map((record) => record.id)).toEqual(["usage-user-a-record"]);
+
+    clearUsageHistory();
+    expect(loadUsageHistory().records).toEqual([]);
+  });
+
+  it("keeps provider and subscription routing settings isolated by account namespace", () => {
+    setStorageNamespace("user-a");
+    saveProviderSettings({
+      ...defaultProviderSettings,
+      model: "cx/gpt-5.5",
+      provider: "9router",
+      providerModels: {
+        ...defaultProviderSettings.providerModels,
+        "9router": "cx/gpt-5.5",
+      },
+    });
+
+    setStorageNamespace("user-b");
+    const secondAccountSettings = loadProviderSettings();
+
+    expect(secondAccountSettings.provider).toBe(defaultProviderSettings.provider);
+    expect(secondAccountSettings.model).toBe(defaultProviderSettings.model);
+
+    setStorageNamespace("user-a");
+    const firstAccountSettings = loadProviderSettings();
+
+    expect(firstAccountSettings.provider).toBe("9router");
+    expect(firstAccountSettings.model).toBe("cx/gpt-5.5");
   });
 
   it("does not persist empty draft chats into chat history", () => {

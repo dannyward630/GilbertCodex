@@ -106,7 +106,7 @@ See [v0.5.0 release notes](docs/releases/v0.5.0.md) for release-prep notes, setu
 
 The next roadmap is focused on making Gilbert faster, clearer, and more capable in real coding sessions. See the full [roadmap](docs/ROADMAP.md) for the active direction.
 
-- Apps page: the next big product surface is the Apps / Plugins / Skills area. v0.5.0 intentionally marks it as coming next instead of pretending the page is complete.
+- Apps page: Gmail and MCP server connections now have real management surfaces. Skills remain the next catalog surface to finish.
 - Activity and inspector polish: grouped runs, easier progress scanning, cleaner source cards, and less protocol-facing noise.
 - Source-control workflow: richer review cards, GitHub issue/PR/release helpers, workflow visibility, and contributor-friendly starter issues.
 - Research upgrades: stronger source quality, thinking/planning context, and better citation surfaces.
@@ -211,6 +211,8 @@ Gilbert Codex is local-first. Provider keys and local endpoint URLs are entered 
 
 GitHub browser login uses OAuth device flow. For local development, create a GitHub OAuth App with device flow enabled, copy `.env.example` to `.env`, set `VITE_GITHUB_OAUTH_CLIENT_ID` to the public client ID, and sign in from Settings. No client secret belongs in the desktop app. GitHub actions use the locally stored access token and should remain behind visible review or permission boundaries for high-impact actions.
 
+Gmail plugin sign-in uses Google OAuth for desktop apps. End users install from Apps > Gmail and should only see Google account selection. Official release builds read the public desktop OAuth client ID from the `VITE_GOOGLE_OAUTH_CLIENT_ID` GitHub repository variable or secret and bake it into the downloadable app. For local development, enable the Gmail API, create a Google OAuth desktop client, set `VITE_GOOGLE_OAUTH_CLIENT_ID` in `.env`, and restart the app. No Google client secret, access token, refresh token, or downloaded credential file belongs in the repository.
+
 Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs for app updates and chat follow-ups. Bot gateway chat is still future runtime work.
 
 See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, provider errors, or local automation output.
@@ -219,6 +221,7 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 
 - [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux partial support, and the native testing checklist.
 - [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, and incoming webhooks.
+- [Gmail plugin setup](docs/gmail/README.md): Google OAuth desktop setup, user connection flow, requested scopes, and Gmail confirmation rules.
 - [GitHub integration setup](docs/github/README.md): GitHub OAuth App device-flow setup, requested scopes, Settings sign-in, repository actions, and webhook troubleshooting.
 
 ## Collaboration

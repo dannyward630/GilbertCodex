@@ -47,4 +47,20 @@ describe("visible tool protocol guard", () => {
 
     expect(stripVisibleToolProtocol(content)).toBe("I found the likely next action.\n\nContinuing with the answer.");
   });
+
+  it("strips bridge tool-call sentinels while keeping the final answer text", () => {
+    const content = String.raw`BRIDGE_TOOL_CALL:{"tool":"terminal_run","args":{"command":"npm run build","cwd":"C:\Users\Example User\Documents\HelloWorld","timeoutMs":12000}}Updated the app theme colors.`;
+
+    expect(looksLikeVisibleToolProtocol(content)).toBe(true);
+    expect(stripVisibleToolProtocol(content)).toBe("Updated the app theme colors.");
+  });
+
+  it("strips incomplete bridge sentinels while streaming", () => {
+    const content = [
+      "Preparing the build.",
+      String.raw`BRIDGE_TOOL_CALL:{"tool":"terminal_run","args":{"command":"npm run build"`,
+    ].join("\n");
+
+    expect(stripVisibleToolProtocol(content)).toBe("Preparing the build.");
+  });
 });

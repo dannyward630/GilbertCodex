@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Check, ChevronDown, ChevronRight, ExternalLink, Globe2, Hash, X } from "lucide-react";
 import { AssistantWorkTrace, createAssistantActivitySnapshot } from "./AssistantActivityIndicator";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -20,48 +20,53 @@ const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
   "Writing final answer from local tool results...",
 ]);
 
+const THREAD_BOTTOM_THRESHOLD_PX = 96;
+
 interface ChatThreadProps {
   active?: boolean;
   appInfo: AppInfo;
   chat: ChatSummary;
   chats: ChatSummary[];
   hasApiKey: boolean;
-  onHeaderBlurChange?: (active: boolean) => void;
+  onForkFromMessage?: (messageId: string) => void | Promise<void>;
+  onMessageFeedback?: (messageId: string, feedback: ChatMessage["feedback"]) => void;
   onOpenPlanReview?: (messageId: string) => void;
   onEditUserMessage?: (messageId: string, content: string) => void | Promise<void>;
   onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
   onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   onSelectChat?: (chatId: string) => void;
-  onStopGeneration?: (messageId: string) => void;
 }
 
-export function ChatThread({
+function ChatThreadComponent({
   active = true,
   appInfo,
   chat,
   chats,
   hasApiKey,
-  onHeaderBlurChange,
   onEditUserMessage,
+  onForkFromMessage,
+  onMessageFeedback,
   onOpenPlanReview,
   onRequestPlanRevision,
   onRegenerateResponse,
   onResolveToolApproval,
   onSelectChat,
-  onStopGeneration,
 }: ChatThreadProps) {
   const threadRef = useRef<HTMLDivElement>(null);
-  const headerBlurActiveRef = useRef(false);
-  const programmaticScrollFrameRef = useRef<number | null>(null);
-  const programmaticScrollRef = useRef(false);
+  const threadContentRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
+  const scrollFollowupFrameRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const lastThreadScrollTopRef = useRef(0);
+  const latestUserMessageKeyRef = useRef<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
+  const latestUserMessageKey = getLatestUserMessageKey(chat);
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
+  const regenerableMessageIds = useMemo(() => getRegenerableMessageIds(chat.messages), [chat.messages]);
   const streamMarker = scrollAnchorMessage
-    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
+    ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
     : `empty:${chat.messages.length}`;
 
   useEffect(() => {
@@ -70,9 +75,10 @@ export function ChatThread({
         window.cancelAnimationFrame(scrollFrameRef.current);
       }
 
-      if (programmaticScrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(programmaticScrollFrameRef.current);
+      if (scrollFollowupFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFollowupFrameRef.current);
       }
+
     };
   }, []);
 
@@ -81,10 +87,56 @@ export function ChatThread({
       return;
     }
 
-    shouldStickToBottomRef.current = true;
-    setHeaderBlurActive(false);
+    const content = threadContentRef.current;
+
+    if (!content || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (!shouldStickToBottomRef.current) {
+        updateThreadBottomState();
+        return;
+      }
+
+      scrollToThreadBottom();
+    });
+
+    observer.observe(content);
+
+    return () => observer.disconnect();
+  }, [active, chat.id]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    latestUserMessageKeyRef.current = null;
+    lastThreadScrollTopRef.current = 0;
+    setThreadBottomState(true);
     scrollToThreadBottom();
   }, [active, chat.id]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    if (latestUserMessageKey === latestUserMessageKeyRef.current) {
+      return;
+    }
+
+    latestUserMessageKeyRef.current = latestUserMessageKey;
+
+    if (!latestUserMessageKey) {
+      return;
+    }
+
+    shouldStickToBottomRef.current = true;
+    setThreadBottomState(true);
+    scrollToThreadBottom();
+  }, [active, latestUserMessageKey]);
 
   useEffect(() => {
     if (!active) {
@@ -118,7 +170,27 @@ export function ChatThread({
 
     scrollFrameRef.current = window.requestAnimationFrame(() => {
       scrollFrameRef.current = null;
+
+      if (!shouldStickToBottomRef.current) {
+        return;
+      }
+
       flushScrollToThreadBottom();
+      scheduleThreadBottomFollowup();
+    });
+  }
+
+  function scheduleThreadBottomFollowup() {
+    if (scrollFollowupFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFollowupFrameRef.current);
+    }
+
+    scrollFollowupFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFollowupFrameRef.current = null;
+
+      if (shouldStickToBottomRef.current) {
+        flushScrollToThreadBottom();
+      }
     });
   }
 
@@ -129,26 +201,14 @@ export function ChatThread({
       return;
     }
 
-    programmaticScrollRef.current = true;
-    thread.scrollTo({ top: thread.scrollHeight });
+    const nextScrollTop = Math.max(0, thread.scrollHeight - thread.clientHeight);
 
-    if (programmaticScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(programmaticScrollFrameRef.current);
+    if (Math.abs(thread.scrollTop - nextScrollTop) > 1) {
+      thread.scrollTop = nextScrollTop;
     }
 
-    programmaticScrollFrameRef.current = window.requestAnimationFrame(() => {
-      programmaticScrollFrameRef.current = null;
-      programmaticScrollRef.current = false;
-    });
-  }
-
-  function setHeaderBlurActive(active: boolean) {
-    if (active === headerBlurActiveRef.current) {
-      return;
-    }
-
-    headerBlurActiveRef.current = active;
-    onHeaderBlurChange?.(active);
+    lastThreadScrollTopRef.current = nextScrollTop;
+    updateThreadBottomState(thread);
   }
 
   function handleThreadScroll() {
@@ -162,12 +222,41 @@ export function ChatThread({
       return;
     }
 
-    const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom < 96;
+    const currentScrollTop = thread.scrollTop;
+    const scrollingUp = currentScrollTop < lastThreadScrollTopRef.current - 1;
+    const atBottom = !scrollingUp && isThreadNearBottom(thread);
+    lastThreadScrollTopRef.current = currentScrollTop;
+    shouldStickToBottomRef.current = atBottom;
 
-    if (!programmaticScrollRef.current) {
-      const hasScrollableContent = thread.scrollHeight - thread.clientHeight > 8;
-      setHeaderBlurActive(hasScrollableContent && thread.scrollTop > 8);
+    if (!atBottom) {
+      cancelPendingThreadBottomScroll();
+    }
+  }
+
+  function setThreadBottomState(atBottom: boolean) {
+    shouldStickToBottomRef.current = atBottom;
+  }
+
+  function updateThreadBottomState(currentThread = threadRef.current) {
+    const thread = currentThread;
+
+    if (!thread) {
+      return;
+    }
+
+    lastThreadScrollTopRef.current = thread.scrollTop;
+    setThreadBottomState(isThreadNearBottom(thread));
+  }
+
+  function cancelPendingThreadBottomScroll() {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
+
+    if (scrollFollowupFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFollowupFrameRef.current);
+      scrollFollowupFrameRef.current = null;
     }
   }
 
@@ -206,110 +295,218 @@ export function ChatThread({
 
   if (chat.messages.length === 0) {
     return (
-      <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
-        <MessageBlock role="assistant">
-          <MarkdownMessage content={hasApiKey ? `${appInfo.name} is ready.` : "Add a provider API key in Settings, then send a message to start testing."} />
-        </MessageBlock>
+      <div className="chat-thread-shell">
+        <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
+          <div ref={threadContentRef} className="chat-thread-content">
+            <MessageBlock role="assistant">
+              <MarkdownMessage content={hasApiKey ? `${appInfo.name} is ready.` : "Add a provider API key in Settings, then send a message to start testing."} />
+            </MessageBlock>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
-      {chat.messages.map((message, messageIndex) => {
-        if (message.status === "queued") {
-          return null;
-        }
+    <div className="chat-thread-shell">
+      <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
+        <div ref={threadContentRef} className="chat-thread-content">
+          {chat.messages.map((message, messageIndex) => {
+            if (message.status === "queued") {
+              return null;
+            }
 
-        const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, Boolean(message.isStreaming)) : { content: message.content };
-        const hasVisibleContent = displayMessage.content.trim().length > 0;
-        const messageSources = message.role === "assistant" ? getMessageSources(message, displayMessage.content) : [];
-        const showMessageSources = message.role === "assistant" && !message.isStreaming && hasVisibleContent && messageSources.length > 0;
-        const hasVisibleAttachment = Boolean(message.attachments?.length);
-        const hasVisibleArtifact = Boolean(message.artifacts?.length);
-        const showPlanReview = shouldShowPlanReviewCard(message);
-        const savedPlanContent = message.role === "assistant" ? getSavedPlanContent(message) : "";
-        const showPlanExecutionContent = message.role === "assistant" && showPlanReview && isPlanExecutionContent(message, displayMessage.content);
-        const isEditingUserMessage = message.role === "user" && editingMessageId === message.id;
-        const activitySnapshot = message.role === "assistant"
-          ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
-          : null;
-        const hasWorkTrace = message.role === "assistant" && (Boolean(message.workTrace?.length) || Boolean(message.responseThinking?.trim()));
-        const showAssistantWorkTrace = message.role === "assistant" && (activitySnapshot || hasWorkTrace || Boolean(message.isStreaming && !hasVisibleContent));
-        const visibleContextCompactions = message.role === "assistant" ? getVisibleContextCompactions(message.contextCompactions) : [];
-        const showMessageBlock = message.role !== "assistant" || hasVisibleContent || hasVisibleAttachment || hasVisibleArtifact || showPlanReview || showAssistantWorkTrace;
-
-        if (message.role === "assistant" && !showMessageBlock && visibleContextCompactions.length === 0) {
-          return null;
-        }
-
-        const actionMessage = message.role === "assistant" ? { ...message, content: displayMessage.content } : message;
-
-        return (
-          <Fragment key={message.id}>
-            {visibleContextCompactions.map((compaction) => (
-              <ContextCompactionDivider key={`${message.id}-${compaction.compactedAt}`} compaction={compaction} />
-            ))}
-            {showMessageBlock ? (
-              <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
-                <MessageAttachments attachments={message.attachments} />
-                <MessageArtifacts artifacts={message.artifacts} />
-                {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
-                {message.role === "user" ? <MessageResearchReferences references={message.researchReferences} chats={chats} onSelectChat={onSelectChat} /> : null}
-                {showAssistantWorkTrace ? (
-                  <AssistantWorkTrace
-                    activitySnapshot={activitySnapshot}
-                    responseStarted={hasVisibleContent}
-                    thinking={message.role === "assistant" ? message.thinking : undefined}
-                    thinkingContent={message.role === "assistant" ? message.responseThinking ?? "" : ""}
-                    thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
-                    workTrace={message.role === "assistant" ? message.workTrace : undefined}
-                  />
-                ) : null}
-                {isEditingUserMessage ? (
-                  <MessageEditForm
-                    hasAttachments={hasVisibleAttachment}
-                    value={editingContent}
-                    onCancel={handleCancelEditMessage}
-                    onChange={setEditingContent}
-                    onSubmit={() => handleSubmitEditMessage(message)}
-                  />
-                ) : showPlanReview ? (
-                  <>
-                    <PlanReviewCard
-                      content={savedPlanContent || displayMessage.content}
-                      isStreaming={message.isStreaming}
-                      message={actionMessage}
-                      onOpenFullPlan={onOpenPlanReview}
-                      onRequestRevision={onRequestPlanRevision}
-                      onResolvePlanApproval={onResolveToolApproval}
-                    />
-                    {showPlanExecutionContent ? (
-                      <div className="plan-execution-response">
-                        <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
-                      </div>
-                    ) : null}
-                  </>
-                ) : displayMessage.content.trim() ? (
-                  <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
-                ) : null}
-                {showMessageSources ? <MessageSourcesRow sources={messageSources} /> : null}
-                {isEditingUserMessage ? null : (
-                  <MessageActions
-                    canRegenerate={canRegenerateMessage(chat, messageIndex)}
-                    message={actionMessage}
-                    onEditMessage={onEditUserMessage ? handleStartEditMessage : undefined}
-                    onRegenerateResponse={onRegenerateResponse}
-                    onStopGeneration={onStopGeneration}
-                  />
-                )}
-                {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerateMessage(chat, messageIndex) ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
-              </MessageBlock>
-            ) : null}
-          </Fragment>
-        );
-      })}
+            return (
+              <ChatMessageRow
+                key={message.id}
+                canRegenerate={regenerableMessageIds.has(message.id)}
+                chats={chats}
+                editingContent={editingContent}
+                editingMessageId={editingMessageId}
+                message={message}
+                messageIndex={messageIndex}
+                onCancelEditMessage={handleCancelEditMessage}
+                onEditContentChange={setEditingContent}
+                onEditUserMessage={onEditUserMessage}
+                onForkFromMessage={onForkFromMessage}
+                onMessageFeedback={onMessageFeedback}
+                onOpenPlanReview={onOpenPlanReview}
+                onRegenerateResponse={onRegenerateResponse}
+                onRequestPlanRevision={onRequestPlanRevision}
+                onResolveToolApproval={onResolveToolApproval}
+                onSelectChat={onSelectChat}
+                onStartEditMessage={handleStartEditMessage}
+                onSubmitEditMessage={handleSubmitEditMessage}
+              />
+            );
+          })}
+        </div>
+      </div>
     </div>
+  );
+}
+
+export const ChatThread = memo(ChatThreadComponent, areChatThreadPropsEqual);
+
+function areChatThreadPropsEqual(previous: ChatThreadProps, next: ChatThreadProps) {
+  return (
+    previous.active === next.active &&
+    previous.appInfo.name === next.appInfo.name &&
+    previous.chat === next.chat &&
+    previous.chats === next.chats &&
+    previous.hasApiKey === next.hasApiKey
+  );
+}
+
+interface ChatMessageRowProps {
+  canRegenerate: boolean;
+  chats: ChatSummary[];
+  editingContent: string;
+  editingMessageId: string | null;
+  message: ChatMessage;
+  messageIndex: number;
+  onCancelEditMessage: () => void;
+  onEditContentChange: (value: string) => void;
+  onEditUserMessage?: (messageId: string, content: string) => void | Promise<void>;
+  onForkFromMessage?: (messageId: string) => void | Promise<void>;
+  onMessageFeedback?: (messageId: string, feedback: ChatMessage["feedback"]) => void;
+  onOpenPlanReview?: (messageId: string) => void;
+  onRegenerateResponse?: (messageId: string) => void | Promise<void>;
+  onRequestPlanRevision?: (messageId: string, feedback: string) => void | Promise<void>;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
+  onSelectChat?: (chatId: string) => void;
+  onStartEditMessage: (messageId: string) => void;
+  onSubmitEditMessage: (message: ChatMessage) => void;
+}
+
+const ChatMessageRow = memo(function ChatMessageRow({
+  canRegenerate,
+  chats,
+  editingContent,
+  editingMessageId,
+  message,
+  onCancelEditMessage,
+  onEditContentChange,
+  onEditUserMessage,
+  onForkFromMessage,
+  onMessageFeedback,
+  onOpenPlanReview,
+  onRegenerateResponse,
+  onRequestPlanRevision,
+  onResolveToolApproval,
+  onSelectChat,
+  onStartEditMessage,
+  onSubmitEditMessage,
+}: ChatMessageRowProps) {
+  const displayMessage = message.role === "assistant" ? separateDisplayThinking(message.content, Boolean(message.isStreaming)) : { content: message.content };
+  const hasVisibleContent = displayMessage.content.trim().length > 0;
+  const messageSources = message.role === "assistant" ? getMessageSources(message, displayMessage.content) : [];
+  const showMessageSources = message.role === "assistant" && !message.isStreaming && hasVisibleContent && messageSources.length > 0;
+  const hasVisibleAttachment = Boolean(message.attachments?.length);
+  const hasVisibleArtifact = Boolean(message.artifacts?.length);
+  const showPlanReview = shouldShowPlanReviewCard(message);
+  const savedPlanContent = message.role === "assistant" ? getSavedPlanContent(message) : "";
+  const showPlanExecutionContent = message.role === "assistant" && showPlanReview && isPlanExecutionContent(message, displayMessage.content);
+  const isEditingUserMessage = message.role === "user" && editingMessageId === message.id;
+  const activitySnapshot = message.role === "assistant"
+    ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
+    : null;
+  const hasWorkTrace = message.role === "assistant" && (Boolean(message.workTrace?.length) || Boolean(message.responseThinking?.trim()));
+  const showAssistantWorkTrace = message.role === "assistant" && (activitySnapshot || hasWorkTrace || Boolean(message.isStreaming && !hasVisibleContent));
+  const visibleContextCompactions = message.role === "assistant" ? getVisibleContextCompactions(message.contextCompactions) : [];
+  const showMessageBlock = message.role !== "assistant" || hasVisibleContent || hasVisibleAttachment || hasVisibleArtifact || showPlanReview || showAssistantWorkTrace;
+
+  if (message.role === "assistant" && !showMessageBlock && visibleContextCompactions.length === 0) {
+    return null;
+  }
+
+  const actionMessage = message.role === "assistant" ? { ...message, content: displayMessage.content } : message;
+
+  return (
+    <Fragment>
+      {visibleContextCompactions.map((compaction) => (
+        <ContextCompactionDivider key={`${message.id}-${compaction.compactedAt}`} compaction={compaction} />
+      ))}
+      {showMessageBlock ? (
+        <MessageBlock role={message.role} status={message.status} isStreaming={message.isStreaming}>
+          <MessageAttachments attachments={message.attachments} />
+          <MessageArtifacts artifacts={message.artifacts} />
+          {message.role === "user" && message.source?.kind === "discord" ? <DiscordMessageSource source={message.source} /> : null}
+          {message.role === "user" ? <MessageResearchReferences references={message.researchReferences} chats={chats} onSelectChat={onSelectChat} /> : null}
+          {showAssistantWorkTrace ? (
+            <AssistantWorkTrace
+              activitySnapshot={activitySnapshot}
+              createdAt={message.createdAt}
+              responseStarted={hasVisibleContent}
+              thinking={message.role === "assistant" ? message.thinking : undefined}
+              thinkingContent={message.role === "assistant" ? message.responseThinking ?? "" : ""}
+              thinkingStreaming={Boolean(message.isStreaming && !hasVisibleContent)}
+              workTrace={message.role === "assistant" ? message.workTrace : undefined}
+            />
+          ) : null}
+          {isEditingUserMessage ? (
+            <MessageEditForm
+              hasAttachments={hasVisibleAttachment}
+              value={editingContent}
+              onCancel={onCancelEditMessage}
+              onChange={onEditContentChange}
+              onSubmit={() => onSubmitEditMessage(message)}
+            />
+          ) : showPlanReview ? (
+            <>
+              <PlanReviewCard
+                content={savedPlanContent || displayMessage.content}
+                isStreaming={message.isStreaming}
+                message={actionMessage}
+                onOpenFullPlan={onOpenPlanReview}
+                onRequestRevision={onRequestPlanRevision}
+                onResolvePlanApproval={onResolveToolApproval}
+              />
+              {showPlanExecutionContent ? (
+                <div className="plan-execution-response">
+                  <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
+                </div>
+              ) : null}
+            </>
+          ) : displayMessage.content.trim() ? (
+            <MarkdownMessage content={displayMessage.content} isStreaming={message.isStreaming} />
+          ) : null}
+          {showMessageSources ? <MessageSourcesRow sources={messageSources} /> : null}
+          {isEditingUserMessage || message.isStreaming ? null : (
+            <MessageActions
+              message={actionMessage}
+              onEditMessage={onEditUserMessage ? onStartEditMessage : undefined}
+              onForkFromMessage={onForkFromMessage}
+              onMessageFeedback={onMessageFeedback}
+            />
+          )}
+          {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerate ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
+        </MessageBlock>
+      ) : null}
+    </Fragment>
+  );
+}, areChatMessageRowPropsEqual);
+
+function areChatMessageRowPropsEqual(previous: ChatMessageRowProps, next: ChatMessageRowProps) {
+  const wasEditing = previous.editingMessageId === previous.message.id;
+  const isEditing = next.editingMessageId === next.message.id;
+  const needsChatReferences = Boolean(previous.message.role === "user" && previous.message.researchReferences?.length);
+
+  return (
+    previous.canRegenerate === next.canRegenerate &&
+    previous.message === next.message &&
+    previous.messageIndex === next.messageIndex &&
+    (!needsChatReferences || previous.chats === next.chats) &&
+    Boolean(previous.onEditUserMessage) === Boolean(next.onEditUserMessage) &&
+    Boolean(previous.onForkFromMessage) === Boolean(next.onForkFromMessage) &&
+    Boolean(previous.onMessageFeedback) === Boolean(next.onMessageFeedback) &&
+    Boolean(previous.onOpenPlanReview) === Boolean(next.onOpenPlanReview) &&
+    Boolean(previous.onRegenerateResponse) === Boolean(next.onRegenerateResponse) &&
+    Boolean(previous.onRequestPlanRevision) === Boolean(next.onRequestPlanRevision) &&
+    Boolean(previous.onResolveToolApproval) === Boolean(next.onResolveToolApproval) &&
+    Boolean(previous.onSelectChat) === Boolean(next.onSelectChat) &&
+    wasEditing === isEditing &&
+    (!isEditing || previous.editingContent === next.editingContent)
   );
 }
 
@@ -728,7 +925,37 @@ function getScrollAnchorMessage(chat: ChatSummary) {
   return chat.messages[chat.messages.length - 1];
 }
 
+function getLatestUserMessageKey(chat: ChatSummary) {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index];
+
+    if (message?.role === "user") {
+      return `${chat.id}:${message.id}`;
+    }
+  }
+
+  return null;
+}
+
+function isThreadNearBottom(thread: HTMLDivElement) {
+  const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+  return distanceFromBottom <= THREAD_BOTTOM_THRESHOLD_PX;
+}
+
 function createMessageActivityMarker(message: ChatMessage) {
+  const workTraceMarker = (message.workTrace ?? [])
+    .map((item) => {
+      if (item.kind === "thinking") {
+        return `${item.id}:${item.kind}:${item.status ?? ""}:${item.content.length}`;
+      }
+
+      if (item.kind === "tool") {
+        return `${item.id}:${item.kind}:${item.toolCall.status}:${item.toolCall.output?.length ?? 0}`;
+      }
+
+      return `${item.id}:${item.kind}:${item.progress.status}:${item.progress.detail?.length ?? 0}`;
+    })
+    .join("|");
   const progressMarker = (message.progress ?? [])
     .map((item) => `${item.id ?? item.label}:${item.status}:${item.detail?.length ?? 0}`)
     .join("|");
@@ -741,19 +968,26 @@ function createMessageActivityMarker(message: ChatMessage) {
       return `${toolCall.id}:${toolCall.status}:${toolCall.input?.length ?? 0}:${toolCall.output?.length ?? 0}:${fileMarker}`;
     })
     .join("|");
-  return `${progressMarker}:${toolMarker}:${message.webSearch?.status ?? ""}:${message.thinking?.completedAt ?? ""}`;
+  return `${workTraceMarker}:${progressMarker}:${toolMarker}:${message.webSearch?.status ?? ""}:${message.thinking?.completedAt ?? ""}`;
 }
 
-function canRegenerateMessage(chat: ChatSummary, messageIndex: number) {
-  const message = chat.messages[messageIndex];
+function getRegenerableMessageIds(messages: ChatMessage[]) {
+  const regenerableMessageIds = new Set<string>();
+  let hasPriorUserMessage = false;
 
-  if (!message || message.role !== "assistant" || message.isStreaming) {
-    return false;
+  for (const message of messages) {
+    if (message.role === "assistant" && !message.isStreaming && hasPriorUserMessage) {
+      const pendingPlanningInput = message.planning?.inputRequest && !message.planning.inputRequest.answeredAt;
+
+      if (!pendingPlanningInput) {
+        regenerableMessageIds.add(message.id);
+      }
+    }
+
+    if (message.role === "user") {
+      hasPriorUserMessage = true;
+    }
   }
 
-  if (message.planning?.inputRequest && !message.planning.inputRequest.answeredAt) {
-    return false;
-  }
-
-  return chat.messages.slice(0, messageIndex).some((candidate) => candidate.role === "user");
+  return regenerableMessageIds;
 }

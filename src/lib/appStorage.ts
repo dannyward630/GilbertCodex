@@ -21,12 +21,14 @@ import {
   normalizeProviderBaseUrl,
   normalizeProviderModelId,
 } from "./models";
+import { DEFAULT_APP_APPEARANCE_SETTINGS, normalizeAppAppearanceSettings } from "./appearance";
 import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../services/webSearchClient";
 import { normalizeToolBridgePermissionMode } from "../toolBridge/permissions";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
 import { autoFinalizeDeviceDatabaseMigration, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValues, type DeviceDatabaseSeed } from "./deviceDatabase";
 import { scheduleIdleTask } from "./idleTask";
+import { normalizeProjectRunConfig } from "./projectRunConfig";
 import type {
   ChatAttachment,
   ChatArtifact,
@@ -51,9 +53,19 @@ import type { LocalPermissionMode, LocalWorkspaceIndexStatus, LocalWorkspaceScop
 import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
 import type { PdfLibraryOrigin, PdfLibraryRecord, PdfLibrarySourceFormat, PdfLibraryState, PdfProjectInstruction } from "../types/pdfLibrary";
+import type { ProviderUsageRecord, UsageHistoryState } from "../types/usage";
 import { CHAT_MEMORY_STORAGE_PREFIX, PROJECT_MEMORY_STORAGE_PREFIX } from "../memory";
 import {
   DEFAULT_BRAVE_SEARCH_SETTINGS,
+  type AppAgentEnvironment,
+  type AppCodeReviewBehavior,
+  type AppFollowUpBehavior,
+  type AppGeneralSettings,
+  type AppInferenceSpeed,
+  type AppLanguageMode,
+  type AppTurnCompletionNotificationMode,
+  type AppWorkMode,
+  type AppAppearanceSettings,
   type AppPersonalizationSettings,
   type AppearanceMode,
   type BraveSearchFreshness,
@@ -67,22 +79,31 @@ import {
   type ProviderModelVisibilityMap,
   type ProviderSettings,
   type ReasoningEffort,
+  type SubscriptionFallbackMode,
+  type SubscriptionOptimizationSettings,
+  type SubscriptionTokenSaverLevel,
   type ThinkingSettings,
   type WebSearchProvider,
   type WebSearchSettings,
 } from "../types/settings";
+import { DEFAULT_PROJECT_OPEN_TARGET_ID, PROJECT_OPEN_TARGETS, type ProjectOpenTargetId } from "../types/projectOpen";
+import type { TerminalShellId } from "../types/terminal";
 
 const CHATS_KEY = "gilbert-codex.chats.v1";
 const PROJECTS_KEY = "gilbert-codex.projects.v1";
 const SETTINGS_KEY = "gilbert-codex.provider-settings.v1";
 const THINKING_KEY = "gilbert-codex.thinking-settings.v1";
 const APPEARANCE_KEY = "gilbert-codex.appearance.v1";
+const APPEARANCE_SETTINGS_KEY = "gilbert-codex.appearance-settings.v1";
+const GENERAL_SETTINGS_KEY = "gilbert-codex.general-settings.v1";
 const PERSONALIZATION_KEY = "gilbert-codex.personalization.v1";
 const ACTIVE_CHAT_KEY = "gilbert-codex.active-chat.v1";
 const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
 const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
 const GITHUB_OAUTH_CLIENT_ID_KEY = "gilbert-codex.github-oauth-client-id.v1";
 const DISCORD_BRIDGE_KEY = "gilbert-codex.discord-bridge.v1";
+const BROWSER_SETTINGS_KEY = "gilbert-codex.browser-settings.v1";
+const BROWSER_HISTORY_KEY = "gilbert-codex.browser-history.v1";
 const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
 const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
 const BROWSER_AUTH_DB_KEY = "gilbert-codex.local-auth-db.v1";
@@ -90,6 +111,7 @@ const BROWSER_AGENT_RUNS_KEY = "gilbert-codex.agent-runs.v1";
 const PDF_LIBRARY_KEY = "gilbert-codex.pdf-library.v1";
 const MAPBOX_SETTINGS_KEY = "gilbert-codex.mapbox-settings.v1";
 const WEATHER_LOCATION_KEY = "gilbert-codex.weather-location.v1";
+const USAGE_HISTORY_KEY = "gilbert-codex.usage-history.v1";
 const PROJECT_TOOL_MEMORY_STORAGE_PREFIX = "gilbert-codex.project-tool-memory.v1.";
 const PERSISTED_STORAGE_KEYS = [
   CHATS_KEY,
@@ -97,18 +119,23 @@ const PERSISTED_STORAGE_KEYS = [
   SETTINGS_KEY,
   THINKING_KEY,
   APPEARANCE_KEY,
+  APPEARANCE_SETTINGS_KEY,
+  GENERAL_SETTINGS_KEY,
   PERSONALIZATION_KEY,
   ACTIVE_CHAT_KEY,
   LOCAL_WORKSPACE_KEY,
   TOOL_REGISTRY_KEY,
   GITHUB_OAUTH_CLIENT_ID_KEY,
   DISCORD_BRIDGE_KEY,
+  BROWSER_SETTINGS_KEY,
+  BROWSER_HISTORY_KEY,
   BROWSER_PREVIEW_SESSION_KEY,
   LEGACY_BROWSER_PREVIEW_SESSION_KEY,
   BROWSER_AGENT_RUNS_KEY,
   PDF_LIBRARY_KEY,
   MAPBOX_SETTINGS_KEY,
   WEATHER_LOCATION_KEY,
+  USAGE_HISTORY_KEY,
 ];
 const PERSISTED_STORAGE_KEY_PREFIXES = [PROJECT_TOOL_MEMORY_STORAGE_PREFIX, CHAT_MEMORY_STORAGE_PREFIX, PROJECT_MEMORY_STORAGE_PREFIX];
 const LEGACY_BROWSER_ONLY_KEYS = [BROWSER_AUTH_DB_KEY];
@@ -143,6 +170,10 @@ export const defaultProviderSettings: ProviderSettings = {
   openRouterApiKey: "",
   provider: DEFAULT_PROVIDER_ID,
   providerModels: getDefaultProviderModels(),
+  subscriptionOptimization: {
+    fallbackMode: "off",
+    tokenSaverLevel: "low",
+  },
   systemPrompt: "You are Gilbert Codex, a careful local coding assistant. Be concise, practical, and honest about limitations.",
   thinking: {
     effort: "medium",
@@ -159,9 +190,33 @@ export const defaultProviderSettings: ProviderSettings = {
     maxResults: DEFAULT_WEB_SEARCH_MAX_RESULTS,
     provider: "duckduckgo",
   },
+  workMode: "coding",
   workspaceDependencies: {
     enabled: true,
   },
+};
+
+export const defaultAppGeneralSettings: AppGeneralSettings = {
+  agentEnvironment: "auto",
+  codeReviewBehavior: "inline",
+  defaultOpenTarget: DEFAULT_PROJECT_OPEN_TARGET_ID,
+  defaultProjectlessChat: false,
+  dictation: {
+    dictionary: "We need to\nCodex\nGilbertCodex",
+    holdHotkey: "Ctrl",
+    toggleHotkey: "Ctrl+Alt+D",
+  },
+  followUpBehavior: "queue",
+  inferenceSpeed: "standard",
+  language: "auto",
+  notifications: {
+    permissionNotifications: true,
+    questionNotifications: true,
+    turnCompletion: "unfocused",
+  },
+  popoutWindowHotkey: "",
+  requireCtrlEnterForLongPrompts: false,
+  terminalShell: "cmd",
 };
 
 export const defaultAppPersonalizationSettings: AppPersonalizationSettings = {
@@ -283,6 +338,7 @@ export function loadProjects(): ProjectSummary[] {
         id: project.id || `project-${name}`,
         localWorkspace: project.localWorkspace ? normalizeLocalWorkspaceSettings(project.localWorkspace) : undefined,
         name,
+        runConfig: normalizeProjectRunConfig(project.runConfig),
         updatedAt: project.updatedAt || project.createdAt || new Date().toISOString(),
       },
     ];
@@ -290,7 +346,10 @@ export function loadProjects(): ProjectSummary[] {
 }
 
 export function saveProjects(projects: ProjectSummary[]) {
-  writeJson(PROJECTS_KEY, projects);
+  writeJson(PROJECTS_KEY, projects.map((project) => ({
+    ...project,
+    runConfig: normalizeProjectRunConfig(project.runConfig),
+  })));
 }
 
 export function loadProviderSettings(): ProviderSettings {
@@ -328,6 +387,7 @@ export function loadProviderSettings(): ProviderSettings {
     openRouterApiKey: apiKeys.openrouter ?? "",
     provider,
     providerModels,
+    subscriptionOptimization: normalizeSubscriptionOptimizationSettings(storedSettings?.subscriptionOptimization),
     thinking: normalizeThinkingSettings(storedThinking ?? storedSettings?.thinking),
     temperature: normalizeTemperature(storedSettings?.temperature, defaultProviderSettings.temperature),
     topK: normalizeTopK(storedSettings?.topK, defaultProviderSettings.topK),
@@ -339,6 +399,7 @@ export function loadProviderSettings(): ProviderSettings {
     },
     userInstructions: normalizeText(storedSettings?.userInstructions, defaultProviderSettings.userInstructions),
     webSearch: normalizeWebSearchSettings(storedSettings?.webSearch),
+    workMode: normalizeAppWorkMode(storedSettings?.workMode),
     workspaceDependencies: normalizeWorkspaceDependencySettings(storedSettings?.workspaceDependencies),
   };
 }
@@ -365,9 +426,11 @@ export function saveProviderSettings(settings: ProviderSettings) {
     modelBudgetOverrides,
     openRouterApiKey: apiKeys.openrouter ?? "",
     providerModels,
+    subscriptionOptimization: normalizeSubscriptionOptimizationSettings(settings.subscriptionOptimization),
     thinking: normalizeThinkingSettings(settings.thinking),
     tools: normalizeToolRegistrySettings(settings.tools),
     webSearch: normalizeWebSearchSettings(settings.webSearch),
+    workMode: normalizeAppWorkMode(settings.workMode),
     workspaceDependencies: normalizeWorkspaceDependencySettings(settings.workspaceDependencies),
   };
 
@@ -390,6 +453,22 @@ export function loadAppearanceMode(): AppearanceMode {
 
 export function saveAppearanceMode(mode: AppearanceMode) {
   writeString(APPEARANCE_KEY, mode);
+}
+
+export function loadAppAppearanceSettings(): AppAppearanceSettings {
+  return normalizeAppAppearanceSettings(readJson<Partial<AppAppearanceSettings>>(APPEARANCE_SETTINGS_KEY) ?? DEFAULT_APP_APPEARANCE_SETTINGS);
+}
+
+export function saveAppAppearanceSettings(settings: AppAppearanceSettings) {
+  writeJson(APPEARANCE_SETTINGS_KEY, normalizeAppAppearanceSettings(settings));
+}
+
+export function loadAppGeneralSettings(): AppGeneralSettings {
+  return normalizeAppGeneralSettings(readJson<Partial<AppGeneralSettings>>(GENERAL_SETTINGS_KEY));
+}
+
+export function saveAppGeneralSettings(settings: AppGeneralSettings) {
+  writeJson(GENERAL_SETTINGS_KEY, normalizeAppGeneralSettings(settings));
 }
 
 export function loadAppPersonalizationSettings(): AppPersonalizationSettings {
@@ -438,6 +517,40 @@ export function loadPdfLibraryState(): PdfLibraryState {
 
 export function savePdfLibraryState(state: PdfLibraryState) {
   writeJson(PDF_LIBRARY_KEY, normalizePdfLibraryState(state));
+}
+
+export function loadUsageHistory(): UsageHistoryState {
+  return normalizeUsageHistoryState(readJson<Partial<UsageHistoryState>>(USAGE_HISTORY_KEY));
+}
+
+export function saveUsageHistory(state: UsageHistoryState) {
+  writeJson(USAGE_HISTORY_KEY, normalizeUsageHistoryState(state));
+}
+
+export function appendUsageHistoryRecord(record: ProviderUsageRecord, options: { maxRecords?: number } = {}) {
+  const history = loadUsageHistory();
+  const maxRecords = Math.max(Math.round(options.maxRecords ?? 10_000), 100);
+  const dedupeId = record.id.trim();
+  const records = [
+    ...history.records.filter((item) => item.id !== dedupeId),
+    normalizeUsageRecord(record),
+  ]
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    .slice(-maxRecords);
+
+  saveUsageHistory({
+    records,
+    updatedAt: new Date().toISOString(),
+    version: 1,
+  });
+}
+
+export function clearUsageHistory() {
+  saveUsageHistory({
+    records: [],
+    updatedAt: new Date().toISOString(),
+    version: 1,
+  });
 }
 
 export function loadPersistentString(key: string) {
@@ -1038,6 +1151,7 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     contextCompactions: normalizeContextCompactions(message.contextCompactions),
     content: legacyDiscordMessage?.content ?? (typeof message.content === "string" ? message.content : ""),
     createdAt: message.createdAt || new Date().toISOString(),
+    feedback: normalizeChatMessageFeedback(message.feedback),
     id: message.id || `message-${Date.now()}`,
     isStreaming: false,
     mode: normalizeChatMessageMode(message.mode),
@@ -1055,6 +1169,10 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     webSearch: normalizeChatWebSearch(message.webSearch),
     workTrace: normalizeWorkTraceItems(message.workTrace),
   };
+}
+
+function normalizeChatMessageFeedback(value: unknown): ChatMessage["feedback"] {
+  return value === "liked" || value === "disliked" ? value : undefined;
 }
 
 function normalizeComposerDraft(value: unknown): ChatComposerDraft | undefined {
@@ -1647,6 +1765,16 @@ function normalizeWorkTraceItems(value: unknown): ChatWorkTraceItem[] | undefine
     const id = typeof traceItem.id === "string" && traceItem.id.trim() ? traceItem.id.trim() : `work-trace-${Date.now()}`;
 
     if (traceItem.kind === "thinking") {
+      const content = typeof traceItem.content === "string" ? traceItem.content.trim() : "";
+
+      if (content) {
+        items.push({
+          content,
+          id,
+          kind: "thinking",
+          status: "complete",
+        });
+      }
       continue;
     }
 
@@ -1967,6 +2095,137 @@ function normalizePdfLibraryState(value: unknown): PdfLibraryState {
   };
 }
 
+function normalizeUsageHistoryState(value: unknown): UsageHistoryState {
+  const state = typeof value === "object" && value ? (value as Partial<UsageHistoryState>) : {};
+  const records = Array.isArray(state.records)
+    ? state.records.flatMap((record) => {
+        const normalized = normalizeUsageRecord(record);
+        return normalized.totalTokens > 0 || normalized.requestCount > 0 ? [normalized] : [];
+      })
+    : [];
+
+  return {
+    records,
+    updatedAt: typeof state.updatedAt === "string" && state.updatedAt.trim() ? state.updatedAt : null,
+    version: 1,
+  };
+}
+
+function normalizeUsageRecord(value: unknown): ProviderUsageRecord {
+  const record = typeof value === "object" && value ? (value as Partial<ProviderUsageRecord>) : {};
+  const createdAt = normalizeIsoTimestamp(record.createdAt);
+  const provider = isModelProviderId(record.provider) ? record.provider : defaultProviderSettings.provider;
+  const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : defaultProviderSettings.model;
+  const inputTokens = normalizeTokenCount(record.inputTokens);
+  const outputTokens = normalizeTokenCount(record.outputTokens ?? record.completionTokens);
+  const completionTokens = normalizeTokenCount(record.completionTokens ?? outputTokens);
+  const reasoningTokens = normalizeTokenCount(record.reasoningTokens);
+  const totalTokens = normalizeTokenCount(record.totalTokens || inputTokens + outputTokens + reasoningTokens);
+  const unitCost = normalizeUsageCostBreakdown(record.unitCost);
+
+  return {
+    chatId: normalizeOptionalText(record.chatId),
+    completionTokens,
+    costSource: normalizeUsageCostSource(record.costSource),
+    createdAt,
+    dateKey: normalizeUsageDateKey(record.dateKey, createdAt),
+    dayKey: normalizeUsageDateKey(record.dayKey, createdAt),
+    endpoint: normalizeOptionalText(record.endpoint),
+    id: typeof record.id === "string" && record.id.trim() ? record.id.trim() : `usage-${createdAt}-${provider}-${hashStableText(model)}`,
+    inputTokens,
+    model,
+    monthKey: normalizeUsageMonthKey(record.monthKey, createdAt),
+    outputTokens,
+    pricingNote: normalizeOptionalText(record.pricingNote),
+    provider,
+    providerLabel: typeof record.providerLabel === "string" && record.providerLabel.trim() ? record.providerLabel.trim() : provider,
+    reasoningTokens,
+    requestCount: normalizeTokenCount(record.requestCount || 1),
+    source: normalizeUsageRecordSource(record.source),
+    totalCostUsd: normalizeCurrency(record.totalCostUsd),
+    totalTokens,
+    unitCost,
+    weekKey: normalizeUsageWeekKey(record.weekKey, createdAt),
+  };
+}
+
+function normalizeUsageRecordSource(value: unknown): ProviderUsageRecord["source"] {
+  return value === "9router" || value === "estimated" || value === "provider" ? value : "estimated";
+}
+
+function normalizeUsageCostSource(value: unknown): ProviderUsageRecord["costSource"] {
+  return value === "catalog" || value === "free" || value === "subscription" || value === "unknown" ? value : "unknown";
+}
+
+function normalizeUsageCostBreakdown(value: unknown): ProviderUsageRecord["unitCost"] {
+  if (typeof value !== "object" || !value) {
+    return undefined;
+  }
+
+  const breakdown = value as Partial<NonNullable<ProviderUsageRecord["unitCost"]>>;
+
+  return {
+    inputUsd: normalizeCurrency(breakdown.inputUsd),
+    outputUsd: normalizeCurrency(breakdown.outputUsd),
+    reasoningUsd: normalizeCurrency(breakdown.reasoningUsd),
+    requestUsd: normalizeCurrency(breakdown.requestUsd),
+    totalUsd: normalizeCurrency(breakdown.totalUsd),
+  };
+}
+
+function normalizeIsoTimestamp(value: unknown) {
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+}
+
+function normalizeUsageDateKey(value: unknown, timestamp: string) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  return timestamp.slice(0, 10);
+}
+
+function normalizeUsageMonthKey(value: unknown, timestamp: string) {
+  if (typeof value === "string" && /^\d{4}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  return timestamp.slice(0, 7);
+}
+
+function normalizeUsageWeekKey(value: unknown, timestamp: string) {
+  if (typeof value === "string" && /^\d{4}-W\d{2}$/.test(value)) {
+    return value;
+  }
+
+  return createUsageWeekKey(new Date(timestamp));
+}
+
+function createUsageWeekKey(date: Date) {
+  const utcDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
+
+  return `${utcDate.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function normalizeTokenCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+function normalizeCurrency(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value.toFixed(8)) : 0;
+}
+
 function normalizePdfProjectInstructions(value: unknown): Record<string, PdfProjectInstruction> {
   if (typeof value !== "object" || !value) {
     return {};
@@ -2265,12 +2524,140 @@ function isBraveResultFilter(value: unknown): value is BraveSearchResultFilter {
   return value === "discussions" || value === "faq" || value === "infobox" || value === "locations" || value === "news" || value === "query" || value === "summarizer" || value === "videos" || value === "web";
 }
 
+function normalizeSubscriptionOptimizationSettings(value: unknown): SubscriptionOptimizationSettings {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<SubscriptionOptimizationSettings>) : {};
+
+  return {
+    fallbackMode: normalizeSubscriptionFallbackMode(storedSettings.fallbackMode),
+    tokenSaverLevel: normalizeSubscriptionTokenSaverLevel(storedSettings.tokenSaverLevel),
+  };
+}
+
+function normalizeSubscriptionFallbackMode(value: unknown): SubscriptionFallbackMode {
+  if (value === "smart-saver" || value === "always-free" || value === "off") {
+    return value;
+  }
+
+  if (value === "auto-free" || value === "free") {
+    return "always-free";
+  }
+
+  return defaultProviderSettings.subscriptionOptimization.fallbackMode;
+}
+
+function normalizeSubscriptionTokenSaverLevel(value: unknown): SubscriptionTokenSaverLevel {
+  if (value === "off" || value === "low" || value === "medium" || value === "high" || value === "max") {
+    return value;
+  }
+
+  if (value === "maximum") {
+    return "max";
+  }
+
+  return defaultProviderSettings.subscriptionOptimization.tokenSaverLevel;
+}
+
 function normalizeWorkspaceDependencySettings(value: unknown) {
   const storedSettings = typeof value === "object" && value ? (value as Partial<ProviderSettings["workspaceDependencies"]>) : {};
 
   return {
     enabled: typeof storedSettings.enabled === "boolean" ? storedSettings.enabled : defaultProviderSettings.workspaceDependencies.enabled,
   };
+}
+
+function normalizeAppGeneralSettings(value: unknown): AppGeneralSettings {
+  const storedSettings = typeof value === "object" && value ? (value as Partial<AppGeneralSettings>) : {};
+  const storedDictation =
+    typeof storedSettings.dictation === "object" && storedSettings.dictation
+      ? (storedSettings.dictation as Partial<AppGeneralSettings["dictation"]>)
+      : {};
+  const storedNotifications =
+    typeof storedSettings.notifications === "object" && storedSettings.notifications
+      ? (storedSettings.notifications as Partial<AppGeneralSettings["notifications"]>)
+      : {};
+
+  return {
+    agentEnvironment: normalizeAppAgentEnvironment(storedSettings.agentEnvironment),
+    codeReviewBehavior: normalizeAppCodeReviewBehavior(storedSettings.codeReviewBehavior),
+    defaultOpenTarget: normalizeProjectOpenTargetId(storedSettings.defaultOpenTarget),
+    defaultProjectlessChat:
+      typeof storedSettings.defaultProjectlessChat === "boolean"
+        ? storedSettings.defaultProjectlessChat
+        : defaultAppGeneralSettings.defaultProjectlessChat,
+    dictation: {
+      dictionary: normalizeBoundedText(storedDictation.dictionary, defaultAppGeneralSettings.dictation.dictionary, 4000),
+      holdHotkey: normalizeBoundedText(storedDictation.holdHotkey, defaultAppGeneralSettings.dictation.holdHotkey, 80),
+      toggleHotkey: normalizeBoundedText(storedDictation.toggleHotkey, defaultAppGeneralSettings.dictation.toggleHotkey, 80),
+    },
+    followUpBehavior: normalizeAppFollowUpBehavior(storedSettings.followUpBehavior),
+    inferenceSpeed: normalizeAppInferenceSpeed(storedSettings.inferenceSpeed),
+    language: normalizeAppLanguageMode(storedSettings.language),
+    notifications: {
+      permissionNotifications:
+        typeof storedNotifications.permissionNotifications === "boolean"
+          ? storedNotifications.permissionNotifications
+          : defaultAppGeneralSettings.notifications.permissionNotifications,
+      questionNotifications:
+        typeof storedNotifications.questionNotifications === "boolean"
+          ? storedNotifications.questionNotifications
+          : defaultAppGeneralSettings.notifications.questionNotifications,
+      turnCompletion: normalizeAppTurnCompletionNotificationMode(storedNotifications.turnCompletion),
+    },
+    popoutWindowHotkey: normalizeBoundedText(storedSettings.popoutWindowHotkey, defaultAppGeneralSettings.popoutWindowHotkey, 80),
+    requireCtrlEnterForLongPrompts:
+      typeof storedSettings.requireCtrlEnterForLongPrompts === "boolean"
+        ? storedSettings.requireCtrlEnterForLongPrompts
+        : defaultAppGeneralSettings.requireCtrlEnterForLongPrompts,
+    terminalShell: isTerminalShellId(storedSettings.terminalShell) ? storedSettings.terminalShell : defaultAppGeneralSettings.terminalShell,
+  };
+}
+
+function normalizeAppWorkMode(value: unknown): AppWorkMode {
+  return value === "everyday" ? "everyday" : "coding";
+}
+
+function normalizeAppAgentEnvironment(value: unknown): AppAgentEnvironment {
+  if (value === "windows-native" || value === "wsl" || value === "auto") {
+    return value;
+  }
+
+  return defaultAppGeneralSettings.agentEnvironment;
+}
+
+function normalizeAppLanguageMode(value: unknown): AppLanguageMode {
+  return value === "auto" ? "auto" : defaultAppGeneralSettings.language;
+}
+
+function normalizeAppInferenceSpeed(value: unknown): AppInferenceSpeed {
+  return value === "fast" ? "fast" : defaultAppGeneralSettings.inferenceSpeed;
+}
+
+function normalizeAppFollowUpBehavior(value: unknown): AppFollowUpBehavior {
+  return value === "steer" ? "steer" : defaultAppGeneralSettings.followUpBehavior;
+}
+
+function normalizeAppCodeReviewBehavior(value: unknown): AppCodeReviewBehavior {
+  return value === "detached" ? "detached" : defaultAppGeneralSettings.codeReviewBehavior;
+}
+
+function normalizeAppTurnCompletionNotificationMode(value: unknown): AppTurnCompletionNotificationMode {
+  if (value === "always" || value === "off" || value === "unfocused") {
+    return value;
+  }
+
+  return defaultAppGeneralSettings.notifications.turnCompletion;
+}
+
+function normalizeProjectOpenTargetId(value: unknown): ProjectOpenTargetId {
+  return PROJECT_OPEN_TARGETS.some((target) => target.id === value) ? (value as ProjectOpenTargetId) : defaultAppGeneralSettings.defaultOpenTarget;
+}
+
+function normalizeBoundedText(value: unknown, fallback: string, maxLength: number) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.slice(0, maxLength);
 }
 
 function normalizeAppPersonalizationSettings(value: unknown): AppPersonalizationSettings {

@@ -6,7 +6,7 @@ import type { ChatSummary } from "../../types/chat";
 import type { DiscordBridgeSettings } from "../../types/discord";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ProjectSummary } from "../../types/project";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
+import type { AppAppearanceSettings, AppGeneralSettings, AppPersonalizationSettings, AppearanceMode, ProviderSettings } from "../../types/settings";
 import type { TerminalAttachedSession } from "../../types/terminal";
 import type { ComposerDraftRestoreRequest, QueuedChatSend } from "./WorkspaceApp";
 
@@ -16,11 +16,13 @@ export interface WorkspaceRuntimeDeps extends Record<string, any> {
   agentRuns: AgentRun[];
   appInfo: AppInfo;
   appearanceMode: AppearanceMode;
+  appearanceSettings: AppAppearanceSettings;
   browserPreviewTarget: { id: number; url: string } | null;
   chats: ChatSummary[];
   composerDraftToRestore: ComposerDraftRestoreRequest | null;
   defaultTerminalWorkingDirectory: string;
   discordBridgeSettings: DiscordBridgeSettings;
+  generalSettings: AppGeneralSettings;
   localWorkspace: LocalWorkspaceSettings;
   pendingChatsRef: MutableRefObject<ChatSummary[]>;
   projects: ProjectSummary[];
@@ -34,12 +36,14 @@ export interface WorkspaceRuntimeDeps extends Record<string, any> {
   setAgentRuns: Dispatch<SetStateAction<AgentRun[]>>;
   setAppInfo: Dispatch<SetStateAction<AppInfo>>;
   setAppearanceMode: Dispatch<SetStateAction<AppearanceMode>>;
+  setAppearanceSettings: Dispatch<SetStateAction<AppAppearanceSettings>>;
   setBrowserPreviewTarget: Dispatch<SetStateAction<{ id: number; url: string } | null>>;
   setChats: (action: SetStateAction<ChatSummary[]>) => void;
   setChatsState: Dispatch<SetStateAction<ChatSummary[]>>;
   setComposerDraftToRestore: Dispatch<SetStateAction<ComposerDraftRestoreRequest | null>>;
   setDefaultTerminalWorkingDirectory: Dispatch<SetStateAction<string>>;
   setDiscordBridgeSettings: Dispatch<SetStateAction<DiscordBridgeSettings>>;
+  setGeneralSettings: Dispatch<SetStateAction<AppGeneralSettings>>;
   setLocalWorkspace: Dispatch<SetStateAction<LocalWorkspaceSettings>>;
   setPersonalizationSettings: Dispatch<SetStateAction<AppPersonalizationSettings>>;
   setProjects: Dispatch<SetStateAction<ProjectSummary[]>>;

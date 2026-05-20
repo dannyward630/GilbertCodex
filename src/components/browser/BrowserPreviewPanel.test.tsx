@@ -70,7 +70,8 @@ describe("browser preview navigation", () => {
   it("normalizes URLs and sends searches to the hidden default search provider", () => {
     expect(createBrowserPreviewNavigationUrl("localhost:5173")).toBe("http://localhost:5173/");
     expect(createBrowserPreviewNavigationUrl("github.com/UrbanWafflezz/GilbertCodex")).toBe("https://github.com/UrbanWafflezz/GilbertCodex");
-    expect(createBrowserPreviewNavigationUrl("weather radar")).toBe("https://duckduckgo.com/?q=weather%20radar");
+    expect(createBrowserPreviewNavigationUrl("YouTube.com")).toBe("https://youtube.com/");
+    expect(createBrowserPreviewNavigationUrl("weather radar")).toBe("https://www.google.com/search?q=weather%20radar");
     expect(createBrowserPreviewNavigationUrl("")).toBeNull();
   });
 
@@ -82,7 +83,7 @@ describe("browser preview navigation", () => {
 });
 
 describe("BrowserPreviewPanel", () => {
-  it("renders a clean new-tab page without the old default-site picker", () => {
+  it("opens the browser on a single Google tab by default", () => {
     const html = renderToStaticMarkup(createElement(BrowserPreviewPanel, {
       expanded: false,
       previewWidth: 560,
@@ -94,9 +95,10 @@ describe("BrowserPreviewPanel", () => {
       onToggleExpanded: () => undefined,
     }));
 
-    expect(html).toContain("New tab");
+    expect(html).toContain("https://www.google.com/");
+    expect(html).toContain("www.google.com");
     expect(html).toContain("Open browser console");
-    expect(html).toContain("Search DuckDuckGo or enter URL");
+    expect(html).not.toContain("http://localhost:8787/");
     expect(html).not.toContain("YouTube");
     expect(html).not.toContain("GitHub");
     expect(html).not.toContain("<select");

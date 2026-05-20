@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  memo,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -28,23 +29,21 @@ import {
   LoaderCircle,
   Mic,
   MicOff,
-  MoreHorizontal,
-  Pencil,
   Plus,
   Search,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
-  Trash2,
   Video,
   Wand2,
   X,
 } from "lucide-react";
-import { ThinkingModeControls } from "../thinking/ThinkingModeControls";
 import { ModelSelectorPopover, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
+import { MessageSteeringQueue } from "./steering/MessageSteeringQueue";
 import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment, isMediaAttachment, isVideoAttachment } from "../../lib/chatAttachments";
 import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, isPlainResearchChat, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
+import { matchesHotkey } from "../../lib/hotkeys";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { scheduleIdleTask } from "../../lib/idleTask";
 import {
@@ -74,9 +73,9 @@ import {
 import type { ChatAttachment, ChatComposerDraft, ChatMessage, ChatSendInput, ChatSummary } from "../../types/chat";
 import type { ComputerGitStatus, LocalPermissionMode, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
-import type { ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
+import type { AppFollowUpBehavior, ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
-type ComposerMenu = "attach" | "branch" | "context" | "local" | "model" | "project" | null;
+type ComposerMenu = "attach" | "context" | "model" | "workspace" | null;
 type VoiceState = "blocked" | "error" | "idle" | "listening" | "requesting" | "unsupported";
 
 interface BuiltInSpeechRecognitionAlternative {
@@ -122,9 +121,13 @@ interface ChatComposerProps {
   chats: ChatSummary[];
   contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
+  dictationDictionary?: string;
+  dictationHoldHotkey?: string;
+  dictationToggleHotkey?: string;
   draft?: ChatComposerDraft | null;
   restoreDraft?: ChatComposerDraft | null;
   restoreDraftId?: string | null;
+  followUpBehavior?: AppFollowUpBehavior;
   isGenerating: boolean;
   lastContextCompaction?: ContextCompactionNotice | null;
   layout?: "center" | "dock";
@@ -137,7 +140,6 @@ interface ChatComposerProps {
   onDraftChange?: (draft: ChatComposerDraft | null) => void;
   onDeleteQueuedMessage: (messageId: string) => void;
   onHoldQueuedMessage: (messageId: string, held: boolean) => void;
-  onUpdateQueuedMessage: (messageId: string, content: string) => void;
   onHeightChange?: (height: number) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onModelChange: (model: string, provider: ChatModelOption["provider"]) => void;
@@ -151,6 +153,7 @@ interface ChatComposerProps {
   providerSettings: ProviderSettings;
   queuedMessageCount?: number;
   queuedMessages?: ChatMessage[];
+  requireCtrlEnterForLongPrompts?: boolean;
   heldQueuedMessageIds?: string[];
   onThinkingChange: (thinking: ThinkingSettings) => void;
   onWebSearchChange: (webSearch: WebSearchSettings) => void;
@@ -250,6 +253,14 @@ function modelFromValue(modelValue: string, providerId: ChatModelOption["provide
   };
 }
 
+function formatComposerModelLabel(label: string) {
+  return label.replace(/^Codex\s+/i, "").trim() || label;
+}
+
+function shouldRequireSubmitChord(content: string) {
+  return content.includes("\n") || content.length >= 240;
+}
+
 function createLiveModelCatalogRequestKey(settings: ProviderSettings) {
   return getLiveModelCatalogProviders(settings)
     .map((provider) => createLiveModelCatalogProviderRequestKey(provider, settings))
@@ -260,8 +271,8 @@ function getLiveModelCatalogProviders(settings: ProviderSettings) {
   return MODEL_PROVIDERS.filter((provider) => shouldLoadLiveModelCatalogProvider(provider.id, settings.provider));
 }
 
-function shouldLoadLiveModelCatalogProvider(provider: ProviderSettings["provider"], activeProvider: ProviderSettings["provider"]) {
-  return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === activeProvider || prefersLiveModelCatalog(provider));
+export function shouldLoadLiveModelCatalogProvider(provider: ProviderSettings["provider"], activeProvider: ProviderSettings["provider"]) {
+  return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === "9router" || provider === activeProvider || prefersLiveModelCatalog(provider));
 }
 
 function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
@@ -304,15 +315,19 @@ function isFreshLiveModelCatalogCache(entry: LiveModelCatalogCacheEntry | undefi
   return Date.now() - entry.checkedAt < maxAge;
 }
 
-export function ChatComposer({
+function ChatComposerComponent({
   active = true,
   chat,
   chats,
   contextWindowSource,
   contextWindowTokens,
+  dictationDictionary = "",
+  dictationHoldHotkey = "",
+  dictationToggleHotkey = "",
   draft,
   restoreDraft,
   restoreDraftId,
+  followUpBehavior = "queue",
   isGenerating,
   lastContextCompaction,
   layout = "dock",
@@ -325,7 +340,6 @@ export function ChatComposer({
   onDraftChange,
   onDeleteQueuedMessage,
   onHoldQueuedMessage,
-  onUpdateQueuedMessage,
   onHeightChange,
   onLocalWorkspaceChange,
   onModelChange,
@@ -338,6 +352,7 @@ export function ChatComposer({
   providerSettings,
   queuedMessageCount,
   queuedMessages = [],
+  requireCtrlEnterForLongPrompts = false,
   heldQueuedMessageIds = [],
   onThinkingChange,
   onWebSearchChange,
@@ -355,11 +370,14 @@ export function ChatComposer({
   const visibleQueuedMessageCount = queuedMessageCount ?? queuedMessages.length;
   const messageRef = useRef("");
   const messageSyncFrameRef = useRef(0);
+  const draftChangeTimerRef = useRef<number | null>(null);
+  const pendingDraftChangeRef = useRef<{ draft: ChatComposerDraft | null; onDraftChange?: (draft: ChatComposerDraft | null) => void } | null>(null);
   const voiceBaseMessageRef = useRef("");
   const voiceRecognitionRef = useRef<BuiltInSpeechRecognition | null>(null);
   const voiceRequestRef = useRef(0);
   const [message, setMessage] = useState("");
-  const deferredMessage = useDeferredValue(message);
+  const [contextDraftMessage, setContextDraftMessage] = useState("");
+  const deferredMessage = useDeferredValue(contextDraftMessage);
   const [skillMention, setSkillMention] = useState<SkillMentionState>(CLOSED_SKILL_MENTION_STATE);
   const [chatResearchMention, setChatResearchMention] = useState<ChatResearchMentionState>(CLOSED_CHAT_RESEARCH_MENTION_STATE);
   const [selectedResearchChatIds, setSelectedResearchChatIds] = useState<string[]>([]);
@@ -382,8 +400,6 @@ export function ChatComposer({
   const [projectSearch, setProjectSearch] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const [queueMenuMessageId, setQueueMenuMessageId] = useState<string | null>(null);
-  const [queuedEditDrafts, setQueuedEditDrafts] = useState<Record<string, string>>({});
   const readyAttachments = useMemo(() => attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : [])), [attachments]);
   const hasMediaAttachment = useMemo(() => readyAttachments.some(isMediaAttachment), [readyAttachments]);
   const hasPendingAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "loading"), [attachments]);
@@ -418,6 +434,16 @@ export function ChatComposer({
   const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
   const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
+  const composerModelLabel = formatComposerModelLabel(selectedModel.label);
+  const workspaceMetaLabel = gitStatus?.available
+    ? hasGitChangeSummary
+      ? `${gitBranchLabel} · ${gitStatus.changedFiles}`
+      : gitBranchLabel
+    : localWorkspace.enabled
+      ? localPermissionModeLabel(localWorkspace.permissionMode)
+      : "Local off";
+  const workspaceButtonLabel = `Workspace: ${projectLabel}. ${workspaceMetaLabel}.`;
+  const activeModeCount = (webSearch.enabled ? 1 : 0) + (imageGenerationEnabled ? 1 : 0) + (planMode.enabled ? 1 : 0);
   const heldQueuedMessageIdSet = useMemo(() => new Set(heldQueuedMessageIds), [heldQueuedMessageIds]);
   const researchChatOptions = useMemo(() => sortChatsByUpdatedAt(chats.filter((candidate) => isPlainResearchChat(candidate, chat.id))), [chat.id, chats]);
   const selectedResearchChats = useMemo(
@@ -432,13 +458,14 @@ export function ChatComposer({
     [chatResearchMention.query, researchChatOptions, selectedResearchChatIds],
   );
 
-  function setComposerMessage(nextMessage: string, options: { immediate?: boolean; notifyDraft?: boolean } = {}) {
+  function setComposerMessage(nextMessage: string, options: { immediate?: boolean; notifyDraft?: boolean; notifyDraftImmediately?: boolean } = {}) {
     messageRef.current = nextMessage;
 
     const textarea = textareaRef.current;
     if (textarea && textarea.value !== nextMessage) {
       textarea.value = nextMessage;
     }
+    resizeComposerTextarea();
 
     if (options.immediate || typeof window === "undefined") {
       if (messageSyncFrameRef.current) {
@@ -446,14 +473,15 @@ export function ChatComposer({
         messageSyncFrameRef.current = 0;
       }
       setMessage(nextMessage);
+      setContextDraftMessage(nextMessage);
       if (options.notifyDraft !== false) {
-        emitDraftChange(nextMessage, attachments);
+        emitDraftChange(nextMessage, attachments, { immediate: options.notifyDraftImmediately });
       }
       return;
     }
 
     if (options.notifyDraft !== false) {
-      emitDraftChange(nextMessage, attachments);
+      emitDraftChange(nextMessage, attachments, { immediate: options.notifyDraftImmediately });
     }
 
     if (messageSyncFrameRef.current) {
@@ -463,21 +491,86 @@ export function ChatComposer({
     messageSyncFrameRef.current = window.requestAnimationFrame(() => {
       messageSyncFrameRef.current = 0;
       setMessage(messageRef.current);
+      resizeComposerTextarea();
     });
+  }
+
+  function resizeComposerTextarea() {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    const viewportHeight = typeof window === "undefined" ? 720 : window.innerHeight;
+    const maxHeight = Math.round(Math.min(220, Math.max(112, viewportHeight * 0.3)));
+
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(maxHeight, Math.max(66, textarea.scrollHeight));
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }
 
   function canSubmitDraft(content: string) {
     return (Boolean(content.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
   }
 
-  function emitDraftChange(content: string, attachmentDrafts: ComposerAttachmentDraft[]) {
-    onDraftChange?.(createComposerDraft(content, attachmentDrafts));
+  function emitDraftChange(content: string, attachmentDrafts: ComposerAttachmentDraft[], options: { immediate?: boolean } = {}) {
+    const draft = createComposerDraft(content, attachmentDrafts);
+
+    if (options.immediate || typeof window === "undefined") {
+      cancelPendingDraftChange();
+      setContextDraftMessage(content);
+      onDraftChange?.(draft);
+      return;
+    }
+
+    pendingDraftChangeRef.current = {
+      draft,
+      onDraftChange,
+    };
+
+    if (draftChangeTimerRef.current !== null) {
+      window.clearTimeout(draftChangeTimerRef.current);
+    }
+
+    draftChangeTimerRef.current = window.setTimeout(() => {
+      flushPendingDraftChange();
+    }, 350);
+  }
+
+  function flushPendingDraftChange(options: { updateContext?: boolean } = {}) {
+    if (draftChangeTimerRef.current !== null) {
+      window.clearTimeout(draftChangeTimerRef.current);
+      draftChangeTimerRef.current = null;
+    }
+
+    const pendingDraftChange = pendingDraftChangeRef.current;
+    pendingDraftChangeRef.current = null;
+
+    if (options.updateContext !== false && mountedRef.current) {
+      setContextDraftMessage(messageRef.current);
+    }
+
+    if (pendingDraftChange) {
+      pendingDraftChange.onDraftChange?.(pendingDraftChange.draft);
+    }
+  }
+
+  function cancelPendingDraftChange() {
+    if (draftChangeTimerRef.current !== null) {
+      window.clearTimeout(draftChangeTimerRef.current);
+      draftChangeTimerRef.current = null;
+    }
+
+    pendingDraftChangeRef.current = null;
   }
 
   useEffect(() => {
     mountedRef.current = true;
 
     return () => {
+      flushPendingDraftChange({ updateContext: false });
       mountedRef.current = false;
       if (messageSyncFrameRef.current) {
         window.cancelAnimationFrame(messageSyncFrameRef.current);
@@ -491,12 +584,6 @@ export function ChatComposer({
     active: openMenu !== null,
     ignoreSelectors: [".model-selector-popover"],
     onDismiss: () => setOpenMenu(null),
-    refs: [composerRef],
-  });
-
-  useDismissableLayer({
-    active: queueMenuMessageId !== null,
-    onDismiss: dismissQueuedMessageMenu,
     refs: [composerRef],
   });
 
@@ -618,6 +705,7 @@ export function ChatComposer({
   }, [active, onHeightChange]);
 
   useEffect(() => {
+    flushPendingDraftChange();
     skipNextAttachmentDraftEmitRef.current = true;
     setComposerMessage(draft?.content ?? "", { immediate: true, notifyDraft: false });
     setAttachments(draft?.attachments.map(createDraftFromAttachment) ?? []);
@@ -635,6 +723,16 @@ export function ChatComposer({
   }, [attachments]);
 
   useEffect(() => {
+    resizeComposerTextarea();
+  }, [message]);
+
+  useEffect(() => {
+    window.addEventListener("resize", resizeComposerTextarea);
+
+    return () => window.removeEventListener("resize", resizeComposerTextarea);
+  }, []);
+
+  useEffect(() => {
     if (!restoreDraft || !restoreDraftId) {
       return;
     }
@@ -644,6 +742,8 @@ export function ChatComposer({
     setAttachments(restoreDraft.attachments.map(createDraftFromAttachment));
     closeSkillMentionPicker();
     closeChatResearchMentionPicker();
+    cancelPendingDraftChange();
+    setContextDraftMessage(restoreDraft.content);
     onDraftChange?.(restoreDraft);
     onDraftApplied?.();
   }, [restoreDraftId]);
@@ -652,6 +752,49 @@ export function ChatComposer({
     setSelectedResearchChatIds([]);
     closeChatResearchMentionPicker();
   }, [chat.id]);
+
+  useEffect(() => {
+    if (!active || (!dictationHoldHotkey && !dictationToggleHotkey)) {
+      return;
+    }
+
+    function handleDictationKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.repeat) {
+        return;
+      }
+
+      if (dictationToggleHotkey && matchesHotkey(event, dictationToggleHotkey)) {
+        event.preventDefault();
+        handleVoiceToggle();
+        return;
+      }
+
+      if (dictationHoldHotkey && matchesHotkey(event, dictationHoldHotkey)) {
+        event.preventDefault();
+        if (voiceState !== "listening" && voiceState !== "requesting") {
+          handleVoiceToggle();
+        }
+      }
+    }
+
+    function handleDictationKeyUp(event: globalThis.KeyboardEvent) {
+      if (!dictationHoldHotkey || !matchesHotkey(event, dictationHoldHotkey)) {
+        return;
+      }
+
+      event.preventDefault();
+      if (voiceState === "listening" || voiceState === "requesting") {
+        handleVoiceToggle();
+      }
+    }
+
+    window.addEventListener("keydown", handleDictationKeyDown);
+    window.addEventListener("keyup", handleDictationKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleDictationKeyDown);
+      window.removeEventListener("keyup", handleDictationKeyUp);
+    };
+  }, [active, dictationHoldHotkey, dictationToggleHotkey, voiceState]);
 
   const liveModelCatalogRequestKey = createLiveModelCatalogRequestKey(providerSettings);
   providerSettingsRef.current = providerSettings;
@@ -1004,10 +1147,13 @@ export function ChatComposer({
     setSelectedResearchChatIds([]);
     closeSkillMentionPicker();
     closeChatResearchMentionPicker();
+    cancelPendingDraftChange();
+    setContextDraftMessage("");
     onDraftChange?.(null);
     void onSubmit({
       attachments: readyAttachments,
       content,
+      followUpBehavior,
       localWorkspace,
       mode: planMode.enabled ? "plan" : "chat",
       planning: planMode.enabled ? {} : undefined,
@@ -1020,84 +1166,40 @@ export function ChatComposer({
     });
   }
 
-  function beginQueuedMessageEdit(queuedMessage: ChatMessage) {
-    setOpenMenu(null);
-    setQueueMenuMessageId(null);
-    setQueuedEditDrafts((drafts) => ({
-      ...drafts,
-      [queuedMessage.id]: drafts[queuedMessage.id] ?? queuedMessage.content,
-    }));
-    onHoldQueuedMessage(queuedMessage.id, true);
-  }
-
-  function toggleQueuedMessageMenu(messageId: string) {
-    if (queueMenuMessageId === messageId) {
-      dismissQueuedMessageMenu();
-      return;
-    }
-
-    if (queueMenuMessageId && queuedEditDrafts[queueMenuMessageId] === undefined) {
-      onHoldQueuedMessage(queueMenuMessageId, false);
-    }
+  function restoreQueuedMessageToComposer(queuedMessage: ChatMessage) {
+    const restoredAttachments = (queuedMessage.attachments ?? []).map(createDraftFromAttachment);
 
     setOpenMenu(null);
-    setQueueMenuMessageId(messageId);
-    onHoldQueuedMessage(messageId, true);
-  }
+    closeSkillMentionPicker();
+    closeChatResearchMentionPicker();
+    setSelectedResearchChatIds(queuedMessage.researchReferences?.map((reference) => reference.chatId) ?? []);
+    skipNextAttachmentDraftEmitRef.current = true;
+    setAttachments(restoredAttachments);
+    setComposerMessage(queuedMessage.content, { immediate: true, notifyDraft: false });
+    cancelPendingDraftChange();
+    setContextDraftMessage(queuedMessage.content);
+    onDraftChange?.(createComposerDraft(queuedMessage.content, restoredAttachments));
+    onHoldQueuedMessage(queuedMessage.id, false);
+    onDeleteQueuedMessage(queuedMessage.id);
 
-  function dismissQueuedMessageMenu() {
-    if (queueMenuMessageId && queuedEditDrafts[queueMenuMessageId] === undefined) {
-      onHoldQueuedMessage(queueMenuMessageId, false);
-    }
-
-    setQueueMenuMessageId(null);
-  }
-
-  function updateQueuedMessageDraft(messageId: string, content: string) {
-    setQueuedEditDrafts((drafts) => ({
-      ...drafts,
-      [messageId]: content,
-    }));
-  }
-
-  function deleteQueuedMessage(messageId: string) {
-    setQueueMenuMessageId((currentId) => (currentId === messageId ? null : currentId));
-    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
-    onDeleteQueuedMessage(messageId);
-  }
-
-  function cancelQueuedMessageEdit(messageId: string) {
-    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
-    onHoldQueuedMessage(messageId, false);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const cursorPosition = queuedMessage.content.length;
+      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+      resizeComposerTextarea();
+    });
   }
 
   function steerQueuedMessage(messageId: string) {
     const queuedMessage = queuedMessages.find((message) => message.id === messageId);
-    const draftContent = queuedEditDrafts[messageId];
-    const nextContent = (draftContent ?? queuedMessage?.content ?? "").trim();
+    const nextContent = (queuedMessage?.content ?? "").trim();
 
     if (!nextContent) {
       return;
     }
 
-    if (draftContent !== undefined) {
-      onUpdateQueuedMessage(messageId, nextContent);
-      setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
-    }
-
     onHoldQueuedMessage(messageId, false);
     onSteerQueuedMessage(messageId, nextContent);
-  }
-
-  function resumeQueuedMessage(messageId: string) {
-    const draftContent = queuedEditDrafts[messageId]?.trim();
-
-    if (draftContent) {
-      onUpdateQueuedMessage(messageId, draftContent);
-    }
-
-    setQueuedEditDrafts((drafts) => removeQueuedEditDraft(drafts, messageId));
-    onHoldQueuedMessage(messageId, false);
   }
 
   function handleTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1168,6 +1270,12 @@ export function ChatComposer({
     }
 
     if (event.key === "Enter" && !event.shiftKey) {
+      const requiresSubmitChord = requireCtrlEnterForLongPrompts && shouldRequireSubmitChord(messageRef.current);
+
+      if (requiresSubmitChord && !event.ctrlKey && !event.metaKey) {
+        return;
+      }
+
       event.preventDefault();
       submitMessage();
     }
@@ -1362,7 +1470,7 @@ export function ChatComposer({
           return;
         }
 
-        setComposerMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results), { immediate: true });
+        setComposerMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results, dictationDictionary), { immediate: true });
         setVoiceStatus("Listening");
       };
 
@@ -1458,87 +1566,16 @@ export function ChatComposer({
           </div>
         </div>
       ) : null}
-      {queuedMessages.length > 0 ? (
-        <div className="composer-queue-tray" aria-label="Queued follow-up messages">
-          {queuedMessages.map((queuedMessage) => {
-            const editDraft = queuedEditDrafts[queuedMessage.id];
-            const isEditingQueuedMessage = editDraft !== undefined;
-            const isHeldQueuedMessage = heldQueuedMessageIdSet.has(queuedMessage.id);
-            const canSteerQueuedMessage = isGenerating && (editDraft ?? queuedMessage.content).trim().length > 0;
-
-            return (
-              <div className="composer-queue-row" data-editing={isEditingQueuedMessage} key={queuedMessage.id}>
-                <CornerDownRight size={15} aria-hidden="true" />
-                {isEditingQueuedMessage ? (
-                  <label className="composer-queue-edit">
-                    <span className="sr-only">Edit queued steering message</span>
-                    <textarea
-                      autoFocus
-                      rows={2}
-                      value={editDraft}
-                      onChange={(event) => updateQueuedMessageDraft(queuedMessage.id, event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                          event.preventDefault();
-                          if (canSteerQueuedMessage) {
-                            steerQueuedMessage(queuedMessage.id);
-                          }
-                        }
-                      }}
-                    />
-                  </label>
-                ) : (
-                  <span title={queuedMessage.content}>{formatQueuedMessagePreview(queuedMessage)}</span>
-                )}
-                {isGenerating ? (
-                  <button type="button" className="composer-queue-steer" disabled={!canSteerQueuedMessage} onClick={() => steerQueuedMessage(queuedMessage.id)}>
-                    <CornerDownRight size={14} aria-hidden="true" />
-                    <span>Steer</span>
-                  </button>
-                ) : isHeldQueuedMessage ? (
-                  <button type="button" className="composer-queue-steer" onClick={() => resumeQueuedMessage(queuedMessage.id)}>
-                    <Check size={14} aria-hidden="true" />
-                    <span>Queue</span>
-                  </button>
-                ) : (
-                  <span className="composer-queue-state">Queued</span>
-                )}
-                {isEditingQueuedMessage ? (
-                  <button type="button" className="composer-queue-icon" aria-label="Cancel queued message edit" title="Cancel edit" onClick={() => cancelQueuedMessageEdit(queuedMessage.id)}>
-                    <X size={14} aria-hidden="true" />
-                  </button>
-                ) : (
-                  <button type="button" className="composer-queue-icon" aria-label="Remove queued message" title="Remove queued message" onClick={() => deleteQueuedMessage(queuedMessage.id)}>
-                    <Trash2 size={14} aria-hidden="true" />
-                  </button>
-                )}
-                <span className="composer-queue-menu-wrap">
-                  <button
-                    type="button"
-                    className="composer-queue-icon"
-                    aria-label="More queued message actions"
-                    aria-haspopup="menu"
-                    aria-expanded={queueMenuMessageId === queuedMessage.id}
-                    title="More"
-                    onClick={() => toggleQueuedMessageMenu(queuedMessage.id)}
-                  >
-                    <MoreHorizontal size={15} aria-hidden="true" />
-                  </button>
-                  {queueMenuMessageId === queuedMessage.id ? (
-                    <div className="composer-queue-menu" role="menu" aria-label="Queued message actions">
-                      <button type="button" role="menuitem" onClick={() => beginQueuedMessageEdit(queuedMessage)}>
-                        <Pencil size={14} aria-hidden="true" />
-                        <span>Edit</span>
-                      </button>
-                    </div>
-                  ) : null}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      <div className="composer-input-wrap">
+      <MessageSteeringQueue
+        heldMessageIds={heldQueuedMessageIdSet}
+        isGenerating={isGenerating}
+        messages={queuedMessages}
+        onDeleteMessage={onDeleteQueuedMessage}
+        onEditMessage={restoreQueuedMessageToComposer}
+        onHoldMessage={onHoldQueuedMessage}
+        onSteerMessage={steerQueuedMessage}
+      />
+      <div className="composer-input-wrap" data-indicators={activeModeCount > 0 ? "true" : "false"}>
         <label className="sr-only" htmlFor="composer-message-input">Message Gilbert Codex</label>
         <textarea
           id="composer-message-input"
@@ -1560,9 +1597,29 @@ export function ChatComposer({
           rows={2}
           defaultValue=""
           onChange={handleMessageChange}
+          onBlur={() => flushPendingDraftChange()}
           onClick={handleTextSelection}
           onKeyDown={handleTextKeyDown}
         />
+        {activeModeCount > 0 ? (
+          <div className="composer-inline-indicators" aria-label="Active composer modes">
+            {webSearch.enabled ? (
+              <span title={`${webSearchProviderLabel} web search on`} aria-label={`${webSearchProviderLabel} web search on`}>
+                <Globe2 size={13} aria-hidden="true" />
+              </span>
+            ) : null}
+            {imageGenerationEnabled ? (
+              <span title="Image generation on" aria-label="Image generation on">
+                <ImageIcon size={13} aria-hidden="true" />
+              </span>
+            ) : null}
+            {planMode.enabled ? (
+              <span title="Plan mode on" aria-label="Plan mode on">
+                <Wand2 size={13} aria-hidden="true" />
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         {skillMention.open ? (
           <div id="composer-skill-mention-picker">
             <SkillMentionPicker
@@ -1620,7 +1677,7 @@ export function ChatComposer({
       ) : null}
       <div className="composer-actions">
         <div className="composer-pinned-actions">
-          <div className="composer-menu-anchor">
+          <div className="composer-menu-anchor composer-attach-root">
             <button
               className="composer-tool composer-tool-primary composer-attach-toggle"
               type="button"
@@ -1630,7 +1687,7 @@ export function ChatComposer({
               data-active={openMenu === "attach"}
               onClick={() => toggleMenu("attach")}
             >
-              <Plus size={20} aria-hidden="true" />
+              <Plus size={17} aria-hidden="true" />
             </button>
             {openMenu === "attach" ? (
               <div className="composer-popover composer-popover-attach" role="menu" aria-label="Add menu">
@@ -1687,16 +1744,83 @@ export function ChatComposer({
                     <span />
                   </span>
                 </button>
-                <div className="composer-menu-separator" />
-                <div className="composer-menu-panel">
-                  <ThinkingModeControls settings={thinking} onChange={onThinkingChange} variant="panel" />
-                </div>
               </div>
             ) : null}
           </div>
         </div>
         <div className="composer-actions-left">
-          <div className="composer-menu-anchor">
+          <div className="composer-menu-anchor composer-workspace-root">
+            <button
+              className="workspace-toggle"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={openMenu === "workspace"}
+              aria-label={workspaceButtonLabel}
+              data-active={openMenu === "workspace"}
+              data-permission={localWorkspace.permissionMode}
+              onClick={() => toggleMenu("workspace")}
+            >
+              <FolderGit2 size={14} aria-hidden="true" />
+              <span>
+                <strong>{projectLabel}</strong>
+                <small>{workspaceMetaLabel}</small>
+              </span>
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+            {openMenu === "workspace" ? (
+              <WorkspacePopover
+                actionNotice={gitActionNotice}
+                actionRunning={gitActionRunning}
+                activeProjectName={chat.project}
+                branchName={gitBranchName}
+                commitMessage={gitCommitMessage}
+                initNotice={gitInitNotice}
+                initializing={gitInitRunning}
+                loading={gitStatusLoading}
+                onBranchNameChange={setGitBranchName}
+                onCommit={commitComposerGitChanges}
+                onCommitMessageChange={setGitCommitMessage}
+                onCreateProject={onCreateProject}
+                onCreateBranch={createComposerGitBranch}
+                onInitialize={initializeGitRepository}
+                onLocalWorkspaceChange={onLocalWorkspaceChange}
+                onPull={pullComposerGitBranch}
+                onPush={pushComposerGitBranch}
+                onReviewChanges={onReviewChanges}
+                onSelectProject={(projectName) => {
+                  onSelectProject(projectName);
+                  setOpenMenu(null);
+                }}
+                onStageAll={stageAllComposerGitChanges}
+                projectLabel={projectLabel}
+                projectSearch={projectSearch}
+                projects={projects}
+                root={activeRoot}
+                setProjectSearch={setProjectSearch}
+                status={gitStatus}
+                workspace={localWorkspace}
+              />
+            ) : null}
+          </div>
+        </div>
+        <div className="composer-actions-right">
+          <div className="composer-menu-anchor composer-context-root">
+            <button
+              className="context-window-chip"
+              type="button"
+              aria-label={contextButtonLabel}
+              aria-haspopup="dialog"
+              aria-expanded={openMenu === "context"}
+              data-active={openMenu === "context"}
+              data-context-level={getContextUsageLevel(contextUsageRatio)}
+              title={contextButtonLabel}
+              onClick={() => toggleMenu("context")}
+            >
+              <span className="context-window-ring" style={createContextRingStyle(contextUsageRatio)} aria-hidden="true" />
+            </button>
+            {openMenu === "context" ? <ContextWindowPopover compaction={lastContextCompaction} usage={contextUsage} usagePercent={contextUsagePercent} /> : null}
+          </div>
+          <div className="composer-menu-anchor composer-model-root">
             <button
               ref={modelButtonRef}
               className="mode-chip mode-chip-model"
@@ -1707,9 +1831,9 @@ export function ChatComposer({
               onClick={handleModelMenuClick}
               onPointerDown={handleModelMenuPointerDown}
             >
-              <Sparkles size={16} aria-hidden="true" />
-              <span>{selectedModel.label}</span>
-              <ChevronDown size={15} aria-hidden="true" />
+              <Sparkles size={14} aria-hidden="true" />
+              <span>{composerModelLabel}</span>
+              <ChevronDown size={13} aria-hidden="true" />
             </button>
             {openMenu === "model" ? (
               <ModelSelectorPopover
@@ -1720,13 +1844,13 @@ export function ChatComposer({
                 modelContextWindows={modelContextWindows}
                 onClose={() => setOpenMenu(null)}
                 onModelChange={onModelChange}
+                onThinkingChange={onThinkingChange}
                 providerSettings={providerSettings}
                 selectedModel={selectedModel}
+                thinking={thinking}
               />
             ) : null}
           </div>
-        </div>
-        <div className="composer-actions-right">
           <button
             className="composer-tool"
             type="button"
@@ -1763,108 +1887,6 @@ export function ChatComposer({
         </div>
       </div>
       <div className="composer-footer">
-        <div className="composer-menu-anchor composer-project-root">
-          <button
-            className="project-toggle"
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={openMenu === "project"}
-            data-active={openMenu === "project"}
-            onClick={() => toggleMenu("project")}
-          >
-            <FolderGit2 size={14} aria-hidden="true" />
-            <span>{projectLabel}</span>
-            <ChevronDown size={13} aria-hidden="true" />
-          </button>
-          {openMenu === "project" ? (
-            <ProjectPopover
-              activeProjectName={chat.project}
-              onCreateProject={onCreateProject}
-              onSelectProject={(projectName) => {
-                onSelectProject(projectName);
-                setOpenMenu(null);
-              }}
-              projectSearch={projectSearch}
-              projects={projects}
-              setProjectSearch={setProjectSearch}
-            />
-          ) : null}
-        </div>
-        <div className="composer-menu-anchor composer-local-root">
-          <button
-            className="local-toggle"
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={openMenu === "local"}
-            data-active={openMenu === "local" || localWorkspace.permissionMode !== "default"}
-            onClick={() => toggleMenu("local")}
-          >
-            {localWorkspace.permissionMode === "full-access" ? <ShieldAlert size={14} aria-hidden="true" /> : localWorkspace.permissionMode === "auto-review" ? <ShieldCheck size={14} aria-hidden="true" /> : <Hand size={14} aria-hidden="true" />}
-            <span>{localPermissionModeLabel(localWorkspace.permissionMode)}</span>
-            <ChevronDown size={13} aria-hidden="true" />
-          </button>
-          {openMenu === "local" ? (
-            <LocalWorkspacePopover
-              settings={localWorkspace}
-              onChange={onLocalWorkspaceChange}
-            />
-          ) : null}
-        </div>
-        <div className="composer-menu-anchor composer-branch-root">
-          <button
-            className="branch-toggle"
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={openMenu === "branch"}
-            data-active={openMenu === "branch"}
-            data-git={gitStatus?.available ? "true" : "false"}
-            onClick={() => toggleMenu("branch")}
-          >
-            <GitBranch size={14} aria-hidden="true" />
-            <span>{gitBranchLabel}</span>
-            <ChevronDown size={13} aria-hidden="true" />
-          </button>
-          {openMenu === "branch" ? (
-            <GitStatusPopover
-              actionNotice={gitActionNotice}
-              actionRunning={gitActionRunning}
-              branchName={gitBranchName}
-              commitMessage={gitCommitMessage}
-              initNotice={gitInitNotice}
-              initializing={gitInitRunning}
-              loading={gitStatusLoading}
-              onBranchNameChange={setGitBranchName}
-              onCommit={commitComposerGitChanges}
-              onCommitMessageChange={setGitCommitMessage}
-              onCreateBranch={createComposerGitBranch}
-              onInitialize={initializeGitRepository}
-              onPull={pullComposerGitBranch}
-              onPush={pushComposerGitBranch}
-              onReviewChanges={onReviewChanges}
-              onStageAll={stageAllComposerGitChanges}
-              root={activeRoot}
-              status={gitStatus}
-            />
-          ) : null}
-        </div>
-        <div className="composer-menu-anchor composer-context-root">
-          <button
-            className="context-window-chip"
-            type="button"
-            aria-label={contextButtonLabel}
-            aria-haspopup="dialog"
-            aria-expanded={openMenu === "context"}
-            data-active={openMenu === "context"}
-            data-context-level={getContextUsageLevel(contextUsageRatio)}
-            title={contextButtonLabel}
-            onClick={() => toggleMenu("context")}
-          >
-            <span className="context-window-ring" style={createContextRingStyle(contextUsageRatio)} aria-hidden="true">
-              <span className="context-window-ring-threshold" />
-            </span>
-          </button>
-          {openMenu === "context" ? <ContextWindowPopover compaction={lastContextCompaction} usage={contextUsage} usagePercent={contextUsagePercent} /> : null}
-        </div>
         {voiceState === "blocked" ? <span className="composer-status composer-status-warning">Mic permission is blocked</span> : null}
         {voiceState === "unsupported" ? <span className="composer-status composer-status-warning">Mic is not available in this preview</span> : null}
         {voiceState === "error" && voiceStatus ? <span className="composer-status composer-status-warning">{voiceStatus}</span> : null}
@@ -1873,9 +1895,6 @@ export function ChatComposer({
         {hasMediaAttachment ? <span className="composer-status">Media uploads use Nemotron Omni when needed</span> : null}
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
         {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
-        {webSearch.enabled ? <span className="composer-status composer-status-web">{webSearchProviderLabel} web on</span> : null}
-        {imageGenerationEnabled ? <span className="composer-status">Images on</span> : null}
-        {planMode.enabled ? <span className="composer-status">Plan mode</span> : null}
       </div>
       </form>
       <p className="composer-ai-disclaimer" data-layout={layout}>
@@ -1885,8 +1904,170 @@ export function ChatComposer({
   );
 }
 
+export const ChatComposer = memo(ChatComposerComponent, areChatComposerPropsEqual);
+
+function areChatComposerPropsEqual(previous: ChatComposerProps, next: ChatComposerProps) {
+  return (
+    previous.active === next.active &&
+    previous.chat === next.chat &&
+    previous.chats === next.chats &&
+    previous.contextWindowSource === next.contextWindowSource &&
+    previous.contextWindowTokens === next.contextWindowTokens &&
+    previous.dictationDictionary === next.dictationDictionary &&
+    previous.dictationHoldHotkey === next.dictationHoldHotkey &&
+    previous.dictationToggleHotkey === next.dictationToggleHotkey &&
+    previous.draft === next.draft &&
+    previous.restoreDraft === next.restoreDraft &&
+    previous.restoreDraftId === next.restoreDraftId &&
+    previous.followUpBehavior === next.followUpBehavior &&
+    previous.isGenerating === next.isGenerating &&
+    previous.lastContextCompaction === next.lastContextCompaction &&
+    previous.layout === next.layout &&
+    previous.localWorkspace === next.localWorkspace &&
+    previous.lastProviderContextUsage === next.lastProviderContextUsage &&
+    previous.model === next.model &&
+    previous.modelContextWindows === next.modelContextWindows &&
+    previous.projects === next.projects &&
+    previous.providerSettings === next.providerSettings &&
+    previous.queuedMessageCount === next.queuedMessageCount &&
+    previous.queuedMessages === next.queuedMessages &&
+    previous.requireCtrlEnterForLongPrompts === next.requireCtrlEnterForLongPrompts &&
+    previous.heldQueuedMessageIds === next.heldQueuedMessageIds &&
+    previous.thinking === next.thinking &&
+    previous.webSearch === next.webSearch
+  );
+}
+
+function WorkspacePopover({
+  actionNotice,
+  actionRunning,
+  activeProjectName,
+  branchName,
+  commitMessage,
+  initNotice,
+  initializing,
+  loading,
+  onBranchNameChange,
+  onCommit,
+  onCommitMessageChange,
+  onCreateBranch,
+  onCreateProject,
+  onInitialize,
+  onLocalWorkspaceChange,
+  onPull,
+  onPush,
+  onReviewChanges,
+  onSelectProject,
+  onStageAll,
+  projectLabel,
+  projectSearch,
+  projects,
+  root,
+  setProjectSearch,
+  status,
+  workspace,
+}: {
+  actionNotice: { kind: "error" | "success"; message: string } | null;
+  actionRunning: string | null;
+  activeProjectName: string;
+  branchName: string;
+  commitMessage: string;
+  initNotice: { kind: "error" | "success"; message: string } | null;
+  initializing: boolean;
+  loading: boolean;
+  onBranchNameChange: (value: string) => void;
+  onCommit: () => void;
+  onCommitMessageChange: (value: string) => void;
+  onCreateBranch: () => void;
+  onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
+  onInitialize: () => void;
+  onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
+  onPull: () => void;
+  onPush: () => void;
+  onReviewChanges?: () => void;
+  onSelectProject: (projectName: string) => void;
+  onStageAll: () => void;
+  projectLabel: string;
+  projectSearch: string;
+  projects: ProjectSummary[];
+  root: string;
+  setProjectSearch: (value: string) => void;
+  status: ComputerGitStatus | null;
+  workspace: LocalWorkspaceSettings;
+}) {
+  const rootLabel = root ? formatCompactPath(root) : "No local folder";
+  const gitSummary = loading ? "Checking Git" : status?.available ? status.branch || "Git repository" : "Git not ready";
+
+  return (
+    <div className="composer-popover composer-popover-workspace" role="dialog" aria-label="Workspace">
+      <div className="workspace-popover-head">
+        <span className="workspace-popover-icon" aria-hidden="true">
+          <FolderGit2 size={18} />
+        </span>
+        <span>
+          <strong>{projectLabel}</strong>
+          <small>{rootLabel}</small>
+        </span>
+      </div>
+
+      <section className="workspace-popover-section" aria-label="Project folder">
+        <div className="workspace-popover-section-head">
+          <span>Project</span>
+          <small>{projects.length === 1 ? "1 saved" : `${projects.length} saved`}</small>
+        </div>
+        <ProjectPopover
+          activeProjectName={activeProjectName}
+          compact
+          onCreateProject={onCreateProject}
+          onSelectProject={onSelectProject}
+          projectSearch={projectSearch}
+          projects={projects}
+          setProjectSearch={setProjectSearch}
+        />
+      </section>
+
+      <section className="workspace-popover-section" aria-label="Local permissions">
+        <div className="workspace-popover-section-head">
+          <span>Local</span>
+          <small>{localPermissionModeLabel(workspace.permissionMode)}</small>
+        </div>
+        <LocalWorkspacePopover compact settings={workspace} onChange={onLocalWorkspaceChange} />
+      </section>
+
+      <section className="workspace-popover-section" aria-label="Git status">
+        <div className="workspace-popover-section-head">
+          <span>Git</span>
+          <small>{gitSummary}</small>
+        </div>
+        <GitStatusPopover
+          actionNotice={actionNotice}
+          actionRunning={actionRunning}
+          branchName={branchName}
+          compact
+          commitMessage={commitMessage}
+          initNotice={initNotice}
+          initializing={initializing}
+          loading={loading}
+          onBranchNameChange={onBranchNameChange}
+          onCommit={onCommit}
+          onCommitMessageChange={onCommitMessageChange}
+          onCreateBranch={onCreateBranch}
+          onInitialize={onInitialize}
+          onPull={onPull}
+          onPush={onPush}
+          onReviewChanges={onReviewChanges}
+          onStageAll={onStageAll}
+          root={root}
+          status={status}
+        />
+      </section>
+    </div>
+  );
+}
+
 function ProjectPopover({
   activeProjectName,
+  compact = false,
   onCreateProject,
   onSelectProject,
   projectSearch,
@@ -1894,6 +2075,7 @@ function ProjectPopover({
   setProjectSearch,
 }: {
   activeProjectName: string;
+  compact?: boolean;
   onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onSelectProject: (projectName: string) => void;
   projectSearch: string;
@@ -1926,11 +2108,11 @@ function ProjectPopover({
   }
 
   return (
-    <div className="composer-popover composer-popover-project" role="dialog" aria-label="Projects">
+    <div className="composer-popover composer-popover-project" role="dialog" aria-label="Projects" data-compact={compact || undefined}>
       <label className="project-search">
         <Search size={16} aria-hidden="true" />
         <span className="sr-only">Search projects</span>
-        <input autoFocus placeholder="Search projects" value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} />
+        <input autoFocus={!compact} placeholder="Search projects" value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} />
       </label>
       <div className="project-list" role="listbox" aria-label="Project folders">
         <button type="button" role="option" aria-selected={noProjectSelected} data-selected={noProjectSelected} onClick={() => onSelectProject(DEFAULT_PROJECT)}>
@@ -2047,6 +2229,7 @@ function GitStatusPopover({
   actionNotice,
   actionRunning,
   branchName,
+  compact = false,
   commitMessage,
   initNotice,
   initializing,
@@ -2066,6 +2249,7 @@ function GitStatusPopover({
   actionNotice: { kind: "error" | "success"; message: string } | null;
   actionRunning: string | null;
   branchName: string;
+  compact?: boolean;
   commitMessage: string;
   initNotice: { kind: "error" | "success"; message: string } | null;
   initializing: boolean;
@@ -2084,7 +2268,7 @@ function GitStatusPopover({
 }) {
   if (loading) {
     return (
-      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
+      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status" data-compact={compact || undefined}>
         <div className="git-status-loading">
           <LoaderCircle size={16} aria-hidden="true" />
           <span>Checking local Git status</span>
@@ -2098,7 +2282,7 @@ function GitStatusPopover({
     const canInitialize = issue.kind === "not-repo" && Boolean(root);
 
     return (
-      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status">
+      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status" data-compact={compact || undefined}>
         <div className="git-status-error" data-kind={issue.kind}>
           <div className="git-status-error-icon">
             {issue.kind === "not-repo" ? <GitBranch size={18} aria-hidden="true" /> : issue.kind === "missing-path" ? <FolderOpen size={18} aria-hidden="true" /> : <AlertTriangle size={18} aria-hidden="true" />}
@@ -2117,15 +2301,55 @@ function GitStatusPopover({
         ) : null}
         {initNotice ? <div className="git-status-notice" data-kind={initNotice.kind}>{initNotice.message}</div> : null}
         {status?.error ? (
-          <div className="git-status-error-detail" title={status.error}>
+          <div className="git-status-error-detail" title={status.error} data-compact={compact || undefined}>
             {status.error}
           </div>
         ) : null}
-        {root ? (
+        {root && !compact ? (
           <div className="git-status-root" title={root}>
             {formatCompactPath(root)}
           </div>
         ) : null}
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status" data-compact="true">
+        <div className="git-status-header">
+          <GitBranch size={16} aria-hidden="true" />
+          <span>
+            <strong>{status.branch || "Git repository"}</strong>
+            <small>{status.githubOwner && status.githubRepo ? `${status.githubOwner}/${status.githubRepo}` : status.remoteUrl || "Local repository"}</small>
+          </span>
+        </div>
+        <div className="git-status-compact-metrics" aria-label="Git change summary">
+          <span>{status.changedFiles === 1 ? "1 changed" : `${status.changedFiles} changed`}</span>
+          <span className="git-additions">+{status.additions}</span>
+          <span className="git-deletions">-{status.deletions}</span>
+        </div>
+        <div className="git-status-action-grid" data-compact="true">
+          <button type="button" disabled={Boolean(actionRunning) || status.changedFiles === 0} onClick={onStageAll}>
+            {actionRunning === "stage" ? <LoaderCircle size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+            <span>Stage</span>
+          </button>
+          <button type="button" disabled={Boolean(actionRunning)} onClick={onPull}>
+            {actionRunning === "pull" ? <LoaderCircle size={14} aria-hidden="true" /> : <CornerDownRight size={14} aria-hidden="true" />}
+            <span>Pull</span>
+          </button>
+          <button type="button" disabled={Boolean(actionRunning)} onClick={onPush}>
+            {actionRunning === "push" ? <LoaderCircle size={14} aria-hidden="true" /> : <ArrowUp size={14} aria-hidden="true" />}
+            <span>Push</span>
+          </button>
+          {onReviewChanges ? (
+            <button type="button" disabled={Boolean(actionRunning)} onClick={onReviewChanges}>
+              <Search size={14} aria-hidden="true" />
+              <span>Review</span>
+            </button>
+          ) : null}
+        </div>
+        {actionNotice ? <div className="git-status-notice" data-kind={actionNotice.kind}>{actionNotice.message}</div> : null}
       </div>
     );
   }
@@ -2205,9 +2429,11 @@ function GitStatusPopover({
 }
 
 function LocalWorkspacePopover({
+  compact = false,
   onChange,
   settings,
 }: {
+  compact?: boolean;
   onChange: (settings: LocalWorkspaceSettings) => void;
   settings: LocalWorkspaceSettings;
 }) {
@@ -2220,7 +2446,7 @@ function LocalWorkspacePopover({
   }
 
   return (
-    <div className="composer-popover composer-popover-local" role="dialog" aria-label="Local permissions">
+    <div className="composer-popover composer-popover-local" role="dialog" aria-label="Local permissions" data-compact={compact || undefined}>
       <div className="local-permission-menu" role="radiogroup" aria-label="Local permissions">
         {[
           { icon: Hand, label: "Default permissions", mode: "default" },
@@ -2287,7 +2513,6 @@ function ContextWindowPopover({ usage, usagePercent }: { compaction?: ContextCom
 function createContextRingStyle(usageRatio: number): CSSProperties {
   return {
     "--context-progress-angle": `${clampUnit(usageRatio) * 360}deg`,
-    "--context-threshold-angle": `${AUTO_COMPACT_CONTEXT_THRESHOLD * 360}deg`,
   } as CSSProperties;
 }
 
@@ -2337,27 +2562,6 @@ function formatVoiceLabel(voiceState: VoiceState) {
   }
 
   return "Start voice input";
-}
-
-function formatQueuedMessagePreview(message: ChatMessage) {
-  const content = message.content.trim();
-
-  if (content) {
-    return content;
-  }
-
-  const attachmentCount = message.attachments?.length ?? 0;
-
-  if (attachmentCount === 1) {
-    return message.attachments?.[0]?.name || "1 attachment";
-  }
-
-  return `${attachmentCount} attachments`;
-}
-
-function removeQueuedEditDraft(drafts: Record<string, string>, messageId: string) {
-  const { [messageId]: _removed, ...nextDrafts } = drafts;
-  return nextDrafts;
 }
 
 function findSkillMentionTrigger(message: string, cursorPosition: number): SkillMentionTrigger | null {
@@ -2455,7 +2659,7 @@ function getBuiltInSpeechRecognition() {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
-function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecognitionResultList) {
+function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecognitionResultList, dictionary: string) {
   const transcriptParts: string[] = [];
 
   for (let index = 0; index < results.length; index += 1) {
@@ -2466,7 +2670,7 @@ function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecogn
     }
   }
 
-  const transcript = formatDictationTranscript(transcriptParts.join(" "));
+  const transcript = applyDictationDictionary(formatDictationTranscript(transcriptParts.join(" ")), dictionary);
 
   if (!transcript) {
     return baseMessage;
@@ -2488,6 +2692,19 @@ function formatDictationTranscript(text: string) {
   }
 
   return `${normalizedText.charAt(0).toUpperCase()}${normalizedText.slice(1)}`;
+}
+
+function applyDictationDictionary(text: string, dictionary: string) {
+  const phrases = dictionary
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 120);
+
+  return phrases.reduce((nextText, phrase) => {
+    const escapedPhrase = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    return nextText.replace(new RegExp(`(^|[^\\w])(${escapedPhrase})(?=$|[^\\w])`, "gi"), (_match, prefix) => `${prefix}${phrase}`);
+  }, text);
 }
 
 function formatSpeechRecognitionError(error?: string) {

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
+use tauri::Manager;
 
 const APP_USER_AGENT: &str = "GilbertCodex/0.1";
 
@@ -30,6 +31,47 @@ pub struct BrowserAutomationResponse {
     pub text_snippet: String,
     pub title: String,
     pub url: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn browser_preview_get_url(
+    app: tauri::AppHandle,
+    label: String,
+) -> Result<Option<String>, String> {
+    let webview = match get_browser_preview_webview(&app, &label)? {
+        Some(webview) => webview,
+        None => return Ok(None),
+    };
+
+    webview
+        .url()
+        .map(|url| Some(url.to_string()))
+        .map_err(|error| format!("Could not read browser URL: {error}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn browser_preview_navigate(
+    app: tauri::AppHandle,
+    label: String,
+    url: String,
+) -> Result<(), String> {
+    let target_url = validate_browser_preview_url(&url)?;
+    let webview = get_browser_preview_webview(&app, &label)?
+        .ok_or_else(|| "Browser view is no longer available.".to_string())?;
+
+    webview
+        .navigate(target_url)
+        .map_err(|error| format!("Could not navigate browser: {error}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn browser_preview_reload(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    let webview = get_browser_preview_webview(&app, &label)?
+        .ok_or_else(|| "Browser view is no longer available.".to_string())?;
+
+    webview
+        .reload()
+        .map_err(|error| format!("Could not reload browser: {error}"))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -130,6 +172,29 @@ fn validate_browser_automation_url(raw_url: &str) -> Result<reqwest::Url, String
                 "browser automation blocked a private or special-use IP address.".to_string(),
             );
         }
+    }
+
+    Ok(url)
+}
+
+fn get_browser_preview_webview(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<Option<tauri::Webview>, String> {
+    if !label.starts_with("browser-preview-") {
+        return Err("Refusing to control a non-browser webview.".to_string());
+    }
+
+    Ok(app.get_webview(label))
+}
+
+fn validate_browser_preview_url(raw_url: &str) -> Result<tauri::Url, String> {
+    let url = tauri::Url::parse(raw_url.trim())
+        .map_err(|_| "Browser navigation needs a valid http(s) URL.".to_string())?;
+    let scheme = url.scheme();
+
+    if scheme != "http" && scheme != "https" {
+        return Err("Browser navigation only supports http(s) URLs.".to_string());
     }
 
     Ok(url)

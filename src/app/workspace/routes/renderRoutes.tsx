@@ -15,21 +15,28 @@ import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { PrimaryRoute } from "../../../types/navigation";
 import type { CreateProjectOptions, ProjectSummary } from "../../../types/project";
 import type { ProviderReasoningState } from "../../../types/reasoning";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../../types/settings";
+import type { AppAppearanceSettings, AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../../types/settings";
 import type { ToolRegistrySettings } from "../../../types/tools";
 import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
+const EMPTY_CHAT_MESSAGES: ChatMessage[] = [];
+const EMPTY_STRING_ARRAY: string[] = [];
+
 export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
-  const { activeRoute, activeSettingsSection, appearanceMode, appInfo, AppsPage, discordBridgeSettings, handleLocalWorkspaceChange, handleRouteChange, handleSubscriptionSandboxUninstalled, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setDiscordBridgeSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, WeatherRadarPage } = deps;
+  const { activeRoute, activeSettingsSection, appearanceMode, appearanceSettings, appInfo, AppsPage, discordBridgeSettings, generalSettings, handleLocalWorkspaceChange, handleRouteChange, handleSubscriptionSandboxUninstalled, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setAppearanceSettings, setDiscordBridgeSettings, setGeneralSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, WeatherRadarPage } = deps;
 
     if (activeRoute === "apps") {
       return (
         <AppsPage
           locationServicesEnabled={locationServicesEnabled}
           onBackToChat={() => setActiveRoute("chat")}
+          onOpenGithubSettings={() => {
+            setActiveSettingsSection("github");
+            setActiveRoute("settings");
+          }}
           onOpenRadar={() => handleRouteChange("radar")}
           onOpenSupport={() => handleRouteChange("support")}
         />
@@ -66,13 +73,18 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
           activeSection={activeSettingsSection}
           appInfo={appInfo}
           appearanceMode={appearanceMode}
+          appearanceSettings={appearanceSettings}
           discordBridge={discordBridgeSettings}
+          generalSettings={generalSettings}
           localWorkspace={localWorkspace}
           personalization={personalizationSettings}
           projects={projects}
           settings={providerSettings}
+          onActiveSectionChange={setActiveSettingsSection}
           onAppearanceModeChange={setAppearanceMode}
+          onAppearanceSettingsChange={setAppearanceSettings}
           onDiscordBridgeChange={setDiscordBridgeSettings}
+          onGeneralSettingsChange={setGeneralSettings}
           onLocalWorkspaceChange={handleLocalWorkspaceChange}
           onPersonalizationChange={setPersonalizationSettings}
           onSettingsChange={setProviderSettings}
@@ -85,22 +97,61 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
   }
 
 export function renderChatPage(deps: WorkspaceRuntimeDeps) {
-  const { activeChat, activeChatProviderSettings, activeRoute, appInfo, browserPreviewTarget, ChatPage, chats, composerDraftToRestore, contextWindow, createToolAwareProviderSettings, getModelProvider, getProviderApiKey, handleActiveChatModelChange, handleAddAutomation, handleArchiveActiveChat, handleComposerDraftChange, handleCopyChatDeeplink, handleCopyChatMarkdown, handleCopySessionId, handleCopyWorkingDirectory, handleDeleteQueuedMessage, handleEditUserMessageAndRegenerate, handleForkActiveChatLocal, handleForkActiveChatWorktree, handleHoldQueuedMessage, handleLocalWorkspaceChange, handleNewChat, handleOpenActiveChatInNewWindow, handleOpenRenameChat, handleRegenerateResponse, handleRequestPlanRevision, handleResolveToolApproval, handleSelectChat, handleSelectProject, handleSendMessage, handleSteerQueuedMessage, handleStopGeneration, handleSubmitPlanningInput, handleTogglePin, handleToggleTerminal, handleUpdateQueuedMessage, isChatSending, lastContextCompaction, lastProviderContextUsage, localWorkspace, modelContextWindows, openCreateProjectDialog, projects, queuedChatSends, setComposerDraftToRestore, setProviderSettings, terminalOpen, toolSettings } = deps;
+  const { activeChat, activeChatProviderSettings, activeRoute, activeToolAwareProviderSettings, agentRuns, appInfo, browserPreviewTarget, ChatPage, chats, composerDraftToRestore, contextWindow, generalSettings, getModelProvider, getProviderApiKey, handleActiveChatModelChange, handleAddAutomation, handleArchiveActiveChat, handleComposerDraftChange, handleCopyChatDeeplink, handleCopyChatMarkdown, handleCopySessionId, handleCopyWorkingDirectory, handleDeleteQueuedMessage, handleEditUserMessageAndRegenerate, handleForkActiveChatLocal, handleForkChatFromMessage, handleForkActiveChatWorktree, handleHoldQueuedMessage, handleLocalWorkspaceChange, handleMessageFeedback, handleNewChat, handleOpenActiveChatInNewWindow, handleOpenProjectInTool, handleOpenProjectRun, handleOpenRenameChat, handleRegenerateResponse, handleRequestPlanRevision, handleResolveToolApproval, handleSelectChat, handleSelectProject, handleSendMessage, handleSteerQueuedMessage, handleStopGeneration, handleSubmitPlanningInput, handleTogglePin, handleToggleTerminal, isChatSending, lastContextCompaction, lastProviderContextUsage, localWorkspace, modelContextWindows, openCreateProjectDialog, projects, queuedChatSends, setComposerDraftToRestore, setProviderSettings, terminalOpen, toolSettings } = deps;
+  const activeQueuedSends = queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id);
+  const activeQueuedMessages = activeQueuedSends.length === 0 ? EMPTY_CHAT_MESSAGES : activeQueuedSends.map((queuedSend) => {
+    const existingMessage = activeChat.messages.find((message) => message.id === queuedSend.userMessageId);
+
+    if (existingMessage) {
+      return existingMessage;
+    }
+
+    return {
+      attachments: queuedSend.input.attachments,
+      content: queuedSend.input.content,
+      createdAt: activeChat.updatedAt,
+      id: queuedSend.userMessageId,
+      mode: queuedSend.input.mode,
+      researchReferences: (queuedSend.input.referencedChatIds ?? []).flatMap((chatId) => {
+        const referencedChat = chats.find((candidate) => candidate.id === chatId);
+
+        return referencedChat
+          ? [
+              {
+                chatId: referencedChat.id,
+                project: referencedChat.project,
+                title: referencedChat.title,
+                updatedAt: referencedChat.updatedAt,
+              },
+            ]
+          : [];
+      }),
+      role: "user",
+      status: "queued",
+    } satisfies ChatMessage;
+  });
 
     return (
       <ChatPage
         active={activeRoute === "chat"}
+        agentRuns={agentRuns}
         appInfo={appInfo}
         chat={activeChat}
         chats={chats}
         browserPreviewEnabled={toolSettings.browserPreview}
         browserPreviewRequestId={browserPreviewTarget?.id ?? 0}
         browserPreviewUrl={browserPreviewTarget?.url ?? null}
+        codeReviewBehavior={generalSettings.codeReviewBehavior}
         composerDraft={activeChat.composerDraft ?? null}
         composerRestoreDraft={composerDraftToRestore?.draft ?? null}
         composerRestoreDraftId={composerDraftToRestore?.id ?? null}
         contextWindowSource={contextWindow.source}
         contextWindowTokens={contextWindow.tokens}
+        defaultOpenTarget={generalSettings.defaultOpenTarget}
+        dictationDictionary={generalSettings.dictation.dictionary}
+        dictationHoldHotkey={generalSettings.dictation.holdHotkey}
+        dictationToggleHotkey={generalSettings.dictation.toggleHotkey}
+        followUpBehavior={generalSettings.followUpBehavior}
         hasApiKey={!getModelProvider(activeChatProviderSettings.provider).requiresApiKey || Boolean(getProviderApiKey(activeChatProviderSettings).trim())}
         isSending={isChatSending(activeChat.id)}
         lastContextCompaction={lastContextCompaction?.chatId === activeChat.id && lastContextCompaction.contextWindowTokens === contextWindow.tokens ? lastContextCompaction : null}
@@ -116,7 +167,11 @@ export function renderChatPage(deps: WorkspaceRuntimeDeps) {
         onCopySessionId={() => void handleCopySessionId()}
         onCopyWorkingDirectory={() => void handleCopyWorkingDirectory()}
         onForkChatLocal={handleForkActiveChatLocal}
+        onForkChatFromMessage={handleForkChatFromMessage}
         onForkChatWorktree={handleForkActiveChatWorktree}
+        onMessageFeedback={handleMessageFeedback}
+        onOpenProjectRun={handleOpenProjectRun}
+        onOpenProjectTool={(target) => handleOpenProjectInTool(activeChat.project, target)}
         onLocalWorkspaceChange={handleLocalWorkspaceChange}
         onModelChange={handleActiveChatModelChange}
         onEditUserMessage={handleEditUserMessageAndRegenerate}
@@ -127,19 +182,20 @@ export function renderChatPage(deps: WorkspaceRuntimeDeps) {
         onDeleteQueuedMessage={handleDeleteQueuedMessage}
         onHoldQueuedMessage={handleHoldQueuedMessage}
         onSteerQueuedMessage={handleSteerQueuedMessage}
-        onUpdateQueuedMessage={handleUpdateQueuedMessage}
         onStopGeneration={handleStopGeneration}
         onSubmitPlanningInput={handleSubmitPlanningInput}
         lastProviderContextUsage={lastProviderContextUsage?.chatId === activeChat.id ? lastProviderContextUsage.usage : null}
         onCreateProject={openCreateProjectDialog}
-        providerSettings={createToolAwareProviderSettings({}, activeChat)}
+        providerSettings={activeToolAwareProviderSettings}
         projects={projects}
-        queuedMessageCount={queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id).length}
-        heldQueuedMessageIds={queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id && queuedSend.held).map((queuedSend) => queuedSend.userMessageId)}
+        queuedMessageCount={activeQueuedSends.length}
+        queuedMessageDetails={activeQueuedMessages}
+        heldQueuedMessageIds={activeQueuedSends.length === 0 ? EMPTY_STRING_ARRAY : activeQueuedSends.filter((queuedSend) => queuedSend.held).map((queuedSend) => queuedSend.userMessageId)}
         onSelectProject={handleSelectProject}
         onImageGenerationChange={(enabled) => setProviderSettings((settings) => ({ ...settings, tools: { ...settings.tools, imageGeneration: enabled } }))}
         onThinkingChange={(nextThinking) => setProviderSettings((settings) => ({ ...settings, thinking: nextThinking }))}
         onWebSearchChange={(nextWebSearch) => setProviderSettings((settings) => ({ ...settings, webSearch: nextWebSearch }))}
+        requireCtrlEnterForLongPrompts={generalSettings.requireCtrlEnterForLongPrompts}
         thinking={activeChatProviderSettings.thinking}
         webSearch={activeChatProviderSettings.webSearch}
         onTogglePin={() => activeChat && handleTogglePin(activeChat.id)}

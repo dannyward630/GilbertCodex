@@ -1,8 +1,13 @@
-export function normalizeNativeRequestMethod(method: string | undefined, bridgeLabel: string): "DELETE" | "GET" | "POST" {
-  const normalizedMethod = (method ?? "GET").trim().toUpperCase();
+export type NativeRequestMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 
-  if (normalizedMethod === "DELETE" || normalizedMethod === "GET" || normalizedMethod === "POST") {
-    return normalizedMethod;
+const SUPPORTED_NATIVE_REQUEST_METHODS = new Set<NativeRequestMethod>(["DELETE", "GET", "PATCH", "POST", "PUT"]);
+
+export function normalizeNativeRequestMethod(method: string | undefined, bridgeLabel: string): NativeRequestMethod {
+  const normalizedMethod = (method ?? "GET").trim().toUpperCase();
+  const supportedMethod = normalizedMethod as NativeRequestMethod;
+
+  if (SUPPORTED_NATIVE_REQUEST_METHODS.has(supportedMethod)) {
+    return supportedMethod;
   }
 
   throw new Error(`${bridgeLabel} does not support ${normalizedMethod || "unknown"} requests.`);

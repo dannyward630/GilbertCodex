@@ -13,9 +13,15 @@ import {
   type NineRouterInstallEvent,
   type NineRouterLocalStatus,
 } from "../../../app/tauriClient";
-import { getDefaultBaseUrlForProvider, getDefaultModelForProvider } from "../../../lib/models";
+import { getDefaultBaseUrlForProvider, getDefaultModelForProvider, NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../../../lib/models";
 import { scheduleIdleTask } from "../../../lib/idleTask";
 import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "../../../services/nativeHttp";
+import {
+  buildNineRouterFallbackModels,
+  dedupeNineRouterFallbackModels,
+  hasUnusableNineRouterFallbackModels,
+  isOpenCodeFreeModel,
+} from "../../../services/nineRouterFallbackRouting";
 import {
   choosePreferredConnection,
   formatConnectionExpiry,
@@ -38,7 +44,7 @@ import {
   type NineRouterExchangeResponse,
   type NineRouterOAuthPollResponse,
 } from "../../../services/nineRouterClient";
-import type { ProviderSettings } from "../../../types/settings";
+import type { ProviderSettings, SubscriptionFallbackMode, SubscriptionTokenSaverLevel } from "../../../types/settings";
 import { ConfirmDialog } from "../../../components/dialogs/AppDialog";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -49,7 +55,7 @@ interface NineRouterSettingsPageProps {
   settings: ProviderSettings;
 }
 
-type NineRouterBusyState = `account:${string}` | `disconnect:${string}` | "install" | "start" | "status" | "uninstall" | null;
+type NineRouterBusyState = `account:${string}` | `disconnect:${string}` | "install" | "settings" | "start" | "status" | "tokenSaver" | "uninstall" | null;
 type NineRouterModelCatalogState = {
   message: string;
   models: string[];
@@ -60,6 +66,24 @@ type NineRouterConnectionCatalogState = {
   message: string;
   status: "idle" | "loading" | "ready" | "error";
 };
+type NineRouterComboCatalogState = {
+  combos: NineRouterCombo[];
+  message: string;
+  status: "idle" | "loading" | "ready" | "error";
+};
+
+interface NineRouterCombo {
+  id?: string;
+  kind?: string | null;
+  modelIds?: string[];
+  models?: string[];
+  name?: string;
+}
+
+interface NineRouterSettingsPayload {
+  error?: { message?: string } | string;
+  rtkEnabled?: boolean;
+}
 
 interface NineRouterUsageQuota {
   displayName?: string | null;
@@ -104,7 +128,8 @@ const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
   percent: 0,
   status: "idle",
 };
-
+const NINE_ROUTER_SMART_SAVER_COMBO_NAME = NINE_ROUTER_SMART_SAVER_MODEL;
+const NINE_ROUTER_ALWAYS_FREE_COMBO_NAME = NINE_ROUTER_ALWAYS_FREE_MODEL;
 export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandboxUninstalled, settings }: NineRouterSettingsPageProps) {
   const [busy, setBusy] = useState<NineRouterBusyState>(null);
   const accountConnectRunRef = useRef(0);
@@ -119,6 +144,11 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
   const [modelCatalog, setModelCatalog] = useState<NineRouterModelCatalogState>({
     message: "Not checked",
     models: [],
+    status: "idle",
+  });
+  const [, setComboCatalog] = useState<NineRouterComboCatalogState>({
+    combos: [],
+    message: "Not checked",
     status: "idle",
   });
   const [modelTestBusy, setModelTestBusy] = useState(false);
@@ -148,6 +178,9 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     () => chooseNineRouterModel(savedNineRouterModel, modelCatalog),
     [modelCatalog, savedNineRouterModel],
   );
+  const subscriptionOptimization = settings.subscriptionOptimization ?? { fallbackMode: "off" as SubscriptionFallbackMode, tokenSaverLevel: "low" as SubscriptionTokenSaverLevel };
+  const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
+  const fallbackMode = subscriptionOptimization.fallbackMode;
   const savedModelMissingFromCatalog =
     modelCatalog.status === "ready" &&
     modelCatalog.models.length > 0 &&
@@ -197,8 +230,10 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     if (status?.running) {
       void refreshProviderConnections({ quiet: true });
       void refreshModelCatalog({ quiet: true });
+      void refreshSubscriptionOptimizer({ quiet: true });
+      void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
     }
-  }, [nineRouterBaseUrl, status?.running]);
+  }, [nineRouterBaseUrl, status?.running, tokenSaverLevel]);
 
   async function refreshStatus(options: { quiet?: boolean } = {}) {
     if (!options.quiet) {
@@ -216,6 +251,9 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       }
       if (nextStatus.running) {
         void refreshProviderConnections({ quiet: true });
+        void refreshModelCatalog({ quiet: true });
+        void refreshSubscriptionOptimizer({ quiet: true });
+        void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
       setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not check subscriptions." });
@@ -241,6 +279,8 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       if (nextStatus.running) {
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
+        void refreshSubscriptionOptimizer({ quiet: true });
+        void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
       setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not start subscription routing." });
@@ -285,6 +325,8 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       if (startedStatus.running) {
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
+        void refreshSubscriptionOptimizer({ quiet: true });
+        void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not install subscriptions.";
@@ -344,6 +386,11 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       setModelCatalog({
         message: "Not checked",
         models: [],
+        status: "idle",
+      });
+      setComboCatalog({
+        combos: [],
+        message: "Not checked",
         status: "idle",
       });
       setUsageByConnectionId({});
@@ -497,6 +544,72 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
 
       return [];
     }
+  }
+
+  async function refreshSubscriptionOptimizer(options: { quiet?: boolean } = {}) {
+    if (!options.quiet) {
+      setBusy("settings");
+      setStatusMessage(null);
+    }
+    setComboCatalog((current) => ({
+      ...current,
+      message: current.status === "ready" ? current.message : "Checking fallback routes",
+      status: "loading",
+    }));
+
+    const combosResult = await Promise.allSettled([
+      loadNineRouterCombos(nineRouterDashboardUrl),
+    ]);
+    const comboResult = combosResult[0];
+
+    if (comboResult.status === "fulfilled") {
+      const combos = await repairActiveFallbackRouteIfNeeded(comboResult.value);
+      setComboCatalog({
+        combos,
+        message: combos.length > 0 ? `${combos.length} fallback ${combos.length === 1 ? "route" : "routes"}` : "No fallback routes yet",
+        status: "ready",
+      });
+    } else {
+      setComboCatalog({
+        combos: [],
+        message: comboResult.reason instanceof Error ? comboResult.reason.message : "Could not load fallback routes.",
+        status: "error",
+      });
+    }
+
+    if (!options.quiet) {
+      const ok = comboResult.status === "fulfilled";
+      setStatusMessage({ kind: ok ? "success" : "warning", text: ok ? "Fallback routes are up to date." : "Some fallback route details could not be refreshed." });
+      setBusy((current) => (current === "settings" ? null : current));
+    }
+  }
+
+  async function repairActiveFallbackRouteIfNeeded(combos: NineRouterCombo[]) {
+    if (fallbackMode === "off") {
+      return combos;
+    }
+
+    const comboName = fallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : NINE_ROUTER_SMART_SAVER_COMBO_NAME;
+    const combo = findNineRouterCombo(combos, comboName);
+    const installedModels = getNineRouterComboModels(combo);
+    const liveModels = modelCatalog.status === "ready" ? modelCatalog.models : await refreshModelCatalog({ quiet: true });
+    const needsRepair =
+      !combo ||
+      installedModels.length === 0 ||
+      hasUnusableNineRouterFallbackModels(installedModels, liveModels) ||
+      (fallbackMode === "always-free" && !installedModels.some(isOpenCodeFreeModel));
+
+    if (!needsRepair) {
+      return combos;
+    }
+
+    const models = buildNineRouterFallbackModels(fallbackMode, selectedNineRouterModel, liveModels);
+    if (models.length === 0) {
+      return combos;
+    }
+
+    await upsertNineRouterCombo(nineRouterDashboardUrl, comboName, models, "fallback");
+    return loadNineRouterCombos(nineRouterDashboardUrl);
   }
 
   async function refreshAccountUsage(connections = connectionCatalog.connections) {
@@ -867,7 +980,44 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     }
   }
 
-  function useNineRouterProvider(modelOverride = selectedNineRouterModel) {
+  async function syncTokenSaverToHelper(level: SubscriptionTokenSaverLevel, options: { quiet?: boolean } = {}) {
+    if (!status?.running) {
+      if (!options.quiet) {
+        setStatusMessage({ kind: "warning", text: "Start subscriptions before syncing optimizer settings." });
+      }
+      return;
+    }
+
+    if (!options.quiet) {
+      setBusy("tokenSaver");
+      setStatusMessage(null);
+    }
+
+    try {
+      await patchNineRouterJson<NineRouterSettingsPayload>(joinLocalUrl(nineRouterDashboardUrl, "/api/settings"), {
+        rtkEnabled: level !== "off",
+      });
+
+      if (!options.quiet) {
+        setStatusMessage({
+          kind: "success",
+          text: "Optimizer settings are synced.",
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not sync optimizer settings.";
+      if (!options.quiet) {
+        setStatusMessage({ kind: "error", text: message });
+      }
+    } finally {
+      if (!options.quiet) {
+        setBusy((current) => (current === "tokenSaver" ? null : current));
+      }
+    }
+  }
+
+  function useNineRouterProvider(modelOverride = selectedNineRouterModel, optimizationOverride?: Partial<ProviderSettings["subscriptionOptimization"]>) {
+    const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" };
     onSettingsChange({
       ...settings,
       baseUrls: {
@@ -880,6 +1030,10 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
         ...settings.providerModels,
         [settings.provider]: settings.model,
         [NINE_ROUTER_PROVIDER_ID]: modelOverride,
+      },
+      subscriptionOptimization: {
+        ...currentOptimization,
+        ...optimizationOverride,
       },
     });
     setStatusMessage({ kind: "success", text: "Subscription routing is now active." });
@@ -895,7 +1049,8 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       ) : null}
       <div className="settings-section-grid">
         {!helperReady ? (
-          <article className="settings-card settings-card-wide">
+          <>
+            <article className="settings-card settings-card-wide">
             <div className="settings-card-heading">
               <Download size={19} aria-hidden="true" />
               <div>
@@ -938,7 +1093,9 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
               </button>
             </div>
             {showInstallProgress ? <InstallProgressMeter progress={installProgress} /> : null}
-          </article>
+            </article>
+
+          </>
         ) : (
           <>
             <article className="settings-card settings-card-wide">
@@ -1082,6 +1239,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                 {modelTestBusy ? "Testing" : "Test selected model"}
               </button>
             </article>
+
           </>
         )}
 
@@ -1146,6 +1304,64 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
   );
 }
 
+function normalizeNineRouterCombosPayload(payload: unknown) {
+  if (Array.isArray(payload)) {
+    return payload.filter(isNineRouterCombo);
+  }
+
+  if (typeof payload !== "object" || !payload) {
+    return [];
+  }
+
+  const record = payload as { combos?: unknown; data?: unknown };
+  const combos = Array.isArray(record.combos) ? record.combos : Array.isArray(record.data) ? record.data : [];
+
+  return combos.filter(isNineRouterCombo);
+}
+
+function isNineRouterCombo(value: unknown): value is NineRouterCombo {
+  if (typeof value !== "object" || !value) {
+    return false;
+  }
+
+  const combo = value as Partial<NineRouterCombo>;
+  return typeof combo.name === "string" || typeof combo.id === "string";
+}
+
+function findNineRouterCombo(combos: NineRouterCombo[], name: string) {
+  return combos.find((combo) => combo.name === name || combo.id === name) ?? null;
+}
+
+function getNineRouterComboModels(combo: NineRouterCombo | null | undefined) {
+  if (!combo) {
+    return [];
+  }
+
+  const models = Array.isArray(combo.models) ? combo.models : Array.isArray(combo.modelIds) ? combo.modelIds : [];
+  return dedupeNineRouterFallbackModels(models);
+}
+
+async function loadNineRouterCombos(dashboardUrl: string) {
+  const payload = await fetchNineRouterJson<NineRouterCombo[] | { combos?: NineRouterCombo[]; data?: NineRouterCombo[] }>(joinLocalUrl(dashboardUrl, "/api/combos"));
+  return normalizeNineRouterCombosPayload(payload);
+}
+
+async function upsertNineRouterCombo(dashboardUrl: string, name: string, models: string[], kind: string) {
+  const combos = await loadNineRouterCombos(dashboardUrl);
+  const existing = findNineRouterCombo(combos, name);
+  const body = {
+    kind,
+    models,
+    name,
+  };
+
+  if (existing?.id) {
+    return putNineRouterJson<NineRouterCombo>(joinLocalUrl(dashboardUrl, `/api/combos/${encodeURIComponent(existing.id)}`), body);
+  }
+
+  return postNineRouterJson<NineRouterCombo>(joinLocalUrl(dashboardUrl, "/api/combos"), body);
+}
+
 function UsageQuotaList({ provider, usageState }: { provider: NineRouterAccountProvider; usageState?: NineRouterUsageState }) {
   if (!usageState || usageState.status === "idle") {
     return <span className="nine-router-usage-empty">{provider.usageNote}</span>;
@@ -1203,6 +1419,10 @@ function createSubscriptionSandboxUninstalledSettings(settings: ProviderSettings
     model: fallbackModel,
     provider: "openrouter",
     providerModels,
+    subscriptionOptimization: {
+      ...(settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" }),
+      fallbackMode: "off",
+    },
   };
 }
 
@@ -1278,6 +1498,8 @@ function formatSubscriptionHelperText(text: string) {
     .replace(/\b[9]Router Local was started, but the API is not ready yet\./g, "Subscriptions are still starting. Try again in a moment.")
     .replace(/\b[9]Router Local\b/g, "subscriptions")
     .replace(/\b[9]Router\b/g, "subscriptions")
+    .replace(/\s+at\s+https?:\/\/(?:127\.0\.0\.1|localhost):20128(?:\/[^\s.]*)?/gi, "")
+    .replace(/\bhttps?:\/\/(?:127\.0\.0\.1|localhost):20128(?:\/[^\s.]*)?/gi, "Subscriptions")
     .replace(/\b(from|in) subscriptions settings\b/gi, "$1 Subscriptions settings")
     .replace(/\bStart subscriptions, then retry\b/g, "Open Subscriptions, then retry")
     .replace(/\bsubscription helper\b/gi, "subscriptions");
@@ -1530,6 +1752,42 @@ async function postNineRouterJson<T>(url: string, body: unknown) {
       "Content-Type": "application/json",
     },
     method: "POST",
+  });
+  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscription request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+async function patchNineRouterJson<T>(url: string, body: unknown) {
+  const response = await fetchWithTimeout(url, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "PATCH",
+  });
+  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
+
+  if (!response.ok) {
+    const error = payload.error;
+    throw new Error(typeof error === "string" ? error : error?.message || `Subscription request failed with HTTP ${response.status}.`);
+  }
+
+  return payload;
+}
+
+async function putNineRouterJson<T>(url: string, body: unknown) {
+  const response = await fetchWithTimeout(url, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "PUT",
   });
   const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
 

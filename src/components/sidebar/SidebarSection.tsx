@@ -1,5 +1,5 @@
 import { ChevronRight, MoreHorizontal } from "lucide-react";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 
@@ -7,7 +7,8 @@ export type SidebarItemActivity = "queued" | "waiting" | "working";
 
 interface SidebarMenuItem {
   danger?: boolean;
-  icon: LucideIcon;
+  icon?: LucideIcon;
+  iconElement?: ReactNode;
   label: string;
   onSelect: () => void;
 }
@@ -21,8 +22,10 @@ interface SidebarItem {
   icon?: LucideIcon;
   id: string;
   label: string;
+  latencyLabel?: string;
   menuItems?: SidebarMenuItem[];
   meta?: string;
+  onPreload?: (id: string) => void;
   onQuickAction?: (id: string) => void;
   onSelect?: (id: string) => void;
   quickActionIcon?: LucideIcon;
@@ -79,9 +82,12 @@ export const SidebarSection = memo(function SidebarSection({
         <div className="sidebar-list-row" data-active={item.active} data-activity={item.activity} data-depth={depth} data-has-menu={hasMenu} data-menu-open={menuOpen}>
           <button
             className="sidebar-list-item"
+            data-latency-label={item.latencyLabel}
             type="button"
             aria-label={activityLabel ? `${item.label}, ${activityLabel}` : undefined}
             aria-expanded={hasChildren ? item.expanded : undefined}
+            onFocus={() => item.onPreload?.(item.id)}
+            onMouseEnter={() => item.onPreload?.(item.id)}
             onClick={() => item.onSelect?.(item.id)}
           >
             <span className="sidebar-list-label">
@@ -149,7 +155,7 @@ export const SidebarSection = memo(function SidebarSection({
                               menuItem.onSelect();
                             }}
                           >
-                            <MenuIcon size={14} aria-hidden="true" />
+                            {menuItem.iconElement ?? (MenuIcon ? <MenuIcon size={14} aria-hidden="true" /> : <span aria-hidden="true" />)}
                             <span>{menuItem.label}</span>
                           </button>
                         );

@@ -11,6 +11,20 @@
   --font-mono: "Cascadia Code", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
   --app-titlebar-height: 48px;
   --app-bg: #2b2d31;
+  --apps-bg: #2b2d31;
+  --apps-bg-glow: #dbc074;
+  --apps-panel: #34373d;
+  --apps-panel-raised: #383b41;
+  --apps-border: #4d5159;
+  --apps-control-bg: #3a3d43;
+  --apps-control-hover: #424b58;
+  --apps-accent: #7bc8ff;
+  --apps-accent-soft: #3a4753;
+  --apps-primary-text: #17202b;
+  --apps-success: #83d6a5;
+  --apps-warning: #dbc074;
+  --apps-installed: #b4a7ff;
+  --apps-danger: #ff8b82;
   --workspace-bg: #2b2d31;
   --chrome: #2b2d31;
   --chrome-border: #3e4248;
@@ -26,8 +40,28 @@
   --surface: #2f3237;
   --surface-raised: #383b41;
   --surface-soft: #474b53;
+  --surface-2: #383b41;
+  --surface-strong: #444950;
   --surface-panel: #34373d;
-  --surface-glass: rgba(52, 55, 61, 0.9);
+  --terminal-panel-bg: #2f3237;
+  --terminal-border: #4d5159;
+  --terminal-rail-bg: #303236;
+  --terminal-toolbar-bg: #383b41;
+  --terminal-output-bg: #22262b;
+  --terminal-control-bg: #3a3d43;
+  --terminal-control-hover: #424b58;
+  --terminal-text: #e9eef4;
+  --terminal-muted: #989ea7;
+  --terminal-accent: #7bc8ff;
+  --terminal-command: #69d6cb;
+  --terminal-error: #ff8b82;
+  --terminal-success: #83d6a5;
+  --terminal-warning: #dbc074;
+  --terminal-cursor: #c9e6ff;
+  --terminal-cursor-accent: #22262b;
+  --terminal-selection-bg: #31506d;
+  --terminal-selection-fg: #f5f4f1;
+  --terminal-scrollbar-thumb: rgba(233, 238, 244, 0.3);
   --chat-page-bg: #282b30;
   --chat-page-bg-2: #282b30;
   --chat-page-glow: transparent;
@@ -37,9 +71,11 @@
   --field-gradient: var(--field-bg);
   --line: #4d5159;
   --line-soft: #42464d;
+  --border: #4d5159;
   --text: #f5f4f1;
   --text-muted: #c8cbd0;
   --text-dim: #989ea7;
+  --muted: #c8cbd0;
   --blue: #7bc8ff;
   --blue-soft: rgba(123, 200, 255, 0.16);
   --cyan: #69d6cb;
@@ -88,6 +124,20 @@
   color: #131923;
   background: #edf4f8;
   --app-bg: #f7fafc;
+  --apps-bg: #f8fbfd;
+  --apps-bg-glow: #a7711f;
+  --apps-panel: #fbfdff;
+  --apps-panel-raised: #f0f5f9;
+  --apps-border: #d2dde8;
+  --apps-control-bg: #f7fafc;
+  --apps-control-hover: #eaf2fa;
+  --apps-accent: #176fd4;
+  --apps-accent-soft: #dceafb;
+  --apps-primary-text: #ffffff;
+  --apps-success: #1d845d;
+  --apps-warning: #a7711f;
+  --apps-installed: #6958d8;
+  --apps-danger: #c9352b;
   --workspace-bg: #e9f1f6;
   --chrome: #fbfcfd;
   --chrome-border: #d7e0ea;
@@ -99,8 +149,28 @@
   --surface: #ffffff;
   --surface-raised: #f0f5f9;
   --surface-soft: #e3edf5;
+  --surface-2: #f0f5f9;
+  --surface-strong: #e8f0f6;
   --surface-panel: #fbfdff;
-  --surface-glass: rgba(255, 255, 255, 0.78);
+  --terminal-panel-bg: #fbfdff;
+  --terminal-border: #d2dde8;
+  --terminal-rail-bg: #f4f7fa;
+  --terminal-toolbar-bg: #f0f5f9;
+  --terminal-output-bg: #fbfdff;
+  --terminal-control-bg: #f7fafc;
+  --terminal-control-hover: #eaf2fa;
+  --terminal-text: #17202b;
+  --terminal-muted: #788594;
+  --terminal-accent: #176fd4;
+  --terminal-command: #0f9f99;
+  --terminal-error: #c9352b;
+  --terminal-success: #1d845d;
+  --terminal-warning: #a7711f;
+  --terminal-cursor: #175e9e;
+  --terminal-cursor-accent: #fbfdff;
+  --terminal-selection-bg: #c9ddf3;
+  --terminal-selection-fg: #17202b;
+  --terminal-scrollbar-thumb: rgba(23, 32, 43, 0.24);
   --chat-page-bg: #f8fbfd;
   --chat-page-bg-2: #edf4f8;
   --chat-page-glow: rgba(45, 130, 218, 0.1);
@@ -118,9 +188,11 @@
     var(--field-bg);
   --line: #d2dde8;
   --line-soft: #e3eaf1;
+  --border: #d2dde8;
   --text: #131923;
   --text-muted: #556270;
   --text-dim: #788594;
+  --muted: #556270;
   --blue: #176fd4;
   --blue-soft: rgba(23, 111, 212, 0.13);
   --cyan: #0f9f99;
@@ -182,14 +254,25 @@ body {
   color: var(--text);
   background: var(--workspace-bg);
   font-family: var(--font-ui);
+  font-size: var(--ui-font-size, 14px);
   font-feature-settings: "cv02", "cv03", "cv04", "ss01";
   font-optical-sizing: auto;
 }
 
 button,
+select,
 textarea,
 input {
   font: inherit;
+}
+
+button,
+input,
+optgroup,
+option,
+select,
+textarea {
+  font-family: var(--font-ui);
 }
 
 button {
@@ -197,7 +280,31 @@ button {
   border: 0;
 }
 
+:root[data-pointer-cursors="true"] button:not(:disabled),
+:root[data-pointer-cursors="true"] [role="button"]:not([aria-disabled="true"]),
+:root[data-pointer-cursors="true"] a[href],
+:root[data-pointer-cursors="true"] input[type="button"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="checkbox"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="color"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="file"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="radio"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="range"]:not(:disabled),
+:root[data-pointer-cursors="true"] input[type="submit"]:not(:disabled),
+:root[data-pointer-cursors="true"] select:not(:disabled),
+:root[data-pointer-cursors="true"] summary {
+  cursor: pointer;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+  font-size: var(--code-font-size, 12px);
+}
+
 button:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--blue);
@@ -229,4 +336,24 @@ input:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+:root[data-reduce-motion="on"] *,
+:root[data-reduce-motion="on"] *::before,
+:root[data-reduce-motion="on"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-reduce-motion="system"] *,
+  :root[data-reduce-motion="system"] *::before,
+  :root[data-reduce-motion="system"] *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }

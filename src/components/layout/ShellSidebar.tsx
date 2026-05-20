@@ -3,10 +3,13 @@ import { Folder, FolderOpen, FolderPlus, Heart, ListPlus, LogOut, MessageSquareP
 import { DEFAULT_PROJECT, formatChatAge, hasComposerDraftContent, isDiscardableEmptyChat, isEmptyChat, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
+import { ProjectOpenIcon } from "../project/ProjectOpenIcon";
+import { getHostPlatform } from "../../lib/hostPlatform";
 import type { AuthUser } from "../../types/auth";
 import type { ChatMessage, ChatSummary } from "../../types/chat";
 import type { PrimaryRoute } from "../../types/navigation";
 import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
+import { getProjectOpenTarget, getProjectOpenTargetsForPlatform, getRecommendedProjectOpenTarget, type ProjectOpenTargetId } from "../../types/projectOpen";
 import type { SettingsSectionId } from "../../pages/settings/types";
 import type { SidebarItemActivity } from "../sidebar/SidebarSection";
 
@@ -16,14 +19,18 @@ interface ShellSidebarProps {
   activeSettingsSection: SettingsSectionId;
   authUser: AuthUser;
   chats: ChatSummary[];
+  defaultOpenTarget?: ProjectOpenTargetId;
   locationServicesEnabled: boolean;
   onCreateProject: (options?: CreateProjectOptions) => void | string | null | Promise<string | null | void>;
   onDeleteChat: (chatId: string) => void;
   onDeleteProject: (projectName: string) => void;
   onNewChat: (project?: string) => void;
   onOpenBulkDeleteChats: () => void;
+  onOpenProjectInTool: (projectName: string, target: ProjectOpenTargetId) => void | Promise<void>;
   onOpenSearch: () => void;
   onLogout: () => void;
+  onPreloadRoute?: (route: PrimaryRoute) => void;
+  onPreloadSettingsSection?: (section: SettingsSectionId) => void;
   onRouteChange: (route: PrimaryRoute) => void;
   onSelectChat: (chatId: string) => void;
   onSettingsSectionChange: (section: SettingsSectionId) => void;
@@ -40,14 +47,18 @@ export const ShellSidebar = memo(function ShellSidebar({
   activeSettingsSection,
   authUser,
   chats,
+  defaultOpenTarget,
   locationServicesEnabled,
   onCreateProject,
   onDeleteChat,
   onDeleteProject,
   onNewChat,
   onOpenBulkDeleteChats,
+  onOpenProjectInTool,
   onOpenSearch,
   onLogout,
+  onPreloadRoute,
+  onPreloadSettingsSection,
   onRouteChange,
   onSelectChat,
   onSettingsSectionChange,
@@ -59,6 +70,7 @@ export const ShellSidebar = memo(function ShellSidebar({
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId && !chat.archived), [activeChatId, chats]);
   const pinnedChats = useMemo(() => visibleChats.filter((chat) => chat.pinned), [visibleChats]);
   const recentChats = useMemo(() => visibleChats.filter((chat) => isNoProjectName(chat.project) && !chat.pinned), [visibleChats]);
+  const hostPlatform = useMemo(() => getHostPlatform(), []);
   const chatsByProject = useMemo(() => {
     const groupedChats = new Map<string, ChatSummary[]>();
 
@@ -115,14 +127,32 @@ export const ShellSidebar = memo(function ShellSidebar({
     },
   ], [onDeleteChat, onTogglePin]);
 
-  const projectOptions = useCallback((projectName: string) => [
-    {
-      danger: true,
-      icon: Trash2,
-      label: "Delete project",
-      onSelect: () => onDeleteProject(projectName),
-    },
-  ], [onDeleteProject]);
+  const projectOptions = useCallback((project: ProjectSummary) => {
+    const projectRoot = project.localWorkspace?.roots[0];
+    const recommendedTarget = defaultOpenTarget
+      ? getProjectOpenTarget(defaultOpenTarget, hostPlatform)
+      : getRecommendedProjectOpenTarget({ platform: hostPlatform, projectName: project.name, projectRoot });
+    const projectOpenTargets = [
+      recommendedTarget,
+      ...getProjectOpenTargetsForPlatform(hostPlatform).filter((target) => target.id !== recommendedTarget.id),
+    ];
+
+    return [
+      ...projectOpenTargets.map((target) => ({
+        iconElement: <ProjectOpenIcon color={target.brandColor} size={16} target={target.id} />,
+        label: target.id === recommendedTarget.id ? `Open in ${target.label} (recommended)` : `Open in ${target.label}`,
+        onSelect: () => {
+          void onOpenProjectInTool(project.name, target.id);
+        },
+      })),
+      {
+        danger: true,
+        icon: Trash2,
+        label: "Delete project",
+        onSelect: () => onDeleteProject(project.name),
+      },
+    ];
+  }, [defaultOpenTarget, hostPlatform, onDeleteProject, onOpenProjectInTool]);
 
   function getProjectChatLimit(projectName: string) {
     return projectChatLimits[getProjectKey(projectName)] ?? PROJECT_CHAT_PREVIEW_LIMIT;
@@ -252,7 +282,7 @@ export const ShellSidebar = memo(function ShellSidebar({
           icon: expanded ? FolderOpen : Folder,
           id: project.name,
           label: project.name,
-          menuItems: projectOptions(project.name),
+          menuItems: projectOptions(project),
           onQuickAction: handleNewProjectChat,
           onSelect: handleSelectProject,
           quickActionIcon: MessageSquarePlus,
@@ -294,6 +324,7 @@ export const ShellSidebar = memo(function ShellSidebar({
         onLogout={onLogout}
         onRouteChange={onRouteChange}
         onSectionChange={onSettingsSectionChange}
+        onSectionPreload={onPreloadSettingsSection}
       />
     );
   }
@@ -309,7 +340,15 @@ export const ShellSidebar = memo(function ShellSidebar({
           <Search size={17} aria-hidden="true" />
           <span>Search</span>
         </button>
-        <button className="sidebar-action" data-active={activeRoute === "apps"} type="button" onClick={() => onRouteChange("apps")}>
+        <button
+          className="sidebar-action"
+          data-active={activeRoute === "apps"}
+          data-latency-label="sidebar:apps"
+          type="button"
+          onFocus={() => onPreloadRoute?.("apps")}
+          onMouseEnter={() => onPreloadRoute?.("apps")}
+          onClick={() => onRouteChange("apps")}
+        >
           <Puzzle size={17} aria-hidden="true" />
           <span>Apps</span>
         </button>
@@ -351,11 +390,27 @@ export const ShellSidebar = memo(function ShellSidebar({
             </button>
           </div>
 
-          <button className="sidebar-settings sidebar-account-settings" data-active={false} type="button" onClick={() => onRouteChange("settings")}>
+          <button
+            className="sidebar-settings sidebar-account-settings"
+            data-active={false}
+            data-latency-label="sidebar:settings"
+            type="button"
+            onFocus={() => onPreloadRoute?.("settings")}
+            onMouseEnter={() => onPreloadRoute?.("settings")}
+            onClick={() => onRouteChange("settings")}
+          >
             <Settings size={16} aria-hidden="true" />
             <span>Settings</span>
           </button>
-          <button className="sidebar-settings sidebar-account-settings" data-active={activeRoute === "support"} type="button" onClick={() => onRouteChange("support")}>
+          <button
+            className="sidebar-settings sidebar-account-settings"
+            data-active={activeRoute === "support"}
+            data-latency-label="sidebar:support"
+            type="button"
+            onFocus={() => onPreloadRoute?.("support")}
+            onMouseEnter={() => onPreloadRoute?.("support")}
+            onClick={() => onRouteChange("support")}
+          >
             <Heart size={16} aria-hidden="true" />
             <span>Fund project</span>
           </button>
@@ -363,7 +418,20 @@ export const ShellSidebar = memo(function ShellSidebar({
       </div>
     </aside>
   );
-});
+}, areShellSidebarPropsEqual);
+
+function areShellSidebarPropsEqual(previous: ShellSidebarProps, next: ShellSidebarProps) {
+  return (
+    previous.activeChatId === next.activeChatId &&
+    previous.activeRoute === next.activeRoute &&
+    previous.activeSettingsSection === next.activeSettingsSection &&
+    previous.authUser === next.authUser &&
+    previous.chats === next.chats &&
+    previous.locationServicesEnabled === next.locationServicesEnabled &&
+    previous.open === next.open &&
+    previous.projects === next.projects
+  );
+}
 
 function getUserInitials(user: AuthUser) {
   const initials = user.displayName

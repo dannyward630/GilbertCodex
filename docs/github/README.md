@@ -1,8 +1,8 @@
 # GitHub Integration Setup
 
-This guide explains how to connect GitHub to Gilbert Codex for repository browsing, code search, branch reads, API-backed commits, draft pull requests, releases, release notes, and workflow automation.
+This guide explains how to connect GitHub to Gilbert Codex for the first-party GitHub plugin: repository browsing, repository stats, tags, code search, local vector-ranked discovery, branch reads, API-backed commits, issues, pull requests, releases, release notes, GitHub Actions, and advanced REST API automation.
 
-Last verified: May 14, 2026.
+Last verified: May 20, 2026.
 
 Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
 
@@ -21,6 +21,16 @@ The integration does require:
 - A public GitHub OAuth App client ID.
 - Device flow enabled on that OAuth App.
 - A GitHub account that already has permission to the repositories it will operate on.
+
+## Plugin Install Flow
+
+1. Open Apps.
+2. Click GitHub.
+3. Click Install GitHub.
+4. If Settings > GitHub is already connected, the plugin tools are ready immediately.
+5. If GitHub is not connected, Gilbert opens Settings > GitHub so the user can continue with browser/device-flow sign-in.
+
+The app stores plugin installation state locally. Disconnecting GitHub removes the account token, but the plugin can stay installed so the user can reconnect later.
 
 ## Official Links
 
@@ -128,7 +138,101 @@ Important details:
 
 ## Step 5: Current App Status
 
-GitHub operations are available when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, branch reads, API commits, draft pull requests, release helpers, workflow listing, workflow dispatch, and workflow-run inspection should all route through the Tauri command layer instead of the GitHub CLI.
+GitHub operations are available when the desktop app is connected and the selected permission mode allows the requested action. Repository inventory, repository stats, branch reads, tag lists, code search, semantic discovery, API commits, full issue lifecycle work, completed-issue discovery, pull request review work, release helpers, workflow listing, workflow dispatch, workflow-run inspection, workflow jobs/artifacts, workflow approval/rerun/cancel, pending deployment review, security alerts, notifications, and advanced REST calls should all route through the Tauri command layer instead of the GitHub CLI.
+
+AI-callable GitHub tool ids:
+
+- `github_account`
+- `github_list_repositories`
+- `github_get_repository`
+- `github_list_branches`
+- `github_list_tags`
+- `github_list_tree`
+- `github_read_file`
+- `github_search_code`
+- `github_semantic_search`
+- `github_create_branch`
+- `github_commit_files`
+- `github_search_issues`
+- `github_list_issues`
+- `github_list_completed_issues`
+- `github_get_issue`
+- `github_list_issue_comments`
+- `github_create_issue`
+- `github_update_issue`
+- `github_close_issue`
+- `github_reopen_issue`
+- `github_mark_issue_duplicate`
+- `github_comment_issue`
+- `github_update_issue_comment`
+- `github_delete_issue_comment`
+- `github_set_issue_labels`
+- `github_add_issue_labels`
+- `github_remove_issue_label`
+- `github_clear_issue_labels`
+- `github_assign_issue`
+- `github_unassign_issue`
+- `github_lock_issue`
+- `github_unlock_issue`
+- `github_pin_issue`
+- `github_unpin_issue`
+- `github_transfer_issue`
+- `github_list_milestones`
+- `github_create_milestone`
+- `github_update_milestone`
+- `github_delete_milestone`
+- `github_list_pull_requests`
+- `github_get_pull_request`
+- `github_list_pull_request_files`
+- `github_list_pull_request_commits`
+- `github_list_pull_request_reviews`
+- `github_create_pull_request_review`
+- `github_request_pull_request_reviewers`
+- `github_remove_pull_request_reviewers`
+- `github_update_pull_request_branch`
+- `github_check_pull_request_merged`
+- `github_create_pull_request`
+- `github_update_pull_request`
+- `github_merge_pull_request`
+- `github_search_repositories`
+- `github_search_users`
+- `github_list_commits`
+- `github_get_commit`
+- `github_compare_refs`
+- `github_list_contributors`
+- `github_list_stargazers`
+- `github_list_forks`
+- `github_create_fork`
+- `github_star_repository`
+- `github_unstar_repository`
+- `github_watch_repository`
+- `github_unwatch_repository`
+- `github_generate_release_notes`
+- `github_list_releases`
+- `github_create_release`
+- `github_list_workflows`
+- `github_list_workflow_runs`
+- `github_get_workflow_run`
+- `github_list_workflow_run_jobs`
+- `github_list_workflow_run_artifacts`
+- `github_approve_workflow_run`
+- `github_dispatch_workflow`
+- `github_rerun_workflow_run`
+- `github_cancel_workflow_run`
+- `github_force_cancel_workflow_run`
+- `github_get_pending_deployments`
+- `github_review_pending_deployments`
+- `github_list_code_scanning_alerts`
+- `github_list_secret_scanning_alerts`
+- `github_list_dependabot_alerts`
+- `github_list_notifications`
+- `github_mark_notification_thread_read`
+- `github_mark_all_notifications_read`
+- `github_api_read`
+- `github_api_write`
+- `github_api_delete`
+
+`github_semantic_search` uses local deterministic vector embeddings to rank repository metadata and GitHub code-search candidates. It does not send repository content to a separate embedding provider.
 
 For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.5.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 

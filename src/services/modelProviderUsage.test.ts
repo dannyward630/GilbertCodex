@@ -15,6 +15,10 @@ const settings: ProviderSettings = {
   openRouterApiKey: "",
   provider: "openrouter",
   providerModels: {},
+  subscriptionOptimization: {
+    fallbackMode: "off",
+    tokenSaverLevel: "low",
+  },
   systemPrompt: "",
   temperature: 0.2,
   thinking: {

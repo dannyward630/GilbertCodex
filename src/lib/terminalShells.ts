@@ -1,17 +1,19 @@
 import type { TerminalShellId } from "../types/terminal";
+import { getHostPlatform, type HostPlatform } from "./hostPlatform";
+export { getHostPlatform };
+export type { HostPlatform };
 
-export type HostPlatform = "linux" | "macos" | "unknown" | "windows";
-
-const WINDOWS_SHELLS: TerminalShellId[] = ["powershell", "cmd"];
+const WINDOWS_SHELLS: TerminalShellId[] = ["powershell", "cmd", "wsl"];
 const MACOS_SHELLS: TerminalShellId[] = ["zsh", "bash", "sh"];
 const LINUX_SHELLS: TerminalShellId[] = ["bash", "sh", "zsh"];
-const ALL_SHELLS: TerminalShellId[] = ["powershell", "cmd", "bash", "zsh", "sh"];
+const ALL_SHELLS: TerminalShellId[] = ["powershell", "cmd", "bash", "zsh", "sh", "wsl"];
 
 const SHELL_LABELS = {
   bash: "Bash",
-  cmd: "cmd",
+  cmd: "Command Prompt",
   powershell: "PowerShell",
   sh: "sh",
+  wsl: "WSL Bash",
   zsh: "Zsh",
 } satisfies Record<TerminalShellId, string>;
 
@@ -20,36 +22,9 @@ const SHELL_PROMPTS = {
   cmd: "CMD>",
   powershell: "PS>",
   sh: "$",
+  wsl: "$",
   zsh: "%",
 } satisfies Record<TerminalShellId, string>;
-
-type NavigatorWithUserAgentData = Navigator & {
-  userAgentData?: {
-    platform?: string;
-  };
-};
-
-export function getHostPlatform(): HostPlatform {
-  if (typeof navigator === "undefined") {
-    return "unknown";
-  }
-
-  const platformSource = `${(navigator as NavigatorWithUserAgentData).userAgentData?.platform ?? navigator.platform ?? ""} ${navigator.userAgent ?? ""}`.toLowerCase();
-
-  if (platformSource.includes("win")) {
-    return "windows";
-  }
-
-  if (platformSource.includes("mac")) {
-    return "macos";
-  }
-
-  if (platformSource.includes("linux") || platformSource.includes("x11")) {
-    return "linux";
-  }
-
-  return "unknown";
-}
 
 export function getDefaultTerminalShell(): TerminalShellId {
   const platform = getHostPlatform();
@@ -84,7 +59,7 @@ export function isTerminalShellId(value: unknown): value is TerminalShellId {
 }
 
 export function isPosixTerminalShell(shell: TerminalShellId) {
-  return shell === "bash" || shell === "zsh" || shell === "sh";
+  return shell === "bash" || shell === "zsh" || shell === "sh" || shell === "wsl";
 }
 
 export function terminalShellLabel(shell: TerminalShellId) {

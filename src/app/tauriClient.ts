@@ -2,6 +2,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/app";
 import type { DiscordBridgeResponseStyle, DiscordTunnelProvider } from "../types/discord";
+import type { ProjectOpenTargetId } from "../types/projectOpen";
+import { getHostPlatform } from "../lib/hostPlatform";
 import { unregisterBackgroundTerminalSession } from "../lib/terminalSessions";
 import type {
   TerminalCreateSessionRequest,
@@ -20,9 +22,11 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.2.3",
+  version: "0.5.0",
   phase: "Public alpha",
   runtime: "Browser preview",
+  platform: getHostPlatform(),
+  arch: "browser",
 };
 
 const DISCORD_INTERACTION_EVENT = "discord-interaction";
@@ -73,6 +77,7 @@ export interface DiscordBridgeStartRequest {
   allowedChannelIds?: string;
   allowedGuildIds?: string;
   applicationId: string;
+  configKey?: string;
   localPort?: number;
   ngrokAuthToken?: string;
   ngrokPath?: string;
@@ -82,6 +87,7 @@ export interface DiscordBridgeStartRequest {
 }
 
 export interface DiscordBridgeStatus {
+  configKey?: string | null;
   error?: string | null;
   localUrl?: string | null;
   message: string;
@@ -133,6 +139,18 @@ export interface WeatherFetchJsonResponse {
   payload: unknown;
   status: number;
   url: string;
+}
+
+export interface ProjectOpenRequest {
+  path: string;
+  target: ProjectOpenTargetId;
+}
+
+export interface ProjectOpenResponse {
+  message: string;
+  path: string;
+  target: ProjectOpenTargetId;
+  targetLabel: string;
 }
 
 export type AppUpdateInstallEvent =
@@ -205,7 +223,7 @@ export type NineRouterInstallEvent =
 export interface NineRouterHttpRequest {
   body?: string;
   headers?: Record<string, string>;
-  method: "DELETE" | "GET" | "POST";
+  method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   timeoutMs?: number;
   url: string;
 }
@@ -268,6 +286,14 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 
   await invoke<void>("open_external_url", { url });
+}
+
+export async function openProjectInExternalTool(request: ProjectOpenRequest): Promise<ProjectOpenResponse> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Opening projects in local apps is available in the desktop app.");
+  }
+
+  return invoke<ProjectOpenResponse>("project_open_external_tool", { request });
 }
 
 export async function ensureNineRouterLocal(): Promise<NineRouterLocalStatus> {

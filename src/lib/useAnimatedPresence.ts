@@ -24,5 +24,8 @@ export function useAnimatedPresence(visible: boolean, exitDurationMs = 180) {
     return () => window.clearTimeout(timer);
   }, [exitDurationMs, mounted, visible]);
 
-  return { exiting, mounted };
+  return {
+    exiting: !visible && exiting,
+    mounted: visible || mounted,
+  };
 }

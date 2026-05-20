@@ -40,6 +40,7 @@ pub struct DiscordBridgeState {
 
 #[derive(Default)]
 struct DiscordBridgeRuntime {
+    config_key: Option<String>,
     local_url: Option<String>,
     message: Option<String>,
     port: Option<u16>,
@@ -70,6 +71,7 @@ pub struct DiscordBridgeStartRequest {
     pub allowed_channel_ids: Option<String>,
     pub allowed_guild_ids: Option<String>,
     pub application_id: String,
+    pub config_key: Option<String>,
     pub local_port: Option<u16>,
     pub ngrok_auth_token: Option<String>,
     pub ngrok_path: Option<String>,
@@ -98,6 +100,7 @@ pub struct DiscordSlashCommandRegisterRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscordBridgeStatus {
+    pub config_key: Option<String>,
     pub error: Option<String>,
     pub local_url: Option<String>,
     pub message: String,
@@ -183,6 +186,12 @@ pub fn discord_bridge_start(
     let response_style = request
         .response_style
         .unwrap_or_else(|| "channel".to_string());
+    let config_key = request
+        .config_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     if application_id.is_empty() {
         return Err("Add the Discord Application ID before starting the bridge.".to_string());
@@ -248,6 +257,7 @@ pub fn discord_bridge_start(
 
     let status = {
         let mut runtime = lock_runtime(&state)?;
+        runtime.config_key = config_key;
         runtime.local_url = Some(local_url);
         runtime.message = Some(message);
         runtime.port = Some(port);
@@ -464,6 +474,7 @@ fn stop_runtime(runtime: &mut DiscordBridgeRuntime) {
     }
 
     runtime.local_url = None;
+    runtime.config_key = None;
     runtime.message = None;
     runtime.port = None;
     runtime.public_url = None;
@@ -473,6 +484,7 @@ fn stop_runtime(runtime: &mut DiscordBridgeRuntime) {
 
 fn runtime_status(runtime: &DiscordBridgeRuntime, message: Option<String>) -> DiscordBridgeStatus {
     DiscordBridgeStatus {
+        config_key: runtime.config_key.clone(),
         error: None,
         local_url: runtime.local_url.clone(),
         message: message

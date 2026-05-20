@@ -23,10 +23,16 @@ import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolRespo
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
 export async function handleSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSendInput) {
-  const { activeChat, enqueueChatSend, isChatSending, startSendMessage } = deps;
+  const { activeChat, enqueueChatSend, handleSteerQueuedMessage, isChatSending, startSendMessage } = deps;
 
     if (isChatSending(activeChat.id)) {
-      enqueueChatSend(input);
+      const queuedMessageId = enqueueChatSend(input);
+
+      if (input.followUpBehavior === "steer" && queuedMessageId) {
+        const defer = typeof window === "undefined" ? setTimeout : window.setTimeout;
+        defer(() => handleSteerQueuedMessage(queuedMessageId, input.content), 0);
+      }
+
       return;
     }
 
@@ -62,16 +68,12 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
     const webSearchToolAvailable = Boolean(toolSettings.webSearch && runtimeWebSearchSettings.enabled);
     const discordStreamer = options.discordReply ? createDiscordResponseStreamer(options.discordReply) : undefined;
     const queuedMessageIndex = queuedSend ? currentChat.messages.findIndex((message) => message.id === queuedSend.queuedMessageId && message.role === "user") : -1;
-
-    if (queuedSend && queuedMessageIndex < 0) {
-      await discordStreamer?.fail("Gilbert could not find the queued Discord request in the local chat.");
-      return;
-    }
+    const queuedMessage = queuedMessageIndex >= 0 ? currentChat.messages[queuedMessageIndex] : undefined;
 
     const currentChatExisted = pendingChatsRef.current.some((chat) => chat.id === currentChat.id);
     const restoreDraft: ChatComposerDraft = { attachments, content };
-    const messagesBeforeUser = queuedSend ? currentChat.messages.slice(0, queuedMessageIndex) : currentChat.messages;
-    const messagesAfterUser = queuedSend ? currentChat.messages.slice(queuedMessageIndex + 1) : [];
+    const messagesBeforeUser = queuedSend ? (queuedMessage ? currentChat.messages.slice(0, queuedMessageIndex) : currentChat.messages) : currentChat.messages;
+    const messagesAfterUser = queuedSend && queuedMessage ? currentChat.messages.slice(queuedMessageIndex + 1) : [];
     const shouldGenerateChatTitle = messagesBeforeUser.length === 0 && !options.preserveExistingTitle;
     const fallbackChatTitle = createFallbackChatTitle({ attachments, content });
     const researchReferences = resolveChatResearchReferences(
@@ -91,17 +93,18 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
     const { controller, requestId } = createActiveGeneration(currentChat.id, previousChatSnapshot, currentChatExisted, restoreDraft);
     const now = new Date().toISOString();
     const userMessage =
-      queuedSend && currentChat.messages[queuedMessageIndex]
+      queuedSend && queuedMessage
         ? {
-            ...currentChat.messages[queuedMessageIndex],
+            ...queuedMessage,
             attachments: attachments.length > 0 ? attachments : undefined,
             content,
             researchReferences: researchReferences.length > 0 ? researchReferences : undefined,
-            source: options.userMessageSource ?? currentChat.messages[queuedMessageIndex].source,
+            source: options.userMessageSource ?? queuedMessage.source,
             status: undefined,
           }
         : {
             ...createMessage("user", content, undefined, undefined, attachments),
+            ...(queuedSend ? { id: queuedSend.queuedMessageId } : {}),
             researchReferences: researchReferences.length > 0 ? researchReferences : undefined,
             source: options.userMessageSource,
           };
@@ -236,7 +239,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           );
           setAgentRunWaiting(agentRun.id, "Planning input needed", inputRequest.detail || inputRequest.title);
           touchProject(currentChat.project);
-          notifyPlanningInputNeeded(inputRequest);
+          notifyPlanningInputNeeded(inputRequest, currentChat.id);
           if (discordStreamer) {
             await discordStreamer.finish("Gilbert needs input inside the app before this Discord request can continue.");
           } else {
@@ -276,6 +279,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           messagesForProvider: researchMessages,
           prompt: content,
           requestId,
+          runId: agentRun.id,
           runtimeToolOverrides: planResearchToolOverrides,
           toolSelectionPrompt: planResearchToolSelectionPrompt,
           webSearchSettingsOverride: runtimeWebSearchSettings,
@@ -321,7 +325,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
             researchResponse.approvalRequests ?? [],
             researchResponse.pendingToolCallContent,
           );
-          notifyRunNeedsAttention("An approval is waiting during plan research.");
+          notifyRunNeedsAttention("An approval is waiting during plan research.", currentChat.id);
           touchProject(currentChat.project);
           return;
         }
@@ -353,6 +357,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
             messagesForProvider: researchMessages,
             prompt: content,
             requestId,
+            runId: agentRun.id,
             runtimeToolOverrides: planResearchToolOverrides,
             toolSelectionPrompt: planResearchToolSelectionPrompt,
             webSearchSettingsOverride: runtimeWebSearchSettings,
@@ -483,7 +488,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           ),
         );
         setAgentRunWaiting(agentRun.id, "Plan approval required", "Approve the plan to hand it into the executable agent loop.", [planApproval]);
-        notifyRunNeedsAttention("A plan is ready for approval before execution.");
+        notifyRunNeedsAttention("A plan is ready for approval before execution.", currentChat.id);
         touchProject(currentChat.project);
         if (discordStreamer) {
           await discordStreamer.finish("Gilbert made a plan, but it needs approval inside the app before execution.");
@@ -537,6 +542,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
               onExternalUpdate: discordStreamer?.update,
               prompt: content,
               requestId,
+              runId: agentRun.id,
               toolSelectionPrompt: createChatToolSelectionPrompt(content, messagesBeforeUser, workspaceSettings),
               webSearchSettingsOverride: runtimeWebSearchSettings,
               workspaceSettings,
@@ -592,7 +598,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
             assistantResponse.approvalRequests ?? [],
             assistantResponse.pendingToolCallContent,
           );
-          notifyRunNeedsAttention("A tool action is waiting for your approval.");
+          notifyRunNeedsAttention("A tool action is waiting for your approval.", currentChat.id);
           touchProject(currentChat.project);
           if (discordStreamer) {
             await discordStreamer.finish("Gilbert needs tool approval inside the app before this Discord request can finish.");
@@ -612,7 +618,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           toolCalls: assistantResponse.toolCalls,
         };
         setAgentRunCompleted(agentRun.id, completedAssistantMessage);
-        notifyRunComplete(completedAssistantMessage);
+        notifyRunComplete(completedAssistantMessage, currentChat.id);
         if (discordStreamer) {
           await discordStreamer.finish(assistantResponse.content, {
             sources: assistantResponse.sources ?? [],
@@ -659,7 +665,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         ),
       );
       setAgentRunFailed(agentRun.id, errorContent);
-      notifyRunNeedsAttention(errorContent);
+      notifyRunNeedsAttention(errorContent, currentChat.id);
       touchProject(currentChat.project);
       if (discordStreamer) {
         await discordStreamer.fail(`Gilbert hit an error while handling the Discord request: ${errorContent}`);

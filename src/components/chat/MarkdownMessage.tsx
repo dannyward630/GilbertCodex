@@ -1,4 +1,4 @@
-import { Children, isValidElement, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, memo, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,7 @@ import { normalizeMarkdownForDisplay } from "../../lib/markdown";
 import { OpenableImage } from "./MessageAttachments";
 
 interface MarkdownMessageProps {
+  className?: string;
   content: string;
   isStreaming?: boolean;
 }
@@ -23,7 +24,7 @@ function getCodeText(children: ReactNode) {
   return Children.toArray(children).join("").replace(/\n$/, "");
 }
 
-function CodeBlock({ className, code, language }: CodeBlockProps) {
+const CodeBlock = memo(function CodeBlock({ className, code, language }: CodeBlockProps) {
   const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const displayLanguage = language || "code";
@@ -68,7 +69,7 @@ function CodeBlock({ className, code, language }: CodeBlockProps) {
       </pre>
     </div>
   );
-}
+});
 
 const markdownComponents: Components = {
   a({ children, href, ...props }) {
@@ -177,18 +178,25 @@ function sanitizeMarkdownImageSrc(src?: string) {
   return undefined;
 }
 
-export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {
+function MarkdownMessageComponent({ className, content, isStreaming }: MarkdownMessageProps) {
   const displayContent = useMemo(() => normalizeMarkdownForDisplay(content, { final: !isStreaming }), [content, isStreaming]);
+  const rootClassName = ["markdown-message", isStreaming ? "markdown-message-streaming" : "", className ?? ""].filter(Boolean).join(" ");
 
   if (!displayContent.trim()) {
     return null;
   }
 
   return (
-    <div className={isStreaming ? "markdown-message markdown-message-streaming" : "markdown-message"} data-streaming={Boolean(isStreaming)}>
+    <div className={rootClassName} data-streaming={Boolean(isStreaming)}>
       <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
         {displayContent}
       </ReactMarkdown>
     </div>
   );
+}
+
+export const MarkdownMessage = memo(MarkdownMessageComponent, areMarkdownMessagePropsEqual);
+
+function areMarkdownMessagePropsEqual(previous: MarkdownMessageProps, next: MarkdownMessageProps) {
+  return previous.className === next.className && previous.content === next.content && previous.isStreaming === next.isStreaming;
 }

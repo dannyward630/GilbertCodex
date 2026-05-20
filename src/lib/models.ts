@@ -56,6 +56,8 @@ export const NINE_ROUTER_CODEX_MODEL_IDS = [
   "cx/gpt-5.3-codex-xhigh",
 ] as const;
 const NINE_ROUTER_CODEX_MODEL_ID_SET = new Set<string>(NINE_ROUTER_CODEX_MODEL_IDS);
+export const NINE_ROUTER_SMART_SAVER_MODEL = "gilbert-smart-saver";
+export const NINE_ROUTER_ALWAYS_FREE_MODEL = "gilbert-always-free";
 export const NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS = [
   "gh/gpt-5-mini",
   "gh/gpt-4.1",
@@ -320,7 +322,7 @@ const MODEL_PROVIDER_DEFINITIONS: Record<ModelProviderId, ModelProviderDefinitio
     defaultBaseUrl: DEFAULT_PROVIDER_BASE_URLS["9router"],
     defaultModel: DEFAULT_PROVIDER_MODELS["9router"],
     detail: "Connected account routes for subscription-backed models.",
-    docsUrl: "https://github.com/decolua/9router",
+    docsUrl: "",
     label: "Subscriptions",
     listModelsPath: "/models",
     optionalApiKey: true,
@@ -551,7 +553,6 @@ function modelOption(
 const MODEL_PRICE_VERIFIED_AT = "2026-05-18";
 
 const PROVIDER_PRICE_SOURCE_URLS: Partial<Record<ModelProviderId, string>> = {
-  "9router": "https://github.com/decolua/9router",
   anthropic: "https://platform.claude.com/docs/en/about-claude/pricing",
   deepseek: "https://api-docs.deepseek.com/quick_start/pricing/",
   google: "https://ai.google.dev/gemini-api/docs/pricing",
@@ -612,6 +613,42 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     category: "reasoning",
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use for harder coding turns where the Codex xHigh route is available through the subscription account.",
+  }),
+  modelOption("9router", "9router-smart-saver", "Smart Saver", NINE_ROUTER_SMART_SAVER_MODEL, "Subscription route first, then low-cost hosted routes, then free subscription routes.", undefined, {
+    capabilities: ["Local gateway", "Fallback", "Low cost"],
+    category: "recommended",
+    pricing: routedPricing("Gilbert creates this local routing combo. Final cost depends on the first route that succeeds.", "9router"),
+    useCase: "Use when the app should keep paid subscription routes first but fall back to cheap and free routes when quotas or providers fail.",
+  }),
+  modelOption("9router", "9router-always-free", "Always Free", NINE_ROUTER_ALWAYS_FREE_MODEL, "Free-model fallback route for OpenCode Free and other no-cost subscription routes.", undefined, {
+    capabilities: ["Local gateway", "Free", "Fallback"],
+    category: "free",
+    pricing: routedPricing("Gilbert creates this free local routing combo from available routes. External free-tier limits can still apply.", "9router"),
+    useCase: "Use when the user wants Gilbert to stay on free routes whenever the local Subscriptions helper has them available.",
+  }),
+  modelOption("9router", "9router-github-gpt-5-mini", "GitHub Copilot GPT-5 Mini", "gh/gpt-5-mini", "Subscription route for connected GitHub Copilot accounts.", undefined, {
+    capabilities: ["Local gateway", "Subscription", "Coding"],
+    category: "coding",
+    pricing: routedPricing("Usage comes from the user's connected GitHub Copilot account and plan limits.", "9router"),
+    useCase: "Use when the user has connected GitHub Copilot and wants Gilbert to route through that subscription.",
+  }),
+  modelOption("9router", "9router-github-gpt-41", "GitHub Copilot GPT-4.1", "gh/gpt-4.1", "Subscription-backed GPT-4.1 route for connected GitHub Copilot accounts.", undefined, {
+    capabilities: ["Local gateway", "Subscription", "Coding"],
+    category: "coding",
+    pricing: routedPricing("Usage comes from the user's connected GitHub Copilot account and plan limits.", "9router"),
+    useCase: "Use for reliable coding and general chat through a connected GitHub Copilot subscription.",
+  }),
+  modelOption("9router", "9router-github-gpt-4o", "GitHub Copilot GPT-4o", "gh/gpt-4o", "Subscription-backed GPT-4o route for connected GitHub Copilot accounts.", undefined, {
+    capabilities: ["Local gateway", "Subscription", "Multimodal"],
+    category: "multimodal",
+    pricing: routedPricing("Usage comes from the user's connected GitHub Copilot account and plan limits.", "9router"),
+    useCase: "Use for broad chat and multimodal tasks through a connected GitHub Copilot subscription.",
+  }),
+  modelOption("9router", "9router-github-claude-haiku-45", "GitHub Copilot Claude Haiku 4.5", "gh/claude-haiku-4.5", "Subscription-backed Claude Haiku route for connected GitHub Copilot accounts.", undefined, {
+    capabilities: ["Local gateway", "Subscription", "Fast"],
+    category: "fast",
+    pricing: routedPricing("Usage comes from the user's connected GitHub Copilot account and plan limits.", "9router"),
+    useCase: "Use for quick edits and fast chat through a connected GitHub Copilot subscription.",
   }),
   modelOption("openrouter", "openrouter-free-auto", "Auto Route Free", DEFAULT_CHAT_MODEL, "Speed-biased free routing across reliable OpenRouter free coding and reasoning models.", 262_144, {
     capabilities: ["Free", "Structured", "Reasoning"],

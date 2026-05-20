@@ -1,7 +1,5 @@
-import { AlertTriangle, CheckCircle2, Code2, ExternalLink, FileCog, RotateCcw, Settings2, Wrench } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Code2, ExternalLink, FileCog, RotateCcw } from "lucide-react";
 import type { UserConfigInfo, WorkspaceDependencyDiagnostic } from "../../../app/tauriClient";
-import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../localWorkspace/files";
-import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { ProviderSettings } from "../../../types/settings";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -12,12 +10,9 @@ interface ConfigurationSettingsPageProps {
   dependencyBusy: "diagnose" | "reinstall" | null;
   dependencyDiagnostic: WorkspaceDependencyDiagnostic | null;
   dependencyStatus: SettingsStatusMessage | null;
-  localWorkspace: LocalWorkspaceSettings;
   onDiagnoseDependencies: () => void;
   onOpenConfig: () => void;
   onReinstallDependencies: () => void;
-  onSelectApprovalPolicy: (policy: "never" | "on-request" | "untrusted") => void;
-  onSelectSandboxMode: (mode: "danger-full-access" | "read-only" | "workspace-write") => void;
   onSettingsPatch: (settings: Partial<ProviderSettings>) => void;
   settings: ProviderSettings;
 }
@@ -28,21 +23,15 @@ export function ConfigurationSettingsPage({
   dependencyBusy,
   dependencyDiagnostic,
   dependencyStatus,
-  localWorkspace,
   onDiagnoseDependencies,
   onOpenConfig,
   onReinstallDependencies,
-  onSelectApprovalPolicy,
-  onSelectSandboxMode,
   onSettingsPatch,
   settings,
 }: ConfigurationSettingsPageProps) {
-  const approvalPolicy = localWorkspace.permissionMode === "full-access" ? "never" : localWorkspace.permissionMode === "default" ? "untrusted" : "on-request";
-  const sandboxMode = localWorkspace.scope === "full-computer" ? "danger-full-access" : "workspace-write";
-
   return (
     <>
-      <SettingsSectionHeading detail="Configure approval policy, sandbox settings, config.toml, and bundled workspace tools." icon={FileCog} title="Configuration" />
+      <SettingsSectionHeading detail="Config file health and bundled workspace tools." icon={FileCog} title="Configuration" />
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">
@@ -75,64 +64,6 @@ export function ConfigurationSettingsPage({
               {configStatus.text}
             </div>
           ) : null}
-        </article>
-
-        <article className="settings-card">
-          <div className="settings-card-heading">
-            <Settings2 size={19} aria-hidden="true" />
-            <div>
-              <h2>Approval policy</h2>
-              <p>Choose whether Gilbert pauses before workspace actions.</p>
-            </div>
-          </div>
-          <div className="settings-segmented-control" role="radiogroup" aria-label="Approval policy">
-            {[
-              { id: "untrusted", label: "Default permissions" },
-              { id: "on-request", label: "Auto-review" },
-              { id: "never", label: "Full access" },
-            ].map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={approvalPolicy === option.id}
-                data-selected={approvalPolicy === option.id}
-                onClick={() => onSelectApprovalPolicy(option.id as "never" | "on-request" | "untrusted")}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </article>
-
-        <article className="settings-card">
-          <div className="settings-card-heading">
-            <Wrench size={19} aria-hidden="true" />
-            <div>
-              <h2>Sandbox settings</h2>
-              <p>Choose which local roots Gilbert can use.</p>
-            </div>
-          </div>
-          <div className="settings-segmented-control" role="radiogroup" aria-label="Sandbox settings">
-            {[
-              { id: "workspace-write", label: "Workspace write" },
-              { id: "danger-full-access", label: "Full access" },
-            ].map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={sandboxMode === option.id}
-                data-selected={sandboxMode === option.id}
-                onClick={() => onSelectSandboxMode(option.id as "danger-full-access" | "read-only" | "workspace-write")}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <span className="settings-subtle-text">
-            {localWorkspace.enabled ? `${localWorkspaceScopeLabel(localWorkspace.scope)} - ${localPermissionModeLabel(localWorkspace.permissionMode)}` : "Local tools disabled"}
-          </span>
         </article>
 
         <article className="settings-card settings-card-wide">

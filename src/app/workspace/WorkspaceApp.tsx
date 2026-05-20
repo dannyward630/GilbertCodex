@@ -1,15 +1,18 @@
-import { lazy, Suspense, useEffect, useRef, useState, type SetStateAction } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { Info, Trash2 } from "lucide-react";
 import { ConfirmDialog, NoticeDialog, TextInputDialog } from "../../components/dialogs/AppDialog";
 import { BulkDeleteChatsDialog } from "../../components/dialogs/BulkDeleteChatsDialog";
 import { AppShell } from "../../components/layout/AppShell";
 import { OnboardingDialog } from "../../components/onboarding/OnboardingDialog";
 import { ProviderConnectionDialog } from "../../components/onboarding/ProviderConnectionDialog";
+import { ProjectRunDialog } from "../../components/projectRun/ProjectRunDialog";
 import { ChatPage } from "../../pages/ChatPage";
 import type { SettingsSectionId } from "../../pages/settings/types";
 import { resolveSettingsNavSection } from "../../pages/settings/settingsNavigation";
 import {
   loadActiveChatId,
+  loadAppAppearanceSettings,
+  loadAppGeneralSettings,
   loadAppPersonalizationSettings,
   loadAppearanceMode,
   loadChats,
@@ -19,6 +22,8 @@ import {
   loadProjects,
   loadProviderSettings,
   saveActiveChatId,
+  saveAppAppearanceSettings,
+  saveAppGeneralSettings,
   saveAppPersonalizationSettings,
   saveAppearanceMode,
   saveChats,
@@ -28,12 +33,12 @@ import {
   saveProjects,
   saveProviderSettings,
 } from "../../lib/appStorage";
+import { applyAppAppearanceToDocument } from "../../lib/appearance";
 import {
   createEmptyChat,
   createId,
   createMessage,
   DEFAULT_PROJECT,
-  formatChatAge,
   hasComposerDraftContent,
   isDiscardableEmptyChat,
   isEmptyChat,
@@ -59,7 +64,14 @@ import {
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { getEffectiveMaxOutputTokens, isLocalModelProvider } from "../../lib/generationSettings";
+import { formatHostPlatformLabel, getHostPlatform } from "../../lib/hostPlatform";
+import { matchesHotkey } from "../../lib/hotkeys";
 import { copyTextToClipboard } from "../../lib/clipboard";
+import {
+  detectProjectRunConfigForWorkspace,
+  normalizeProjectRunConfig,
+  updateProjectRunLastRun,
+} from "../../lib/projectRunConfig";
 import { CHAT_MODEL_OPTIONS, getDefaultBaseUrlForProvider, getDefaultModelForProvider, getModelProvider, getProviderApiKey, isModelProviderId, isNineRouterCodexModelId, isNineRouterGithubCopilotModelId, supportsProviderThinking } from "../../lib/models";
 import { scheduleIdleTask } from "../../lib/idleTask";
 import { createPdfLibraryContextMessages, syncPdfLibraryFromChats } from "../../lib/pdfLibrary";
@@ -95,6 +107,7 @@ import {
   createBridgeChatToolCall,
   createDefaultToolRegistry,
   coalesceToolBridgeCalls,
+  inferProviderToolBridgeFormat,
   createProjectToolMemoryContext,
   createProjectToolMemoryScope,
   executeToolBridgeCalls,
@@ -106,10 +119,11 @@ import {
   resolveToolPermission,
   saveProjectToolMemoryState,
   selectAdvertisedBridgeTools,
+  selectToolCapabilityPlan,
   shouldAttachWebSearch,
   validateToolArguments,
 } from "../../toolBridge";
-import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolMemorySearchRequest, ToolResultMessage } from "../../toolBridge";
+import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch } from "../../toolBridge";
 import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../../localWorkspace/files";
 import {
   createLocalComputerProgress,
@@ -193,14 +207,16 @@ import {
   getDefaultTerminalWorkingDirectory,
   isTauriDesktopRuntime,
   listenForDiscordInteractions,
+  openProjectInExternalTool,
   sendDiscordInteractionResponse,
-  startDiscordBridge,
-  stopDiscordBridge,
   type DiscordInteractionEvent,
 } from "../tauriClient";
+import { createDiscordBridgeAutoStartKey, ensureDiscordBridgeAutoStarted } from "../discordBridgeAutoStart";
 import { listAgentRuns, saveAgentRun } from "../agentRunClient";
-import { openChatWindow } from "../windowClient";
+import { bringCurrentWindowToForeground, openChatWindow } from "../windowClient";
 import {
+  configureDesktopNotificationActivation,
+  configureDesktopNotifications,
   createNeedsAttentionNotification,
   createNeedsInputNotification,
   notifyAgentRunStatus,
@@ -224,27 +240,50 @@ import type {
   ChatSummary,
   ChatToolCall,
   ChatWebSearch,
-  ChatWorkTraceItem,
 } from "../../types/chat";
 import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { PrimaryRoute } from "../../types/navigation";
-import type { ProviderReasoningState } from "../../types/reasoning";
 import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
+import type { ProjectOpenTargetId } from "../../types/projectOpen";
+import type { ProjectRunAction, ProjectRunConfig } from "../../types/projectRun";
 import type { DiscordBridgeSettings } from "../../types/discord";
 import type { TerminalAttachedSession } from "../../types/terminal";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../types/settings";
+import type { AppAppearanceSettings, AppGeneralSettings, AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../types/settings";
 import { normalizeToolRegistrySettings } from "../../types/tools";
 import type { ToolRegistrySettings } from "../../types/tools";
 
 import type { WorkspaceRuntimeDeps } from "./runtimeTypes";
-import { RouteLoading, formatDiscordStreamMessage, waitForDiscordFlushSlot, formatDiscordProgress, formatLocalToolPreviewProgress, formatDiscordToolStatus, formatDiscordSources, limitDiscordStreamMessage, formatMarkdownForDiscord, splitMarkdownFenceSegments, formatDiscordTextMarkdown, isMarkdownHorizontalRule, isMarkdownTableStart, renderMarkdownTableForDiscord, parseMarkdownTableRow, renderMarkdownTableRowForDiscord, closeUnclosedDiscordCodeFence, getChatIdFromLocationHash, createChatDeeplink, formatChatAsMarkdown, createForkedChat, cloneMessageForFork, cloneToolCallForFork, cloneJson, createUniqueProjectName, createProjectBaseName, projectNameFromPath, normalizeSelectedProjectPath, looksLikeContradictedSuccessfulFileMutationAnswer, hasSuccessfulFileMutationToolCall, readErrorMessage, upsertToolCall, withStreamingWorkThinking, completeStreamingWorkThinking, mergeMessageWorkTrace, toolCallsMatchForWorkTrace, getToolCallInputIdentity, cleanWorkThinkingContent, mergeAgentApprovals, mergeChatArtifacts, recoverInterruptedAgentRun } from "./workspaceHelpers";
+import {
+  RouteLoading,
+  formatDiscordStreamMessage,
+  waitForDiscordFlushSlot,
+  formatLocalToolPreviewProgress,
+  formatDiscordToolStatus,
+  getChatIdFromLocationHash,
+  createChatDeeplink,
+  formatChatAsMarkdown,
+  createForkedChat,
+  createUniqueProjectName,
+  createProjectBaseName,
+  projectNameFromPath,
+  normalizeSelectedProjectPath,
+  looksLikeContradictedSuccessfulFileMutationAnswer,
+  readErrorMessage,
+  upsertToolCall,
+  withStreamingWorkThinking,
+  completeStreamingWorkThinking,
+  mergeMessageWorkTrace,
+  mergeAgentApprovals,
+  mergeChatArtifacts,
+  recoverInterruptedAgentRun,
+} from "./workspaceHelpers";
 import { persistChatState as persistChatStateImpl, setChats as setChatsImpl, handleComposerDraftChange as handleComposerDraftChangeImpl, queueDurableMemoryForChangedChats as queueDurableMemoryForChangedChatsImpl, queueDurableMemoryForChatIds as queueDurableMemoryForChatIdsImpl, scheduleDurableMemoryFlush as scheduleDurableMemoryFlushImpl, flushDurableMemoryQueue as flushDurableMemoryQueueImpl, takeNextDurableMemoryChatId as takeNextDurableMemoryChatIdImpl, persistDurableMemoryForChatId as persistDurableMemoryForChatIdImpl } from "./state/chatPersistence";
 import { resolveWorkspaceForChatProject as resolveWorkspaceForChatProjectImpl, isActiveChatProject as isActiveChatProjectImpl } from "./state/workspaceLookup";
 import { persistAgentRun as persistAgentRunImpl, createAgentRunForMessage as createAgentRunForMessageImpl, updateAgentRun as updateAgentRunImpl, setAgentRunWaiting as setAgentRunWaitingImpl, setAgentRunCompleted as setAgentRunCompletedImpl, setAgentRunFailed as setAgentRunFailedImpl, setAgentRunCancelled as setAgentRunCancelledImpl, setAgentRunContinuing as setAgentRunContinuingImpl, createPlanningExecutionApproval as createPlanningExecutionApprovalImpl } from "./state/agentRuns";
-import { handleNewChat as handleNewChatImpl, handleSelectChat as handleSelectChatImpl, handleActiveChatModelChange as handleActiveChatModelChangeImpl, handleProviderConnectionChoice as handleProviderConnectionChoiceImpl, handleSelectProject as handleSelectProjectImpl, openCreateProjectDialog as openCreateProjectDialogImpl, createProjectFromFolder as createProjectFromFolderImpl, handleLocalWorkspaceChange as handleLocalWorkspaceChangeImpl, bindActiveChatToProject as bindActiveChatToProjectImpl, handleToggleTerminal as handleToggleTerminalImpl, attachLiveTerminalSession as attachLiveTerminalSessionImpl, handleTogglePin as handleTogglePinImpl, handleOpenRenameChat as handleOpenRenameChatImpl, confirmRenameChat as confirmRenameChatImpl, handleArchiveActiveChat as handleArchiveActiveChatImpl, handleCopyWorkingDirectory as handleCopyWorkingDirectoryImpl, handleCopySessionId as handleCopySessionIdImpl, handleCopyChatDeeplink as handleCopyChatDeeplinkImpl, handleCopyChatMarkdown as handleCopyChatMarkdownImpl, handleForkActiveChatLocal as handleForkActiveChatLocalImpl, handleForkActiveChatWorktree as handleForkActiveChatWorktreeImpl, handleAddAutomation as handleAddAutomationImpl, handleOpenActiveChatInNewWindow as handleOpenActiveChatInNewWindowImpl, getActiveWorkingDirectory as getActiveWorkingDirectoryImpl, copyLabeledTextToClipboard as copyLabeledTextToClipboardImpl, activateForkedChat as activateForkedChatImpl, notifyPlanningInputNeeded as notifyPlanningInputNeededImpl, notifyRunNeedsAttention as notifyRunNeedsAttentionImpl, notifyRunComplete as notifyRunCompleteImpl, touchProject as touchProjectImpl, restoreProjectLocalWorkspace as restoreProjectLocalWorkspaceImpl, saveWorkspaceForProject as saveWorkspaceForProjectImpl, handleDeleteChat as handleDeleteChatImpl, handleDeleteProject as handleDeleteProjectImpl, handleOpenBulkDeleteChats as handleOpenBulkDeleteChatsImpl, handleToggleBulkDeleteChat as handleToggleBulkDeleteChatImpl, handleSelectAllBulkDeleteChats as handleSelectAllBulkDeleteChatsImpl, handleClearBulkDeleteChats as handleClearBulkDeleteChatsImpl, confirmDeleteChat as confirmDeleteChatImpl, confirmDeleteProject as confirmDeleteProjectImpl, confirmBulkDeleteChats as confirmBulkDeleteChatsImpl } from "./state/projectActions";
+import { handleNewChat as handleNewChatImpl, handleSelectChat as handleSelectChatImpl, handleActiveChatModelChange as handleActiveChatModelChangeImpl, handleProviderConnectionChoice as handleProviderConnectionChoiceImpl, handleSelectProject as handleSelectProjectImpl, openCreateProjectDialog as openCreateProjectDialogImpl, createProjectFromFolder as createProjectFromFolderImpl, handleLocalWorkspaceChange as handleLocalWorkspaceChangeImpl, bindActiveChatToProject as bindActiveChatToProjectImpl, handleToggleTerminal as handleToggleTerminalImpl, attachLiveTerminalSession as attachLiveTerminalSessionImpl, handleTogglePin as handleTogglePinImpl, handleOpenRenameChat as handleOpenRenameChatImpl, confirmRenameChat as confirmRenameChatImpl, handleArchiveActiveChat as handleArchiveActiveChatImpl, handleCopyWorkingDirectory as handleCopyWorkingDirectoryImpl, handleCopySessionId as handleCopySessionIdImpl, handleCopyChatDeeplink as handleCopyChatDeeplinkImpl, handleCopyChatMarkdown as handleCopyChatMarkdownImpl, handleForkActiveChatLocal as handleForkActiveChatLocalImpl, handleForkChatFromMessage as handleForkChatFromMessageImpl, handleForkActiveChatWorktree as handleForkActiveChatWorktreeImpl, handleMessageFeedback as handleMessageFeedbackImpl, handleAddAutomation as handleAddAutomationImpl, handleOpenActiveChatInNewWindow as handleOpenActiveChatInNewWindowImpl, getActiveWorkingDirectory as getActiveWorkingDirectoryImpl, copyLabeledTextToClipboard as copyLabeledTextToClipboardImpl, activateForkedChat as activateForkedChatImpl, notifyPlanningInputNeeded as notifyPlanningInputNeededImpl, notifyRunNeedsAttention as notifyRunNeedsAttentionImpl, notifyRunComplete as notifyRunCompleteImpl, touchProject as touchProjectImpl, restoreProjectLocalWorkspace as restoreProjectLocalWorkspaceImpl, saveWorkspaceForProject as saveWorkspaceForProjectImpl, handleDeleteChat as handleDeleteChatImpl, handleDeleteProject as handleDeleteProjectImpl, handleOpenBulkDeleteChats as handleOpenBulkDeleteChatsImpl, handleToggleBulkDeleteChat as handleToggleBulkDeleteChatImpl, handleSelectAllBulkDeleteChats as handleSelectAllBulkDeleteChatsImpl, handleClearBulkDeleteChats as handleClearBulkDeleteChatsImpl, confirmDeleteChat as confirmDeleteChatImpl, confirmDeleteProject as confirmDeleteProjectImpl, confirmBulkDeleteChats as confirmBulkDeleteChatsImpl } from "./state/projectActions";
 import { isChatSending as isChatSendingImpl, isAnyChatSending as isAnyChatSendingImpl, getSendingChatIds as getSendingChatIdsImpl, setChatSending as setChatSendingImpl, getActiveGenerationByRequest as getActiveGenerationByRequestImpl, getActiveGenerationByMessage as getActiveGenerationByMessageImpl, createActiveGeneration as createActiveGenerationImpl, setActiveGenerationTarget as setActiveGenerationTargetImpl, isRequestInactive as isRequestInactiveImpl, finishActiveGeneration as finishActiveGenerationImpl, handleStopGeneration as handleStopGenerationImpl, stopActiveGeneration as stopActiveGenerationImpl, stopStreamingMessage as stopStreamingMessageImpl, stopStaleStreamingMessages as stopStaleStreamingMessagesImpl, stopStreamingAssistantMessage as stopStreamingAssistantMessageImpl, completeActiveProgress as completeActiveProgressImpl, preserveQueuedMessagesForSnapshot as preserveQueuedMessagesForSnapshotImpl, restoreChatSnapshot as restoreChatSnapshotImpl, updateQueuedChatSends as updateQueuedChatSendsImpl, scheduleGeneratedChatTitle as scheduleGeneratedChatTitleImpl, applyGeneratedChatTitle as applyGeneratedChatTitleImpl, shouldPreserveExistingTitleAfterUserEdit as shouldPreserveExistingTitleAfterUserEditImpl, enqueueChatSend as enqueueChatSendImpl, handleDeleteQueuedMessage as handleDeleteQueuedMessageImpl, handleHoldQueuedMessage as handleHoldQueuedMessageImpl, handleUpdateQueuedMessage as handleUpdateQueuedMessageImpl, handleEditUserMessageAndRegenerate as handleEditUserMessageAndRegenerateImpl, handleSteerQueuedMessage as handleSteerQueuedMessageImpl } from "./chat/generationQueue";
 import { steerActiveResponse as steerActiveResponseImpl, createMessagesForProvider as createMessagesForProviderImpl, createChatToolSelectionPrompt as createChatToolSelectionPromptImpl, referencesSelectedWorkspaceForToolSelection as referencesSelectedWorkspaceForToolSelectionImpl, resolveChatResearchReferences as resolveChatResearchReferencesImpl, getChatResearchCandidates as getChatResearchCandidatesImpl, createChatResearchContextMessages as createChatResearchContextMessagesImpl, createActiveProjectBoundaryMessage as createActiveProjectBoundaryMessageImpl, createMemorySearchForRequest as createMemorySearchForRequestImpl, clampMemoryToolInteger as clampMemoryToolIntegerImpl, limitMemoryToolContent as limitMemoryToolContentImpl, rememberProjectMapSnapshot as rememberProjectMapSnapshotImpl, loadToolMemoryForProject as loadToolMemoryForProjectImpl, saveToolMemoryForProject as saveToolMemoryForProjectImpl, createToolMemoryScope as createToolMemoryScopeImpl, getEnabledWorkspaceRoots as getEnabledWorkspaceRootsImpl, rememberProjectToolMemoryFromBridgeRun as rememberProjectToolMemoryFromBridgeRunImpl, rememberProjectToolMemoryFromChatToolCalls as rememberProjectToolMemoryFromChatToolCallsImpl, getToolMemoryProjectName as getToolMemoryProjectNameImpl, createSourceControlContextMessages as createSourceControlContextMessagesImpl, shouldSkipLocalContextForGithub as shouldSkipLocalContextForGithubImpl, createLocalWorkspaceContextMessages as createLocalWorkspaceContextMessagesImpl, hasAnyLocalWorkspaceToolEnabled as hasAnyLocalWorkspaceToolEnabledImpl, getAutomaticWorkspaceContextCharBudget as getAutomaticWorkspaceContextCharBudgetImpl, syncLocalWorkspaceIndexSummary as syncLocalWorkspaceIndexSummaryImpl } from "./context/messageContext";
-import { compactProviderMessages as compactProviderMessagesImpl, resolveContextWindowForModel as resolveContextWindowForModelImpl, getManualModelBudgetOverride as getManualModelBudgetOverrideImpl, getConfiguredContextWindow as getConfiguredContextWindowImpl, createContextBoundLocalToolExecutionPolicy as createContextBoundLocalToolExecutionPolicyImpl, getModelVisibleToolResultCharBudget as getModelVisibleToolResultCharBudgetImpl, minNullableCharCap as minNullableCharCapImpl, getProviderCompactionBaseline as getProviderCompactionBaselineImpl, recordContextCompaction as recordContextCompactionImpl, createContextCompactionProgress as createContextCompactionProgressImpl, withContextCompactionProgress as withContextCompactionProgressImpl, withContextCompactionMarker as withContextCompactionMarkerImpl, createChatContextCompaction as createChatContextCompactionImpl, getContextCompactionMarkerKey as getContextCompactionMarkerKeyImpl, recordProviderContextUsage as recordProviderContextUsageImpl, recordProviderActualUsage as recordProviderActualUsageImpl, estimateProviderContextUsageForDisplay as estimateProviderContextUsageForDisplayImpl, createProviderPayloadGuardrailProgress as createProviderPayloadGuardrailProgressImpl, withProviderPayloadGuardrailProgress as withProviderPayloadGuardrailProgressImpl, recordPlanningProviderRequest as recordPlanningProviderRequestImpl, recordPlanningProviderUsage as recordPlanningProviderUsageImpl, createChatProviderSettings as createChatProviderSettingsImpl, createToolAwareProviderSettings as createToolAwareProviderSettingsImpl, createPromptAwareProviderSettings as createPromptAwareProviderSettingsImpl, hasRequestScopedWorkspaceToolsEnabled as hasRequestScopedWorkspaceToolsEnabledImpl, createPromptAwareThinkingSettings as createPromptAwareThinkingSettingsImpl, shouldUseLighterThinkingForPrompt as shouldUseLighterThinkingForPromptImpl, createFinalOnlyProviderSettings as createFinalOnlyProviderSettingsImpl, rememberSessionApprovalDecision as rememberSessionApprovalDecisionImpl, createRuntimeApprovalDecisions as createRuntimeApprovalDecisionsImpl, getRuntimeWebSearchMaxResults as getRuntimeWebSearchMaxResultsImpl, getRuntimeWebSearchSettings as getRuntimeWebSearchSettingsImpl, supportsProviderParallelToolCalls as supportsProviderParallelToolCallsImpl, createLocationAwareWebSearchSettings as createLocationAwareWebSearchSettingsImpl } from "./context/contextWindow";
+import { compactProviderMessages as compactProviderMessagesImpl, resolveContextWindowForModel as resolveContextWindowForModelImpl, getManualModelBudgetOverride as getManualModelBudgetOverrideImpl, getConfiguredContextWindow as getConfiguredContextWindowImpl, createContextBoundLocalToolExecutionPolicy as createContextBoundLocalToolExecutionPolicyImpl, getModelVisibleToolResultCharBudget as getModelVisibleToolResultCharBudgetImpl, minNullableCharCap as minNullableCharCapImpl, getProviderCompactionBaseline as getProviderCompactionBaselineImpl, recordContextCompaction as recordContextCompactionImpl, createContextCompactionProgress as createContextCompactionProgressImpl, withContextCompactionProgress as withContextCompactionProgressImpl, withContextCompactionMarker as withContextCompactionMarkerImpl, createChatContextCompaction as createChatContextCompactionImpl, getContextCompactionMarkerKey as getContextCompactionMarkerKeyImpl, recordProviderContextUsage as recordProviderContextUsageImpl, recordProviderActualUsage as recordProviderActualUsageImpl, estimateProviderContextUsageForDisplay as estimateProviderContextUsageForDisplayImpl, createProviderPayloadGuardrailProgress as createProviderPayloadGuardrailProgressImpl, withProviderPayloadGuardrailProgress as withProviderPayloadGuardrailProgressImpl, recordPlanningProviderRequest as recordPlanningProviderRequestImpl, recordPlanningProviderUsage as recordPlanningProviderUsageImpl, createToolAwareProviderSettings as createToolAwareProviderSettingsImpl, createPromptAwareProviderSettings as createPromptAwareProviderSettingsImpl, hasRequestScopedWorkspaceToolsEnabled as hasRequestScopedWorkspaceToolsEnabledImpl, createPromptAwareThinkingSettings as createPromptAwareThinkingSettingsImpl, shouldUseLighterThinkingForPrompt as shouldUseLighterThinkingForPromptImpl, createFinalOnlyProviderSettings as createFinalOnlyProviderSettingsImpl, rememberSessionApprovalDecision as rememberSessionApprovalDecisionImpl, createRuntimeApprovalDecisions as createRuntimeApprovalDecisionsImpl, getRuntimeWebSearchMaxResults as getRuntimeWebSearchMaxResultsImpl, getRuntimeWebSearchSettings as getRuntimeWebSearchSettingsImpl, supportsProviderParallelToolCalls as supportsProviderParallelToolCallsImpl, createLocationAwareWebSearchSettings as createLocationAwareWebSearchSettingsImpl } from "./context/contextWindow";
 import { createAppAgentToolCall as createAppAgentToolCallImpl, appendAgentRuntimeStep as appendAgentRuntimeStepImpl, completeLatestAgentRuntimeStep as completeLatestAgentRuntimeStepImpl, mapAgentDecisionToStepType as mapAgentDecisionToStepTypeImpl, runAppOwnedCodingAgent as runAppOwnedCodingAgentImpl } from "./agentRuntime/appAgentRunner";
 import { streamAssistantWithLocalTools as streamAssistantWithLocalToolsImpl } from "./tools/localToolStreaming";
 import { createToolFinalAnswerUnavailableMessage as createToolFinalAnswerUnavailableMessageImpl, createSynthesisRecoveryFallback as createSynthesisRecoveryFallbackImpl, summarizeUserFacingFailure as summarizeUserFacingFailureImpl, createRecoverableBridgeToolRetryInstruction as createRecoverableBridgeToolRetryInstructionImpl, getToolCallRawOutput as getToolCallRawOutputImpl, extractSuggestedFileReadCandidates as extractSuggestedFileReadCandidatesImpl, extractNearbyPathCandidates as extractNearbyPathCandidatesImpl, extractSuggestedFileSearchQuery as extractSuggestedFileSearchQueryImpl, isMissingFileReadToolCall as isMissingFileReadToolCallImpl, isMissingFileReadError as isMissingFileReadErrorImpl, extractMissingReadPath as extractMissingReadPathImpl, extractToolInputPath as extractToolInputPathImpl, createMissingReadSearchQuery as createMissingReadSearchQueryImpl, getLastPathSegment as getLastPathSegmentImpl, isRecoverableBridgeArgumentError as isRecoverableBridgeArgumentErrorImpl, summarizeCompletedToolFallback as summarizeCompletedToolFallbackImpl, shouldKeepToolOutputOutOfChat as shouldKeepToolOutputOutOfChatImpl, countTextLines as countTextLinesImpl, limitFallbackToolOutput as limitFallbackToolOutputImpl, createGitToolFallbackAnswer as createGitToolFallbackAnswerImpl, parseGitStatusFallbackFiles as parseGitStatusFallbackFilesImpl, parseGitDiffStatFallbackFiles as parseGitDiffStatFallbackFilesImpl, extractToolStdout as extractToolStdoutImpl, cleanGitFallbackPath as cleanGitFallbackPathImpl, dedupeGitFallbackFiles as dedupeGitFallbackFilesImpl, groupGitStatusFallbackFiles as groupGitStatusFallbackFilesImpl, formatGitStatusFallbackGroup as formatGitStatusFallbackGroupImpl, formatGitStatSuffix as formatGitStatSuffixImpl, createNoExecutedToolFinalInstruction as createNoExecutedToolFinalInstructionImpl, createNoExecutedToolFinalAnswer as createNoExecutedToolFinalAnswerImpl, extractFirstUnsuccessfulToolSection as extractFirstUnsuccessfulToolSectionImpl, summarizeUnsuccessfulToolSection as summarizeUnsuccessfulToolSectionImpl, stripToolSectionHeader as stripToolSectionHeaderImpl, stripToolAdaptationRecommendation as stripToolAdaptationRecommendationImpl, appendAutoCompactionContinuation as appendAutoCompactionContinuationImpl, isAutoCompactionContinuationMessage as isAutoCompactionContinuationMessageImpl } from "./tools/toolFallbacks";
@@ -256,10 +295,14 @@ import { handleSubmitPlanningInput as handleSubmitPlanningInputImpl, handleReque
 import { handleRegenerateResponse as handleRegenerateResponseImpl } from "./chat/regenerateActions";
 import { renderUtilityPage as renderUtilityPageImpl, renderChatPage as renderChatPageImpl, handleSkipOnboarding as handleSkipOnboardingImpl, handleNeverShowOnboarding as handleNeverShowOnboardingImpl, handleOpenOnboardingSettings as handleOpenOnboardingSettingsImpl, handleOpenProviderConnectionNineRouterSettings as handleOpenProviderConnectionNineRouterSettingsImpl, handleOpenProviderConnectionKeySettings as handleOpenProviderConnectionKeySettingsImpl, handleRouteChange as handleRouteChangeImpl, handleSettingsSectionChange as handleSettingsSectionChangeImpl } from "./routes/renderRoutes";
 
-const AppsPage = lazy(() => import("../../pages/apps/AppsPage").then((module) => ({ default: module.AppsPage })));
-const SettingsPage = lazy(() => import("../../pages/settings/SettingsPage").then((module) => ({ default: module.SettingsPage })));
-const SupportPage = lazy(() => import("../../pages/SupportPage").then((module) => ({ default: module.SupportPage })));
-const WeatherRadarPage = lazy(() => import("../../pages/WeatherRadarPage").then((module) => ({ default: module.WeatherRadarPage })));
+const loadAppsPage = () => import("../../pages/apps/AppsPage");
+const loadSettingsPage = () => import("../../pages/settings/SettingsPage");
+const loadSupportPage = () => import("../../pages/SupportPage");
+const loadWeatherRadarPage = () => import("../../pages/WeatherRadarPage");
+const AppsPage = lazy(() => loadAppsPage().then((module) => ({ default: module.AppsPage })));
+const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
+const SupportPage = lazy(() => loadSupportPage().then((module) => ({ default: module.SupportPage })));
+const WeatherRadarPage = lazy(() => loadWeatherRadarPage().then((module) => ({ default: module.WeatherRadarPage })));
 
 export interface ActiveGeneration {
   chatId: string;
@@ -341,9 +384,10 @@ const PROVIDER_PAYLOAD_GUARDRAIL_PROGRESS_ID = "provider-payload-guardrail";
 const BRIDGE_TOOL_APPROVAL_RESUME_KIND = "bridge_tool_calls";
 const DISCORD_NEW_CHAT_COMMAND = "gilbertnewchat";
 const DISCORD_STREAM_UPDATE_INTERVAL_MS = 2_400;
-const DISCORD_STREAM_MESSAGE_LIMIT = 1_850;
 const STEERING_PROGRESS_ID = "response-steering";
 const ONBOARDING_NEVER_SHOW_KEY = "gilbert-codex.onboarding.never-show.v1";
+const PROVIDER_CONNECTION_PROMPT_LAST_SHOWN_VERSION_KEY = "gilbert-codex.provider-connection.last-shown-version.v1";
+const PROVIDER_CONNECTION_PROMPT_NEVER_SHOW_KEY = "gilbert-codex.provider-connection.never-show.v1";
 const LAST_ACTIVE_PROJECT_KEY = "gilbert-codex.last-active-project.v1";
 const SIMPLE_THINKING_PROMPT_MAX_WORDS = 18;
 const SIMPLE_THINKING_PROMPT_PATTERN = /\b(?:answer|change|clean up|explain|fix typo|format|quick|rename|remove|rewrite|show|summarize|tell|translate|update)\b/i;
@@ -563,14 +607,6 @@ function createLocationAwareToolSettings(tools: unknown, locationServicesEnabled
   };
 }
 
-function shouldOpenProviderConnectionDialog(settings: ProviderSettings) {
-  if (settings.provider === NINE_ROUTER_PROVIDER_ID || settings.provider === "openrouter") {
-    return false;
-  }
-
-  return !getProviderApiKey(settings).trim();
-}
-
 function isSubscriptionRouteModel(model: string | undefined) {
   const normalizedModel = model?.trim().toLowerCase() ?? "";
 
@@ -609,6 +645,44 @@ function createDiscordRuntimeContextMessages(workspaceSettings: LocalWorkspaceSe
   ];
 }
 
+function createProjectRunRequestPrompt({
+  action,
+  projectName,
+  root,
+}: {
+  action: ProjectRunAction;
+  projectName: string;
+  root: string;
+}) {
+  const cwd = action.cwd?.trim() || root;
+  const previewUrl = action.previewUrl?.trim();
+
+  return [
+    `Run this project using the saved Run action "${action.label}".`,
+    "",
+    `Project: ${projectName}`,
+    `Workspace root: ${root}`,
+    `Working directory: ${cwd}`,
+    `Action kind: ${action.kind}`,
+    `Shell: ${action.shell ?? "default"}`,
+    `Background dev server/watch mode: ${action.background ? "yes" : "no"}`,
+    previewUrl ? `Configured preview URL: ${previewUrl}` : "Configured preview URL: none",
+    "",
+    "Command:",
+    "```",
+    action.command.trim(),
+    "```",
+    "",
+    "Use the real app tools for this run. First call terminal_list_sessions and terminal_dev_server_status with the working directory, command, and preview URL. Reuse only an app-owned session or external localhost server that matches this exact target command/cwd/preview URL. Do not treat unrelated reachable common localhost ports as reusable, and do not open them in the browser. Be honest that external Windows Terminal or PowerShell scrollback cannot be read; if full logs are needed, offer to restart or run the command inside Gilbert's integrated terminal.",
+    "",
+    action.background
+      ? "If no matching server is reusable, call terminal_run with background=true, backgroundWaitMs=8000, the command above, cwd/workingDirectory, shell when configured, and previewUrl when configured."
+      : "If no matching completed run is reusable, call terminal_run with background=false, the command above, cwd/workingDirectory, and shell when configured.",
+    "",
+    "After startup, call terminal_read_session for any app-owned session you started or reused. Open the browser preview at the configured target URL, or at a URL produced by the terminal_run output for this same command. Never open an unrelated localhost port from a broad diagnostic scan. Then call browser_console_read. Read terminal and browser diagnostics, fix important errors if this request requires code changes, and verify again after fixes.",
+  ].join("\n");
+}
+
 interface WorkspaceAppProps {
   authSession: AuthSession;
   onLogout: () => void;
@@ -628,13 +702,18 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [discordBridgeSettings, setDiscordBridgeSettings] = useState<DiscordBridgeSettings>(() => loadDiscordBridgeSettings());
   const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspaceSettings>(() => loadLocalWorkspaceSettings());
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadAppearanceMode());
+  const [appearanceSettings, setAppearanceSettings] = useState<AppAppearanceSettings>(() => loadAppAppearanceSettings());
+  const [generalSettings, setGeneralSettings] = useState<AppGeneralSettings>(() => loadAppGeneralSettings());
   const [personalizationSettings, setPersonalizationSettings] = useState<AppPersonalizationSettings>(() => loadAppPersonalizationSettings());
   const [appInfo, setAppInfo] = useState<AppInfo>({
     name: "Gilbert Codex",
     phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.2.3",
+    version: "0.5.0",
+    platform: getHostPlatform(),
+    arch: "browser",
   });
+  const [appInfoResolved, setAppInfoResolved] = useState(false);
   const [sendingChatIds, setSendingChatIds] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>("general");
@@ -642,11 +721,13 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalAttachedSession, setTerminalAttachedSession] = useState<TerminalAttachedSession | null>(null);
   const [browserPreviewTarget, setBrowserPreviewTarget] = useState<{ id: number; url: string } | null>(null);
+  const [projectRunDialogOpen, setProjectRunDialogOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(284);
   const [defaultTerminalWorkingDirectory, setDefaultTerminalWorkingDirectory] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(() => loadPersistentString(ONBOARDING_NEVER_SHOW_KEY) !== "true");
-  const [providerConnectionOpen, setProviderConnectionOpen] = useState(() => shouldOpenProviderConnectionDialog(providerSettings));
+  const [providerConnectionOpen, setProviderConnectionOpen] = useState(false);
+  const [providerConnectionPromptEvaluated, setProviderConnectionPromptEvaluated] = useState(false);
   const [noticeDialog, setNoticeDialog] = useState<{ description?: string; title: string } | null>(null);
   const [renameChatId, setRenameChatId] = useState<string | null>(null);
   const [renameChatTitle, setRenameChatTitle] = useState("");
@@ -701,11 +782,51 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const queuedStartersRef = useRef(new Set<string>());
   const sessionApprovalDecisionsRef = useRef<SessionApprovalDecisionsByWorkspace>({});
   const chatMemoryFingerprintsRef = useRef(new Map<string, string>());
-  const runtime = {} as WorkspaceRuntimeDeps;
+  const runtimeRef = useRef<WorkspaceRuntimeDeps>({} as WorkspaceRuntimeDeps);
+  const runtime = runtimeRef.current;
   const durableMemoryBackfillTimerRef = useRef<number | null>(null);
   const durableMemoryFlushTimerRef = useRef<number | null>(null);
   const pendingDurableMemoryChatIdsRef = useRef(new Set<string>());
   const priorityDurableMemoryChatIdsRef = useRef(new Set<string>());
+  const pendingIdlePersistenceRef = useRef(new Map<string, { cancel: () => void; run: () => void }>());
+  const activeToolAwareProviderSettingsRef = useRef<{
+    chat: ChatSummary;
+    contextWindow: typeof contextWindow;
+    generalSettings: AppGeneralSettings;
+    locationServicesEnabled: boolean;
+    modelContextWindows: ModelContextWindowMap;
+    providerSettings: ProviderSettings;
+    value: ProviderSettings;
+  } | null>(null);
+
+  const flushIdlePersistence = useCallback((key?: string) => {
+    const entries = key
+      ? [...pendingIdlePersistenceRef.current.entries()].filter(([entryKey]) => entryKey === key)
+      : [...pendingIdlePersistenceRef.current.entries()];
+
+    for (const [entryKey, entry] of entries) {
+      pendingIdlePersistenceRef.current.delete(entryKey);
+      entry.cancel();
+      entry.run();
+    }
+  }, []);
+
+  const scheduleIdlePersistence = useCallback((key: string, run: () => void, timeoutMs = 500) => {
+    pendingIdlePersistenceRef.current.get(key)?.cancel();
+    const wrappedRun = () => {
+      pendingIdlePersistenceRef.current.delete(key);
+      run();
+    };
+    const cancel = scheduleIdleTask(wrappedRun, timeoutMs);
+    pendingIdlePersistenceRef.current.set(key, { cancel, run: wrappedRun });
+  }, []);
+
+  const scheduleChatStatePersistence = useCallback((nextChats: ChatSummary[]) => {
+    scheduleIdlePersistence("chats", () => {
+      saveChats(nextChats);
+      syncPdfLibraryFromChats(nextChats);
+    }, 250);
+  }, [scheduleIdlePersistence]);
   function persistChatState(nextChats: ChatSummary[], previousChats: ChatSummary[] = pendingChatsRef.current) {
     return (persistChatStateImpl as any)(runtime, nextChats, previousChats);
   }
@@ -745,6 +866,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     return () => {
+      flushIdlePersistence();
+
       if (durableMemoryBackfillTimerRef.current !== null) {
         window.clearTimeout(durableMemoryBackfillTimerRef.current);
       }
@@ -766,7 +889,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
       titleGenerationRequestsRef.current.clear();
     };
-  }, []);
+  }, [flushIdlePersistence]);
 
   useEffect(() => {
     durableMemoryBackfillTimerRef.current = window.setTimeout(() => {
@@ -789,9 +912,33 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     return scheduleIdleTask(() => {
-      void getAppInfo().then(setAppInfo);
+      void getAppInfo()
+        .then(setAppInfo)
+        .finally(() => setAppInfoResolved(true));
     }, 500);
   }, []);
+
+  useEffect(() => {
+    if (!appInfoResolved) {
+      return;
+    }
+
+    const currentVersion = appInfo.version.trim() || "unknown";
+
+    if (loadPersistentString(PROVIDER_CONNECTION_PROMPT_NEVER_SHOW_KEY) === "true") {
+      setProviderConnectionPromptEvaluated(true);
+      return;
+    }
+
+    if (loadPersistentString(PROVIDER_CONNECTION_PROMPT_LAST_SHOWN_VERSION_KEY) === currentVersion) {
+      setProviderConnectionPromptEvaluated(true);
+      return;
+    }
+
+    savePersistentString(PROVIDER_CONNECTION_PROMPT_LAST_SHOWN_VERSION_KEY, currentVersion);
+    setProviderConnectionOpen(true);
+    setProviderConnectionPromptEvaluated(true);
+  }, [appInfo.version, appInfoResolved]);
 
   useEffect(() => {
     let mounted = true;
@@ -825,6 +972,68 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [agentRuns]);
 
   useEffect(() => {
+    configureDesktopNotifications(generalSettings.notifications);
+  }, [generalSettings.notifications]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) {
+      return configureDesktopNotificationActivation(null);
+    }
+
+    return configureDesktopNotificationActivation((activation) => {
+      void bringCurrentWindowToForeground();
+
+      const chatId = activation.chatId?.trim();
+      if (!chatId) {
+        setActiveRoute("chat");
+        setSearchOpen(false);
+        return;
+      }
+
+      const targetChat = pendingChatsRef.current.find((chat) => chat.id === chatId && !chat.archived);
+      if (!targetChat) {
+        setActiveRoute("chat");
+        setSearchOpen(false);
+        return;
+      }
+
+      const nextHash = `#chat=${encodeURIComponent(targetChat.id)}`;
+      if (window.location.hash !== nextHash) {
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+      }
+
+      const nextChats = pruneEmptyChats(pendingChatsRef.current, targetChat.id);
+      if (nextChats.length !== pendingChatsRef.current.length) {
+        pendingChatsRef.current = nextChats;
+        setChats(nextChats);
+      }
+      restoreProjectLocalWorkspace(targetChat.project);
+      activeChatIdRef.current = targetChat.id;
+      setActiveChatId(targetChat.id);
+      setActiveRoute("chat");
+      setSearchOpen(false);
+    });
+  }, [isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!generalSettings.popoutWindowHotkey || typeof window === "undefined") {
+      return;
+    }
+
+    const handlePopoutHotkey = (event: KeyboardEvent) => {
+      if (!matchesHotkey(event, generalSettings.popoutWindowHotkey)) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleOpenActiveChatInNewWindow();
+    };
+
+    window.addEventListener("keydown", handlePopoutHotkey);
+    return () => window.removeEventListener("keydown", handlePopoutHotkey);
+  }, [activeChatId, generalSettings.popoutWindowHotkey]);
+
+  useEffect(() => {
     if (!isDesktopRuntime) {
       return;
     }
@@ -832,7 +1041,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return scheduleIdleTask(() => {
       void prepareDesktopNotifications();
     }, 3_000);
-  }, [isDesktopRuntime]);
+  }, [generalSettings.notifications, isDesktopRuntime]);
 
   useEffect(() => {
     if (!isDesktopRuntime) {
@@ -911,7 +1120,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     function savePendingChats() {
-      persistChatState(pendingChatsRef.current);
+      scheduleChatStatePersistence(pendingChatsRef.current);
+      flushIdlePersistence();
     }
 
     function handleVisibilityChange() {
@@ -927,20 +1137,24 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       window.removeEventListener("pagehide", savePendingChats);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [flushIdlePersistence, scheduleChatStatePersistence]);
 
   useEffect(() => {
     projectsRef.current = projects;
-    saveProjects(projects);
-  }, [projects]);
+    scheduleIdlePersistence("projects", () => saveProjects(projects), 500);
+  }, [projects, scheduleIdlePersistence]);
 
   useEffect(() => {
-    saveProviderSettings(providerSettings);
-  }, [providerSettings]);
+    scheduleIdlePersistence("provider-settings", () => saveProviderSettings(providerSettings), 500);
+  }, [providerSettings, scheduleIdlePersistence]);
 
   useEffect(() => {
-    saveAppPersonalizationSettings(personalizationSettings);
-  }, [personalizationSettings]);
+    scheduleIdlePersistence("general-settings", () => saveAppGeneralSettings(generalSettings), 500);
+  }, [generalSettings, scheduleIdlePersistence]);
+
+  useEffect(() => {
+    scheduleIdlePersistence("personalization", () => saveAppPersonalizationSettings(personalizationSettings), 500);
+  }, [personalizationSettings, scheduleIdlePersistence]);
 
   useEffect(() => {
     if (locationServicesEnabled) {
@@ -962,8 +1176,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     discordBridgeSettingsRef.current = discordBridgeSettings;
-    saveDiscordBridgeSettings(discordBridgeSettings);
-  }, [discordBridgeSettings]);
+    scheduleIdlePersistence("discord-bridge", () => saveDiscordBridgeSettings(discordBridgeSettings), 500);
+  }, [discordBridgeSettings, scheduleIdlePersistence]);
 
   useEffect(() => {
     if (!isDesktopRuntime) {
@@ -993,25 +1207,15 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [discordBridgeSettings.enabled, discordBridgeSettings.mode, isDesktopRuntime, localWorkspace, providerSettings, toolSettings.provider, toolSettings.webSearch]);
 
   useEffect(() => {
-    if (!isDesktopRuntime || !discordBridgeSettings.enabled || !discordBridgeSettings.autoStartBridge || discordBridgeSettings.mode !== "interactions") {
+    if (!isDesktopRuntime) {
       return;
     }
 
-    if (!discordBridgeSettings.applicationId.trim() || !discordBridgeSettings.publicKey.trim()) {
+    const autoStartKey = createDiscordBridgeAutoStartKey(discordBridgeSettings);
+
+    if (!autoStartKey) {
       return;
     }
-
-    const autoStartKey = [
-      discordBridgeSettings.applicationId,
-      discordBridgeSettings.publicKey,
-      discordBridgeSettings.bridgePort,
-      discordBridgeSettings.tunnelProvider,
-      discordBridgeSettings.ngrokPath,
-      discordBridgeSettings.ngrokAuthToken ? "token" : "no-token",
-      discordBridgeSettings.responseStyle,
-      discordBridgeSettings.allowedGuildIds,
-      discordBridgeSettings.allowedChannelIds,
-    ].join("|");
 
     if (discordAutoStartKeyRef.current === autoStartKey) {
       return;
@@ -1020,26 +1224,16 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     discordAutoStartKeyRef.current = autoStartKey;
 
     return scheduleIdleTask(() => {
-      void startDiscordBridge({
-        allowedChannelIds: discordBridgeSettings.allowedChannelIds,
-        allowedGuildIds: discordBridgeSettings.allowedGuildIds,
-        applicationId: discordBridgeSettings.applicationId,
-        localPort: discordBridgeSettings.bridgePort,
-        ngrokAuthToken: discordBridgeSettings.ngrokAuthToken,
-        ngrokPath: discordBridgeSettings.ngrokPath,
-        publicKey: discordBridgeSettings.publicKey,
-        responseStyle: discordBridgeSettings.responseStyle,
-        tunnelProvider: discordBridgeSettings.tunnelProvider,
-      })
-        .then((status) => {
-          if (!status.publicUrl) {
+      void ensureDiscordBridgeAutoStarted(discordBridgeSettings)
+        .then((result) => {
+          if (!result.status?.publicUrl) {
             return;
           }
 
           setDiscordBridgeSettings((currentSettings) => ({
             ...currentSettings,
-            interactionsEndpointUrl: status.publicUrl ?? currentSettings.interactionsEndpointUrl,
-            publicInteractionsUrl: status.publicUrl ?? currentSettings.publicInteractionsUrl,
+            interactionsEndpointUrl: result.status?.publicUrl ?? currentSettings.interactionsEndpointUrl,
+            publicInteractionsUrl: result.status?.publicUrl ?? currentSettings.publicInteractionsUrl,
           }));
         })
         .catch(() => {
@@ -1050,11 +1244,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     localWorkspaceRef.current = localWorkspace;
-    saveLocalWorkspaceSettings(localWorkspace);
+    scheduleIdlePersistence("local-workspace", () => saveLocalWorkspaceSettings(localWorkspace), 500);
     return scheduleIdleTask(() => {
       void refreshWorkspaceContext(localWorkspace);
     }, localWorkspace.roots.length > 0 ? 1_500 : 300);
-  }, [localWorkspace]);
+  }, [localWorkspace, scheduleIdlePersistence]);
 
   useEffect(() => {
     if (!toolSettings.terminal && terminalOpen) {
@@ -1185,30 +1379,30 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   ]);
 
   useEffect(() => {
-    saveAppearanceMode(appearanceMode);
+    scheduleIdlePersistence("appearance", () => {
+      saveAppearanceMode(appearanceMode);
+      saveAppAppearanceSettings(appearanceSettings);
+    }, 500);
 
     const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
 
     function applyAppearance() {
-      const resolvedTheme = appearanceMode === "system" ? (mediaQuery.matches ? "light" : "dark") : appearanceMode;
-      document.documentElement.dataset.theme = resolvedTheme;
-      document.documentElement.dataset.themePreference = appearanceMode;
-      document.documentElement.style.colorScheme = resolvedTheme;
+      applyAppAppearanceToDocument(appearanceMode, appearanceSettings);
     }
 
     applyAppearance();
     mediaQuery.addEventListener("change", applyAppearance);
 
     return () => mediaQuery.removeEventListener("change", applyAppearance);
-  }, [appearanceMode]);
+  }, [appearanceMode, appearanceSettings, scheduleIdlePersistence]);
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
 
     if (activeChatId) {
-      saveActiveChatId(activeChatId);
+      scheduleIdlePersistence("active-chat", () => saveActiveChatId(activeChatId), 300);
     }
-  }, [activeChatId]);
+  }, [activeChatId, scheduleIdlePersistence]);
 
   useEffect(() => {
     if (chats.some((chat) => chat.id === activeChatId && !chat.archived)) {
@@ -1225,8 +1419,9 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [activeChatId, chats]);
 
   useEffect(() => {
-    savePersistentString(LAST_ACTIVE_PROJECT_KEY, normalizeProjectName(activeChat.project));
-  }, [activeChat.project]);
+    const projectName = normalizeProjectName(activeChat.project);
+    scheduleIdlePersistence("last-active-project", () => savePersistentString(LAST_ACTIVE_PROJECT_KEY, projectName), 300);
+  }, [activeChat.project, scheduleIdlePersistence]);
 
   useEffect(() => {
     function selectChatFromHash() {
@@ -1355,6 +1550,15 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (handleProviderConnectionChoiceImpl as any)(runtime, nextProvider, nextModel);
   }
 
+  function handleCloseProviderConnectionDialog() {
+    setProviderConnectionOpen(false);
+  }
+
+  function handleNeverShowProviderConnectionDialog() {
+    savePersistentString(PROVIDER_CONNECTION_PROMPT_NEVER_SHOW_KEY, "true");
+    setProviderConnectionOpen(false);
+  }
+
   function handleSubscriptionSandboxUninstalled(nextSettings: ProviderSettings) {
     const openRouterModel = nextSettings.providerModels.openrouter?.trim() || nextSettings.model.trim() || getDefaultModelForProvider("openrouter");
     const fallbackSettings: ProviderSettings = {
@@ -1452,6 +1656,14 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (handleForkActiveChatLocalImpl as any)(runtime);
   }
 
+  function handleForkChatFromMessage(messageId: string) {
+    return (handleForkChatFromMessageImpl as any)(runtime, messageId);
+  }
+
+  function handleMessageFeedback(messageId: string, feedback: ChatMessage["feedback"]) {
+    return (handleMessageFeedbackImpl as any)(runtime, messageId, feedback);
+  }
+
   async function handleForkActiveChatWorktree() {
     return (handleForkActiveChatWorktreeImpl as any)(runtime);
   }
@@ -1476,16 +1688,16 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (activateForkedChatImpl as any)(runtime, forkedChat, workspace);
   }
 
-  function notifyPlanningInputNeeded(inputRequest: ChatPlanningInputRequest) {
-    return (notifyPlanningInputNeededImpl as any)(runtime, inputRequest);
+  function notifyPlanningInputNeeded(inputRequest: ChatPlanningInputRequest, chatId?: string) {
+    return (notifyPlanningInputNeededImpl as any)(runtime, inputRequest, chatId);
   }
 
-  function notifyRunNeedsAttention(detail?: string) {
-    return (notifyRunNeedsAttentionImpl as any)(runtime, detail);
+  function notifyRunNeedsAttention(detail?: string, chatId?: string) {
+    return (notifyRunNeedsAttentionImpl as any)(runtime, detail, chatId);
   }
 
-  function notifyRunComplete(message: ChatMessage) {
-    return (notifyRunCompleteImpl as any)(runtime, message);
+  function notifyRunComplete(message: ChatMessage, chatId?: string) {
+    return (notifyRunCompleteImpl as any)(runtime, message, chatId);
   }
 
   function touchProject(projectName: string) {
@@ -1786,8 +1998,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (createContextBoundLocalToolExecutionPolicyImpl as any)(runtime, basePolicy);
   }
 
-  function getModelVisibleToolResultCharBudget(contextWindowTokens: number) {
-    return (getModelVisibleToolResultCharBudgetImpl as any)(runtime, contextWindowTokens);
+  function getModelVisibleToolResultCharBudget(contextWindowTokens: number, settingsOverride?: ProviderSettings) {
+    return (getModelVisibleToolResultCharBudgetImpl as any)(runtime, contextWindowTokens, settingsOverride);
   }
 
   function minNullableCharCap(cap: number | null, budget: number) {
@@ -1874,6 +2086,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     return {
       ...baseSettings,
+      agentEnvironment: generalSettings.agentEnvironment,
       model,
       provider,
       providerModels: {
@@ -1907,12 +2120,12 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (createFinalOnlyProviderSettingsImpl as any)(runtime, prompt, chat);
   }
 
-  function rememberSessionApprovalDecision(approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings) {
-    return (rememberSessionApprovalDecisionImpl as any)(runtime, approval, decision, workspaceSettings);
+  function rememberSessionApprovalDecision(approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings, chatId?: string) {
+    return (rememberSessionApprovalDecisionImpl as any)(runtime, approval, decision, workspaceSettings, chatId);
   }
 
-  function createRuntimeApprovalDecisions(workspaceSettings: LocalWorkspaceSettings, approvalDecisions?: Record<string, AgentApprovalDecision>) {
-    return (createRuntimeApprovalDecisionsImpl as any)(runtime, workspaceSettings, approvalDecisions);
+  function createRuntimeApprovalDecisions(workspaceSettings: LocalWorkspaceSettings, approvalDecisions?: Record<string, AgentApprovalDecision>, chatId?: string) {
+    return (createRuntimeApprovalDecisionsImpl as any)(runtime, workspaceSettings, approvalDecisions, chatId);
   }
 
   function getRuntimeWebSearchMaxResults(settings: ProviderSettings, requestedMaxResults?: number) {
@@ -2245,6 +2458,136 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (startSendMessageImpl as any)(runtime, input, queuedSend, options);
   }
 
+  function saveProjectRunConfigForProject(projectName: string, config: ProjectRunConfig | undefined) {
+    const normalizedProjectName = normalizeProjectName(projectName);
+
+    if (isNoProjectName(normalizedProjectName)) {
+      return;
+    }
+
+    const normalizedConfig = normalizeProjectRunConfig(config);
+    const now = new Date().toISOString();
+
+    setProjects((currentProjects) => {
+      const nextProjects = currentProjects.some((project) => project.name.toLowerCase() === normalizedProjectName.toLowerCase())
+        ? currentProjects.map((project) =>
+            project.name.toLowerCase() === normalizedProjectName.toLowerCase()
+              ? {
+                  ...project,
+                  runConfig: normalizedConfig,
+                  updatedAt: now,
+                }
+              : project,
+          )
+        : [
+            {
+              createdAt: now,
+              id: createId("project"),
+              localWorkspace: localWorkspaceRef.current.enabled ? localWorkspaceRef.current : undefined,
+              name: normalizedProjectName,
+              runConfig: normalizedConfig,
+              updatedAt: now,
+            },
+            ...currentProjects,
+          ];
+      const sortedProjects = sortProjectsByUpdatedAt(nextProjects);
+      projectsRef.current = sortedProjects;
+      return sortedProjects;
+    });
+  }
+
+  async function handleOpenProjectRun() {
+    setSearchOpen(false);
+    setProjectRunDialogOpen(true);
+
+    const projectName = normalizeProjectName(activeChat.project);
+    if (isNoProjectName(projectName)) {
+      return;
+    }
+
+    const workspace = resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
+    const root = workspace.enabled ? workspace.roots[0] : "";
+    if (!root) {
+      return;
+    }
+
+    const project = projectsRef.current.find((candidate) => candidate.name.toLowerCase() === projectName.toLowerCase());
+    const detectedConfig = await detectProjectRunConfigForWorkspace(workspace, project?.runConfig);
+    if (detectedConfig) {
+      saveProjectRunConfigForProject(projectName, detectedConfig);
+    }
+  }
+
+  async function handleOpenProjectInTool(project: string, target: ProjectOpenTargetId) {
+    const projectName = normalizeProjectName(project);
+    const workspace = resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
+    const root = workspace.enabled ? workspace.roots[0] : "";
+
+    if (isNoProjectName(projectName) || !root) {
+      setNoticeDialog({
+        description: "Add or select a project folder before opening it in another app.",
+        title: "No project folder selected",
+      });
+      return;
+    }
+
+    try {
+      await openProjectInExternalTool({
+        path: root,
+        target,
+      });
+      touchProject(projectName);
+    } catch (error) {
+      setNoticeDialog({
+        description: readErrorMessage(error, "Install the app or add its launcher to PATH, then try again."),
+        title: "Could not open project",
+      });
+    }
+  }
+
+  function handleSaveProjectRunConfig(config: ProjectRunConfig) {
+    saveProjectRunConfigForProject(activeChat.project, config);
+    setProjectRunDialogOpen(false);
+  }
+
+  async function handleSaveAndRunProjectRun(config: ProjectRunConfig, action: ProjectRunAction) {
+    const projectName = normalizeProjectName(activeChat.project);
+    const workspace = resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
+    const root = workspace.enabled ? workspace.roots[0] : "";
+
+    if (!root || !action.command.trim()) {
+      setNoticeDialog({
+        description: root ? "Enter a command before running this project." : "Choose a project folder before running commands.",
+        title: "Run action is not ready",
+      });
+      return;
+    }
+
+    const runningConfig = updateProjectRunLastRun(config, action, {
+      status: "running",
+    });
+    saveProjectRunConfigForProject(projectName, runningConfig);
+    setProjectRunDialogOpen(false);
+
+    await startSendMessage({
+      attachments: [],
+      content: createProjectRunRequestPrompt({
+        action,
+        projectName,
+        root,
+      }),
+      localWorkspace: workspace,
+      mode: "chat",
+      webSearch: {
+        enabled: false,
+        maxResults: providerSettings.webSearch.maxResults,
+        provider: providerSettings.webSearch.provider,
+      },
+    }, undefined, {
+      preserveExistingTitle: true,
+    });
+  }
+
   async function handleResolveToolApproval(messageId: string, approvalId: string, decision: AgentApprovalDecision) {
     return (handleResolveToolApprovalImpl as any)(runtime, messageId, approvalId, decision);
   }
@@ -2297,6 +2640,34 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (handleSettingsSectionChangeImpl as any)(runtime, section);
   }
 
+  const handlePreloadRoute = useCallback((route: PrimaryRoute) => {
+    if (route === "apps") {
+      void loadAppsPage();
+    } else if (route === "settings") {
+      void loadSettingsPage();
+    } else if (route === "support") {
+      void loadSupportPage();
+    } else if (route === "radar" && locationServicesEnabled) {
+      void loadWeatherRadarPage();
+    }
+  }, [locationServicesEnabled]);
+
+  const handlePreloadSettingsSection = useCallback((section: SettingsSectionId) => {
+    void loadSettingsPage().then((module) => module.preloadSettingsSection(section));
+  }, []);
+
+  useEffect(() => {
+    return scheduleIdleTask(() => {
+      void loadAppsPage();
+      void loadSettingsPage();
+      void loadSupportPage();
+
+      if (locationServicesEnabled) {
+        void loadWeatherRadarPage();
+      }
+    }, 700);
+  }, [locationServicesEnabled]);
+
 
 
   Object.assign(runtime, {
@@ -2310,9 +2681,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     activeRoute,
     activeSendRef,
     activeSettingsSection,
+    agentRuns,
     agentRunsRef,
     annotateProviderPayloadSpike,
     appearanceMode,
+    appearanceSettings,
     appendAgentRuntimeStep,
     appendAutoCompactionContinuation,
     appInfo,
@@ -2484,6 +2857,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     formatResearchPayload,
     formatTokenCount,
     generateChatTitle,
+    generalSettings,
     getActiveGenerationByMessage,
     getActiveGenerationByRequest,
     getActiveWorkingDirectory,
@@ -2522,11 +2896,15 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     handleDeleteQueuedMessage,
     handleEditUserMessageAndRegenerate,
     handleForkActiveChatLocal,
+    handleForkChatFromMessage,
     handleForkActiveChatWorktree,
     handleHoldQueuedMessage,
     handleLocalWorkspaceChange,
+    handleMessageFeedback,
     handleNewChat,
     handleOpenActiveChatInNewWindow,
+    handleOpenProjectInTool,
+    handleOpenProjectRun,
     handleOpenRenameChat,
     handleRegenerateResponse,
     handleRequestPlanRevision,
@@ -2549,6 +2927,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     hasRequestScopedWorkspaceToolsEnabled,
     hasSuccessfulApprovedPlanMutation,
     hasSuccessfulApprovedPlanWorkspaceTool,
+    inferProviderToolBridgeFormat,
     isAbortError,
     isActiveChatProject,
     isAnyChatSending,
@@ -2702,9 +3081,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     saveProjectToolMemoryState,
     saveToolMemoryForProject,
     saveWorkspaceForProject,
+    scheduleChatStatePersistence,
     scheduleDurableMemoryFlush,
     scheduleGeneratedChatTitle,
     selectAdvertisedBridgeTools,
+    selectToolCapabilityPlan,
     sendDiscordInteractionResponse,
     sendDiscordReply,
     sendProviderMessage,
@@ -2720,6 +3101,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setAgentRuns,
     setAgentRunWaiting,
     setAppearanceMode,
+    setAppearanceSettings,
     setBrowserPreviewTarget,
     setBulkDeleteChatIds,
     setBulkDeleteChatsOpen,
@@ -2728,6 +3110,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setChatsState,
     setComposerDraftToRestore,
     setDiscordBridgeSettings,
+    setGeneralSettings,
     setLastContextCompaction,
     setLastProviderContextUsage,
     setLocalWorkspace,
@@ -2808,12 +3191,38 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     withWebSearchProgress,
   });
 
+  const activeToolAwareProviderSettingsCache = activeToolAwareProviderSettingsRef.current;
+  const activeToolAwareProviderSettings =
+    activeToolAwareProviderSettingsCache &&
+    activeToolAwareProviderSettingsCache.chat === activeChat &&
+    activeToolAwareProviderSettingsCache.contextWindow === contextWindow &&
+    activeToolAwareProviderSettingsCache.generalSettings === generalSettings &&
+    activeToolAwareProviderSettingsCache.locationServicesEnabled === locationServicesEnabled &&
+    activeToolAwareProviderSettingsCache.modelContextWindows === modelContextWindows &&
+    activeToolAwareProviderSettingsCache.providerSettings === providerSettings
+      ? activeToolAwareProviderSettingsCache.value
+      : createToolAwareProviderSettings({}, activeChat);
+  activeToolAwareProviderSettingsRef.current = {
+    chat: activeChat,
+    contextWindow,
+    generalSettings,
+    locationServicesEnabled,
+    modelContextWindows,
+    providerSettings,
+    value: activeToolAwareProviderSettings,
+  };
+  runtime.activeToolAwareProviderSettings = activeToolAwareProviderSettings;
+
   const pendingDeleteChat = pendingDeleteChatId ? chats.find((chat) => chat.id === pendingDeleteChatId) : undefined;
   const pendingRenameChat = renameChatId ? chats.find((chat) => chat.id === renameChatId) : undefined;
   const pendingDeleteProject = pendingDeleteProjectName ? projects.find((project) => project.name.toLowerCase() === pendingDeleteProjectName.toLowerCase()) : undefined;
   const pendingDeleteProjectChats = pendingDeleteProject
     ? chats.filter((chat) => chat.project.toLowerCase() === pendingDeleteProject.name.toLowerCase())
     : [];
+  const activeRunProjectName = normalizeProjectName(activeChat.project);
+  const activeRunProject = projects.find((project) => project.name.toLowerCase() === activeRunProjectName.toLowerCase());
+  const activeRunWorkspace = resolveWorkspaceForChatProject(activeRunProjectName, localWorkspace);
+  const activeRunProjectRoot = activeRunWorkspace.enabled ? activeRunWorkspace.roots[0] : "";
 
   return (
     <>
@@ -2825,6 +3234,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         appearanceMode={appearanceMode}
         authUser={authSession.user}
         chats={chats}
+        defaultOpenTarget={generalSettings.defaultOpenTarget}
+        defaultTerminalShell={generalSettings.terminalShell}
         desktopRuntime={isDesktopRuntime}
         locationServicesEnabled={locationServicesEnabled}
         projects={projects}
@@ -2837,8 +3248,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         onDeleteProject={handleDeleteProject}
         onNewChat={handleNewChat}
         onOpenBulkDeleteChats={handleOpenBulkDeleteChats}
+        onOpenProjectInTool={handleOpenProjectInTool}
         onOpenSearch={() => setSearchOpen(true)}
         onLogout={onLogout}
+        onPreloadRoute={handlePreloadRoute}
+        onPreloadSettingsSection={handlePreloadSettingsSection}
         onRouteChange={handleRouteChange}
         onShowAbout={() => setAboutOpen(true)}
         onCloseTerminal={() => setTerminalOpen(false)}
@@ -2871,16 +3285,27 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         open={providerConnectionOpen}
         settings={providerSettings}
         onActivateProvider={handleProviderConnectionChoice}
-        onClose={() => setProviderConnectionOpen(false)}
+        onClose={handleCloseProviderConnectionDialog}
+        onNeverShowAgain={handleNeverShowProviderConnectionDialog}
         onOpenNineRouterSettings={handleOpenProviderConnectionNineRouterSettings}
         onOpenProviderSettings={handleOpenProviderConnectionKeySettings}
       />
 
       <OnboardingDialog
-        open={!providerConnectionOpen && onboardingOpen}
+        open={providerConnectionPromptEvaluated && !providerConnectionOpen && onboardingOpen}
         onClose={handleSkipOnboarding}
         onNeverShowAgain={handleNeverShowOnboarding}
         onOpenSettings={handleOpenOnboardingSettings}
+      />
+
+      <ProjectRunDialog
+        config={activeRunProject?.runConfig}
+        open={projectRunDialogOpen}
+        projectName={activeRunProjectName}
+        projectRoot={activeRunProjectRoot}
+        onClose={() => setProjectRunDialogOpen(false)}
+        onSave={handleSaveProjectRunConfig}
+        onSaveAndRun={handleSaveAndRunProjectRun}
       />
 
       <BulkDeleteChatsDialog
@@ -2998,6 +3423,10 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           <div>
             <dt>Runtime</dt>
             <dd>{appInfo.runtime}</dd>
+          </div>
+          <div>
+            <dt>Platform</dt>
+            <dd>{formatHostPlatformLabel(appInfo.platform, appInfo.arch)}</dd>
           </div>
         </dl>
       </NoticeDialog>

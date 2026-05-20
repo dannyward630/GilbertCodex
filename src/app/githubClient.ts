@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauriDesktopRuntime } from "./tauriClient";
 import type {
   GithubBranch,
+  GithubApiRequest,
+  GithubApiResponse,
   GithubCodeSearchItem,
   GithubCommitFileInput,
   GithubCommitFilesResponse,
@@ -215,6 +217,12 @@ export async function getGithubState(): Promise<GithubConnectionState> {
   return invoke<GithubConnectionState>("github_get_state");
 }
 
+/** Marks the first-party GitHub plugin installed locally without changing the account token. */
+export async function installGithubPlugin(): Promise<GithubConnectionState> {
+  assertGithubDesktop();
+  return invoke<GithubConnectionState>("github_install_plugin");
+}
+
 /** Starts GitHub OAuth device flow and returns the user-code session to show in Settings. */
 export async function beginGithubDeviceLogin(request: GithubBeginDeviceLoginRequest): Promise<GithubDeviceLoginSession> {
   assertGithubDesktop();
@@ -351,6 +359,12 @@ export async function dispatchGithubWorkflow(request: GithubDispatchWorkflowRequ
 export async function listGithubWorkflowRuns(request: GithubListWorkflowRunsRequest): Promise<GithubWorkflowRunListResponse> {
   assertGithubDesktop();
   return invoke<GithubWorkflowRunListResponse>("github_list_workflow_runs", { request });
+}
+
+/** Uses the connected account for advanced GitHub REST API resources not covered by a specific wrapper. */
+export async function requestGithubApi(request: GithubApiRequest): Promise<GithubApiResponse> {
+  assertGithubDesktop();
+  return invoke<GithubApiResponse>("github_api", { request });
 }
 
 /** Formats search hits for model-visible output without leaking raw API JSON. */

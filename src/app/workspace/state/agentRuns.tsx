@@ -21,6 +21,7 @@ import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import { createInitialCodingEvidence, finalizeCodingEvidenceForMessage } from "../../../coding/evidence";
 
 export function persistAgentRun(deps: WorkspaceRuntimeDeps, nextRun: AgentRun) {
   const { agentRunsRef, saveAgentRun, setAgentRuns } = deps;
@@ -55,13 +56,23 @@ export function createAgentRunForMessage(deps: WorkspaceRuntimeDeps, params: {
     prompt: string;
     title?: string;
   }) {
-  const { createId, persistAgentRun, titleFromMessage } = deps;
+  const { createId, persistAgentRun, providerSettings, titleFromMessage } = deps;
 
     const now = new Date().toISOString();
     const run: AgentRun = {
       approvals: [],
       artifacts: [],
       chatId: params.chatId,
+      coding: createInitialCodingEvidence({
+        chatId: params.chatId,
+        messageId: params.messageId,
+        model: providerSettings.model,
+        permissionMode: params.localWorkspace?.permissionMode,
+        prompt: params.prompt,
+        provider: providerSettings.provider,
+        startedAt: now,
+        workspaceRoots: params.localWorkspace?.roots ?? [],
+      }),
       createdAt: now,
       events: [
         {
@@ -146,12 +157,21 @@ export function setAgentRunWaiting(deps: WorkspaceRuntimeDeps, runId: string | u
 export function setAgentRunCompleted(deps: WorkspaceRuntimeDeps, runId: string | undefined, message: ChatMessage) {
   const { createId, updateAgentRun } = deps;
 
-    updateAgentRun(runId, (run, now) => ({
-      ...run,
+    updateAgentRun(runId, (run, now) => {
+      const nextRun = finalizeCodingEvidenceForMessage(run, {
+        artifacts: message.artifacts,
+        completedAt: now,
+        content: message.content,
+        sources: message.sources,
+        toolCalls: message.toolCalls,
+      });
+
+      return {
+      ...nextRun,
       artifacts: message.artifacts ?? run.artifacts,
       completedAt: now,
       events: [
-        ...run.events,
+        ...nextRun.events,
         {
           at: now,
           id: createId("agent-event"),
@@ -162,7 +182,7 @@ export function setAgentRunCompleted(deps: WorkspaceRuntimeDeps, runId: string |
       pendingToolCallContent: undefined,
       sources: message.sources ?? run.sources,
       status: "completed",
-      steps: run.steps.map((step) =>
+      steps: nextRun.steps.map((step) =>
         step.status === "running" || step.status === "waiting_for_approval"
           ? {
               ...step,
@@ -173,7 +193,8 @@ export function setAgentRunCompleted(deps: WorkspaceRuntimeDeps, runId: string |
       ),
       toolCalls: message.toolCalls ?? run.toolCalls,
       updatedAt: now,
-    }));
+    };
+    });
   }
 
 export function setAgentRunFailed(deps: WorkspaceRuntimeDeps, runId: string | undefined, errorMessage: string) {

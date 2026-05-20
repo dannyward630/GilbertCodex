@@ -9,6 +9,7 @@ import {
   stopDiscordBridge,
   type DiscordBridgeStatus,
 } from "../../../app/tauriClient";
+import { createDiscordBridgeConfigKey } from "../../../app/discordBridgeAutoStart";
 import {
   DISCORD_BRIDGE_MODE_LABELS,
   DISCORD_BRIDGE_RESPONSE_STYLE_LABELS,
@@ -137,6 +138,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
         allowedChannelIds: settings.allowedChannelIds,
         allowedGuildIds: settings.allowedGuildIds,
         applicationId: settings.applicationId,
+        configKey: createDiscordBridgeConfigKey(settings),
         localPort: settings.bridgePort,
         ngrokAuthToken: settings.ngrokAuthToken,
         ngrokPath: settings.ngrokPath,
@@ -149,6 +151,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
       setBridgeStatus(status);
       onSettingsChange({
         ...settings,
+        autoStartBridge: true,
         enabled: true,
         interactionsEndpointUrl: nextEndpoint,
         mode: "interactions",

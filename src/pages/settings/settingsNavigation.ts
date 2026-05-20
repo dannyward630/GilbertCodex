@@ -1,9 +1,12 @@
 import {
   CloudSun,
+  BarChart3,
+  Compass,
   Database,
   FileCog,
   Github,
   MessageCircle,
+  Palette,
   Route,
   Search,
   ServerCog,
@@ -13,8 +16,11 @@ import type { SettingsNavItem, SettingsSectionId } from "./types";
 
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { icon: Settings2, id: "general", label: "General", meta: "Profile" },
+  { icon: Palette, id: "appearance", label: "Appearance", meta: "Theme" },
   { icon: ServerCog, id: "model", label: "AI & Providers", meta: "Models" },
   { icon: Route, id: "nineRouter", label: "Subscriptions", meta: "Accounts" },
+  { icon: BarChart3, id: "usage", label: "Usage", meta: "Costs" },
+  { icon: Compass, id: "browser", label: "Browser", meta: "Privacy" },
   { icon: Search, id: "braveSearch", label: "Web Search", meta: "Sources" },
   { icon: CloudSun, id: "weatherSources", label: "Weather & Maps", meta: "Geo" },
   { icon: FileCog, id: "configuration", label: "Workspace", meta: "Runtime" },
@@ -24,7 +30,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
 ];
 
 export function resolveSettingsNavSection(section: SettingsSectionId): SettingsSectionId {
-  if (section === "appearance" || section === "personalization") {
+  if (section === "personalization") {
     return "general";
   }
 

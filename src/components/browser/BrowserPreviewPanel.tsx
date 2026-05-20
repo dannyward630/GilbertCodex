@@ -12,14 +12,14 @@ import {
   Plus,
   RotateCw,
   Search,
+  ShieldCheck,
   Terminal,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
-import type { Webview } from "@tauri-apps/api/webview";
+import type { Webview, WebviewOptions } from "@tauri-apps/api/webview";
 import { isTauriDesktopRuntime } from "../../app/tauriClient";
-import { loadPersistentString, savePersistentString } from "../../lib/appStorage";
 import {
   clearBrowserConsoleEntries,
   getBrowserConsoleSnapshot,
@@ -32,6 +32,20 @@ import {
   type BrowserConsoleLevel,
   type BrowserConsoleSnapshot,
 } from "../../lib/browserConsole";
+import {
+  addBrowserDomain,
+  clearBrowserPreviewSessionStorage,
+  evaluateBrowserNavigationPolicy,
+  getBrowserUrlDomain,
+  loadBrowserSettings,
+  patchBrowserSettings,
+  recordBrowserHistoryVisit,
+  removeBrowserDomain,
+  subscribeBrowserPreviewSessionCleared,
+  subscribeBrowserSettings,
+  type BrowserSearchEngineId,
+  type BrowserSettings,
+} from "../../services/browserSettings";
 
 interface BrowserPreviewPanelProps {
   closing?: boolean;
@@ -61,9 +75,15 @@ export interface BrowserPreviewSession {
   tabs: BrowserPreviewTab[];
 }
 
+interface PendingBrowserNavigation {
+  domain: string;
+  reason: "approval-required" | "blocked-domain";
+  url: string;
+}
+
 type LocalPreviewStatus = "available" | "checking" | "unavailable";
 type NativeBrowserStatus = "idle" | "loading" | "ready" | "error";
-export type SearchEngineId = "duckduckgo" | "github" | "google" | "youtube";
+export type SearchEngineId = BrowserSearchEngineId;
 
 interface NativeBrowserInstance {
   generation: number;
@@ -87,12 +107,12 @@ interface SearchEngine {
   searchUrl: (query: string) => string;
 }
 
-const BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v2";
-const LEGACY_BROWSER_PREVIEW_SESSION_KEY = "gilbert-codex.browser-preview.v1";
-const DEFAULT_SEARCH_ENGINE_ID: SearchEngineId = "duckduckgo";
+const DEFAULT_BROWSER_HOME_URL = "https://www.google.com/";
+const DEFAULT_SEARCH_ENGINE_ID: SearchEngineId = "google";
 const LOCAL_PROBE_TIMEOUT_MS = 900;
 const LOCAL_PREVIEW_PORTS = [5173, 5174, 3000, 3001, 4173, 4174, 4200, 4201, 4321, 4322, 5000, 5001, 5500, 6006, 8000, 8001, 8080, 8081, 1313, 4000];
 const NATIVE_BROWSER_CREATE_TIMEOUT_MS = 6_000;
+const NATIVE_BROWSER_POLL_INTERVAL_MS = 650;
 const HIDDEN_NATIVE_BROWSER_BOUNDS: NativeBrowserBounds = { height: 1, width: 1, x: 0, y: 0 };
 const BROWSER_CONSOLE_FILTERS: BrowserConsoleFilter[] = ["all", "error", "warning", "log", "info"];
 const SEARCH_ENGINES: SearchEngine[] = [
@@ -135,11 +155,15 @@ export function BrowserPreviewPanel({
   const nativeBrowserRef = useRef<NativeBrowserInstance | null>(null);
   const nativeBrowserInstancesRef = useRef<Map<string, NativeBrowserInstance>>(new Map());
   const nativeBrowserGenerationRef = useRef(0);
+  const nativeObservedUrlsRef = useRef<Map<string, string>>(new Map());
+  const recordedInitialVisitTabIdsRef = useRef<Set<string>>(new Set());
+  const incognitoModeRef = useRef<boolean | null>(null);
   const normalizedInitialUrl = useMemo(() => {
     const url = normalizePreviewUrl(initialUrl);
     return url && !isCurrentAppUrl(url) ? url : null;
   }, [initialUrl]);
-  const [session, setSession] = useState<BrowserPreviewSession>(() => loadBrowserPreviewSession(normalizedInitialUrl));
+  const [browserSettings, setBrowserSettings] = useState<BrowserSettings>(() => loadBrowserSettings());
+  const [session, setSession] = useState<BrowserPreviewSession>(() => loadBrowserPreviewSession(normalizedInitialUrl, loadBrowserSettings().incognitoEnabled));
   const [mountedIframeTabIds, setMountedIframeTabIds] = useState<Set<string>>(() => new Set());
   const [localPreview, setLocalPreview] = useState<{ status: LocalPreviewStatus; url?: string }>({ status: "checking" });
   const activeTab = getActiveTab(session);
@@ -152,9 +176,10 @@ export function BrowserPreviewPanel({
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleFilter, setConsoleFilter] = useState<BrowserConsoleFilter>("all");
   const [consoleSnapshot, setConsoleSnapshot] = useState<BrowserConsoleSnapshot>(() => getBrowserConsoleSnapshot());
-  const selectedSearchEngine = getSearchEngine(DEFAULT_SEARCH_ENGINE_ID);
+  const [pendingNavigation, setPendingNavigation] = useState<PendingBrowserNavigation | null>(null);
+  const selectedSearchEngine = getSearchEngine(browserSettings.defaultSearchEngine);
   const activeUrlIsLocal = Boolean(activeUrl && isLocalHttpUrl(activeUrl));
-  const nativeBrowserEnabled = !closing && isTauriDesktopRuntime() && Boolean(activeUrl && !activeUrlIsLocal);
+  const nativeBrowserEnabled = !closing && isTauriDesktopRuntime() && Boolean(activeUrl && (!activeUrlIsLocal || browserSettings.incognitoEnabled));
   const showFrame = Boolean(activeUrl && (!activeUrlIsLocal || activeLocalStatus === "available"));
   const iframeTabs = session.tabs.filter((tab) => mountedIframeTabIds.has(tab.id) && tab.url && shouldRenderIframeForUrl(tab.url));
   const visibleConsoleEntries = useMemo(() => filterBrowserConsoleEntries(consoleSnapshot.entries, consoleFilter), [consoleFilter, consoleSnapshot.entries]);
@@ -162,6 +187,54 @@ export function BrowserPreviewPanel({
   const activeHistoryState = getTabHistoryState(activeTab);
   const canGoBack = activeHistoryState.historyIndex > 0;
   const canGoForward = activeHistoryState.historyIndex >= 0 && activeHistoryState.historyIndex < activeHistoryState.history.length - 1;
+
+  const syncObservedNativeBrowserUrl = useCallback((instance: NativeBrowserInstance, rawUrl: string | null | undefined) => {
+    const nextUrl = normalizePreviewUrl(rawUrl ?? "");
+
+    if (!nextUrl || isCurrentAppUrl(nextUrl)) {
+      return;
+    }
+
+    if (nativeObservedUrlsRef.current.get(instance.tabId) === nextUrl) {
+      return;
+    }
+
+    nativeObservedUrlsRef.current.set(instance.tabId, nextUrl);
+    instance.url = nextUrl;
+    recordBrowserHistoryVisit(nextUrl, formatBrowserPreviewTitle(nextUrl), browserSettings);
+
+    setSession((currentSession) => {
+      const ensuredSession = ensureSession(currentSession);
+      let changed = false;
+      const nextTabs = ensuredSession.tabs.map((tab) => {
+        if (tab.id !== instance.tabId || tab.url === nextUrl) {
+          return tab;
+        }
+
+        changed = true;
+        return {
+          ...tab,
+          ...createNavigationHistoryUpdate(tab, nextUrl),
+          updatedAt: new Date().toISOString(),
+          url: nextUrl,
+        };
+      });
+
+      if (!changed) {
+        return ensuredSession;
+      }
+
+      return {
+        ...ensuredSession,
+        tabs: nextTabs,
+      };
+    });
+
+    if (activeTab.id === instance.tabId) {
+      setAddressDraft(nextUrl);
+      setAddressInvalid(false);
+    }
+  }, [activeTab.id, browserSettings]);
 
   const closeNativeBrowserTab = useCallback((tabId: string) => {
     const instance = nativeBrowserInstancesRef.current.get(tabId);
@@ -191,6 +264,7 @@ export function BrowserPreviewPanel({
     nativeBrowserInstancesRef.current.clear();
     nativeBrowserRef.current = null;
     instances.forEach(closeNativeBrowserInstance);
+    void forceCloseNativeBrowserPreviews();
     setNativeBrowserStatus("idle");
     setNativeBrowserError("");
   }, []);
@@ -222,8 +296,57 @@ export function BrowserPreviewPanel({
   }, []);
 
   useEffect(() => {
-    saveBrowserPreviewSession(session);
-  }, [session]);
+    return subscribeBrowserSettings(setBrowserSettings);
+  }, []);
+
+  useEffect(() => {
+    for (const tab of session.tabs) {
+      if (!tab.url || recordedInitialVisitTabIdsRef.current.has(tab.id)) {
+        continue;
+      }
+
+      recordedInitialVisitTabIdsRef.current.add(tab.id);
+      nativeObservedUrlsRef.current.set(tab.id, tab.url);
+      recordBrowserHistoryVisit(tab.url, formatBrowserPreviewTitle(tab.url), browserSettings);
+    }
+  }, [browserSettings, session.tabs]);
+
+  useEffect(() => {
+    return subscribeBrowserPreviewSessionCleared(() => {
+      closeAllNativeBrowserInstances();
+      setPendingNavigation(null);
+      nativeObservedUrlsRef.current.clear();
+      recordedInitialVisitTabIdsRef.current.clear();
+      setMountedIframeTabIds(new Set());
+      setSession(createBrowserPreviewSession());
+    });
+  }, [closeAllNativeBrowserInstances]);
+
+  useEffect(() => {
+    if (incognitoModeRef.current === null) {
+      incognitoModeRef.current = browserSettings.incognitoEnabled;
+      if (browserSettings.incognitoEnabled) {
+        clearBrowserPreviewSessionStorage({ notify: false });
+      }
+      return;
+    }
+
+    if (incognitoModeRef.current === browserSettings.incognitoEnabled) {
+      return;
+    }
+
+    incognitoModeRef.current = browserSettings.incognitoEnabled;
+    closeAllNativeBrowserInstances();
+    setPendingNavigation(null);
+    nativeObservedUrlsRef.current.clear();
+    recordedInitialVisitTabIdsRef.current.clear();
+    setMountedIframeTabIds(new Set());
+    setSession(createBrowserPreviewSession());
+
+    if (browserSettings.incognitoEnabled) {
+      clearBrowserPreviewSessionStorage({ notify: false });
+    }
+  }, [browserSettings.incognitoEnabled, closeAllNativeBrowserInstances]);
 
   useEffect(() => {
     const refreshConsoleSnapshot = () => setConsoleSnapshot(getBrowserConsoleSnapshot());
@@ -260,16 +383,21 @@ export function BrowserPreviewPanel({
     }
 
     closeAllNativeBrowserInstances();
-    void closeStaleNativeBrowserInstances();
+    void forceCloseNativeBrowserPreviews();
+    const retryTimer = window.setTimeout(() => {
+      void forceCloseNativeBrowserPreviews();
+    }, 240);
+
+    return () => window.clearTimeout(retryTimer);
   }, [closing, closeAllNativeBrowserInstances]);
 
   useEffect(() => {
-    if (!normalizedInitialUrl) {
+    if (!normalizedInitialUrl || normalizedInitialUrl === activeUrl) {
       return;
     }
 
-    setSession((currentSession) => openUrlInSession(currentSession, normalizedInitialUrl));
-  }, [normalizedInitialUrl]);
+    requestNavigation(normalizedInitialUrl);
+  }, [activeUrl, normalizedInitialUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -380,10 +508,10 @@ export function BrowserPreviewPanel({
     setNativeBrowserStatus("loading");
     setNativeBrowserError("");
 
-    void createNativeBrowserInstance(label, activeUrl, nativeFrameRef.current)
+    void createNativeBrowserInstance(label, activeUrl, nativeFrameRef.current, browserSettings.incognitoEnabled)
       .then((webview) => {
         if (disposed || nativeBrowserGenerationRef.current !== generation) {
-          void webview.close().catch(() => undefined);
+          void hideAndCloseNativeBrowser(webview);
           return;
         }
 
@@ -433,7 +561,59 @@ export function BrowserPreviewPanel({
     return () => {
       disposed = true;
     };
-  }, [activeTab.id, activeTab.reloadKey, activeUrl, hideInactiveNativeBrowserInstances, nativeBrowserEnabled, showFrame, syncNativeBrowserBounds]);
+  }, [activeTab.id, activeTab.reloadKey, activeUrl, browserSettings.incognitoEnabled, hideInactiveNativeBrowserInstances, nativeBrowserEnabled, showFrame, syncNativeBrowserBounds]);
+
+  useEffect(() => {
+    const instance = nativeBrowserRef.current;
+
+    if (!instance) {
+      return;
+    }
+
+    if (pendingNavigation) {
+      void hideNativeBrowserInstance(instance);
+      return;
+    }
+
+    if (nativeBrowserEnabled && showFrame && activeUrl) {
+      void showNativeBrowserInstance(instance);
+      syncNativeBrowserBounds();
+    }
+  }, [activeUrl, nativeBrowserEnabled, pendingNavigation, showFrame, syncNativeBrowserBounds]);
+
+  useEffect(() => {
+    if (!nativeBrowserEnabled || !showFrame || !activeUrl) {
+      return;
+    }
+
+    let disposed = false;
+
+    const pollNativeUrl = () => {
+      const instance = nativeBrowserRef.current;
+
+      if (!instance || instance.tabId !== activeTab.id) {
+        return;
+      }
+
+      void getNativeBrowserCurrentUrl(instance.label)
+        .then((url) => {
+          if (!disposed) {
+            syncObservedNativeBrowserUrl(instance, url);
+          }
+        })
+        .catch(() => {
+          // URL polling is best effort; the next navigation or reload will resync state.
+        });
+    };
+
+    pollNativeUrl();
+    const interval = window.setInterval(pollNativeUrl, NATIVE_BROWSER_POLL_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [activeTab.id, activeUrl, nativeBrowserEnabled, showFrame, syncObservedNativeBrowserUrl]);
 
   useLayoutEffect(() => {
     if (!nativeBrowserEnabled || !showFrame || !activeUrl) {
@@ -483,7 +663,7 @@ export function BrowserPreviewPanel({
     };
   }, [closeAllNativeBrowserInstances]);
 
-  function submitAddress(value = addressDraft, engineId = DEFAULT_SEARCH_ENGINE_ID) {
+  function submitAddress(value = addressDraft, engineId = browserSettings.defaultSearchEngine) {
     const nextUrl = createBrowserPreviewNavigationUrl(value, engineId);
 
     if (!nextUrl) {
@@ -491,11 +671,115 @@ export function BrowserPreviewPanel({
       return;
     }
 
+    requestNavigation(nextUrl, { userInitiated: true });
+  }
+
+  function requestNavigation(nextUrl: string, options: { force?: boolean; userInitiated?: boolean } = {}) {
+    if (!options.force && isUnsupportedLocalPreviewUrl(nextUrl)) {
+      recordBrowserConsoleEntry({
+        kind: "browser",
+        level: "warning",
+        message: `Ignored unsupported localhost browser target: ${nextUrl}`,
+        source: "Browser preview",
+        tabId: activeTab.id,
+        tabTitle: formatBrowserPreviewTitle(nextUrl),
+        url: nextUrl,
+      });
+      return;
+    }
+
+    if (!options.force) {
+      const decision = evaluateBrowserNavigationPolicy(nextUrl, browserSettings);
+
+      if (decision.decision === "block") {
+        setPendingNavigation({
+          domain: decision.domain || getBrowserUrlDomain(nextUrl),
+          reason: "blocked-domain",
+          url: nextUrl,
+        });
+        recordBrowserConsoleEntry({
+          kind: "browser",
+          level: "warning",
+          message: `Blocked browser navigation: ${nextUrl}`,
+          source: "Browser preview",
+          tabId: activeTab.id,
+          tabTitle: formatBrowserPreviewTitle(nextUrl),
+          url: nextUrl,
+        });
+        return;
+      }
+
+      if (decision.decision === "ask" && !options.userInitiated) {
+        setPendingNavigation({
+          domain: decision.domain,
+          reason: "approval-required",
+          url: nextUrl,
+        });
+        return;
+      }
+    }
+
+    setPendingNavigation(null);
     navigateToUrl(nextUrl);
   }
 
+  function approvePendingNavigation(rememberDomain: boolean) {
+    if (!pendingNavigation) {
+      return;
+    }
+
+    const navigation = pendingNavigation;
+
+    if (rememberDomain && navigation.domain) {
+      patchBrowserSettings({
+        allowedDomains: addBrowserDomain(browserSettings.allowedDomains, navigation.domain),
+      });
+    }
+
+    requestNavigation(navigation.url, { force: true });
+  }
+
+  function unblockPendingNavigation() {
+    if (!pendingNavigation) {
+      return;
+    }
+
+    const navigation = pendingNavigation;
+
+    if (navigation.domain) {
+      patchBrowserSettings({
+        blockedDomains: removeBrowserDomain(browserSettings.blockedDomains, navigation.domain),
+      });
+    }
+
+    requestNavigation(navigation.url, { force: true });
+  }
+
   function navigateToUrl(nextUrl: string) {
-    closeNativeBrowserTab(activeTab.id);
+    const existingInstance = nativeBrowserInstancesRef.current.get(activeTab.id);
+    const useExistingNativeBrowser = Boolean(existingInstance && shouldUseNativeBrowserForUrl(nextUrl, browserSettings));
+    const nextReloadKey = activeTab.url === nextUrl ? activeTab.reloadKey + 1 : activeTab.reloadKey;
+
+    if (existingInstance && useExistingNativeBrowser) {
+      existingInstance.url = nextUrl;
+      existingInstance.reloadKey = nextReloadKey;
+      nativeObservedUrlsRef.current.set(existingInstance.tabId, nextUrl);
+      void navigateNativeBrowserInstance(existingInstance, nextUrl, activeTab.url === nextUrl).catch((error: unknown) => {
+        closeNativeBrowserTab(existingInstance.tabId);
+        recordBrowserConsoleEntry({
+          kind: "browser",
+          level: "warning",
+          message: `Native browser navigation fell back to reopening: ${error instanceof Error ? error.message : String(error)}`,
+          source: "Browser preview",
+          tabId: existingInstance.tabId,
+          tabTitle: formatBrowserPreviewTitle(nextUrl),
+          url: nextUrl,
+        });
+      });
+    } else {
+      closeNativeBrowserTab(activeTab.id);
+    }
+
     recordBrowserConsoleEntry({
       kind: "browser",
       level: "info",
@@ -505,6 +789,7 @@ export function BrowserPreviewPanel({
       tabTitle: formatBrowserPreviewTitle(nextUrl),
       url: nextUrl,
     });
+    recordBrowserHistoryVisit(nextUrl, formatBrowserPreviewTitle(nextUrl), browserSettings);
     updateActiveTab((tab) => ({
       ...tab,
       ...createNavigationHistoryUpdate(tab, nextUrl),
@@ -530,7 +815,7 @@ export function BrowserPreviewPanel({
   }
 
   function openNewTab() {
-    const nextTab = createPreviewTab();
+    const nextTab = createPreviewTab(DEFAULT_BROWSER_HOME_URL);
 
     setSession((currentSession) => ({
       activeTabId: nextTab.id,
@@ -546,7 +831,19 @@ export function BrowserPreviewPanel({
       return;
     }
 
-    closeNativeBrowserTab(activeTab.id);
+    const existingInstance = nativeBrowserInstancesRef.current.get(activeTab.id);
+
+    if (existingInstance && shouldUseNativeBrowserForUrl(nextUrl, browserSettings)) {
+      existingInstance.url = nextUrl;
+      existingInstance.reloadKey = activeTab.reloadKey + 1;
+      nativeObservedUrlsRef.current.set(existingInstance.tabId, nextUrl);
+      void navigateNativeBrowserInstance(existingInstance, nextUrl, false).catch(() => {
+        closeNativeBrowserTab(existingInstance.tabId);
+      });
+    } else {
+      closeNativeBrowserTab(activeTab.id);
+    }
+
     recordBrowserConsoleEntry({
       kind: "browser",
       level: "info",
@@ -599,7 +896,17 @@ export function BrowserPreviewPanel({
       return;
     }
 
-    closeNativeBrowserTab(activeTab.id);
+    const existingInstance = nativeBrowserInstancesRef.current.get(activeTab.id);
+
+    if (existingInstance && shouldUseNativeBrowserForUrl(activeUrl, browserSettings)) {
+      existingInstance.reloadKey = activeTab.reloadKey + 1;
+      void reloadNativeBrowserInstance(existingInstance).catch(() => {
+        closeNativeBrowserTab(existingInstance.tabId);
+      });
+    } else {
+      closeNativeBrowserTab(activeTab.id);
+    }
+
     recordBrowserConsoleEntry({
       kind: "browser",
       level: "info",
@@ -626,7 +933,7 @@ export function BrowserPreviewPanel({
 
   function handleClosePanel() {
     closeAllNativeBrowserInstances();
-    void closeStaleNativeBrowserInstances();
+    void forceCloseNativeBrowserPreviews();
     onClose();
   }
 
@@ -660,6 +967,12 @@ export function BrowserPreviewPanel({
       <div className="browser-preview-window">
         <div className="browser-preview-tabbar">
           <div className="browser-preview-tab-strip">
+            {browserSettings.incognitoEnabled ? (
+              <div className="browser-preview-badge" title="Incognito mode is on">
+                <ShieldCheck size={14} aria-hidden="true" />
+                <span>Incognito</span>
+              </div>
+            ) : null}
             <div className="browser-preview-tabs" role="tablist" aria-label="Browser tabs" onWheel={handleTabListWheel}>
               {session.tabs.map((tab) => {
                 const tabTitle = formatBrowserPreviewTitle(tab.url);
@@ -820,9 +1133,19 @@ export function BrowserPreviewPanel({
               activeLocalStatus={activeUrlIsLocal ? activeLocalStatus : "available"}
               activeUrl={activeUrl}
               addressDraft={addressDraft}
+              defaultSearchEngine={browserSettings.defaultSearchEngine}
               localPreview={localPreview}
-              onNavigate={navigateToUrl}
+              onNavigate={(url) => requestNavigation(url, { userInitiated: true })}
               onSubmit={submitAddress}
+            />
+          ) : null}
+          {pendingNavigation ? (
+            <BrowserNavigationPrompt
+              navigation={pendingNavigation}
+              onAllowDomain={() => approvePendingNavigation(true)}
+              onCancel={() => setPendingNavigation(null)}
+              onOpenOnce={() => approvePendingNavigation(false)}
+              onUnblock={unblockPendingNavigation}
             />
           ) : null}
           {consoleOpen ? (
@@ -944,6 +1267,7 @@ interface BrowserStartPageProps {
   activeLocalStatus: LocalPreviewStatus;
   activeUrl?: string;
   addressDraft: string;
+  defaultSearchEngine: BrowserSearchEngineId;
   localPreview: { status: LocalPreviewStatus; url?: string };
   onNavigate: (url: string) => void;
   onSubmit: (value: string, engineId?: SearchEngineId) => void;
@@ -953,11 +1277,12 @@ function BrowserStartPage({
   activeLocalStatus,
   activeUrl,
   addressDraft,
+  defaultSearchEngine,
   localPreview,
   onNavigate,
   onSubmit,
 }: BrowserStartPageProps) {
-  const selectedSearchEngine = getSearchEngine(DEFAULT_SEARCH_ENGINE_ID);
+  const selectedSearchEngine = getSearchEngine(defaultSearchEngine);
   const [startDraft, setStartDraft] = useState(addressDraft);
 
   useEffect(() => {
@@ -984,7 +1309,7 @@ function BrowserStartPage({
         className="browser-preview-start-search"
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit(startDraft, DEFAULT_SEARCH_ENGINE_ID);
+          onSubmit(startDraft, defaultSearchEngine);
         }}
       >
         <Search size={18} aria-hidden="true" />
@@ -999,6 +1324,56 @@ function BrowserStartPage({
           </button>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function BrowserNavigationPrompt({
+  navigation,
+  onAllowDomain,
+  onCancel,
+  onOpenOnce,
+  onUnblock,
+}: {
+  navigation: PendingBrowserNavigation;
+  onAllowDomain: () => void;
+  onCancel: () => void;
+  onOpenOnce: () => void;
+  onUnblock: () => void;
+}) {
+  const blocked = navigation.reason === "blocked-domain";
+
+  return (
+    <section className="browser-preview-navigation-prompt" aria-label={blocked ? "Blocked browser navigation" : "Approve browser navigation"}>
+      <div className="browser-preview-navigation-card">
+        <div className="browser-preview-navigation-title">
+          <ShieldCheck size={18} aria-hidden="true" />
+          <div>
+            <h2>{blocked ? "Blocked domain" : "Open website?"}</h2>
+            <span>{navigation.domain || formatBrowserPreviewTitle(navigation.url)}</span>
+          </div>
+        </div>
+        <p>{navigation.url}</p>
+        <div className="browser-preview-navigation-actions">
+          {blocked ? (
+            <button type="button" onClick={onUnblock}>
+              Remove block and open
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={onOpenOnce}>
+                Open once
+              </button>
+              <button type="button" onClick={onAllowDomain}>
+                Allow domain
+              </button>
+            </>
+          )}
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1226,7 +1601,7 @@ function createPreviewTab(url?: string): BrowserPreviewTab {
   };
 }
 
-function createBrowserPreviewSession(url?: string): BrowserPreviewSession {
+function createBrowserPreviewSession(url = DEFAULT_BROWSER_HOME_URL): BrowserPreviewSession {
   const tab = createPreviewTab(url);
 
   return {
@@ -1340,145 +1715,16 @@ export function closeBrowserPreviewSessionTab(session: BrowserPreviewSession, ta
   };
 }
 
-function openUrlInSession(session: BrowserPreviewSession, url: string): BrowserPreviewSession {
-  const ensuredSession = ensureSession(session);
-  const existingTab = ensuredSession.tabs.find((tab) => tab.url === url);
-
-  if (existingTab) {
-    return {
-      ...ensuredSession,
-      activeTabId: existingTab.id,
-    };
-  }
-
-  const activeTab = getActiveTab(ensuredSession);
-
-  if (!activeTab.url) {
-    const historyUpdate = createNavigationHistoryUpdate(activeTab, url);
-
-    return {
-      activeTabId: activeTab.id,
-      tabs: ensuredSession.tabs.map((tab) =>
-        tab.id === activeTab.id
-          ? {
-              ...tab,
-              ...historyUpdate,
-              updatedAt: new Date().toISOString(),
-              url,
-            }
-          : tab,
-      ),
-    };
-  }
-
-  const nextTab = createPreviewTab(url);
-
-  return {
-    activeTabId: nextTab.id,
-    tabs: [...ensuredSession.tabs, nextTab],
-  };
-}
-
-function loadBrowserPreviewSession(initialUrl?: string | null): BrowserPreviewSession {
+function loadBrowserPreviewSession(initialUrl?: string | null, incognito = false): BrowserPreviewSession {
   if (typeof window === "undefined") {
     return createBrowserPreviewSession(initialUrl ?? undefined);
   }
 
-  const storedSession = readStoredSession(BROWSER_PREVIEW_SESSION_KEY) ?? readStoredSession(LEGACY_BROWSER_PREVIEW_SESSION_KEY);
-
-  if (storedSession) {
-    const tabs = Array.isArray(storedSession.tabs)
-      ? storedSession.tabs.flatMap((tab) => {
-          const normalizedTab = normalizeStoredTab(tab);
-          return normalizedTab ? [normalizedTab] : [];
-        })
-      : [];
-
-    if (tabs.length > 0) {
-      const activeTabId = tabs.some((tab) => tab.id === storedSession.activeTabId) ? String(storedSession.activeTabId) : tabs[0].id;
-      const session = {
-        activeTabId,
-        tabs,
-      };
-
-      return initialUrl ? openUrlInSession(session, initialUrl) : session;
-    }
+  if (incognito) {
+    return createBrowserPreviewSession(initialUrl ?? undefined);
   }
 
   return createBrowserPreviewSession(initialUrl ?? undefined);
-}
-
-function readStoredSession(key: string) {
-  try {
-    return JSON.parse(loadPersistentString(key) ?? "null") as Partial<BrowserPreviewSession> | null;
-  } catch {
-    return null;
-  }
-}
-
-function saveBrowserPreviewSession(session: BrowserPreviewSession) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    savePersistentString(BROWSER_PREVIEW_SESSION_KEY, JSON.stringify(session));
-  } catch {
-    return;
-  }
-}
-
-function normalizeStoredTab(value: unknown): BrowserPreviewTab | null {
-  if (typeof value !== "object" || !value) {
-    return null;
-  }
-
-  const tab = value as Partial<BrowserPreviewTab>;
-  const url = normalizePreviewUrl(tab.url);
-
-  if (url && isCurrentAppUrl(url)) {
-    return null;
-  }
-
-  const normalizedHistory = normalizeStoredHistory(tab.history, tab.historyIndex, url);
-
-  return {
-    createdAt: typeof tab.createdAt === "string" && tab.createdAt ? tab.createdAt : new Date().toISOString(),
-    history: normalizedHistory.history,
-    historyIndex: normalizedHistory.historyIndex,
-    id: typeof tab.id === "string" && tab.id ? tab.id : createPreviewTabId(),
-    reloadKey: typeof tab.reloadKey === "number" && Number.isFinite(tab.reloadKey) ? tab.reloadKey : 0,
-    updatedAt: typeof tab.updatedAt === "string" && tab.updatedAt ? tab.updatedAt : new Date().toISOString(),
-    url: url ?? undefined,
-  };
-}
-
-function normalizeStoredHistory(value: unknown, rawIndex: unknown, currentUrl: string | null) {
-  const history = Array.isArray(value)
-    ? value.flatMap((entry) => {
-        const url = typeof entry === "string" ? normalizePreviewUrl(entry) : null;
-        return url && !isCurrentAppUrl(url) ? [url] : [];
-      })
-    : [];
-
-  if (currentUrl && !history.includes(currentUrl)) {
-    history.push(currentUrl);
-  }
-
-  if (history.length === 0) {
-    return {
-      history,
-      historyIndex: -1,
-    };
-  }
-
-  const indexFromUrl = currentUrl ? history.lastIndexOf(currentUrl) : -1;
-  const storedIndex = typeof rawIndex === "number" && Number.isFinite(rawIndex) ? rawIndex : -1;
-
-  return {
-    history,
-    historyIndex: clampHistoryIndex(storedIndex >= 0 ? storedIndex : indexFromUrl >= 0 ? indexFromUrl : history.length - 1, history),
-  };
 }
 
 async function findAvailableLocalPreview() {
@@ -1619,8 +1865,27 @@ function isLocalHttpUrl(url: string) {
   }
 }
 
+function isUnsupportedLocalPreviewUrl(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+
+    if (parsedUrl.protocol !== "http:" || !isLocalHostName(parsedUrl.hostname)) {
+      return false;
+    }
+
+    const port = Number.parseInt(parsedUrl.port || "80", 10);
+    return port !== 80 && !LOCAL_PREVIEW_PORTS.includes(port);
+  } catch {
+    return false;
+  }
+}
+
 function shouldRenderIframeForUrl(url: string) {
   return !isTauriDesktopRuntime() || isLocalHttpUrl(url);
+}
+
+function shouldUseNativeBrowserForUrl(url: string, settings: BrowserSettings) {
+  return isTauriDesktopRuntime() && (!isLocalHttpUrl(url) || settings.incognitoEnabled);
 }
 
 export function createBrowserPreviewFrameKey(tab: Pick<BrowserPreviewTab, "id" | "reloadKey" | "url">) {
@@ -1654,6 +1919,7 @@ function getSearchEngine(engineId: SearchEngineId) {
 let tauriWebviewModulePromise: Promise<typeof import("@tauri-apps/api/webview")> | null = null;
 let tauriWindowModulePromise: Promise<typeof import("@tauri-apps/api/window")> | null = null;
 let tauriDpiModulePromise: Promise<typeof import("@tauri-apps/api/dpi")> | null = null;
+let tauriCoreModulePromise: Promise<typeof import("@tauri-apps/api/core")> | null = null;
 
 function loadTauriWebviewModule() {
   tauriWebviewModulePromise ??= import("@tauri-apps/api/webview");
@@ -1670,7 +1936,12 @@ function loadTauriDpiModule() {
   return tauriDpiModulePromise;
 }
 
-async function createNativeBrowserInstance(label: string, url: string, frame: HTMLElement | null) {
+function loadTauriCoreModule() {
+  tauriCoreModulePromise ??= import("@tauri-apps/api/core");
+  return tauriCoreModulePromise;
+}
+
+async function createNativeBrowserInstance(label: string, url: string, frame: HTMLElement | null, incognito: boolean) {
   const bounds = frame ? getNativeBrowserBounds(frame) : null;
 
   if (!bounds) {
@@ -1678,21 +1949,48 @@ async function createNativeBrowserInstance(label: string, url: string, frame: HT
   }
 
   const [{ Webview }, { getCurrentWindow }] = await Promise.all([loadTauriWebviewModule(), loadTauriWindowModule()]);
-  const webview = new Webview(getCurrentWindow(), label, {
+  const currentWindow = getCurrentWindow();
+  const options: WebviewOptions = {
     dragDropEnabled: true,
     focus: false,
     height: bounds.height,
+    incognito,
     url,
     width: bounds.width,
     x: bounds.x,
     y: bounds.y,
     zoomHotkeysEnabled: true,
-  });
-
+  };
+  const webview = new Webview(currentWindow, label, options);
   await waitForNativeBrowserCreated(webview);
   await setNativeBrowserBounds(webview, bounds);
 
   return webview;
+}
+
+async function navigateNativeBrowserInstance(instance: NativeBrowserInstance, url: string, reloadCurrentUrl: boolean) {
+  if (reloadCurrentUrl) {
+    await reloadNativeBrowserInstance(instance);
+    return;
+  }
+
+  const { invoke } = await loadTauriCoreModule();
+  await invoke("browser_preview_navigate", {
+    label: instance.label,
+    url,
+  });
+}
+
+async function reloadNativeBrowserInstance(instance: NativeBrowserInstance) {
+  const { invoke } = await loadTauriCoreModule();
+  await invoke("browser_preview_reload", {
+    label: instance.label,
+  });
+}
+
+async function getNativeBrowserCurrentUrl(label: string) {
+  const { invoke } = await loadTauriCoreModule();
+  return invoke<string | null>("browser_preview_get_url", { label });
 }
 
 function waitForNativeBrowserCreated(webview: Webview) {
@@ -1796,7 +2094,28 @@ async function closeStaleNativeBrowserInstances(currentLabel?: string) {
   }
 }
 
+async function forceCloseNativeBrowserPreviews() {
+  try {
+    const { Webview } = await loadTauriWebviewModule();
+    const webviews = await Webview.getAll();
+
+    await Promise.all(
+      webviews
+        .filter((webview) => webview.label.startsWith("browser-preview-"))
+        .map(hideAndCloseNativeBrowser),
+    );
+  } catch {
+    // Best effort cleanup for native webviews that can outlive the React panel.
+  }
+}
+
 async function hideAndCloseNativeBrowser(webview: Webview) {
+  try {
+    await setNativeBrowserBounds(webview, HIDDEN_NATIVE_BROWSER_BOUNDS);
+  } catch {
+    // The webview may already be disposed or the DPI module may not be ready.
+  }
+
   try {
     await webview.hide();
   } catch {

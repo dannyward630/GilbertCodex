@@ -1,6 +1,6 @@
-import { createId, DEFAULT_PROJECT, formatChatAge, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
+import { createId, DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
 import type { AgentApproval, AgentRun } from "../../types/agentRun";
-import type { ChatArtifact, ChatAttachment, ChatMessage, ChatProgressItem, ChatSource, ChatSummary, ChatToolCall, ChatWorkTraceItem } from "../../types/chat";
+import type { ChatArtifact, ChatMessage, ChatProgressItem, ChatSource, ChatSummary, ChatToolCall, ChatWorkTraceItem } from "../../types/chat";
 import type { ProjectSummary } from "../../types/project";
 import type { DiscordStreamUpdate } from "./WorkspaceApp";
 
@@ -262,15 +262,17 @@ export function formatChatAsMarkdown(chat: ChatSummary) {
   return sections.join("\n");
 }
 
-export function createForkedChat(sourceChat: ChatSummary, projectName: string, title = `Fork: ${sourceChat.title || "New chat"}`): ChatSummary {
+export function createForkedChat(sourceChat: ChatSummary, projectName: string, title = `Fork: ${sourceChat.title || "New chat"}`, options: { throughMessageId?: string } = {}): ChatSummary {
   const now = new Date().toISOString();
+  const messageEndIndex = options.throughMessageId ? sourceChat.messages.findIndex((message) => message.id === options.throughMessageId) : -1;
+  const sourceMessages = messageEndIndex >= 0 ? sourceChat.messages.slice(0, messageEndIndex + 1) : sourceChat.messages;
 
   return {
     ...sourceChat,
     archived: false,
     id: createId("chat"),
     isDraft: undefined,
-    messages: sourceChat.messages.map(cloneMessageForFork),
+    messages: sourceMessages.map(cloneMessageForFork),
     pinned: false,
     project: normalizeProjectName(projectName),
     title,

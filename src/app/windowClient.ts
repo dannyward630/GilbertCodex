@@ -26,6 +26,14 @@ export async function startWindowDrag() {
   await withWindow((window) => window.startDragging());
 }
 
+export async function bringCurrentWindowToForeground() {
+  await withWindow(async (window) => {
+    await window.show().catch(() => undefined);
+    await window.unminimize().catch(() => undefined);
+    await window.setFocus();
+  });
+}
+
 export async function openChatWindow(chatId: string, title: string) {
   const url = createChatRouteUrl(chatId);
 
@@ -43,13 +51,18 @@ export async function openChatWindow(chatId: string, title: string) {
   }
 
   const webview = new WebviewWindow(label, {
+    center: true,
     decorations: false,
-    height: 820,
-    minHeight: 680,
-    minWidth: 960,
+    fullscreen: false,
+    height: 740,
+    maximized: false,
+    minHeight: 560,
+    minWidth: 800,
+    preventOverflow: true,
     title: title.trim() || "Gilbert Codex",
     url,
-    width: 1280,
+    visible: false,
+    width: 1120,
   });
 
   await new Promise<void>((resolve, reject) => {

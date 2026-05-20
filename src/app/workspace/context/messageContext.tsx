@@ -155,6 +155,7 @@ export async function steerActiveResponse(deps: WorkspaceRuntimeDeps, {
         messagesForProvider,
         prompt: steeringPrompt,
         requestId,
+        runId: assistantMessage.agentRunId,
         toolSelectionPrompt: createChatToolSelectionPrompt(steeringPrompt, messagesBeforeAssistant, workspaceSettings),
         workspaceSettings,
       });
@@ -266,12 +267,22 @@ export async function createMessagesForProvider(deps: WorkspaceRuntimeDeps, exis
     return compaction.messages;
   }
 
+const TOOL_SELECTION_ACKNOWLEDGEMENT_PATTERN = /^\s*(?:thanks?|thank you|ok(?:ay)?|cool|nice|got it|sounds good|perfect|great)\s*[.!?]*\s*$/i;
+const LOCAL_CODE_TOOL_CONTEXT_PATTERN =
+  /\b(?:app|codebase|component|config(?:uration)?|file|implementation|model|provider|registry|repo|repository|runtime|service|settings?|source|tool|workspace|src[\\/]|\.tsx?\b|\.jsx?\b)\b/i;
+const TOOL_SELECTION_FOLLOWUP_PATTERN =
+  /\b(?:it|this|that|these|those|they|them|feature|implementation|provider|setting|tool|works?\s+with|supports?)\b/i;
+const CONNECTED_APP_TOOL_CONTEXT_PATTERN =
+  /\b(?:gmail|mailbox|inbox|email(?:s| message| thread)?|google calendar|primary calendar|calendar account|calendar events?|free[-\s/]?busy|all[-\s]?day event)\b/i;
+const CONNECTED_APP_TOOL_FOLLOWUP_PATTERN =
+  /\b(?:again|check|look|now|one more time|1 more time|refresh|recheck|re-check|same|show|today|tomorrow|yesterday)\b/i;
+
 export function createChatToolSelectionPrompt(deps: WorkspaceRuntimeDeps, prompt: string, existingMessages: ChatMessage[], workspaceSettings: LocalWorkspaceSettings) {
   const { referencesSelectedWorkspaceForToolSelection, shouldAttachWebSearch } = deps;
 
     const trimmedPrompt = prompt.trim();
 
-    if (!workspaceSettings.enabled || !trimmedPrompt || /^\s*(?:thanks?|thank you|ok(?:ay)?|cool|nice|got it|sounds good|perfect|great)\s*[.!?]*\s*$/i.test(trimmedPrompt)) {
+    if (!trimmedPrompt || TOOL_SELECTION_ACKNOWLEDGEMENT_PATTERN.test(trimmedPrompt)) {
       return trimmedPrompt;
     }
 
@@ -282,19 +293,33 @@ export function createChatToolSelectionPrompt(deps: WorkspaceRuntimeDeps, prompt
       .filter((line) => line.length > 12)
       .join("\n");
 
-    if (shouldAttachWebSearch(trimmedPrompt) && !referencesSelectedWorkspaceForToolSelection(trimmedPrompt)) {
-      return trimmedPrompt;
-    }
-
-    if (!recentContext || !/\b(?:app|codebase|component|config(?:uration)?|file|implementation|model|provider|registry|repo|repository|runtime|service|settings?|source|tool|workspace|src[\\/]|\.tsx?\b|\.jsx?\b)\b/i.test(recentContext)) {
-      return trimmedPrompt;
-    }
-
     const looksLikeFollowUp =
       trimmedPrompt.split(/\s+/).filter(Boolean).length <= 18 ||
-      /\b(?:it|this|that|these|those|they|them|feature|implementation|provider|setting|tool|works?\s+with|supports?)\b/i.test(trimmedPrompt);
+      TOOL_SELECTION_FOLLOWUP_PATTERN.test(trimmedPrompt);
+    const looksLikeConnectedAppFollowUp =
+      Boolean(recentContext) &&
+      CONNECTED_APP_TOOL_CONTEXT_PATTERN.test(recentContext) &&
+      looksLikeFollowUp &&
+      CONNECTED_APP_TOOL_FOLLOWUP_PATTERN.test(trimmedPrompt);
 
-    if (!looksLikeFollowUp) {
+    if (shouldAttachWebSearch(trimmedPrompt) && !referencesSelectedWorkspaceForToolSelection(trimmedPrompt) && !looksLikeConnectedAppFollowUp) {
+      return trimmedPrompt;
+    }
+
+    if (!recentContext || !looksLikeFollowUp) {
+      return trimmedPrompt;
+    }
+
+    if (looksLikeConnectedAppFollowUp) {
+      return [
+        trimmedPrompt,
+        "Recent app/tool conversation context for tool selection only:",
+        recentContext,
+        "If the user is following up on Gmail, Google Calendar, or another connected app result, keep the same app tools available for the next answer.",
+      ].join("\n\n");
+    }
+
+    if (!workspaceSettings.enabled || !LOCAL_CODE_TOOL_CONTEXT_PATTERN.test(recentContext)) {
       return trimmedPrompt;
     }
 
