@@ -26,6 +26,66 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check private release overlay config
+        shell: pwsh
+        env:
+          GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+        run: |
+          if (Test-Path -LiteralPath "src/toolBridge/index.ts") {
+            return
+          }
+
+          if (-not $env:GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY -or -not $env:GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN) {
+            throw "Missing private release overlay. Add GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY and GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN secrets so release builds can restore src/toolBridge and optional local plugin bundles without committing them to the public repo."
+          }
+
+      - name: Check out private release overlay
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          ref: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
+          token: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+          path: .private-release-overlay
+
+      - name: Install private release overlay
+        shell: pwsh
+        run: |
+          $toolBridgeCandidates = @(
+            ".private-release-overlay/src/toolBridge",
+            ".private-release-overlay/toolBridge"
+          )
+          $toolBridgeSource = $toolBridgeCandidates |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ "index.ts") } |
+            Select-Object -First 1
+
+          if (-not $toolBridgeSource) {
+            throw "The private release overlay did not contain src/toolBridge/index.ts or toolBridge/index.ts."
+          }
+
+          if (Test-Path -LiteralPath "src/toolBridge") {
+            Remove-Item -LiteralPath "src/toolBridge" -Recurse -Force
+          }
+          Copy-Item -LiteralPath $toolBridgeSource -Destination "src/toolBridge" -Recurse -Force
+
+          foreach ($optionalPath in @("plugins", ".agents/plugins")) {
+            $source = Join-Path ".private-release-overlay" $optionalPath
+            if (Test-Path -LiteralPath $source) {
+              if (Test-Path -LiteralPath $optionalPath) {
+                Remove-Item -LiteralPath $optionalPath -Recurse -Force
+              }
+              $parent = Split-Path -Parent $optionalPath
+              if ($parent) {
+                New-Item -ItemType Directory -Force -Path $parent | Out-Null
+              }
+              Copy-Item -LiteralPath $source -Destination $optionalPath -Recurse -Force
+            }
+          }
+
+          if (-not (Test-Path -LiteralPath "src/toolBridge/index.ts")) {
+            throw "Private release overlay restore did not produce src/toolBridge/index.ts."
+          }
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -72,6 +132,44 @@ jobs:
         run: |
           if (-not $env:GOOGLE_OAUTH_CLIENT_SECRET) {
             throw "Missing GOOGLE_OAUTH_CLIENT_SECRET. Add the Google OAuth desktop client secret as a repository secret before publishing a Gmail-enabled release."
+          }
+
+      - name: Check app-facing release config
+        shell: pwsh
+        env:
+          VITE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.VITE_GITHUB_OAUTH_CLIENT_ID || secrets.VITE_GITHUB_OAUTH_CLIENT_ID }}
+          VITE_SUPPORT_CASHAPP_URL: ${{ vars.VITE_SUPPORT_CASHAPP_URL || secrets.VITE_SUPPORT_CASHAPP_URL }}
+          VITE_SUPPORT_PAYPAL_URL: ${{ vars.VITE_SUPPORT_PAYPAL_URL || secrets.VITE_SUPPORT_PAYPAL_URL }}
+          VITE_SUPPORT_STRIPE_MONTHLY_URL: ${{ vars.VITE_SUPPORT_STRIPE_MONTHLY_URL || secrets.VITE_SUPPORT_STRIPE_MONTHLY_URL }}
+          VITE_SUPPORT_STRIPE_ONE_TIME_URL: ${{ vars.VITE_SUPPORT_STRIPE_ONE_TIME_URL || secrets.VITE_SUPPORT_STRIPE_ONE_TIME_URL }}
+        run: |
+          if (-not $env:VITE_GITHUB_OAUTH_CLIENT_ID) {
+            throw "Missing VITE_GITHUB_OAUTH_CLIENT_ID. Add the public GitHub OAuth app client ID as a repository variable or secret before publishing a release."
+          }
+
+          $supportNames = @(
+            "VITE_SUPPORT_CASHAPP_URL",
+            "VITE_SUPPORT_PAYPAL_URL",
+            "VITE_SUPPORT_STRIPE_MONTHLY_URL",
+            "VITE_SUPPORT_STRIPE_ONE_TIME_URL"
+          )
+          $configuredSupportLinks = 0
+
+          foreach ($name in $supportNames) {
+            $value = (Get-Item "env:$name" -ErrorAction SilentlyContinue).Value
+            if (-not $value) {
+              continue
+            }
+
+            if ($value -match "^(sk|rk|pk|ek|whsec)_" -or $value -match "(?i)(access_token|refresh_token|client_secret|api_key|webhook_secret|whsec)=") {
+              throw "$name looks like a secret or contains a secret-like query parameter. Use only public hosted funding URLs in Vite release variables."
+            }
+
+            $configuredSupportLinks += 1
+          }
+
+          if ($configuredSupportLinks -eq 0) {
+            Write-Warning "No VITE_SUPPORT_* release variables are configured. The installer will still build, but the Support page will ship without funding links except disabled placeholders."
           }
 
       - name: Resolve release tag
@@ -122,7 +220,12 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.VITE_GITHUB_OAUTH_CLIENT_ID || secrets.VITE_GITHUB_OAUTH_CLIENT_ID }}
           VITE_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.VITE_GOOGLE_OAUTH_CLIENT_ID || secrets.VITE_GOOGLE_OAUTH_CLIENT_ID }}
+          VITE_SUPPORT_CASHAPP_URL: ${{ vars.VITE_SUPPORT_CASHAPP_URL || secrets.VITE_SUPPORT_CASHAPP_URL }}
+          VITE_SUPPORT_PAYPAL_URL: ${{ vars.VITE_SUPPORT_PAYPAL_URL || secrets.VITE_SUPPORT_PAYPAL_URL }}
+          VITE_SUPPORT_STRIPE_MONTHLY_URL: ${{ vars.VITE_SUPPORT_STRIPE_MONTHLY_URL || secrets.VITE_SUPPORT_STRIPE_MONTHLY_URL }}
+          VITE_SUPPORT_STRIPE_ONE_TIME_URL: ${{ vars.VITE_SUPPORT_STRIPE_ONE_TIME_URL || secrets.VITE_SUPPORT_STRIPE_ONE_TIME_URL }}
         with:
           tagName: ${{ steps.release_tag.outputs.tag }}
           releaseName: Gilbert Codex ${{ steps.release_tag.outputs.tag }}

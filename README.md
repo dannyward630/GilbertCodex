@@ -213,6 +213,8 @@ GitHub browser login uses OAuth device flow. For local development, create a Git
 
 Gmail plugin sign-in uses Google OAuth for desktop apps. End users install from Apps > Gmail and should only see Google account selection. Official release builds read the public desktop OAuth client ID from the `VITE_GOOGLE_OAUTH_CLIENT_ID` GitHub repository variable or secret and bake it into the downloadable app. For local development, enable the Gmail API, create a Google OAuth desktop client, set `VITE_GOOGLE_OAUTH_CLIENT_ID` in `.env`, and restart the app. No Google client secret, access token, refresh token, or downloaded credential file belongs in the repository.
 
+Release-only app configuration stays out of the public source tree. The GitHub `Release` workflow restores private app-only runtime files from a private release overlay and reads public app-facing values such as OAuth client IDs and hosted support links from repository variables or secrets before building the installer. Values prefixed with `VITE_` are baked into the packaged frontend and must be safe for users to inspect.
+
 Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs for app updates and chat follow-ups. Bot gateway chat is still future runtime work.
 
 See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, screenshots, workspace paths, terminal output, provider errors, or local automation output.

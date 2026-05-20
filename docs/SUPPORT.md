@@ -36,6 +36,8 @@ VITE_SUPPORT_CASHAPP_URL=
 
 Empty Stripe and Cash App values are hidden until configured. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
 
+For GitHub release builds, set the same `VITE_SUPPORT_*` names as repository variables or secrets. The release workflow passes them to the Tauri build so the packaged app can include the hosted links without committing them to the public source tree. These are app-facing values, so they must be public hosted URLs only; never use private account secrets, access tokens, webhook secrets, or raw API keys.
+
 ## Safety Rules
 
 - Never put Stripe `sk_...`, `rk_...`, `whsec_...`, API keys, webhook secrets, access tokens, or private account data in Vite environment values.

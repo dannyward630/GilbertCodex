@@ -37,6 +37,31 @@ The GitHub `Release` workflow builds the Windows NSIS installer with the same up
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key is password-protected
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY`
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN`
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_REF` when the private overlay should build from a branch or tag other than `main`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+
+The private release overlay is a private repository that is checked out only inside GitHub Actions. It lets the public repository stay clean while the release runner restores app-only files before packaging. The overlay can contain:
+
+```text
+src/toolBridge/
+plugins/
+.agents/plugins/
+```
+
+`src/toolBridge/index.ts` is required for release builds. `plugins/` and `.agents/plugins/` are optional, but if they exist in the private overlay they are copied into the build workspace before the installer is compiled. These files remain absent from the public GitHub tree.
+
+Add these repository variables or secrets before publishing a release build that needs built-in app-facing configuration:
+
+- `VITE_GITHUB_OAUTH_CLIENT_ID`
+- `VITE_GOOGLE_OAUTH_CLIENT_ID`
+- `VITE_SUPPORT_CASHAPP_URL`
+- `VITE_SUPPORT_PAYPAL_URL`
+- `VITE_SUPPORT_STRIPE_MONTHLY_URL`
+- `VITE_SUPPORT_STRIPE_ONE_TIME_URL`
+
+The `VITE_*` values are baked into the packaged frontend and can be inspected by app users, so only put public OAuth client IDs or public hosted funding URLs there. Keep private values in non-`VITE_` GitHub Secrets such as `GOOGLE_OAUTH_CLIENT_SECRET` and the Tauri signing key.
 
 ## What The Installer Includes
 
@@ -49,7 +74,7 @@ The GitHub `Release` workflow builds the Windows NSIS installer with the same up
 
 ## What Stays Local
 
-Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, and updater private keys are not bundled into public installers. Those are created or connected by the user after installation.
+Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, updater private keys, and private release overlay repository credentials are not bundled into public installers. Those are created or connected by the user after installation or used only by GitHub Actions during packaging.
 
 ## Light And Dark Mode
 
