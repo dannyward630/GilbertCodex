@@ -72,25 +72,7 @@ The app stores plugin installation state locally. Disconnecting GitHub removes t
 
 Do not copy or commit the client secret. Gilbert Codex does not need it for device-flow login.
 
-## Step 2: Add The Client ID To Local Development
-
-1. In the repository root, create a local `.env` from `.env.example`.
-
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-
-2. Set the public client ID:
-
-   ```text
-   VITE_GITHUB_OAUTH_CLIENT_ID=your_client_id_here
-   ```
-
-3. Keep `.env` out of Git. It should remain local.
-
-4. Restart the Vite or Tauri dev server after changing `.env`.
-
-## Step 3: Connect From Gilbert Codex
+## Step 2: Save The Client ID In Gilbert
 
 1. Start the desktop app:
 
@@ -100,21 +82,29 @@ Do not copy or commit the client secret. Gilbert Codex does not need it for devi
 
 2. Open Settings > GitHub.
 
-3. Confirm the Client ID field is filled.
+3. Paste the public OAuth App Client ID.
 
-4. Click Continue with GitHub.
+4. Gilbert stores that Client ID locally for the current app user. Do not paste or commit the OAuth client secret.
 
-5. Gilbert opens GitHub's device login page or shows a code.
+## Step 3: Connect From Gilbert Codex
 
-6. In the browser, authorize the app.
+1. Open Settings > GitHub.
 
-7. Return to Gilbert Codex.
+2. Confirm the Client ID field is filled.
 
-8. Wait for the connection status to show the GitHub username.
+3. Click Continue with GitHub.
 
-9. Click Check access.
+4. Gilbert opens GitHub's device login page or shows a code.
 
-10. Confirm repository previews load.
+5. In the browser, authorize the app.
+
+6. Return to Gilbert Codex.
+
+7. Wait for the connection status to show the GitHub username.
+
+8. Click Check access.
+
+9. Confirm repository previews load.
 
 ## Step 4: Understand The Requested Scopes
 
@@ -234,7 +224,7 @@ AI-callable GitHub tool ids:
 
 `github_semantic_search` uses local deterministic vector embeddings to rank repository metadata and GitHub code-search candidates. It does not send repository content to a separate embedding provider.
 
-For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The v0.5.0 workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
+For the Gilbert Codex release workflow, public release notes are kept in `docs/releases/<tag>.md`. The workflow reads that file so the GitHub Release body can stay in sync with the repo note instead of using a one-line generated placeholder.
 
 ## Repository Webhooks
 
@@ -277,7 +267,7 @@ GitHub says repository webhooks require repository owner or admin access. Use or
 
 | Problem | Likely Cause | Fix |
 | --- | --- | --- |
-| Continue with GitHub is disabled | Client ID is empty | Add `VITE_GITHUB_OAUTH_CLIENT_ID` to `.env`, restart the app, or paste the client ID in Settings > GitHub |
+| Continue with GitHub is disabled | Client ID is empty | Paste the OAuth App Client ID in Settings > GitHub |
 | Device login fails immediately | Device flow is not enabled on the OAuth App | Open the OAuth App settings and enable Device Flow |
 | GitHub connects but repositories do not load | Token scopes are reduced, SSO is required, or the account lacks repo access | Click Check access, authorize SSO if needed, or reconnect with full scopes |
 | Settings says reconnect needed | Token is missing scopes Gilbert expects | Click Continue with GitHub again and approve the requested scopes |
@@ -287,7 +277,7 @@ GitHub says repository webhooks require repository owner or admin access. Use or
 
 ## Maintainer Checklist
 
-- Keep `.env.example` limited to public client IDs and non-secret setup values.
+- Keep `.env.example` limited to optional public hosted links and non-secret setup values.
 - Keep requested scopes in `src/app/githubClient.ts`, Settings UI copy, and this document aligned.
 - Keep GitHub token storage notes in `SECURITY.md` current.
 - Prefer draft PR creation until richer review cards and diffs are available in the UI.

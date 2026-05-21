@@ -38,10 +38,21 @@ const RESEARCH_WEB_TOOL_IDS = new Set([
   "web_fetch",
 ]);
 
+const RESEARCH_RUNTIME_TOOL_IDS = new Set([
+  "browser_console_read",
+  "browser_preview_open",
+  "browser_screenshot_capture",
+  "terminal_dev_server_status",
+  "terminal_list_sessions",
+  "terminal_read_session",
+  "terminal_run",
+]);
+
 /** Aggregate evidence the research phase produced, derived from real tool calls. */
 export interface PlanResearchEvidence {
   toolCallCount: number;
   filesRead: string[];
+  runtimeChecks?: string[];
   searchQueries: string[];
   webQueries: string[];
 }
@@ -90,8 +101,10 @@ export function createPlanResearchInstruction(
         `2. Before declaring research complete, perform at least ${PLAN_RESEARCH_BUDGET.minToolCalls} real tool calls and read at least ${PLAN_RESEARCH_BUDGET.minFilesRead} distinct files in full or in part. "I already know this codebase" is NOT an acceptable reason to skip tool calls — your training-time knowledge of this repo is stale.`,
         "3. Grep for the symbols, types, file names, and function names the user mentions. Then read the top hits.",
         "4. If the user gives you a vague request, infer 2-3 likely entry-point files, list the workspace root to find them, and read them.",
-        "5. Do NOT write the plan itself this turn. Do NOT produce a tasks list, step-by-step implementation, or final answer.",
-        "6. When you've gathered enough evidence, emit a single Markdown document titled `## Research observations` with these subsections:",
+        "5. If the original request involves running, previewing, screenshots, console errors, browser UI, localhost, or visual verification, use the attached terminal diagnostics, browser preview, browser screenshot, and browser console tools as research evidence. Do not treat static file reads as enough for runtime/browser questions.",
+        "6. Do NOT write the plan itself this turn. Do NOT produce a tasks list, step-by-step implementation, or final answer.",
+        "7. When you've gathered enough evidence, emit a single Markdown document titled `## Research observations` with these subsections:",
+        "   - `### Runtime and browser evidence` - terminal sessions, preview URLs, screenshot observations, and browser console issues when those tools were relevant.",
         "   - `### Files inspected` — every file path you actually read, one per bullet, with a one-line note about what's there.",
         "   - `### Symbols and functions of interest` — bullets of the form `path:line — name — what it does`.",
         "   - `### Relevant code excerpts` — short verbatim snippets (under 20 lines each) with file:line citations.",
@@ -145,6 +158,7 @@ export function createPlanResearchFollowupInstruction(evidence: PlanResearchEvid
  */
 export function summarizeResearchEvidence(toolCalls: ChatToolCall[] | undefined): PlanResearchEvidence {
   const filesRead = new Set<string>();
+  const runtimeChecks = new Set<string>();
   const searchQueries = new Set<string>();
   const webQueries = new Set<string>();
   let toolCallCount = 0;
@@ -176,11 +190,18 @@ export function summarizeResearchEvidence(toolCalls: ChatToolCall[] | undefined)
       if (query) webQueries.add(query);
       continue;
     }
+
+    if (RESEARCH_RUNTIME_TOOL_IDS.has(toolId) || isRuntimeishLabel(toolCall.label)) {
+      toolCallCount += 1;
+      runtimeChecks.add(formatRuntimeCheck(toolCall));
+      continue;
+    }
   }
 
   return {
     toolCallCount,
     filesRead: Array.from(filesRead),
+    ...(runtimeChecks.size > 0 ? { runtimeChecks: Array.from(runtimeChecks) } : {}),
     searchQueries: Array.from(searchQueries),
     webQueries: Array.from(webQueries),
   };
@@ -221,6 +242,15 @@ export function formatResearchPayload(findings: string, evidence: PlanResearchEv
     lines.push("Searches performed:");
     for (const query of evidence.searchQueries) {
       lines.push(`- ${query}`);
+    }
+  }
+
+  const runtimeChecks = evidence.runtimeChecks ?? [];
+  if (runtimeChecks.length > 0) {
+    lines.push("");
+    lines.push("Runtime and browser checks:");
+    for (const check of runtimeChecks) {
+      lines.push(`- ${check}`);
     }
   }
 
@@ -266,6 +296,22 @@ function isSearchishLabel(label: string | undefined): boolean {
 function isWebishLabel(label: string | undefined): boolean {
   if (!label) return false;
   return /web (?:search|fetch)/i.test(label);
+}
+
+function isRuntimeishLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  return /\b(?:browser|console|screenshot|preview|terminal|dev server|command)\b/i.test(label);
+}
+
+function formatRuntimeCheck(toolCall: ChatToolCall): string {
+  const pieces = [
+    toolCall.toolId || toolCall.label || "runtime_tool",
+    extractQuery(toolCall),
+    toolCall.terminal?.command,
+    toolCall.terminal?.workingDirectory,
+  ].filter(Boolean);
+
+  return pieces.join(" - ");
 }
 
 function extractPath(toolCall: ChatToolCall): string | undefined {

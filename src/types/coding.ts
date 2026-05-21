@@ -41,6 +41,7 @@ export interface ToolHealthSnapshot {
   runtimeBudget?: {
     maxExecutions?: number;
     maxPasses?: number;
+    maxToolResultContentChars?: number | null;
     remainingExecutions?: number;
     remainingPasses?: number;
   };

@@ -295,6 +295,8 @@ describe("tool protocol leak guards", () => {
 
   it("requires real workspace tools for short UI edit prompts", () => {
     expect(requiresWorkspaceToolCallForPrompt("make it better more readable better design and more party like", true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt("when user sends message from ghome screen it should go to a chat workplace page for the chat and ide like experinec", true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt("when user sends message from ghome screen it should go to a chat workplace page for the chat and ide like experinec", false)).toBe(false);
     expect(requiresWorkspaceToolCallForPrompt([
       "do the job",
       "Local-code conversation context for tool selection only:",
@@ -303,6 +305,12 @@ describe("tool protocol leak guards", () => {
     ].join("\n"), true)).toBe(true);
     expect(requiresWorkspaceToolCallForPrompt("make it better more readable better design and more party like", false)).toBe(false);
     expect(requiresWorkspaceToolCallForPrompt("thanks", true)).toBe(false);
+  });
+
+  it("requires real workspace tools for browser screenshots, console, and terminal diagnostics", () => {
+    expect(requiresWorkspaceToolCallForPrompt("open the preview, take a screenshot, read console, and fix the UI", true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt("run the app in terminal and inspect localhost", true)).toBe(true);
+    expect(requiresWorkspaceToolCallForPrompt("open the preview, take a screenshot, read console, and fix the UI", false)).toBe(false);
   });
 
   it("does not ask for the provider tool-call channel when capability planning found no attached tools", () => {

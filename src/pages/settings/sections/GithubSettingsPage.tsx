@@ -251,7 +251,7 @@ export function GithubSettingsPage({
               <ol className="integration-doc-steps">
                 <li>Open GitHub Developer settings, create an OAuth App, and use public-safe app details.</li>
                 <li>Set Homepage URL to the project or repository page, set Authorization callback URL to <code>http://localhost</code>, and enable Device Flow.</li>
-                <li>Copy the public Client ID into this page or into <code>VITE_GITHUB_OAUTH_CLIENT_ID</code> for local development.</li>
+                <li>Copy the public Client ID into this page. Gilbert stores it locally for this desktop user.</li>
                 <li>Click Continue with GitHub. Gilbert starts device-flow login and sends you to <code>https://github.com/login/device</code> with a user code.</li>
                 <li>Approve the requested scopes. Scopes limit token access and do not exceed the signed-in account's own repository permissions.</li>
                 <li>Return to Gilbert and wait for the connection state to show your username, then click Check access.</li>

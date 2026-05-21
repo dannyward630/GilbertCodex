@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
@@ -31,6 +32,35 @@ pub struct BrowserAutomationResponse {
     pub text_snippet: String,
     pub title: String,
     pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPreviewCaptureRequest {
+    pub clip: Option<BrowserPreviewCaptureClip>,
+    pub format: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPreviewCaptureClip {
+    pub height: f64,
+    pub scale: Option<f64>,
+    pub width: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPreviewCaptureResponse {
+    pub clip: Option<BrowserPreviewCaptureClip>,
+    pub data_url: String,
+    pub label: String,
+    pub mime_type: String,
+    pub size_bytes: usize,
+    pub url: Option<String>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -72,6 +102,38 @@ pub fn browser_preview_reload(app: tauri::AppHandle, label: String) -> Result<()
     webview
         .reload()
         .map_err(|error| format!("Could not reload browser: {error}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn browser_preview_capture(
+    app: tauri::AppHandle,
+    request: BrowserPreviewCaptureRequest,
+) -> Result<BrowserPreviewCaptureResponse, String> {
+    let label = normalize_browser_preview_capture_label(request.label)?;
+    let format = normalize_browser_preview_capture_format(request.format)?;
+    let clip = request
+        .clip
+        .map(validate_browser_preview_capture_clip)
+        .transpose()?;
+    let webview = get_browser_preview_capture_webview(&app, &label)?
+        .ok_or_else(|| "Browser view is no longer available.".to_string())?;
+    let url = webview.url().ok().map(|url| url.to_string());
+    let params = build_browser_preview_capture_params(&format, clip.as_ref())?;
+    let result_json = capture_webview_with_devtools(&webview, params.to_string())?;
+    let base64_data = extract_capture_screenshot_data(&result_json)?;
+    let size_bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data.as_bytes())
+        .map(|bytes| bytes.len())
+        .unwrap_or_else(|_| estimate_base64_payload_bytes(&base64_data));
+
+    Ok(BrowserPreviewCaptureResponse {
+        clip,
+        data_url: format!("data:image/{format};base64,{base64_data}"),
+        label,
+        mime_type: format!("image/{format}"),
+        size_bytes,
+        url,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -188,6 +250,17 @@ fn get_browser_preview_webview(
     Ok(app.get_webview(label))
 }
 
+fn get_browser_preview_capture_webview(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<Option<tauri::Webview>, String> {
+    if label == "main" || label.starts_with("browser-preview-") {
+        return Ok(app.get_webview(label));
+    }
+
+    Err("Refusing to capture a non-browser webview.".to_string())
+}
+
 fn validate_browser_preview_url(raw_url: &str) -> Result<tauri::Url, String> {
     let url = tauri::Url::parse(raw_url.trim())
         .map_err(|_| "Browser navigation needs a valid http(s) URL.".to_string())?;
@@ -198,6 +271,174 @@ fn validate_browser_preview_url(raw_url: &str) -> Result<tauri::Url, String> {
     }
 
     Ok(url)
+}
+
+fn normalize_browser_preview_capture_label(label: Option<String>) -> Result<String, String> {
+    let label = label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("main")
+        .to_string();
+
+    if label == "main" || label.starts_with("browser-preview-") {
+        return Ok(label);
+    }
+
+    Err(
+        "Browser screenshot capture can only target the main app or browser preview webviews."
+            .to_string(),
+    )
+}
+
+fn normalize_browser_preview_capture_format(format: Option<String>) -> Result<String, String> {
+    let format = format
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+
+    if format == "png" {
+        Ok(format)
+    } else {
+        Err("Browser screenshot capture currently supports PNG only.".to_string())
+    }
+}
+
+fn validate_browser_preview_capture_clip(
+    clip: BrowserPreviewCaptureClip,
+) -> Result<BrowserPreviewCaptureClip, String> {
+    if !clip.x.is_finite()
+        || !clip.y.is_finite()
+        || !clip.width.is_finite()
+        || !clip.height.is_finite()
+        || clip.scale.is_some_and(|scale| !scale.is_finite())
+    {
+        return Err("Browser screenshot clip must use finite numbers.".to_string());
+    }
+
+    if clip.x < 0.0 || clip.y < 0.0 || clip.width <= 0.0 || clip.height <= 0.0 {
+        return Err("Browser screenshot clip needs a positive area.".to_string());
+    }
+
+    if clip.scale.is_some_and(|scale| scale <= 0.0) {
+        return Err("Browser screenshot clip scale must be greater than zero.".to_string());
+    }
+
+    Ok(clip)
+}
+
+fn build_browser_preview_capture_params(
+    format: &str,
+    clip: Option<&BrowserPreviewCaptureClip>,
+) -> Result<serde_json::Value, String> {
+    let mut params = serde_json::json!({
+        "captureBeyondViewport": false,
+        "format": format,
+        "fromSurface": true,
+    });
+
+    if let Some(clip) = clip {
+        params["clip"] = serde_json::json!({
+            "height": clip.height,
+            "scale": clip.scale.unwrap_or(1.0),
+            "width": clip.width,
+            "x": clip.x,
+            "y": clip.y,
+        });
+    }
+
+    Ok(params)
+}
+
+fn extract_capture_screenshot_data(result_json: &str) -> Result<String, String> {
+    let value = serde_json::from_str::<serde_json::Value>(result_json)
+        .map_err(|error| format!("Could not parse browser screenshot response: {error}"))?;
+    value
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .filter(|data| !data.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "Browser screenshot response did not include image data.".to_string())
+}
+
+fn estimate_base64_payload_bytes(value: &str) -> usize {
+    let padding = value
+        .chars()
+        .rev()
+        .take_while(|character| *character == '=')
+        .count();
+    (value.len() * 3 / 4).saturating_sub(padding)
+}
+
+#[cfg(windows)]
+fn capture_webview_with_devtools(
+    webview: &tauri::Webview,
+    params_json: String,
+) -> Result<String, String> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let result = capture_windows_platform_webview(platform, params_json);
+            let _ = tx.send(result);
+        })
+        .map_err(|error| format!("Could not access browser webview: {error}"))?;
+
+    rx.recv_timeout(Duration::from_secs(12))
+        .map_err(|_| "Timed out while capturing browser screenshot.".to_string())?
+}
+
+#[cfg(windows)]
+fn capture_windows_platform_webview(
+    platform: tauri::webview::PlatformWebview,
+    params_json: String,
+) -> Result<String, String> {
+    use std::sync::mpsc;
+    use webview2_com::{CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR};
+
+    let controller = platform.controller();
+    let core = unsafe { controller.CoreWebView2() }
+        .map_err(|error| format!("Could not access WebView2: {error}"))?;
+    let (tx, rx) = mpsc::channel();
+    let core_for_call = core.clone();
+    let params_for_call = params_json;
+
+    CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+        Box::new(move |handler| unsafe {
+            let method = CoTaskMemPWSTR::from("Page.captureScreenshot");
+            let params = CoTaskMemPWSTR::from(params_for_call.as_str());
+            core_for_call
+                .CallDevToolsProtocolMethod(
+                    *method.as_ref().as_pcwstr(),
+                    *params.as_ref().as_pcwstr(),
+                    &handler,
+                )
+                .map_err(webview2_com::Error::WindowsError)
+        }),
+        Box::new(move |error_code, result_json| {
+            let result = error_code
+                .map(|()| result_json)
+                .map_err(|error| format!("WebView2 screenshot capture failed: {error}"));
+            let _ = tx.send(result);
+            Ok(())
+        }),
+    )
+    .map_err(|error| format!("Could not capture browser screenshot: {error}"))?;
+
+    rx.recv_timeout(Duration::from_secs(12))
+        .map_err(|_| "Timed out while reading browser screenshot.".to_string())?
+}
+
+#[cfg(not(windows))]
+fn capture_webview_with_devtools(
+    _webview: &tauri::Webview,
+    _params_json: String,
+) -> Result<String, String> {
+    Err("Browser screenshot capture is currently implemented for the Windows WebView2 desktop runtime."
+        .to_string())
 }
 
 fn is_loopback_browser_automation_host(host: &str) -> bool {
@@ -391,7 +632,10 @@ fn absolutize_url(base_url: &str, href: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_browser_automation_url;
+    use super::{
+        normalize_browser_preview_capture_label, validate_browser_automation_url,
+        validate_browser_preview_capture_clip, BrowserPreviewCaptureClip,
+    };
 
     #[test]
     fn browser_automation_allows_public_https() {
@@ -421,5 +665,53 @@ mod tests {
     #[test]
     fn browser_automation_blocks_embedded_credentials() {
         assert!(validate_browser_automation_url("https://user:pass@example.com/").is_err());
+    }
+
+    #[test]
+    fn browser_capture_allows_only_main_and_preview_labels() {
+        assert_eq!(
+            normalize_browser_preview_capture_label(None).unwrap(),
+            "main"
+        );
+        assert_eq!(
+            normalize_browser_preview_capture_label(Some(" browser-preview-1-tab ".to_string()))
+                .unwrap(),
+            "browser-preview-1-tab"
+        );
+        assert!(normalize_browser_preview_capture_label(Some("settings".to_string())).is_err());
+    }
+
+    #[test]
+    fn browser_capture_rejects_invalid_clip_area() {
+        assert!(
+            validate_browser_preview_capture_clip(BrowserPreviewCaptureClip {
+                height: 200.0,
+                scale: Some(1.0),
+                width: 300.0,
+                x: 0.0,
+                y: 0.0,
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_browser_preview_capture_clip(BrowserPreviewCaptureClip {
+                height: 0.0,
+                scale: Some(1.0),
+                width: 300.0,
+                x: 0.0,
+                y: 0.0,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_browser_preview_capture_clip(BrowserPreviewCaptureClip {
+                height: 200.0,
+                scale: Some(-1.0),
+                width: 300.0,
+                x: 0.0,
+                y: 0.0,
+            })
+            .is_err()
+        );
     }
 }

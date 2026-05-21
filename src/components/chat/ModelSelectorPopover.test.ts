@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultProviderSettings } from "../../lib/appStorage";
-import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, NINE_ROUTER_SMART_SAVER_MODEL } from "../../lib/models";
+import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, NINE_ROUTER_SMART_SAVER_MODEL, OPENROUTER_FREE_AUTO_MODEL } from "../../lib/models";
 import type { ProviderSettings } from "../../types/settings";
 import { buildSelectorEntries, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
 
@@ -51,7 +51,7 @@ describe("model selector subscription models", () => {
     ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
   ];
 
-  it("keeps subscription defaults selectable while the active live catalog is unavailable", () => {
+  it("hides subscription defaults while the live catalog is unavailable", () => {
     const settings = createProviderSettings({
       model: "cx/gpt-5.5",
       provider: "9router",
@@ -60,19 +60,19 @@ describe("model selector subscription models", () => {
     for (const [status, liveModels] of [
       ["loading", undefined],
       ["error", undefined],
-      ["ready", []],
+      [undefined, undefined],
     ] as const) {
-      expect(getSubscriptionModelValues(settings, status, liveModels)).toEqual(subscriptionDefaults);
+      expect(getSubscriptionModelValues(settings, status, liveModels)).toEqual([]);
     }
   });
 
-  it("keeps inactive subscription defaults selectable from the composer menu", () => {
+  it("keeps subscription defaults selectable once the live catalog is ready", () => {
     const settings = createProviderSettings({
-      model: defaultProviderSettings.providerModels.openrouter,
-      provider: "openrouter",
+      model: "cx/gpt-5.5",
+      provider: "9router",
     });
 
-    expect(getSubscriptionModelValues(settings, undefined, undefined)).toEqual(subscriptionDefaults);
+    expect(getSubscriptionModelValues(settings, "ready", [])).toEqual(subscriptionDefaults);
   });
 
   it("merges ready live subscription models with the static defaults", () => {
@@ -91,5 +91,22 @@ describe("model selector subscription models", () => {
     expect(modelValues).toContain("cx/gpt-5.3-codex-high");
     expect(modelValues).toContain("gh/gpt-4o");
     expect(modelValues).not.toContain("gh/gpt-5.4");
+  });
+
+  it("hides OpenRouter models until an OpenRouter key is configured", () => {
+    const withoutKey = createProviderSettings({
+      model: defaultProviderSettings.providerModels.openrouter,
+      provider: "openrouter",
+    });
+    const withKey = createProviderSettings({
+      apiKeys: {
+        openrouter: "sk-or-test",
+      },
+      model: defaultProviderSettings.providerModels.openrouter,
+      provider: "openrouter",
+    });
+
+    expect(buildSelectorEntries(withoutKey, withoutKey.model, {}, {}, {}).some((entry) => entry.provider.id === "openrouter")).toBe(false);
+    expect(buildSelectorEntries(withKey, withKey.model, {}, {}, {}).map((entry) => entry.option.value)).toContain(OPENROUTER_FREE_AUTO_MODEL);
   });
 });

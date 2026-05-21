@@ -315,7 +315,7 @@ export async function searchBrave(query: string, settings: BraveSearchSettings, 
 
 /** Converts normalized web results into stable chat source cards. */
 export function createChatSourcesFromWebResults(results: WebSearchResult[]): ChatSource[] {
-  return normalizeSearchResults(results, results.length).map((result, index) => ({
+  return normalizeSearchResults(results, Math.min(results.length, MAX_WEB_SEARCH_RESULTS)).map((result, index) => ({
     detail: formatSourceDetail(result),
     id: `web-source-${index + 1}-${stableSourceId(result.url)}`,
     imageUrl: result.imageUrl,

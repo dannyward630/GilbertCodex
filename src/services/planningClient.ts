@@ -179,32 +179,32 @@ export interface PlanningProgressEvidence {
 export function createPlanningProgress(phase: PlanningPhase, evidence?: PlanningProgressEvidence): ChatProgressItem[] {
   return [
     {
-      detail: "Plan mode",
+      detail: "Request captured",
       id: "plan-context",
-      label: "Read request",
+      label: "Understand request",
       status: phase === "input" ? "active" : "complete",
     },
     {
-      detail: phase === "input" ? "Waiting for your answer" : "Answered or not needed",
+      detail: phase === "input" ? "Checking whether a decision would change the plan" : "Scope is clear",
       id: "plan-input",
-      label: "Clarify choices",
+      label: "Clarify scope",
       status: phase === "input" ? "active" : "complete",
     },
     {
       detail: createResearchProgressDetail(phase, evidence),
       id: "plan-research",
-      label: "Research codebase",
+      label: "Research context",
       status: phase === "researching" ? "active" : phase === "drafting" || phase === "complete" ? "complete" : "pending",
     },
     {
       detail:
         phase === "drafting"
-          ? "Writing the plan from research findings"
+          ? "Organizing findings into a reviewable plan"
           : phase === "complete"
             ? "Plan ready"
             : "Waiting",
       id: "plan-write",
-      label: "Write plan",
+      label: "Think through plan",
       status: phase === "drafting" ? "active" : phase === "complete" ? "complete" : "pending",
     },
   ];
@@ -218,7 +218,7 @@ function createResearchProgressDetail(phase: PlanningPhase, evidence?: PlanningP
     return phase === "researching" ? `Inspecting code (${parts.join(", ")})` : `Inspected ${parts.join(", ")}`;
   }
 
-  if (phase === "researching") return "Reading the codebase";
+  if (phase === "researching") return "Looking through the workspace";
   if (phase === "drafting" || phase === "complete") return "Context gathered";
   return "Waiting";
 }
@@ -274,7 +274,7 @@ function createFinalAnswerSettings(settings: ProviderSettings): ProviderSettings
     temperature: Math.min(settings.temperature, 0.25),
     thinking: {
       ...settings.thinking,
-      effort: "medium",
+      effort: "high",
       enabled: settings.tools.thinking,
     },
     tools: disablePlanningExecutionTools(settings.tools),
@@ -301,12 +301,14 @@ function createFinalAnswerSystemPrompt(basePrompt: string) {
   return [
     basePrompt,
     "Plan mode is active. You are the DRAFTER. The research phase that ran before you produced a tool-call ledger and a findings digest; build the plan from those.",
+    "Before writing the visible Markdown, think through the user's goal, constraints, evidence, ordering, risks, and verification. Do not expose hidden chain-of-thought; only surface the resulting plan and concise rationale.",
     "TOOL CALLS ARE DISABLED for this turn. Do NOT emit native tool calls, strict tool envelopes, or raw protocol JSON. Any tool-call markup is malformed.",
     "Reference only files, symbols, functions, snippets, and sources that appear in the research evidence. Do not invent files or functions that were not provided.",
     "Length: write as much plan as the task warrants. For a bug fix in one file, a short plan is fine. For a multi-file refactor, the plan should be long and detailed — name every file touched, every helper extracted, every test added. Do NOT artificially shorten.",
     "If the user is asking for a bug fix, name each bug, the file and approximate line, and the exact change. If the user is asking for a feature, name the files to create or edit and the structure.",
-    "Format the plan as Markdown with these sections, in order:",
+    "Format workspace/code plans as Markdown with these sections, in order:",
     "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each. Cite line numbers when known.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change. Group related steps under sub-headings if the plan is long.\n## Risks and edge cases\nBullet list. Be specific about which risk applies to which file/step.\n## Verification\nHow to confirm it works (tests to run, manual checks, commands).\n## Suggested PR breakdown\nOnly include this section if the plan spans more than one logical chunk. Otherwise omit.",
+    "For general research or non-code requests with no workspace files, do not write a fake `Files to change: None` section. Use `## Sources to gather` or `## Information to verify` in that slot, then keep the same Step-by-step plan, Risks and edge cases, and Verification sections.",
     "Do not wrap the plan in a fenced code block. The headings and lists must be rendered as visible Markdown, not shown as literal text inside a code fence.",
     "Be concrete. No generic advice like 'review the codebase' or 'investigate further' — the research is already done. If the evidence doesn't cover something, name it as an open question in Risks rather than guessing.",
     "If web sources were provided, use Markdown links for claims that rely on them.",
@@ -338,7 +340,8 @@ function createFinalAnswerMessages(messages: ChatMessage[], researchFindings: st
         researchFindings
           ? "Use the RESEARCH FINDINGS above as the attached context for the plan."
           : "No host-provided research findings were available. Build the best plan you can from the conversation and workspace context already in the messages.",
-        "Use the section headings: ## Goal, ## Files to change, ## Step-by-step plan, ## Risks and edge cases, ## Verification.",
+        "For workspace/code tasks, use: ## Goal, ## Files to change, ## Step-by-step plan, ## Risks and edge cases, ## Verification.",
+        "For general research or non-code tasks with no files to change, replace ## Files to change with ## Sources to gather or ## Information to verify.",
       ].join("\n\n"),
     ),
   ];

@@ -161,6 +161,21 @@ describe("summarizeResearchEvidence", () => {
     ]);
     expect(evidence.filesRead).toEqual(["src/legacy.ts"]);
   });
+
+  it("counts browser screenshots and terminal checks as runtime research evidence", () => {
+    const evidence = summarizeResearchEvidence([
+      makeToolCall({ id: "1", label: "Capture browser screenshot", toolId: "browser_screenshot_capture", input: JSON.stringify({ reason: "verify layout" }) }),
+      makeToolCall({ id: "2", label: "Read browser console", toolId: "browser_console_read" }),
+      makeToolCall({ id: "3", label: "Check dev server status", toolId: "terminal_dev_server_status" }),
+    ]);
+
+    expect(evidence.toolCallCount).toBe(3);
+    expect(evidence.runtimeChecks).toEqual([
+      "browser_screenshot_capture",
+      "browser_console_read",
+      "terminal_dev_server_status",
+    ]);
+  });
 });
 
 describe("isResearchDeepEnough", () => {
@@ -200,6 +215,7 @@ describe("formatResearchPayload", () => {
       {
         toolCallCount: 5,
         filesRead: ["src/a.ts", "src/b.ts"],
+        runtimeChecks: ["browser_screenshot_capture"],
         searchQueries: ["useAuth"],
         webQueries: [],
       },
@@ -209,6 +225,7 @@ describe("formatResearchPayload", () => {
     expect(payload).toContain("Files read: 2");
     expect(payload).toContain("- src/a.ts");
     expect(payload).toContain("- useAuth");
+    expect(payload).toContain("- browser_screenshot_capture");
     expect(payload).toContain("# Model digest");
     expect(payload).toContain("finding A");
   });

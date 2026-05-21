@@ -44,23 +44,38 @@ export function handleNewChat(deps: WorkspaceRuntimeDeps, project: string) {
   }
 
 export function handleSelectChat(deps: WorkspaceRuntimeDeps, chatId: string) {
-  const { activeChatIdRef, pendingChatsRef, pruneEmptyChats, restoreProjectLocalWorkspace, setActiveChatId, setActiveRoute, setChats, setSearchOpen } = deps;
+  const { activeChatIdRef, activeRoute, pendingChatsRef, pruneEmptyChats, restoreProjectLocalWorkspace, setActiveChatId, setActiveRoute, setChats, setSearchOpen } = deps;
 
     const selectedChat = pendingChatsRef.current.find((chat) => chat.id === chatId);
 
-    if (selectedChat) {
-      restoreProjectLocalWorkspace(selectedChat.project);
+    if (!selectedChat) {
+      setSearchOpen(false);
+      return;
     }
 
-    const nextChats = pruneEmptyChats(pendingChatsRef.current, chatId);
-    if (nextChats.length !== pendingChatsRef.current.length) {
-      pendingChatsRef.current = nextChats;
-      setChats(nextChats);
+    if (chatId === activeChatIdRef.current && activeRoute === "chat") {
+      setSearchOpen(false);
+      return;
     }
+
     activeChatIdRef.current = chatId;
     setActiveChatId(chatId);
     setActiveRoute("chat");
     setSearchOpen(false);
+
+    runAfterNextPaint(() => {
+      if (activeChatIdRef.current !== chatId) {
+        return;
+      }
+
+      restoreProjectLocalWorkspace(selectedChat.project);
+
+      const nextChats = pruneEmptyChats(pendingChatsRef.current, chatId);
+      if (nextChats.length !== pendingChatsRef.current.length) {
+        pendingChatsRef.current = nextChats;
+        setChats(nextChats);
+      }
+    });
   }
 
 export function handleActiveChatModelChange(deps: WorkspaceRuntimeDeps, nextModel: string, nextProvider: ProviderSettings["provider"]) {
@@ -354,7 +369,7 @@ export function handleLocalWorkspaceChange(deps: WorkspaceRuntimeDeps, nextWorks
   }
 
 export function bindActiveChatToProject(deps: WorkspaceRuntimeDeps, project: string, workspaceOverride: LocalWorkspaceSettings) {
-  const { activeChatIdRef, createEmptyChat, createNoProjectWorkspace, isDiscardableEmptyChat, isNoProjectName, localWorkspaceRef, normalizeProjectName, pendingChatsRef, pruneEmptyChats, resolveWorkspaceForChatProject, setActiveChatId, setActiveRoute, setChats, setLocalWorkspace, setSearchOpen, sortChatsByUpdatedAt } = deps;
+  const { activeChatIdRef, createEmptyChat, createNoProjectWorkspace, isDiscardableEmptyChat, isNoProjectName, localWorkspaceRef, normalizeProjectName, pendingChatsRef, pruneEmptyChats, resolveWorkspaceForChatProject, sameLocalWorkspaceSettings, setActiveChatId, setActiveRoute, setChats, setLocalWorkspace, setSearchOpen, sortChatsByUpdatedAt } = deps;
 
     const projectName = normalizeProjectName(project);
     const now = new Date().toISOString();
@@ -366,8 +381,10 @@ export function bindActiveChatToProject(deps: WorkspaceRuntimeDeps, project: str
       const projectWorkspace = isNoProjectName(projectName)
         ? createNoProjectWorkspace(localWorkspaceRef.current)
         : workspaceOverride ?? resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
-      localWorkspaceRef.current = projectWorkspace;
-      setLocalWorkspace(projectWorkspace);
+      if (!sameLocalWorkspaceSettings(projectWorkspace, localWorkspaceRef.current)) {
+        localWorkspaceRef.current = projectWorkspace;
+        setLocalWorkspace(projectWorkspace);
+      }
       setActiveRoute("chat");
       setSearchOpen(false);
       return;
@@ -406,12 +423,16 @@ export function bindActiveChatToProject(deps: WorkspaceRuntimeDeps, project: str
 
     if (isNoProjectName(projectName)) {
       const noProjectWorkspace = createNoProjectWorkspace(localWorkspaceRef.current);
-      localWorkspaceRef.current = noProjectWorkspace;
-      setLocalWorkspace(noProjectWorkspace);
+      if (!sameLocalWorkspaceSettings(noProjectWorkspace, localWorkspaceRef.current)) {
+        localWorkspaceRef.current = noProjectWorkspace;
+        setLocalWorkspace(noProjectWorkspace);
+      }
     } else {
       const projectWorkspace = workspaceOverride ?? resolveWorkspaceForChatProject(projectName, localWorkspaceRef.current);
-      localWorkspaceRef.current = projectWorkspace;
-      setLocalWorkspace(projectWorkspace);
+      if (!sameLocalWorkspaceSettings(projectWorkspace, localWorkspaceRef.current)) {
+        localWorkspaceRef.current = projectWorkspace;
+        setLocalWorkspace(projectWorkspace);
+      }
     }
 
     setActiveRoute("chat");
@@ -871,28 +892,34 @@ export function touchProject(deps: WorkspaceRuntimeDeps, projectName: string) {
   }
 
 export function restoreProjectLocalWorkspace(deps: WorkspaceRuntimeDeps, projectName: string, workspaceOverride: LocalWorkspaceSettings) {
-  const { createNoProjectWorkspace, isNoProjectName, localWorkspaceRef, normalizeProjectName, projectsRef, setLocalWorkspace } = deps;
+  const { createNoProjectWorkspace, isNoProjectName, localWorkspaceRef, normalizeProjectName, projectsRef, sameLocalWorkspaceSettings, setLocalWorkspace } = deps;
 
     const normalizedProjectName = normalizeProjectName(projectName);
 
     if (isNoProjectName(normalizedProjectName)) {
       const noProjectWorkspace = createNoProjectWorkspace(localWorkspaceRef.current);
-      localWorkspaceRef.current = noProjectWorkspace;
-      setLocalWorkspace(noProjectWorkspace);
+      if (!sameLocalWorkspaceSettings(noProjectWorkspace, localWorkspaceRef.current)) {
+        localWorkspaceRef.current = noProjectWorkspace;
+        setLocalWorkspace(noProjectWorkspace);
+      }
       return;
     }
 
     const projectWorkspace = workspaceOverride ?? projectsRef.current.find((project) => project.name.toLowerCase() === normalizedProjectName.toLowerCase())?.localWorkspace;
 
     if (projectWorkspace) {
-      localWorkspaceRef.current = projectWorkspace;
-      setLocalWorkspace(projectWorkspace);
+      if (!sameLocalWorkspaceSettings(projectWorkspace, localWorkspaceRef.current)) {
+        localWorkspaceRef.current = projectWorkspace;
+        setLocalWorkspace(projectWorkspace);
+      }
       return;
     }
 
     const noProjectWorkspace = createNoProjectWorkspace(localWorkspaceRef.current);
-    localWorkspaceRef.current = noProjectWorkspace;
-    setLocalWorkspace(noProjectWorkspace);
+    if (!sameLocalWorkspaceSettings(noProjectWorkspace, localWorkspaceRef.current)) {
+      localWorkspaceRef.current = noProjectWorkspace;
+      setLocalWorkspace(noProjectWorkspace);
+    }
   }
 
 export function saveWorkspaceForProject(deps: WorkspaceRuntimeDeps, projectName: string, nextWorkspace: LocalWorkspaceSettings) {
@@ -1144,3 +1171,14 @@ export function confirmBulkDeleteChats(deps: WorkspaceRuntimeDeps) {
     setBulkDeleteChatIds([]);
     setSearchOpen(false);
   }
+
+function runAfterNextPaint(callback: () => void) {
+  if (typeof window === "undefined") {
+    callback();
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(callback);
+  });
+}

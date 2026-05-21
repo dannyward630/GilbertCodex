@@ -57,6 +57,7 @@ const loadDatabaseSettingsPage = () => import("./sections/DatabaseSettingsPage")
 const loadDiscordSettingsPage = () => import("./sections/DiscordSettingsPage");
 const loadGeneralSettingsPage = () => import("./sections/GeneralSettingsPage");
 const loadGithubSettingsPage = () => import("./sections/GithubSettingsPage");
+const loadGoogleSettingsPage = () => import("./sections/GoogleSettingsPage");
 const loadMapboxSettingsPage = () => import("./mapbox/MapboxSettingsPage");
 const loadModelSettingsPage = () => import("./sections/ModelSettingsPage");
 const loadNineRouterSettingsPage = () => import("./nine-router/NineRouterSettingsPage");
@@ -74,6 +75,7 @@ const DatabaseSettingsPage = lazy(() => loadDatabaseSettingsPage().then((module)
 const DiscordSettingsPage = lazy(() => loadDiscordSettingsPage().then((module) => ({ default: module.DiscordSettingsPage })));
 const GeneralSettingsPage = lazy(() => loadGeneralSettingsPage().then((module) => ({ default: module.GeneralSettingsPage })));
 const GithubSettingsPage = lazy(() => loadGithubSettingsPage().then((module) => ({ default: module.GithubSettingsPage })));
+const GoogleSettingsPage = lazy(() => loadGoogleSettingsPage().then((module) => ({ default: module.GoogleSettingsPage })));
 const MapboxSettingsPage = lazy(() => loadMapboxSettingsPage().then((module) => ({ default: module.MapboxSettingsPage })));
 const ModelSettingsPage = lazy(() => loadModelSettingsPage().then((module) => ({ default: module.ModelSettingsPage })));
 const NineRouterSettingsPage = lazy(() => loadNineRouterSettingsPage().then((module) => ({ default: module.NineRouterSettingsPage })));
@@ -92,6 +94,7 @@ const SETTINGS_SECTION_PRELOADERS: Record<SettingsSectionId, () => Promise<unkno
   discord: loadDiscordSettingsPage,
   general: () => Promise.all([loadGeneralSettingsPage(), loadPersonalizationSettingsPage()]),
   github: loadGithubSettingsPage,
+  google: loadGoogleSettingsPage,
   mapbox: () => Promise.all([loadWeatherSourcesSettingsPage(), loadMapboxSettingsPage()]),
   model: () => Promise.all([loadProvidersSettingsPage(), loadModelSettingsPage()]),
   nineRouter: loadNineRouterSettingsPage,
@@ -906,6 +909,10 @@ function SettingsPageComponent({
 
     if (displaySection === "discord") {
       return <DiscordSettingsPage settings={discordBridge} onSettingsChange={onDiscordBridgeChange} />;
+    }
+
+    if (displaySection === "google") {
+      return <GoogleSettingsPage />;
     }
 
     if (displaySection === "nineRouter") {

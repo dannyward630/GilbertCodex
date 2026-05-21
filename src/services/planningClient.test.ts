@@ -30,7 +30,7 @@ describe("createPlanningProgress", () => {
   it("falls back to a generic detail when no evidence is provided", () => {
     const progress = createPlanningProgress("researching");
     const research = progress.find((item) => item.id === "plan-research");
-    expect(research?.detail).toBe("Reading the codebase");
+    expect(research?.detail).toBe("Looking through the workspace");
   });
 });
 

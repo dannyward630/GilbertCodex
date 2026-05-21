@@ -26,7 +26,7 @@ const EMPTY_CHAT_MESSAGES: ChatMessage[] = [];
 const EMPTY_STRING_ARRAY: string[] = [];
 
 export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
-  const { activeRoute, activeSettingsSection, appearanceMode, appearanceSettings, appInfo, AppsPage, discordBridgeSettings, generalSettings, handleLocalWorkspaceChange, handleRouteChange, handleSubscriptionSandboxUninstalled, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setAppearanceSettings, setDiscordBridgeSettings, setGeneralSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, WeatherRadarPage } = deps;
+  const { activeRoute, activeSettingsSection, appearanceMode, appearanceSettings, appInfo, AppsPage, automationDraft, automationState, discordBridgeSettings, generalSettings, handleAcknowledgeAutomationRun, handleCreateAutomationTask, handleDeleteAutomationTask, handleDuplicateAutomationTask, handleLocalWorkspaceChange, handleOpenAutomationRunChat, handlePauseAllAutomationTasks, handlePauseAutomationTask, handleRouteChange, handleRunAutomationTask, handleSimulateAutomationTask, handleSnoozeAutomationRun, handleSubscriptionSandboxUninstalled, handleUpdateAutomationTask, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setAppearanceSettings, setAutomationDraft, setDiscordBridgeSettings, setGeneralSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, TasksPage, WeatherRadarPage } = deps;
 
     if (activeRoute === "apps") {
       return (
@@ -35,6 +35,10 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
           onBackToChat={() => setActiveRoute("chat")}
           onOpenGithubSettings={() => {
             setActiveSettingsSection("github");
+            setActiveRoute("settings");
+          }}
+          onOpenGoogleSettings={() => {
+            setActiveSettingsSection("google");
             setActiveRoute("settings");
           }}
           onOpenRadar={() => handleRouteChange("radar")}
@@ -47,6 +51,32 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
       return (
         <SupportPage
           onBackToChat={() => setActiveRoute("chat")}
+        />
+      );
+    }
+
+    if (activeRoute === "tasks") {
+      return (
+        <TasksPage
+          discordSettings={discordBridgeSettings}
+          draft={automationDraft}
+          globalPaused={automationState.globalPaused}
+          runs={automationState.runs}
+          tasks={automationState.tasks}
+          onAcknowledgeRun={handleAcknowledgeAutomationRun}
+          onBackToChat={() => setActiveRoute("chat")}
+          onClearDraft={() => setAutomationDraft(null)}
+          onCreateTask={handleCreateAutomationTask}
+          onDeleteTask={handleDeleteAutomationTask}
+          onDuplicateTask={handleDuplicateAutomationTask}
+          onOpenRunChat={handleOpenAutomationRunChat}
+          onPauseAll={handlePauseAllAutomationTasks}
+          onPauseTask={handlePauseAutomationTask}
+          providerSettings={providerSettings}
+          onRunTask={handleRunAutomationTask}
+          onSimulateTask={handleSimulateAutomationTask}
+          onSnoozeRun={handleSnoozeAutomationRun}
+          onUpdateTask={handleUpdateAutomationTask}
         />
       );
     }

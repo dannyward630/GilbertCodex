@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/app";
 import type { DiscordBridgeResponseStyle, DiscordTunnelProvider } from "../types/discord";
@@ -22,7 +22,7 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.5.0",
+  version: "0.5.5",
   phase: "Public alpha",
   runtime: "Browser preview",
   platform: getHostPlatform(),
@@ -52,6 +52,70 @@ export interface BrowserAutomationResponse {
   textSnippet: string;
   title: string;
   url: string;
+}
+
+export interface BrowserPreviewCaptureClip {
+  height: number;
+  scale?: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+export interface BrowserPreviewCaptureRequest {
+  clip?: BrowserPreviewCaptureClip;
+  format?: "png";
+  label?: string;
+}
+
+export interface BrowserPreviewCaptureResponse {
+  clip?: BrowserPreviewCaptureClip | null;
+  dataUrl: string;
+  label: string;
+  mimeType: string;
+  sizeBytes: number;
+  url?: string | null;
+}
+
+export type NativeDictationState =
+  | "blocked"
+  | "error"
+  | "idle"
+  | "missingModel"
+  | "ready"
+  | "recording"
+  | "transcribing"
+  | "warming";
+
+export interface NativeDictationStatus {
+  accelerator: string;
+  canFallback: boolean;
+  engine: string;
+  gpuAvailable: boolean;
+  gpuDeviceId?: number | null;
+  gpuDeviceName?: string | null;
+  message: string;
+  model: string;
+  modelAvailable: boolean;
+  modelLoaded: boolean;
+  modelPath?: string | null;
+  recordingDurationMs?: number | null;
+  sampleRate?: number | null;
+  state: NativeDictationState;
+}
+
+export interface NativeDictationStopResponse {
+  durationMs: number;
+  status: NativeDictationStatus;
+  transcript: string;
+}
+
+export interface NativeDictationAudioLevelResponse {
+  level: number;
+  peak: number;
+  recordingDurationMs?: number | null;
+  sampleRate?: number | null;
+  state: NativeDictationState;
 }
 
 export interface UserConfigInfo {
@@ -267,7 +331,7 @@ export interface NineRouterOAuthCallbackResponse {
 
 /** Detects the desktop runtime before invoking Tauri-only commands. */
 export function isTauriDesktopRuntime() {
-  return typeof window !== "undefined" && (Boolean(window.__TAURI_INTERNALS__) || Boolean(window.__TAURI__));
+  return Boolean(isTauri()) || (typeof window !== "undefined" && (Boolean(window.__TAURI_INTERNALS__) || Boolean(window.__TAURI__)));
 }
 
 /** Reads app metadata from Rust and falls back for browser-only previews. */
@@ -467,6 +531,69 @@ export async function runBrowserAutomation(request: BrowserAutomationRequest): P
   return invoke<BrowserAutomationResponse>("browser_automation", { request });
 }
 
+/** Captures the current in-app browser preview as a PNG data URL. */
+export async function captureBrowserPreview(request: BrowserPreviewCaptureRequest): Promise<BrowserPreviewCaptureResponse> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Browser screenshot capture is available in the desktop app.");
+  }
+
+  return invoke<BrowserPreviewCaptureResponse>("browser_preview_capture", { request });
+}
+
+export async function getNativeDictationStatus(): Promise<NativeDictationStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return createBrowserDictationStatus();
+  }
+
+  return invoke<NativeDictationStatus>("dictation_status");
+}
+
+export async function prepareNativeDictation(): Promise<NativeDictationStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return createBrowserDictationStatus();
+  }
+
+  return invoke<NativeDictationStatus>("dictation_prepare");
+}
+
+export async function startNativeDictation(): Promise<NativeDictationStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return createBrowserDictationStatus();
+  }
+
+  return invoke<NativeDictationStatus>("dictation_start");
+}
+
+export async function stopNativeDictation(): Promise<NativeDictationStopResponse> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Offline dictation is available in the desktop app.");
+  }
+
+  return invoke<NativeDictationStopResponse>("dictation_stop");
+}
+
+export async function cancelNativeDictation(): Promise<NativeDictationStatus> {
+  if (!isTauriDesktopRuntime()) {
+    return createBrowserDictationStatus();
+  }
+
+  return invoke<NativeDictationStatus>("dictation_cancel");
+}
+
+export async function getNativeDictationAudioLevel(): Promise<NativeDictationAudioLevelResponse> {
+  if (!isTauriDesktopRuntime()) {
+    return {
+      level: 0,
+      peak: 0,
+      recordingDurationMs: null,
+      sampleRate: null,
+      state: "idle",
+    };
+  }
+
+  return invoke<NativeDictationAudioLevelResponse>("dictation_audio_level");
+}
+
 export async function fetchWeatherJson(request: WeatherFetchJsonRequest): Promise<WeatherFetchJsonResponse> {
   if (isTauriDesktopRuntime()) {
     return invoke<WeatherFetchJsonResponse>("weather_fetch_json", { request });
@@ -646,6 +773,22 @@ export async function sendDiscordInteractionResponse(request: { applicationId: s
   return invoke<void>("discord_bridge_send_interaction_response", { request });
 }
 
+export async function sendDiscordChannelMessage(request: { botToken: string; channelId: string; content: string }): Promise<void> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Discord channel messages are only available in the desktop app.");
+  }
+
+  return invoke<void>("discord_bridge_send_channel_message", { request });
+}
+
+export async function sendDiscordWebhookMessage(request: { content: string; webhookUrl: string }): Promise<void> {
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Discord webhook messages are only available in the desktop app.");
+  }
+
+  return invoke<void>("discord_bridge_send_webhook_message", { request });
+}
+
 export async function registerDiscordSlashCommand(request: {
   applicationId: string;
   botToken: string;
@@ -690,6 +833,25 @@ function createWorkspaceDependencyPreviewDiagnostic(message: string): WorkspaceD
     pythonVersion: null,
     status: "error",
     version: "desktop-only",
+  };
+}
+
+function createBrowserDictationStatus(): NativeDictationStatus {
+  return {
+    accelerator: "browser",
+    canFallback: true,
+    engine: "browser-speech",
+    gpuAvailable: false,
+    gpuDeviceId: null,
+    gpuDeviceName: null,
+    message: "Offline Whisper dictation is available in the desktop app.",
+    model: "Browser speech recognition",
+    modelAvailable: false,
+    modelLoaded: false,
+    modelPath: null,
+    recordingDurationMs: null,
+    sampleRate: null,
+    state: "missingModel",
   };
 }
 
@@ -782,7 +944,7 @@ export async function drainTerminalSession(sessionId: string): Promise<TerminalD
         sessionId,
       },
     }),
-    2_500,
+    8_000,
     "Terminal output drain",
   );
 }

@@ -98,8 +98,8 @@ function createSeedState() {
               detail: "Release checklist for public alpha",
               id: "artifact-release",
               kind: "file",
-              title: "docs/releases/v0.5.0.md",
-              url: "docs/releases/v0.5.0.md",
+              title: "docs/releases/v0.5.5.md",
+              url: "docs/releases/v0.5.5.md",
             },
           ],
           sources: [

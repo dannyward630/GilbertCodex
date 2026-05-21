@@ -11,9 +11,12 @@ import {
   LLAMA_33_70B_FREE_MODEL,
   LING_26_FLASH_MODEL,
   MINIMAX_M25_FREE_MODEL,
+  NEMOTRON_3_NANO_OMNI_MODEL,
   NEMOTRON_3_SUPER_MODEL,
   NINE_ROUTER_ALWAYS_FREE_MODEL,
+  NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS,
   NINE_ROUTER_CODEX_MODEL_IDS,
+  NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
   NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
   NINE_ROUTER_SMART_SAVER_MODEL,
   OPENROUTER_AUTO_MODEL,
@@ -25,12 +28,14 @@ import {
   QWEN3_NEXT_80B_FREE_MODEL,
   TRINITY_LARGE_THINKING_FREE_MODEL,
   buildProviderModelOptions,
+  getEffectiveProviderModelContextWindowTokens,
   getChatModelOption,
   getDefaultModelForProvider,
   isNineRouterGithubCopilotModelId,
   isOpenRouterFreeModel,
   normalizeNineRouterDiscoveredModelId,
   normalizeProviderModelId,
+  supportsModelInputModality,
 } from "./models";
 
 describe("model catalog", () => {
@@ -78,6 +83,7 @@ describe("model catalog", () => {
   });
 
   it("keeps the internal media fallback route hidden from the visible curated list", () => {
+    expect(IMAGE_REASONING_MODEL).toBe(NEMOTRON_3_NANO_OMNI_MODEL);
     expect(normalizeProviderModelId("openrouter", IMAGE_REASONING_MODEL)).toBe(IMAGE_REASONING_MODEL);
     expect(OPENROUTER_CURATED_FREE_MODELS).not.toContain(IMAGE_REASONING_MODEL);
     expect(getChatModelOption(IMAGE_REASONING_MODEL, "openrouter")).toBeUndefined();
@@ -130,6 +136,7 @@ describe("model catalog", () => {
     expect(optionValues).not.toContain("gpt-5-nano");
     expect(normalizeProviderModelId("openai", "gpt-5-nano")).toBe("gpt-5.4-nano");
     expect(getChatModelOption("gpt-5.5", "openai")).toMatchObject({
+      capabilities: expect.arrayContaining(["Multimodal"]),
       contextWindowTokens: 1_050_000,
       maxOutputTokens: 128_000,
       pricing: {
@@ -140,6 +147,7 @@ describe("model catalog", () => {
       },
     });
     expect(getChatModelOption("gpt-5.3-codex", "openai")).toMatchObject({
+      capabilities: expect.arrayContaining(["Multimodal"]),
       contextWindowTokens: 400_000,
       maxOutputTokens: 128_000,
       pricing: {
@@ -161,6 +169,11 @@ describe("model catalog", () => {
 
     expect(getDefaultModelForProvider("9router")).toBe("cx/gpt-5.5");
     expect(optionValues).toEqual(subscriptionDefaults);
+    expect(getChatModelOption("cx/gpt-5.5", "9router")).toMatchObject({
+      contextWindowTokens: NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
+    });
+    expect(getEffectiveProviderModelContextWindowTokens("9router", "cx/gpt-5.5", 1_000_000, { codexContextWindow: "standard" })).toBe(NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS);
+    expect(getEffectiveProviderModelContextWindowTokens("9router", "cx/gpt-5.5", 262_144, { codexContextWindow: "extended" })).toBe(NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS);
     expect(buildProviderModelOptions("9router", [
       { id: "custom-combo" },
       { id: "cx/gpt-5.3-codex-xhigh" },
@@ -173,6 +186,15 @@ describe("model catalog", () => {
       NINE_ROUTER_ALWAYS_FREE_MODEL,
       ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
     ]);
+  });
+
+  it("treats OpenAI and Codex subscription routes as native image-input models", () => {
+    expect(supportsModelInputModality("openai", "gpt-5.5", "image")).toBe(true);
+    expect(supportsModelInputModality("openai", "gpt-4o", "image")).toBe(true);
+    expect(supportsModelInputModality("9router", "cx/gpt-5.5", "image")).toBe(true);
+    expect(supportsModelInputModality("9router", "cx/gpt-5.3-codex-xhigh", "image")).toBe(true);
+    expect(supportsModelInputModality("9router", NINE_ROUTER_SMART_SAVER_MODEL, "image")).toBe(false);
+    expect(supportsModelInputModality("openrouter", GPT_OSS_120B_FREE_MODEL, "image")).toBe(false);
   });
 
   it("keeps GitHub Copilot subscription routes on supported 9Router ids", () => {

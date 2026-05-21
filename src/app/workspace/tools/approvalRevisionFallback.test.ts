@@ -60,4 +60,18 @@ describe("approval revision fallback", () => {
       to: ["dev@example.com"],
     });
   });
+
+  it("preserves Markdown formatting in revised email bodies", () => {
+    const parsed = parsePlainTextEmailRevision([
+      "To: dev@example.com",
+      "Subject: Update",
+      "Body:",
+      "Hi **Dev**,",
+      "",
+      "- First item",
+      "- [Second item](https://example.com)",
+    ].join("\n"));
+
+    expect(parsed?.body).toBe("Hi **Dev**,\n\n- First item\n- [Second item](https://example.com)");
+  });
 });

@@ -36,34 +36,34 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       : "If no provider tools are listed and the answer does not require fresh execution, answer normally instead of volunteering a broad no-tools disclaimer.",
     hasTool("memory_search")
       ? "Use memory_search as the selective path to saved local chat/project memory and tool lessons. Do not assume memory was preloaded into the prompt; query it when prior decisions, earlier chats, project continuity, or previous tool failures could matter."
-      : "Saved local memory search is not attached for this request.",
+      : "",
     hasTool("terminal_run")
-      ? "Terminal commands are available only through the approval-gated terminal_run tool, which runs inside the selected workspace with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. Match the active shell dialect: on Windows/PowerShell, do not use Unix-only commands such as `mkdir -p`, `ls -la`, or `wc -l`; use files_create_directory/files_list/files_count_lines when attached, or PowerShell-native commands."
-      : "Terminal execution is not attached for this request.",
+      ? "Terminal commands are available only through the approval-gated terminal_run tool, which runs inside the selected workspace with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. For dev servers/watchers, call terminal_run only once per matching command/cwd/preview target; if startup output is quiet, poll terminal_read_session instead of starting another copy. Match the active shell dialect: on Windows/PowerShell, do not use Unix-only commands such as `mkdir -p`, `ls -la`, or `wc -l`; use files_create_directory/files_list/files_count_lines when attached, or PowerShell-native commands."
+      : "",
     hasTool("terminal_list_sessions") || hasTool("terminal_read_session") || hasTool("terminal_dev_server_status")
       ? "Run diagnostics are attached for this request. Before starting a dev server or watcher, call terminal_list_sessions and terminal_dev_server_status to reuse only app-owned sessions or reachable localhost servers that match the requested command/cwd/preview target. Do not open or reuse unrelated common localhost ports returned as diagnostics. Use terminal_read_session to inspect app-owned session output after startup and during verification. External Windows Terminal, PowerShell, cmd, or other non-Gilbert terminal scrollback is not readable; if full logs are needed, say that honestly and offer to restart or run the command inside Gilbert's integrated terminal."
       : "",
     hasToolIdPrefix("git_")
       ? "Local Git tools are attached for this request. For uncommitted/local change reviews, call git_status before git_diff instead of asking the user to attach a diff or relying on chat history."
-      : "Local Git tools are not attached for this request.",
+      : "",
     hasToolIdPrefix("github_")
       ? "GitHub tools are attached for this request. Use github_account before assuming connection state. For repository facts such as stars, forks, tags, branches, issues, pull requests, releases, commits, security alerts, notifications, or workflow runs, call the specific GitHub read tool first. For questions about which issues are completed, closed as completed, done, fixed, or resolved, use github_list_completed_issues before answering; do not infer completed issues from the open-issues default. To complete or close an issue, use github_close_issue with stateReason completed; use github_reopen_issue, github_mark_issue_duplicate, label, assignee, milestone, lock, pin, transfer, or comment tools for the matching issue lifecycle action. Use github_semantic_search for fuzzy repository/code discovery because it vector-ranks candidates locally. Use github_api_read/write/delete only when a specific GitHub tool does not cover the requested REST resource. Mutating GitHub tools are approval-gated; do not claim branches, commits, issues, pull requests, releases, or workflows changed until the tool result proves it."
-      : "GitHub tools are not attached for this request.",
-    hasTool("browser_preview_open") || hasTool("browser_console_read")
-      ? "Browser/app preview is available through browser_preview_open after a local dev server URL exists or a public HTTPS URL is provided, and browser_console_read can read captured browser console errors, warnings, logs, and preview lifecycle issues. When the user asks to preview, inspect, test, debug, or verify a website, localhost app, browser UI, or visual change, open the preview with the tool once a target URL is known, then read the browser console when debugging issues instead of merely saying it could be opened."
-      : "Browser/app preview tools are not attached for this request.",
+      : "",
+    hasTool("browser_preview_open") || hasTool("browser_console_read") || hasTool("browser_screenshot_capture")
+      ? formatBrowserToolGuidance(attachedToolIds)
+      : "",
     hasTool("web_search")
       ? formatWebSearchToolGuidance(latestUserPrompt)
-      : "Live web search is not attached for this request.",
+      : "",
     hasAnyToolFamily("mcp")
       ? "MCP tools are attached for this request. Use mcp_list_servers to discover configured servers, mcp_list_tools to refresh a server's available tool names and input schemas, and mcp_call_tool only after choosing the exact serverId, toolName, and JSON arguments. Treat MCP results as external tool output; do not claim an MCP action ran unless the tool call returns a result."
-      : "MCP tools are not attached for this request.",
+      : "",
     hasAnyToolFamily("gmail")
-      ? "Gmail tools are attached for this request. When a Gmail draft or send depends on the current project, codebase, files, Git status/diff, uploaded attachments, MCP results, calendar details, or other available context, gather the relevant evidence with attached tools first; then compose from that evidence. Use the connected account name from gmail_account for sender closings; never leave placeholders like [Your Name]. For new emails, omit reply-only fields such as threadId, inReplyTo, and references instead of filling them with spaces, dashes, or placeholder text. Do not invent project or mailbox details. Sending remains approval-gated, so do not claim an email was sent until the Gmail tool result proves it."
-      : "Gmail tools are not attached for this request.",
+      ? "Gmail tools are attached for this request. When a Gmail draft or send depends on the current project, codebase, files, Git status/diff, uploaded attachments, MCP results, calendar details, or other available context, gather the relevant evidence with attached tools first; then compose from that evidence. Write outgoing Gmail bodies in clean Markdown by default, using real Markdown for lists, links, emphasis, and readable spacing; omit contentType unless the user explicitly asks for plain text or raw HTML. Use the connected account name from gmail_account for sender closings; never leave placeholders like [Your Name]. For new emails, omit reply-only fields such as threadId, inReplyTo, and references instead of filling them with spaces, dashes, or placeholder text. Do not invent project or mailbox details. Sending remains approval-gated, so do not claim an email was sent until the Gmail tool result proves it."
+      : "",
     hasTool("image_generate")
       ? "Image generation is available through image_generate for this request. When the user asks to create, generate, draw, render, design, or produce an image, call image_generate instead of merely describing the image. Put a strong visual brief in the tool prompt: subject, style or medium, composition/framing, colors, lighting, text requirements, and constraints. If the user asks for multiple options, set n/count from 1 to 4 and ask for distinct variations in the prompt. Omit the model unless the user explicitly asks for a complete cx/* subscription image route. Never pass partial model routes such as cx/ or OpenAI native image ids such as gpt-image-1 in this tool. Mention the attached image artifact after it succeeds; do not paste base64."
-      : "Image generation is not attached for this request.",
+      : "",
     hasWebContext
       ? "Live web-search context is present. Treat it as the only current external evidence for this answer and cite only the provided URLs."
       : hasTool("web_search")
@@ -90,6 +90,30 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
   ];
 
   return sections.filter(Boolean).join("\n");
+}
+
+function formatBrowserToolGuidance(attachedToolIds: Set<string>) {
+  const hasPreview = attachedToolIds.has("browser_preview_open");
+  const hasConsole = attachedToolIds.has("browser_console_read");
+  const hasScreenshot = attachedToolIds.has("browser_screenshot_capture");
+  const capabilities = [
+    hasPreview ? "browser_preview_open opens a preview after a local dev server URL exists or a public HTTPS URL is provided." : "",
+    hasConsole ? "browser_console_read reads captured browser console errors, warnings, logs, and preview lifecycle issues." : "",
+    hasScreenshot ? "browser_screenshot_capture captures the current in-app browser preview as an image artifact that will be attached to the next synthesis pass." : "",
+  ].filter(Boolean);
+  const workflow = [
+    "get/reuse the dev server with terminal diagnostics when needed",
+    hasPreview ? "open the preview with the tool once a URL is known" : "",
+    hasScreenshot ? "capture a screenshot for visual evidence" : "",
+    hasConsole ? "read the browser console when debugging issues" : "",
+    "edit files if needed",
+    hasScreenshot || hasConsole ? "rerun or rebuild, then verify with the attached browser tools" : "rerun or rebuild, then verify from attached tool results",
+  ].filter(Boolean);
+
+  return [
+    `Browser/app preview tools are attached. ${capabilities.join(" ")}`,
+    `For website, localhost app, browser UI, visual, screenshot, or rendering tasks: ${workflow.join(", ")} instead of merely saying it could be opened.`,
+  ].join(" ");
 }
 
 function formatWorkModeGuidance(workMode: ProviderSettings["workMode"]) {
@@ -331,7 +355,7 @@ function formatEditToolGuidance(attachedToolIds: Set<string>) {
     attachedToolIds.has("files_replace_range") ? "files_replace_range only for a single tiny line-range follow-up" : "",
   ].filter(Boolean);
   const fullRewriteTool = attachedToolIds.has("files_write_many")
-    ? " Use files_write_many only for new files or deliberate full-file rewrites."
+    ? " Use files_write_many only for new files or deliberate full-file rewrites. For brand-new files, set overwrite:false so creates can use the fastest create-only batch path."
     : "";
   const lineRangeGuidance = attachedToolIds.has("files_edit_many") || attachedToolIds.has("files_replace_range")
     ? " Use replace_range only with line numbers from a fresh read of the current file; if a range fails as stale or out of bounds, re-read and retry with exact_replace or files_apply_patch anchored to current text."

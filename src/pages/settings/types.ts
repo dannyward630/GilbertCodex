@@ -14,6 +14,7 @@ export type SettingsSectionId =
   | "discord"
   | "general"
   | "github"
+  | "google"
   | "mapbox"
   | "model"
   | "nineRouter"

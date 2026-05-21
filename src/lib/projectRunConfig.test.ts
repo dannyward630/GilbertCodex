@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectProjectRunActions,
+  getProjectRunActionPreviewUrl,
   mergeDetectedProjectRunActions,
   normalizeProjectRunConfig,
 } from "./projectRunConfig";
@@ -143,5 +144,42 @@ describe("project run config storage behavior", () => {
     const merged = mergeDetectedProjectRunActions(existing, detected);
 
     expect(merged?.actions.find((action) => action.id === "detected:dev-server")?.command).toBe("npm run dev -- --host localhost");
+  });
+});
+
+describe("project run preview inference", () => {
+  it("uses configured preview URLs first", () => {
+    expect(getProjectRunActionPreviewUrl({
+      command: "npm run dev",
+      kind: "dev-server",
+      previewUrl: "http://127.0.0.1:1420/",
+    })).toBe("http://localhost:1420/");
+  });
+
+  it("infers ports from common dev command forms", () => {
+    expect(getProjectRunActionPreviewUrl({
+      command: "npm run dev",
+      kind: "dev-server",
+    })).toBe("http://localhost:5173/");
+
+    expect(getProjectRunActionPreviewUrl({
+      command: "npm run app:dev",
+      kind: "dev-server",
+    })).toBe("http://localhost:1420/");
+
+    expect(getProjectRunActionPreviewUrl({
+      command: "vite --host localhost --port 3000",
+      kind: "dev-server",
+    })).toBe("http://localhost:3000/");
+
+    expect(getProjectRunActionPreviewUrl({
+      command: "$env:PORT=4000; npm run dev",
+      kind: "dev-server",
+    })).toBe("http://localhost:4000/");
+
+    expect(getProjectRunActionPreviewUrl({
+      command: "python manage.py runserver",
+      kind: "dev-server",
+    })).toBe("http://localhost:8000/");
   });
 });

@@ -44,7 +44,7 @@ interface SupportLinkDefinition {
 }
 
 export const SUPPORT_GITHUB_URL = "https://github.com/UrbanWafflezz/GilbertCodex";
-export const SUPPORT_CASH_TAG = "";
+export const SUPPORT_CASH_TAG = "Cash App";
 export const DEFAULT_CASH_APP_URL = "";
 
 const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
@@ -79,7 +79,7 @@ const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
     tone: "gold",
   },
   {
-    description: "A Cash App funding link can sit here once it is ready.",
+    description: "A Cash App hosted funding link can sit here once it is ready.",
     disabledLabel: "Add a Cash App hosted funding link to enable this option.",
     envKey: "VITE_SUPPORT_CASHAPP_URL",
     id: "cashApp",
@@ -121,8 +121,7 @@ export function normalizeSupportUrl(value: unknown): string {
 export function normalizeSupportConfig(rawConfig: RawSupportConfig = {}): SupportConfig {
   const links = SUPPORT_LINK_DEFINITIONS.map((definition) => {
     const rawValue = rawConfig[definition.envKey];
-    const fallbackUrl = definition.id === "cashApp" ? DEFAULT_CASH_APP_URL : "";
-    const url = normalizeSupportUrl(isBlankSupportValue(rawValue) ? fallbackUrl : rawValue);
+    const url = normalizeSupportUrl(isBlankSupportValue(rawValue) ? "" : rawValue);
 
     return {
       description: definition.description,

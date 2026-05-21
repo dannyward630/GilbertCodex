@@ -125,7 +125,7 @@ export function PlanReviewPanel({ expanded = false, message, onClose, onRequestR
   const canRequestRevision = Boolean(onRequestRevision && !message.isStreaming && !approved && !denied && !supersededPlan);
 
   const stateLabel: { description: string; label: string; tone: "warning" | "success" | "danger" | "muted" | "info" } = message.isStreaming
-    ? { description: "Researching and drafting...", label: "Plan in progress", tone: "info" }
+    ? { description: "Thinking through the route before review.", label: "Plan in progress", tone: "info" }
     : pendingApproval
       ? { description: "Approve to start coding, edit inline, request changes, or decline.", label: "Plan ready for review", tone: "warning" }
       : approved
@@ -188,7 +188,7 @@ export function PlanReviewPanel({ expanded = false, message, onClose, onRequestR
         </span>
         <div>
           <span className="plan-review-panel-eyebrow">
-            <Sparkles size={11} aria-hidden="true" /> Plan mode
+            <ClipboardList size={11} aria-hidden="true" /> Plan
           </span>
           <h2 id="plan-review-panel-title">{stateLabel.label}</h2>
           <small>{stateLabel.description}</small>

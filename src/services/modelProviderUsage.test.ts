@@ -16,6 +16,7 @@ const settings: ProviderSettings = {
   provider: "openrouter",
   providerModels: {},
   subscriptionOptimization: {
+    codexContextWindow: "standard",
     fallbackMode: "off",
     tokenSaverLevel: "low",
   },

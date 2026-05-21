@@ -3441,11 +3441,114 @@
   width: min(1180px, 100%);
 }
 
+.settings-shell[data-section="google"] {
+  width: min(1180px, 100%);
+}
+
 .github-settings-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
   gap: 16px;
   min-width: 0;
+}
+
+.google-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.google-oauth-card,
+.google-readiness-card,
+.google-scopes-card {
+  gap: 16px;
+}
+
+.google-action-row {
+  flex-wrap: wrap;
+}
+
+.google-doc-link {
+  text-decoration: none;
+}
+
+.google-readiness-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.google-api-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.google-api-list span {
+  min-height: 25px;
+  padding: 5px 8px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.google-scope-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.google-scope-section {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.google-scope-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.google-scope-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.google-scope-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  color: var(--text-muted);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.google-scope-heading button:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.google-scope-cloud code {
+  background: var(--surface-panel);
 }
 
 .github-account-card,
@@ -4337,6 +4440,8 @@
   }
 
   .github-settings-layout,
+  .google-settings-layout,
+  .google-scope-columns,
   .mapbox-settings-layout,
   .integration-docs-body,
   .github-upgrade-banner {

@@ -35,6 +35,7 @@ const DEFAULT_GOOGLE_CALENDAR_OAUTH_SCOPE = GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.jo
 
 export interface CalendarConnectOAuthRequest {
   clientId: string;
+  clientSecret?: string;
   scope?: string;
 }
 
@@ -61,6 +62,7 @@ export async function connectGoogleCalendarOAuth(request: CalendarConnectOAuthRe
   return invoke<CalendarConnectionState>("calendar_connect_oauth", {
     request: {
       clientId: request.clientId,
+      clientSecret: request.clientSecret,
       scope: request.scope || DEFAULT_GOOGLE_CALENDAR_OAUTH_SCOPE,
     },
   });

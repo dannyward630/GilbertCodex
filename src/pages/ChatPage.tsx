@@ -1,9 +1,9 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Code2, GitBranch, Grid2X2, Image as ImageIcon, Route, Search, Sparkles, type LucideIcon } from "lucide-react";
+import { Code2, GitBranch, Grid2X2, Image as ImageIcon, Route, Search, type LucideIcon } from "lucide-react";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ConversationHeader } from "../components/chat/ConversationHeader";
-import { RightRail, chatHasPendingRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "../components/inspector/RightRail";
+import { RightRail, chatHasAutoOpenRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "../components/inspector/RightRail";
 import type { CodingSidecarTab } from "../components/coding/CodingSidecarPanel";
 import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap } from "../lib/contextWindow";
 import { DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../lib/chatUtils";
@@ -173,6 +173,7 @@ function ChatPageComponent({
   requireCtrlEnterForLongPrompts = false,
 }: ChatPageProps) {
   const conversationBodyRef = useRef<HTMLDivElement>(null);
+  const rightRailAutoOpenedRef = useRef(false);
   const [composerHeight, setComposerHeight] = useState(152);
   const [rightRailOpen, setRightRailOpen] = useState(false);
   const [activePlanReviewMessageId, setActivePlanReviewMessageId] = useState<string | null>(null);
@@ -187,7 +188,7 @@ function ChatPageComponent({
   const [gitReviewResizing, setGitReviewResizing] = useState(false);
   const [gitReviewWidth, setGitReviewWidth] = useState(DEFAULT_GIT_REVIEW_WIDTH);
   const [codingSidecarTab, setCodingSidecarTab] = useState<CodingSidecarTab>("codebase");
-  const rightRailNeedsAction = useMemo(() => chatHasPendingRightRailAction(chat), [chat]);
+  const rightRailNeedsAction = useMemo(() => chatHasAutoOpenRightRailAction(chat), [chat]);
   const rightRailHasContent = useMemo(
     () => chatHasRightRailContent(chat) || chatHasPlanReviewContent(chat, activePlanReviewMessageId),
     [activePlanReviewMessageId, chat],
@@ -342,6 +343,7 @@ function ChatPageComponent({
     setCodingSidecarTab("review");
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
+    rightRailAutoOpenedRef.current = false;
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
@@ -357,6 +359,7 @@ function ChatPageComponent({
     setCodingSidecarTab("codebase");
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
+    rightRailAutoOpenedRef.current = false;
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
@@ -371,12 +374,14 @@ function ChatPageComponent({
   }, []);
 
   const handleCloseRightRail = useCallback(() => {
+    rightRailAutoOpenedRef.current = false;
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
   }, []);
 
   const handleOpenPlanReview = useCallback((messageId: string) => {
+    rightRailAutoOpenedRef.current = false;
     setGitReviewOpen(false);
     setGitReviewExpanded(false);
     setPlanReviewExpanded(false);
@@ -596,6 +601,7 @@ function ChatPageComponent({
 
     setGitReviewOpen(false);
     setGitReviewExpanded(false);
+    rightRailAutoOpenedRef.current = false;
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
   }, [active, chat.id]);
@@ -617,6 +623,7 @@ function ChatPageComponent({
     }
 
     if (!rightRailHasContent) {
+      rightRailAutoOpenedRef.current = false;
       setRightRailOpen(false);
       setActivePlanReviewMessageId(null);
       setPlanReviewExpanded(false);
@@ -624,7 +631,16 @@ function ChatPageComponent({
     }
 
     if (rightRailNeedsAction) {
+      rightRailAutoOpenedRef.current = true;
       setRightRailOpen(true);
+      return;
+    }
+
+    if (rightRailAutoOpenedRef.current) {
+      rightRailAutoOpenedRef.current = false;
+      setRightRailOpen(false);
+      setActivePlanReviewMessageId(null);
+      setPlanReviewExpanded(false);
     }
   }, [active, chat.id, rightRailHasContent, rightRailNeedsAction]);
 
@@ -668,6 +684,7 @@ function ChatPageComponent({
     setBrowserPreviewExpanded(false);
     setBrowserPreviewInitialUrl(browserPreviewUrl);
     setBrowserPreviewOpen(true);
+    rightRailAutoOpenedRef.current = false;
     setGitReviewOpen(false);
     setGitReviewExpanded(false);
   }, [active, browserPreviewEnabled, browserPreviewRequestId, browserPreviewUrl]);
@@ -978,10 +995,6 @@ function EmptyChatStart({ chat, children, hasApiKey, localWorkspace, model, onSe
   return (
     <div className="empty-chat-start">
       <section className="empty-chat-hero" aria-label="Current chat setup">
-        <div className="empty-chat-kicker">
-          <Sparkles size={15} aria-hidden="true" />
-          <span>{context.hasProject ? `Ready in ${context.projectLabel}` : "Ready with chat context"}</span>
-        </div>
         <h2>Start with the right context.</h2>
       </section>
       <div className="empty-chat-suggestions" aria-label="Starter prompts">

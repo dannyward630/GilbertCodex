@@ -158,6 +158,71 @@ describe("assistant activity indicator", () => {
     expect(snapshot?.label).toBe("Batch writing 2 files");
     expect(snapshot?.fileItems).toHaveLength(2);
     expect(snapshot?.fileItems.map((item) => item.path)).toEqual(["src/a.ts", "src/b.ts"]);
+
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: snapshot,
+      responseStarted: false,
+      thinkingContent: "",
+      thinkingStreaming: true,
+    }));
+
+    expect(html).toContain("src/a.ts");
+    expect(html).toContain("src/b.ts");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("+1");
+  });
+
+  it("shows active batch edit rows under the applying file changes thinking item", () => {
+    const workTrace: NonNullable<ChatMessage["workTrace"]> = [
+      {
+        content: "Applying file changes.",
+        id: "thinking-1",
+        kind: "thinking",
+        status: "active",
+      },
+    ];
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: JSON.stringify({
+            edits: [
+              {
+                newText: "const next = true;\nexport { next };\n",
+                oldText: "const next = false;\n",
+                path: "src/App.tsx",
+              },
+              {
+                newText: ".app { color: white; }\n",
+                oldText: ".app { color: black; }\n",
+                path: "src/App.css",
+              },
+            ],
+          }),
+          label: "Edit many workspace files",
+          status: "active",
+          toolId: "files_edit_many",
+        },
+      ],
+    }));
+
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: snapshot,
+      responseStarted: false,
+      thinkingContent: "",
+      thinkingStreaming: true,
+      workTrace,
+    }));
+
+    expect(html).toContain("Applying file changes.");
+    expect(html).toContain("Batch editing 2 files");
+    expect(html).toContain("src/App.tsx");
+    expect(html).toContain("src/App.css");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("+2");
+    expect(html).toContain("assistant-thinking-tool-file-deletions");
+    expect(html).toContain("-1");
   });
 
   it("shows partial batch completions as per-file rows while still running", () => {
@@ -195,7 +260,11 @@ describe("assistant activity indicator", () => {
     expect(html).toContain("2 pending");
     expect(html).toContain("data-inline=\"true\"");
     expect(html).toContain("src/a.ts");
-    expect(html).toContain("OK +1 -0");
+    expect(html).toContain("OK");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("+1");
+    expect(html).toContain("assistant-thinking-tool-file-deletions");
+    expect(html).toContain("-0");
   });
 
   it("dedupes stale active batch rows when the completed batch row is present", () => {
@@ -433,6 +502,54 @@ describe("assistant activity indicator", () => {
     expect(html).toContain("src/app/App.tsx");
   });
 
+  it("renders file change rows with additions, deletions, and diff previews", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      content: "Done.",
+      toolCalls: [
+        {
+          fileChanges: [
+            {
+              additions: 117,
+              deletions: 73,
+              diffPreview: [
+                { content: "--- src/toolBridge/selection.ts", kind: "meta" },
+                { content: "+++ src/toolBridge/selection.ts", kind: "meta" },
+                { content: "@@ -1,1 +1,2 @@", kind: "hunk" },
+                { content: "old selector", kind: "remove", oldLine: 1 },
+                { content: "new selector", kind: "add", newLine: 1 },
+              ],
+              diffTruncated: true,
+              kind: "update",
+              path: "C:/repo/src/toolBridge/selection.ts",
+            },
+          ],
+          id: "tool-1",
+          label: "Apply workspace patch",
+          status: "complete",
+        },
+      ],
+    }), { responseStarted: true });
+
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: snapshot,
+      responseStarted: false,
+      thinkingContent: "",
+      thinkingStreaming: false,
+    }));
+
+    expect(html).toContain("src/toolBridge/selection.ts");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("+117");
+    expect(html).toContain("assistant-thinking-tool-file-deletions");
+    expect(html).toContain("-73");
+    expect(html).toContain("assistant-thinking-tool-file-diff");
+    expect(html).toContain("data-kind=\"remove\"");
+    expect(html).toContain("old selector");
+    expect(html).toContain("data-kind=\"add\"");
+    expect(html).toContain("new selector");
+    expect(html).toContain("Diff preview trimmed");
+  });
+
   it("shows batch edit success and failure in the work trace", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "Done.",
@@ -482,7 +599,11 @@ describe("assistant activity indicator", () => {
 
     expect(html).toContain("Batch edited 1 of 2 files");
     expect(html).toContain("data-inline=\"true\"");
-    expect(html).toContain("OK +4 -1");
+    expect(html).toContain("OK");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("+4");
+    expect(html).toContain("assistant-thinking-tool-file-deletions");
+    expect(html).toContain("-1");
     expect(html).toContain("Issue");
     expect(html).toContain("src/app/missing.ts");
   });

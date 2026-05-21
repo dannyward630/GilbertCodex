@@ -364,12 +364,13 @@
 }
 
 .plugin-card {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   align-self: start;
   gap: 9px;
   min-height: 0;
   padding: 12px;
+  contain: layout paint;
 }
 
 .plugin-card:not([data-expanded="true"]) {

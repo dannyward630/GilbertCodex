@@ -37,6 +37,21 @@ interface AssistantActivityFileStats {
   writes: number;
 }
 
+type ToolFileRowStatus = NonNullable<ChatToolCall["batchFileResults"]>[number]["status"];
+
+interface ToolFileRowData {
+  additions: number;
+  deletions: number;
+  detail: string;
+  diffPreview?: ChatToolFileChange["diffPreview"];
+  diffTruncated?: boolean;
+  displayPath: string;
+  kind: AssistantActivityFileKind;
+  path: string;
+  status: ToolFileRowStatus;
+  statusLabel: string;
+}
+
 interface CreateAssistantActivitySnapshotOptions {
   responseStarted?: boolean;
 }
@@ -471,10 +486,13 @@ function AssistantWorkToolLine({ toolCall }: { toolCall: ChatToolCall }) {
   const detail = cleanToolActivityDetail(title, batchDisplay?.detail ?? formatToolActivityLine(toolCall));
   const batchFileResults = toolCall.batchFileResults ?? [];
   const fileChanges = toolCall.fileChanges ?? [];
+  const estimatedFileItems = batchFileResults.length === 0 && fileChanges.length === 0 && (toolCall.status === "active" || toolCall.status === "waiting_approval")
+    ? estimateFileItemsFromToolInput(toolCall)
+    : [];
   const inputDetail = getVisibleToolInput(toolCall.input, toolCall);
   const outputDetail = getVisibleToolOutput(toolCall.output, toolCall);
   const hasBatchFiles = batchFileResults.length > 0;
-  const hasVisibleFiles = hasBatchFiles || fileChanges.length > 0;
+  const hasVisibleFiles = hasBatchFiles || fileChanges.length > 0 || estimatedFileItems.length > 0;
   const hasDetails = Boolean(inputDetail) || Boolean(outputDetail);
   const showToolStatus = shouldShowToolStatus(toolCall.status);
   const summary = (
@@ -491,7 +509,7 @@ function AssistantWorkToolLine({ toolCall }: { toolCall: ChatToolCall }) {
       </span>
     </span>
   );
-  const visibleFiles = hasVisibleFiles ? <ToolFileList batchFileResults={batchFileResults} fileChanges={fileChanges} inline /> : null;
+  const visibleFiles = hasVisibleFiles ? <ToolFileList batchFileResults={batchFileResults} estimatedFileItems={estimatedFileItems} fileChanges={fileChanges} inline /> : null;
 
   if (!hasDetails) {
     return (
@@ -530,13 +548,20 @@ function cleanToolActivityDetail(title: string, detail: string) {
 
 function ToolFileList({
   batchFileResults,
+  estimatedFileItems,
   fileChanges,
   inline,
 }: {
   batchFileResults: NonNullable<ChatToolCall["batchFileResults"]>;
+  estimatedFileItems: AssistantActivityFileItem[];
   fileChanges: ChatToolFileChange[];
   inline?: boolean;
 }) {
+  const fileChangesByDisplayPath = new Map(
+    fileChanges
+      .map((change) => [formatActivityPath(change.path), change] as const)
+      .filter(([displayPath]) => displayPath),
+  );
   const visibleBatchFileResults = batchFileResults
     .map((result, index) => ({
       detail: cleanToolFileDetail(result.detail),
@@ -552,38 +577,169 @@ function ToolFileList({
       index,
     }))
     .filter((item) => item.displayPath);
-  const hasBatchFiles = visibleBatchFileResults.length > 0;
+  const visibleEstimatedFileItems = estimatedFileItems
+    .map((item, index) => ({
+      displayPath: formatActivityPath(item.path),
+      index,
+      item,
+    }))
+    .filter((item) => item.displayPath);
+  const rows: ToolFileRowData[] = visibleBatchFileResults.length > 0
+    ? visibleBatchFileResults.map(({ detail, displayPath, result }) => {
+        const matchingChange = fileChangesByDisplayPath.get(displayPath);
+        return {
+          additions: result.additions,
+          deletions: result.deletions,
+          detail,
+          diffPreview: matchingChange?.diffPreview,
+          diffTruncated: matchingChange?.diffTruncated,
+          displayPath,
+          kind: result.kind ?? matchingChange?.kind ?? "update",
+          path: result.path,
+          status: result.status,
+          statusLabel: formatBatchFileStatus(result.status),
+        };
+      })
+    : visibleFileChanges.length > 0
+      ? visibleFileChanges.map(({ change, displayPath }) => ({
+        additions: change.additions,
+        deletions: change.deletions,
+        detail: "",
+        diffPreview: change.diffPreview,
+        diffTruncated: change.diffTruncated,
+        displayPath,
+        kind: change.kind ?? "update",
+        path: change.path,
+        status: "ok",
+        statusLabel: "",
+      }))
+      : visibleEstimatedFileItems.map(({ displayPath, item }) => ({
+        additions: item.additions,
+        deletions: item.deletions,
+        detail: "",
+        displayPath,
+        kind: item.kind,
+        path: item.path,
+        status: "ok",
+        statusLabel: "",
+      }));
 
-  if (!hasBatchFiles && visibleFileChanges.length === 0) {
+  if (rows.length === 0) {
     return null;
   }
 
   return (
     <div className="assistant-thinking-tool-files" data-inline={inline ? "true" : undefined} aria-label="File changes">
-      {hasBatchFiles
-        ? visibleBatchFileResults.map(({ detail, displayPath, index, result }) => (
-            <div
-              className="assistant-thinking-tool-file"
-              data-kind={result.kind ?? "update"}
-              data-show-status={shouldShowFileStatus(result.status) ? "true" : "false"}
-              data-status={result.status}
-              key={`${result.path}-${index}`}
-              title={detail || undefined}
-            >
-              {shouldShowFileStatus(result.status) ? <ToolFileStatusIcon status={result.status} /> : null}
-              <strong>{displayPath}</strong>
-              <span className="assistant-thinking-tool-file-result" data-status={result.status}>
-                {formatBatchFileResultMeta(result)}
-              </span>
-              {detail ? <small>{detail}</small> : null}
-            </div>
-          ))
-        : visibleFileChanges.map(({ change, displayPath, index }) => (
-            <div className="assistant-thinking-tool-file" data-kind={change.kind ?? "update"} data-show-status="false" data-status="ok" key={`${change.path}-${index}`}>
-              <strong>{displayPath}</strong>
-              <span>+{formatNumber(change.additions)} -{formatNumber(change.deletions)}</span>
-            </div>
-          ))}
+      {rows.map((row, index) => (
+        <ToolFileRow key={`${row.path}-${index}`} row={row} />
+      ))}
+    </div>
+  );
+}
+
+function ToolFileRow({ row }: { row: ToolFileRowData }) {
+  const showStatus = shouldShowFileStatus(row.status);
+  const hasPreview = Boolean(row.diffPreview?.length);
+  const rowContent = (
+    <span className="assistant-thinking-tool-file-row">
+      {showStatus ? <ToolFileStatusIcon status={row.status} /> : null}
+      <strong>{row.displayPath}</strong>
+      <ToolFileDelta
+        additions={row.additions}
+        deletions={row.deletions}
+        status={row.status}
+        statusLabel={row.statusLabel}
+      />
+      {hasPreview ? <ChevronDown className="assistant-thinking-tool-file-chevron" size={13} aria-hidden="true" /> : null}
+    </span>
+  );
+
+  if (hasPreview) {
+    return (
+      <details
+        className="assistant-thinking-tool-file"
+        data-has-preview="true"
+        data-kind={row.kind ?? "update"}
+        data-show-status={showStatus ? "true" : "false"}
+        data-status={row.status}
+        title={row.detail || undefined}
+      >
+        <summary>{rowContent}</summary>
+        {row.detail ? <small>{row.detail}</small> : null}
+        <ToolFileDiffPreview lines={row.diffPreview ?? []} truncated={row.diffTruncated === true} />
+      </details>
+    );
+  }
+
+  return (
+    <div
+      className="assistant-thinking-tool-file"
+      data-kind={row.kind ?? "update"}
+      data-show-status={showStatus ? "true" : "false"}
+      data-status={row.status}
+      title={row.detail || undefined}
+    >
+      {rowContent}
+      {row.detail ? <small>{row.detail}</small> : null}
+    </div>
+  );
+}
+
+function ToolFileDelta({
+  additions,
+  deletions,
+  status,
+  statusLabel,
+}: {
+  additions: number;
+  deletions: number;
+  status: ToolFileRowStatus;
+  statusLabel: string;
+}) {
+  const showDelta = additions > 0 || deletions > 0 || !statusLabel;
+
+  return (
+    <span
+      className="assistant-thinking-tool-file-result"
+      data-status={status}
+      aria-label={[
+        statusLabel,
+        showDelta ? `${formatNumber(additions)} additions` : "",
+        showDelta ? `${formatNumber(deletions)} deletions` : "",
+      ].filter(Boolean).join(", ")}
+    >
+      {statusLabel ? <span className="assistant-thinking-tool-file-status-label">{statusLabel}</span> : null}
+      {showDelta ? (
+        <>
+          <span className="assistant-thinking-tool-file-additions">+{formatNumber(additions)}</span>
+          <span className="assistant-thinking-tool-file-deletions">-{formatNumber(deletions)}</span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+function ToolFileDiffPreview({
+  lines,
+  truncated,
+}: {
+  lines: NonNullable<ChatToolFileChange["diffPreview"]>;
+  truncated: boolean;
+}) {
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="assistant-thinking-tool-file-diff" aria-label="Diff preview">
+      {lines.map((line, index) => (
+        <code className="assistant-thinking-tool-file-diff-line" data-kind={line.kind} key={`${line.kind}-${index}-${line.oldLine ?? ""}-${line.newLine ?? ""}`}>
+          <span className="assistant-thinking-tool-file-diff-number">{formatDiffLineNumber(line)}</span>
+          <span className="assistant-thinking-tool-file-diff-marker" aria-hidden="true">{getDiffLineMarker(line.kind)}</span>
+          <span className="assistant-thinking-tool-file-diff-content">{line.content || " "}</span>
+        </code>
+      ))}
+      {truncated ? <span className="assistant-thinking-tool-file-diff-truncated">Diff preview trimmed</span> : null}
     </div>
   );
 }
@@ -1507,9 +1663,35 @@ function formatFileCount(count: number) {
   return count === 1 ? "1 file" : `${count} files`;
 }
 
-function formatBatchFileResultMeta(result: NonNullable<ChatToolCall["batchFileResults"]>[number]) {
-  const diff = result.additions > 0 || result.deletions > 0 ? ` +${formatNumber(result.additions)} -${formatNumber(result.deletions)}` : "";
-  return `${formatBatchFileStatus(result.status)}${diff}`;
+function formatDiffLineNumber(line: NonNullable<ChatToolFileChange["diffPreview"]>[number]) {
+  if (line.kind === "meta" || line.kind === "hunk") {
+    return "";
+  }
+
+  const oldLine = line.oldLine ? formatNumber(line.oldLine) : "";
+  const newLine = line.newLine ? formatNumber(line.newLine) : "";
+
+  if (oldLine && newLine) {
+    return `${oldLine}:${newLine}`;
+  }
+
+  return oldLine || newLine;
+}
+
+function getDiffLineMarker(kind: NonNullable<ChatToolFileChange["diffPreview"]>[number]["kind"]) {
+  if (kind === "add") {
+    return "+";
+  }
+
+  if (kind === "remove") {
+    return "-";
+  }
+
+  if (kind === "context") {
+    return " ";
+  }
+
+  return "";
 }
 
 function formatBatchFileStatus(status: NonNullable<ChatToolCall["batchFileResults"]>[number]["status"]) {

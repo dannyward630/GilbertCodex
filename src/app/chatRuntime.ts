@@ -732,8 +732,17 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
   const asksToContinueWork = /\b(?:do\s+(?:it|the\s+job)|continue|finish(?:\s+it)?|go\s+ahead|make\s+it\s+happen|apply\s+(?:it|that|the\s+change))\b/i.test(trimmed);
   const asksForEdit =
     /\b(?:add|append|change|create|delete|edit|fix|implement|improve|insert|make\s+(?:it|this|that)?\s*(?:look\s+|feel\s+|more\s+)?(?:better|cleaner|clearer|polished|readable)|modi(?:fy|fy|y)|patch|polish|refactor|remove|replace|restyle|revamp|style|tweak|update|upgrade|write)\b/i.test(trimmed);
+  const asksForAppBehaviorChange =
+    /\b(?:when|if|after|on)\b[\s\S]{0,220}\b(?:should|shouldn['’]?t|should\s+not|needs?\s+to|must|has\s+to|have\s+to)\b[\s\S]{0,220}\b(?:go\s+to|navigate|route|open|show|display|render|switch|send|land|take|work|create|start)\b|\b(?:should|shouldn['’]?t|should\s+not|needs?\s+to|must|has\s+to|have\s+to)\b[\s\S]{0,220}\b(?:go\s+to|navigate|route|open|show|display|render|switch|send|land|take|work|create|start)\b/i.test(trimmed) &&
+    /\b(?:app|chat|component|flow|ghome|home|ide|layout|navigation|page|route|screen|ui|user|workspace|workplace)\b/i.test(trimmed);
   const asksForInspection =
     /\b(?:check|inspect|look(?:\s+at)?|read|review|search|verify)\b[\s\S]{0,180}\b(?:app|code|codebase|files?|project|repo|repository|source|workspace)\b/i.test(trimmed);
+  const asksForTerminalExecution =
+    /\b(?:run|execute|start|serve|build|compile|test|launch)\b[\s\S]{0,180}\b(?:app|project|dev server|server|tests?|build|command|terminal|npm|pnpm|yarn|vite|cargo)\b/i.test(trimmed) ||
+    /\b(?:terminal|dev server|localhost)\b[\s\S]{0,140}\b(?:run|start|read|inspect|check|debug|verify|status)\b/i.test(trimmed);
+  const asksForBrowserEvidence =
+    /\b(?:open|preview|capture|take|read|inspect|debug|verify|check|look(?:\s+at)?|use)\b[\s\S]{0,180}\b(?:browser|preview|screenshot|console|devtools|localhost|local site|webview|website|visual|ui)\b/i.test(trimmed) ||
+    /\b(?:browser|preview|screenshot|console|devtools|localhost|local site|webview|website|visual|ui)\b[\s\S]{0,180}\b(?:open|capture|take|read|inspect|debug|verify|check|fix|use)\b/i.test(trimmed);
   const asksForGitChangeReview = LOCAL_GIT_CHANGE_REVIEW_PATTERN.test(trimmed);
   const referencesLocalTarget =
     LOCAL_WORKSPACE_REFERENCE_PATTERN.test(trimmed) ||
@@ -741,7 +750,7 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
     /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i.test(trimmed) ||
     /\b(?:component|css|design|layout|page|screen|theme|ui|visual|website|src[\\/]|hello\s*world|helloworld)\b/i.test(trimmed);
 
-  return asksForGitChangeReview || ((asksForEdit || asksForInspection || asksToContinueWork) && referencesLocalTarget);
+  return asksForGitChangeReview || asksForTerminalExecution || asksForBrowserEvidence || ((asksForEdit || asksForAppBehaviorChange || asksForInspection || asksToContinueWork) && referencesLocalTarget);
 }
 
 export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string, options: { blockedReasons?: string[]; canUseProviderTools?: boolean } = {}) {

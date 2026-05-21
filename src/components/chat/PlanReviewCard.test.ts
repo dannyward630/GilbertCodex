@@ -55,7 +55,7 @@ describe("truncatePreview", () => {
 });
 
 describe("PlanReviewCard", () => {
-  it("does not render an empty drafting placeholder before plan content exists", () => {
+  it("renders a calm progress surface before plan content exists", () => {
     const message: ChatMessage = {
       content: "",
       createdAt: "2026-05-16T00:00:00.000Z",
@@ -76,7 +76,38 @@ describe("PlanReviewCard", () => {
       message,
     }));
 
-    expect(html).toBe("");
+    expect(html).toContain("plan-review-response");
+    expect(html).toContain("Thinking through plan");
+    expect(html).toContain("The plan will appear when it is ready to review.");
+    expect(html).not.toContain("plan-review-card");
+  });
+
+  it("keeps half-written streaming plan text hidden until review-ready", () => {
+    const message: ChatMessage = {
+      content: "## Goal\nHalf-written plan text.",
+      createdAt: "2026-05-16T00:00:00.000Z",
+      id: "message-1",
+      isStreaming: true,
+      mode: "plan",
+      planning: {
+        maxPasses: 1,
+        passCount: 0,
+        startedAt: "2026-05-16T00:00:00.000Z",
+      },
+      role: "assistant",
+    };
+
+    const html = renderToStaticMarkup(createElement(PlanReviewCard, {
+      content: message.content,
+      isStreaming: true,
+      message,
+      onOpenFullPlan: () => undefined,
+    }));
+
+    expect(html).toContain("Thinking through plan");
+    expect(html).toContain("The plan will appear when it is ready to review.");
+    expect(html).not.toContain("Half-written plan text.");
+    expect(html).not.toContain("Open plan");
   });
 
   it("renders plan mode as an inline response instead of the old card shell", () => {
@@ -118,7 +149,9 @@ describe("PlanReviewCard", () => {
     expect(html).not.toContain("plan-review-card");
     expect(html).toContain("Plan ready for review");
     expect(html).toContain("Accept &amp; start");
-    expect(html).toContain("Files to change");
+    expect(html).toContain("Show summary");
+    expect(html).toContain("Open plan");
+    expect(html).not.toContain("src/App.tsx");
   });
 
   it("keeps an accepted saved plan reopenable after execution content replaces the message text", () => {

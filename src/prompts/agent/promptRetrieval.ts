@@ -226,6 +226,18 @@ function isChunkAllowed(chunk: PromptChunk, context: AgentPromptRetrievalContext
     return isPythonLike(context.latestUserPrompt);
   }
 
+  if (chunk.id === "skill.research-current-facts") {
+    return context.hasWebContext || isResearchLike(context.latestUserPrompt, context.settings);
+  }
+
+  if (chunk.id === "skill.code-review") {
+    return isReviewLike(context.latestUserPrompt);
+  }
+
+  if (chunk.id === "skill.frontend-product-quality") {
+    return isFrontendLike(context.latestUserPrompt);
+  }
+
   return true;
 }
 
@@ -299,7 +311,15 @@ function isPlanningLike(prompt: string) {
 }
 
 function isReviewLike(prompt: string) {
+  if (isPromptAuditLike(prompt)) {
+    return false;
+  }
+
   return /\b(review|audit|production-ready|risk|bug hunt|findings|security|regression)\b/i.test(prompt);
+}
+
+function isPromptAuditLike(prompt: string) {
+  return /\b(?:system\s+prompt|prompt\s+(?:for|tokens?|budget|optimization)|tools?\s+(?:prompt|tokens?|budget)|token\s+(?:budget|usage|uses?))\b/i.test(prompt);
 }
 
 function isFrontendLike(prompt: string) {

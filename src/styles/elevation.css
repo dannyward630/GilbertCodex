@@ -132,7 +132,6 @@ body *::after {
   animation: none !important;
 }
 
-.sidebar-activity-dot,
-.markdown-message[data-streaming="true"]::after {
+.sidebar-activity-dot {
   box-shadow: none !important;
 }

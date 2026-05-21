@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Pencil, SquareArrowUpRight, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, Copy, Pencil, RotateCcw, SquareArrowUpRight, ThumbsDown, ThumbsUp } from "lucide-react";
 import { copyTextToClipboard } from "../../lib/clipboard";
 import { normalizeMarkdownForDisplay } from "../../lib/markdown";
 import { stripVisibleToolProtocol } from "../../lib/visibleToolProtocol";
@@ -10,6 +10,7 @@ interface MessageActionsProps {
   onEditMessage?: (messageId: string) => void;
   onForkFromMessage?: (messageId: string) => void | Promise<void>;
   onMessageFeedback?: (messageId: string, feedback: ChatMessage["feedback"]) => void;
+  onRegenerateResponse?: (messageId: string) => void | Promise<void>;
 }
 
 function formatMessageTime(createdAt: string) {
@@ -38,11 +39,44 @@ function formatMessageDateTime(createdAt: string) {
   }).format(new Date(timestamp));
 }
 
-export function MessageActions({ message, onEditMessage, onForkFromMessage, onMessageFeedback }: MessageActionsProps) {
+function formatStreamTimingTitle(message: ChatMessage) {
+  const timing = message.streamTiming;
+  const timestamp = formatMessageDateTime(message.createdAt);
+
+  if (!timing || message.role !== "assistant") {
+    return timestamp;
+  }
+
+  const details = [
+    timing.timeToFirstVisibleTokenMs !== undefined
+      ? `first visible token ${formatDurationMs(timing.timeToFirstVisibleTokenMs)}`
+      : timing.timeToFirstTokenMs !== undefined
+        ? `first token ${formatDurationMs(timing.timeToFirstTokenMs)}`
+        : "",
+    timing.timeToFirstByteMs !== undefined ? `first byte ${formatDurationMs(timing.timeToFirstByteMs)}` : "",
+    timing.totalMs !== undefined ? `total ${formatDurationMs(timing.totalMs)}` : "",
+  ].filter(Boolean);
+
+  return [timestamp, details.join(", ")].filter(Boolean).join(" - ");
+}
+
+function formatDurationMs(value: number) {
+  if (value >= 10_000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)}s`;
+  }
+
+  return `${Math.round(value)}ms`;
+}
+
+export function MessageActions({ message, onEditMessage, onForkFromMessage, onMessageFeedback, onRegenerateResponse }: MessageActionsProps) {
   const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
   const timeLabel = useMemo(() => formatMessageTime(message.createdAt), [message.createdAt]);
-  const fullTimeLabel = useMemo(() => formatMessageDateTime(message.createdAt), [message.createdAt]);
+  const fullTimeLabel = useMemo(() => formatStreamTimingTitle(message), [message]);
   const copyContent = useMemo(
     () => message.role === "assistant"
       ? normalizeMarkdownForDisplay(stripVisibleToolProtocol(message.content), { final: !message.isStreaming })
@@ -53,6 +87,7 @@ export function MessageActions({ message, onEditMessage, onForkFromMessage, onMe
   const showEdit = Boolean(onEditMessage && message.role === "user");
   const showAssistantFeedback = Boolean(onMessageFeedback && message.role === "assistant" && !message.isStreaming && message.status !== "queued");
   const showFork = Boolean(onForkFromMessage && message.role === "assistant" && !message.isStreaming && message.status !== "queued");
+  const showRegenerate = Boolean(onRegenerateResponse && message.role === "assistant" && !message.isStreaming && message.status !== "queued");
   const statusLabel = message.status === "queued" ? "Queued" : null;
 
   useEffect(() => {
@@ -110,6 +145,14 @@ export function MessageActions({ message, onEditMessage, onForkFromMessage, onMe
     void onForkFromMessage(message.id);
   }
 
+  function regenerateResponse() {
+    if (!showRegenerate || !onRegenerateResponse) {
+      return;
+    }
+
+    void onRegenerateResponse(message.id);
+  }
+
   return (
     <div className="message-meta">
       {showEdit ? (
@@ -129,6 +172,11 @@ export function MessageActions({ message, onEditMessage, onForkFromMessage, onMe
             <ThumbsDown size={14} aria-hidden="true" />
           </button>
         </>
+      ) : null}
+      {showRegenerate ? (
+        <button className="message-action" type="button" aria-label="Regenerate response" title="Regenerate response" onClick={regenerateResponse}>
+          <RotateCcw size={14} aria-hidden="true" />
+        </button>
       ) : null}
       {showFork ? (
         <button className="message-action" type="button" aria-label="Branch in a new chat" title="Branch in a new chat" onClick={forkFromMessage}>

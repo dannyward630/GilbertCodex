@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.0.md">v0.5.0 release notes</a>
+  <a href="docs/releases/v0.5.5.md">v0.5.5 release notes</a>
   |
-  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.0">Windows alpha download</a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.5">Windows alpha download</a>
   |
   <a href="docs/ROADMAP.md">Roadmap</a>
   |
@@ -19,31 +19,31 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.0.md"><img alt="Version 0.5.0" src="https://img.shields.io/badge/version-0.5.0-d8b36c"></a>
+  <a href="docs/releases/v0.5.5.md"><img alt="Version 0.5.5" src="https://img.shields.io/badge/version-0.5.5-d8b36c"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
   <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
-## v0.5.0 Public Alpha
+## v0.5.5 Public Alpha
 
-Gilbert Codex v0.5.0 is the largest public alpha jump so far. The app has moved from a basic desktop chat shell into a serious local AI workspace with local users, project-scoped state, multi-provider streaming, thinking/planning controls, source-backed context, subscription account sign-in, image-generation artifacts, GitHub and Discord setup, safer review flows, and a cleaner modular runtime.
+Gilbert Codex v0.5.5 is a release-readiness update focused on making the app feel more complete without loosening its local-first boundaries. It keeps the big v0.5.0 foundation and adds stronger Apps and Plugins surfaces, Google/Gmail/Calendar setup through Settings, task automation, voice dictation, browser/terminal polish, deeper customization, and a cleaner runtime path for provider streaming, planning, approvals, and source-backed work.
 
-This is still alpha software. Windows x64 is the verified target; macOS and Linux have partial source support and need contributor testing. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+This is still alpha software. Windows x64 is the verified packaged target. macOS support is in active development and should land soon; Linux remains source-first until native testing catches up. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
 
 The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
 
 ## Highlights
 
-| Area | What changed in v0.5.0 |
+| Area | What changed in v0.5.5 |
 | --- | --- |
-| Local users | Local account creation/sign-in with namespaced chats, projects, settings, and workspace state. |
-| Subscriptions | Connected account routes for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported providers, with model catalogs visible in Settings and no required local subscription API key. |
-| Image generation | Chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. |
-| Agent workspace | Project grouping, searchable history, pinned chats, generated titles, queued sends, regeneration, stop controls, file/image attachments, and local persistence. |
-| Source context | DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging. |
-| Review posture | Destructive delete confirmation, explicit local workspace permission modes, source-write guardrails, notification checks, CSP configuration, and visible progress/activity cards. |
+| Customization | Appearance, motion, layout, model, dictation, notification, terminal, web search, and project-open controls are more visible and easier to tune from Settings. |
+| Apps and integrations | Gmail, Google Calendar, Google Tasks, GitHub, Discord, browser preview, plugins, and MCP-facing surfaces have stronger setup and management flows. |
+| Voice | Offline Whisper dictation is wired into the composer, with browser fallback avoided when the desktop offline path is expected. Release builds prepare the verified model and Vulkan SDK. |
+| Agent workspace | Queued sends, steering, planning/research, approval revisions, live tool progress, browser capture, project tasks, and terminal behavior are tighter across the main workspace. |
+| Source context | DuckDuckGo/Brave-backed source cards, thinking/planning support, browser preview capture, and clearer fallback messaging are improved. |
+| Repository hygiene | Private tool bridge and plugin bundles stay out of public Git, then the release workflow restores them from a private overlay before packaging. |
 
 ## Screenshots
 
@@ -82,13 +82,13 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The v0.5.0 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.0).
+The v0.5.5 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.5).
 
 Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
-macOS and Linux release artifacts are not official yet. The repo has partial source support for both platforms, and contributors with those operating systems are needed to test and complete the port.
+macOS release artifacts are in development and should be out soon. Linux release artifacts are not official yet; source support exists, but native testing is still needed before the project promises a packaged Linux download.
 
-See [v0.5.0 release notes](docs/releases/v0.5.0.md) for release-prep notes, setup notes, known limitations, and validation commands.
+See [v0.5.5 release notes](docs/releases/v0.5.5.md) for release-prep notes, setup notes, known limitations, and validation commands.
 
 ## Product Shape
 
@@ -98,9 +98,10 @@ See [v0.5.0 release notes](docs/releases/v0.5.0.md) for release-prep notes, setu
 - Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
 - Subscription routing: optional local subscription routing for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported provider accounts, with account sign-in, sign-out, usage visibility, model catalogs, and clean OpenRouter fallback.
 - Image generation: chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. Codex / ChatGPT-backed image generation is the first-class path in this release; broader provider coverage is still being tightened.
-- Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, and clearer fallback messaging.
+- Voice input: offline Whisper dictation for desktop builds, bundled model resources, and configurable dictation hotkeys/dictionary entries.
+- Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, browser preview capture, and clearer fallback messaging.
 - Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
-- Settings: provider key/base URL entry, subscription account setup, subscription model catalogs without a required local API key, GitHub browser login, Discord bridge setup/runtime controls, support/funding links, connection validation, appearance mode, model, generation, thinking, and workspace controls.
+- Settings: provider key/base URL entry, subscription account setup, subscription model catalogs without a required local API key, GitHub browser login, Google OAuth setup, Discord bridge setup/runtime controls, optional support links, connection validation, appearance mode, motion, voice dictation, model, generation, thinking, and workspace controls.
 
 ## Coming Next
 
@@ -209,11 +210,11 @@ See [Windows Installer](docs/INSTALLER.md) for what is bundled, what stays local
 
 Gilbert Codex is local-first. Provider keys and local endpoint URLs are entered through Settings and treated as local user data, not repository configuration. Desktop local accounts are stored in the local Gilbert Database, and the browser preview uses localStorage as a development fallback. Do not commit real API keys, local databases, logs, terminal output, private workspace data, or build artifacts.
 
-GitHub browser login uses OAuth device flow. For local development, create a GitHub OAuth App with device flow enabled, copy `.env.example` to `.env`, set `VITE_GITHUB_OAUTH_CLIENT_ID` to the public client ID, and sign in from Settings. No client secret belongs in the desktop app. GitHub actions use the locally stored access token and should remain behind visible review or permission boundaries for high-impact actions.
+GitHub browser login uses OAuth device flow. Create a GitHub OAuth App with device flow enabled, paste the public Client ID into Settings > GitHub, and sign in from there. No GitHub client secret belongs in the desktop app or release workflow. GitHub actions use the locally stored access token and should remain behind visible review or permission boundaries for high-impact actions.
 
-Gmail plugin sign-in uses Google OAuth for desktop apps. End users install from Apps > Gmail and should only see Google account selection. Official release builds read the public desktop OAuth client ID from the `VITE_GOOGLE_OAUTH_CLIENT_ID` GitHub repository variable or secret and bake it into the downloadable app. For local development, enable the Gmail API, create a Google OAuth desktop client, set `VITE_GOOGLE_OAUTH_CLIENT_ID` in `.env`, and restart the app. No Google client secret, access token, refresh token, or downloaded credential file belongs in the repository.
+Gmail and Google Calendar sign-in use Google OAuth for desktop apps. Each user adds their own Google Cloud desktop OAuth Client ID and Client secret in Settings > Google, then installs Gmail or Google Calendar from Apps and chooses a Google account in the browser. No shared Google OAuth client ID, Google access token, refresh token, or downloaded credential file belongs in the repository.
 
-Release-only app configuration stays out of the public source tree. The GitHub `Release` workflow restores private app-only runtime files from a private release overlay and reads public app-facing values such as OAuth client IDs and hosted support links from repository variables or secrets before building the installer. Values prefixed with `VITE_` are baked into the packaged frontend and must be safe for users to inspect.
+Release-only app configuration stays out of the public source tree. The GitHub `Release` workflow restores private app-only runtime files from a private release overlay before building the installer, including the private tool bridge and optional plugin bundles. App-user OAuth values, provider keys, local accounts, and support links are not required as release secrets; users configure those inside the installed app.
 
 Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs for app updates and chat follow-ups. Bot gateway chat is still future runtime work.
 
@@ -224,6 +225,7 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 - [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux partial support, and the native testing checklist.
 - [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, and incoming webhooks.
 - [Gmail plugin setup](docs/gmail/README.md): Google OAuth desktop setup, user connection flow, requested scopes, and Gmail confirmation rules.
+- [Google OAuth setup](docs/google/README.md): Bring-your-own Google OAuth client setup and production verification notes.
 - [GitHub integration setup](docs/github/README.md): GitHub OAuth App device-flow setup, requested scopes, Settings sign-in, repository actions, and webhook troubleshooting.
 
 ## Collaboration

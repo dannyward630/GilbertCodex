@@ -5,6 +5,7 @@ import {
   Database,
   FileCog,
   Github,
+  KeyRound,
   MessageCircle,
   Palette,
   Route,
@@ -26,6 +27,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { icon: FileCog, id: "configuration", label: "Workspace", meta: "Runtime" },
   { icon: Database, id: "database", label: "Library & Data", meta: "Local" },
   { icon: Github, id: "github", label: "GitHub", meta: "Code" },
+  { icon: KeyRound, id: "google", label: "Google", meta: "OAuth" },
   { icon: MessageCircle, id: "discord", label: "Discord", meta: "Chat" },
 ];
 

@@ -11,6 +11,7 @@ describe("support config", () => {
     expect(config.primaryLinks[0]).toMatchObject({
       enabled: false,
       id: "cashApp",
+      providerLabel: "Cash App",
       url: DEFAULT_CASH_APP_URL,
     });
     expect(config.visiblePrimaryLinks.map((link) => link.id)).toEqual([]);

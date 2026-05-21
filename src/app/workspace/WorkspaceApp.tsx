@@ -61,6 +61,7 @@ import {
   getFallbackModelContextWindows,
   type ContextCompactionNotice,
   type ContextWindowUsage,
+  type ModelContextWindow,
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { getEffectiveMaxOutputTokens, isLocalModelProvider } from "../../lib/generationSettings";
@@ -69,11 +70,25 @@ import { matchesHotkey } from "../../lib/hotkeys";
 import { copyTextToClipboard } from "../../lib/clipboard";
 import {
   detectProjectRunConfigForWorkspace,
+  getProjectRunActionPreviewUrl,
   normalizeProjectRunConfig,
   updateProjectRunLastRun,
 } from "../../lib/projectRunConfig";
-import { CHAT_MODEL_OPTIONS, getDefaultBaseUrlForProvider, getDefaultModelForProvider, getModelProvider, getProviderApiKey, isModelProviderId, isNineRouterCodexModelId, isNineRouterGithubCopilotModelId, supportsProviderThinking } from "../../lib/models";
+import { CHAT_MODEL_OPTIONS, getDefaultBaseUrlForProvider, getDefaultModelForProvider, getModelProvider, getNineRouterCodexContextWindowTokens, getProviderApiKey, isModelProviderId, isNineRouterCodexModelId, isNineRouterGithubCopilotModelId, supportsProviderThinking } from "../../lib/models";
 import { scheduleIdleTask } from "../../lib/idleTask";
+import {
+  computeAutomationSchedulerDelayMs,
+  computeNextRunAt,
+  createAutomationRunPrompt,
+  createAutomationRuntimeToolOverrides,
+  createAutomationSimulationSummary,
+  createAutomationTaskFromDraft,
+  createAutomationToolScope,
+  createAutomationToolSelectionPrompt,
+  formatAutomationNotificationSummary,
+  isAutomationTaskDue,
+  normalizeAutomationState,
+} from "../../lib/automationScheduler";
 import { createPdfLibraryContextMessages, syncPdfLibraryFromChats } from "../../lib/pdfLibrary";
 import {
   createChatMemoryFingerprint,
@@ -123,7 +138,7 @@ import {
   shouldAttachWebSearch,
   validateToolArguments,
 } from "../../toolBridge";
-import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch } from "../../toolBridge";
+import type { ProviderToolBridgeOptions, ToolAutomationScope, ToolBridgeExecutionBatch } from "../../toolBridge";
 import { buildComputerFileIndex, createComputerGitWorktree, createLocalWorkspaceContext, getComputerFileIndexSummary, pickComputerFolder, resolveLocalWorkspaceRoots } from "../../localWorkspace/files";
 import {
   createLocalComputerProgress,
@@ -208,11 +223,14 @@ import {
   isTauriDesktopRuntime,
   listenForDiscordInteractions,
   openProjectInExternalTool,
+  sendDiscordChannelMessage,
+  sendDiscordWebhookMessage,
   sendDiscordInteractionResponse,
   type DiscordInteractionEvent,
 } from "../tauriClient";
 import { createDiscordBridgeAutoStartKey, ensureDiscordBridgeAutoStarted } from "../discordBridgeAutoStart";
 import { listAgentRuns, saveAgentRun } from "../agentRunClient";
+import { loadAutomationState, saveAutomationState } from "../automationClient";
 import { bringCurrentWindowToForeground, openChatWindow } from "../windowClient";
 import {
   configureDesktopNotificationActivation,
@@ -224,6 +242,7 @@ import {
 } from "../desktopNotifications";
 import type { AppInfo } from "../../types/app";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../types/agentRun";
+import type { AutomationRun, AutomationRunReason, AutomationState, AutomationTask, AutomationTaskDraft } from "../../types/automation";
 import type { AuthSession } from "../../types/auth";
 import type {
   ChatArtifact,
@@ -237,6 +256,7 @@ import type {
   ChatResearchReference,
   ChatSendInput,
   ChatSource,
+  ChatStreamTiming,
   ChatSummary,
   ChatToolCall,
   ChatWebSearch,
@@ -287,9 +307,9 @@ import { compactProviderMessages as compactProviderMessagesImpl, resolveContextW
 import { createAppAgentToolCall as createAppAgentToolCallImpl, appendAgentRuntimeStep as appendAgentRuntimeStepImpl, completeLatestAgentRuntimeStep as completeLatestAgentRuntimeStepImpl, mapAgentDecisionToStepType as mapAgentDecisionToStepTypeImpl, runAppOwnedCodingAgent as runAppOwnedCodingAgentImpl } from "./agentRuntime/appAgentRunner";
 import { streamAssistantWithLocalTools as streamAssistantWithLocalToolsImpl } from "./tools/localToolStreaming";
 import { createToolFinalAnswerUnavailableMessage as createToolFinalAnswerUnavailableMessageImpl, createSynthesisRecoveryFallback as createSynthesisRecoveryFallbackImpl, summarizeUserFacingFailure as summarizeUserFacingFailureImpl, createRecoverableBridgeToolRetryInstruction as createRecoverableBridgeToolRetryInstructionImpl, getToolCallRawOutput as getToolCallRawOutputImpl, extractSuggestedFileReadCandidates as extractSuggestedFileReadCandidatesImpl, extractNearbyPathCandidates as extractNearbyPathCandidatesImpl, extractSuggestedFileSearchQuery as extractSuggestedFileSearchQueryImpl, isMissingFileReadToolCall as isMissingFileReadToolCallImpl, isMissingFileReadError as isMissingFileReadErrorImpl, extractMissingReadPath as extractMissingReadPathImpl, extractToolInputPath as extractToolInputPathImpl, createMissingReadSearchQuery as createMissingReadSearchQueryImpl, getLastPathSegment as getLastPathSegmentImpl, isRecoverableBridgeArgumentError as isRecoverableBridgeArgumentErrorImpl, summarizeCompletedToolFallback as summarizeCompletedToolFallbackImpl, shouldKeepToolOutputOutOfChat as shouldKeepToolOutputOutOfChatImpl, countTextLines as countTextLinesImpl, limitFallbackToolOutput as limitFallbackToolOutputImpl, createGitToolFallbackAnswer as createGitToolFallbackAnswerImpl, parseGitStatusFallbackFiles as parseGitStatusFallbackFilesImpl, parseGitDiffStatFallbackFiles as parseGitDiffStatFallbackFilesImpl, extractToolStdout as extractToolStdoutImpl, cleanGitFallbackPath as cleanGitFallbackPathImpl, dedupeGitFallbackFiles as dedupeGitFallbackFilesImpl, groupGitStatusFallbackFiles as groupGitStatusFallbackFilesImpl, formatGitStatusFallbackGroup as formatGitStatusFallbackGroupImpl, formatGitStatSuffix as formatGitStatSuffixImpl, createNoExecutedToolFinalInstruction as createNoExecutedToolFinalInstructionImpl, createNoExecutedToolFinalAnswer as createNoExecutedToolFinalAnswerImpl, extractFirstUnsuccessfulToolSection as extractFirstUnsuccessfulToolSectionImpl, summarizeUnsuccessfulToolSection as summarizeUnsuccessfulToolSectionImpl, stripToolSectionHeader as stripToolSectionHeaderImpl, stripToolAdaptationRecommendation as stripToolAdaptationRecommendationImpl, appendAutoCompactionContinuation as appendAutoCompactionContinuationImpl, isAutoCompactionContinuationMessage as isAutoCompactionContinuationMessageImpl } from "./tools/toolFallbacks";
-import { runParallelSubagents as runParallelSubagentsImpl, streamProviderMessageWithRetry as streamProviderMessageWithRetryImpl, runProviderRetryWithTimeout as runProviderRetryWithTimeoutImpl, createProviderRetryInstruction as createProviderRetryInstructionImpl, isRetryableProviderMessageError as isRetryableProviderMessageErrorImpl, hasLocalToolEvidence as hasLocalToolEvidenceImpl, createEmptyResponseRetrySettings as createEmptyResponseRetrySettingsImpl, updateGeneratedMessage as updateGeneratedMessageImpl, preserveVisibleResponseThinking as preserveVisibleResponseThinkingImpl, createInterruptedResponseContextMessages as createInterruptedResponseContextMessagesImpl, createSteeringInstruction as createSteeringInstructionImpl, withSteeringProgress as withSteeringProgressImpl, removeSteeringProgress as removeSteeringProgressImpl } from "./providers/providerStreaming";
+import { runParallelSubagents as runParallelSubagentsImpl, streamProviderMessageWithRetry as streamProviderMessageWithRetryImpl, runProviderRetryWithTimeout as runProviderRetryWithTimeoutImpl, createProviderRetryInstruction as createProviderRetryInstructionImpl, isRetryableProviderMessageError as isRetryableProviderMessageErrorImpl, hasLocalToolEvidence as hasLocalToolEvidenceImpl, createEmptyResponseRetrySettings as createEmptyResponseRetrySettingsImpl, updateGeneratedMessage as updateGeneratedMessageImpl, preserveVisibleResponseThinking as preserveVisibleResponseThinkingImpl, createInterruptedResponseContextMessages as createInterruptedResponseContextMessagesImpl, createSteeringInstruction as createSteeringInstructionImpl, withSteeringProgress as withSteeringProgressImpl, removeSteeringProgress as removeSteeringProgressImpl, type ProviderStreamingDeps } from "./providers/providerStreaming";
 import { handleDiscordInteraction as handleDiscordInteractionImpl, resolveDiscordSourceChat as resolveDiscordSourceChatImpl, findLatestDiscordConversationChat as findLatestDiscordConversationChatImpl, discordSourceMatchesInteraction as discordSourceMatchesInteractionImpl, createDiscordMessageSource as createDiscordMessageSourceImpl, isDiscordNewChatCommand as isDiscordNewChatCommandImpl, normalizeDiscordCommandName as normalizeDiscordCommandNameImpl, resolveDiscordChatProject as resolveDiscordChatProjectImpl, sendDiscordReply as sendDiscordReplyImpl, createDiscordResponseStreamer as createDiscordResponseStreamerImpl } from "./discord/discordActions";
-import { handleSendMessage as handleSendMessageImpl, startSendMessage as startSendMessageImpl } from "./chat/sendActions";
+import { handleSendMessage as handleSendMessageImpl, startSendMessage as startSendMessageImpl, type SendActionsDeps } from "./chat/sendActions";
 import { handleResolveToolApproval as handleResolveToolApprovalImpl } from "./tools/approvalActions";
 import { handleSubmitPlanningInput as handleSubmitPlanningInputImpl, handleRequestPlanRevision as handleRequestPlanRevisionImpl } from "./chat/planningActions";
 import { handleRegenerateResponse as handleRegenerateResponseImpl } from "./chat/regenerateActions";
@@ -298,10 +318,12 @@ import { renderUtilityPage as renderUtilityPageImpl, renderChatPage as renderCha
 const loadAppsPage = () => import("../../pages/apps/AppsPage");
 const loadSettingsPage = () => import("../../pages/settings/SettingsPage");
 const loadSupportPage = () => import("../../pages/SupportPage");
+const loadTasksPage = () => import("../../pages/TasksPage");
 const loadWeatherRadarPage = () => import("../../pages/WeatherRadarPage");
 const AppsPage = lazy(() => loadAppsPage().then((module) => ({ default: module.AppsPage })));
 const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
 const SupportPage = lazy(() => loadSupportPage().then((module) => ({ default: module.SupportPage })));
+const TasksPage = lazy(() => loadTasksPage().then((module) => ({ default: module.TasksPage })));
 const WeatherRadarPage = lazy(() => loadWeatherRadarPage().then((module) => ({ default: module.WeatherRadarPage })));
 
 export interface ActiveGeneration {
@@ -336,9 +358,36 @@ export interface DiscordReplyTarget {
 }
 
 export interface StartSendMessageOptions {
+  automationScope?: ToolAutomationScope;
+  background?: boolean;
   discordReply?: DiscordReplyTarget;
+  onAssistantMessageCreated?: (details: {
+    agentRunId: string;
+    chatId: string;
+    messageId: string;
+    model: string;
+    provider: ProviderSettings["provider"];
+    userMessageId: string;
+  }) => void;
+  onAssistantMessageSettled?: (details: {
+    agentRunId: string;
+    approvals?: AgentApproval[];
+    chatId: string;
+    content: string;
+    error?: string;
+    messageId: string;
+    model: string;
+    provider: ProviderSettings["provider"];
+    sources?: ChatSource[];
+    status: "completed" | "failed" | "waiting_for_approval";
+    toolCalls?: ChatToolCall[];
+  }) => void;
   preserveExistingTitle?: boolean;
+  preserveChatModelSelection?: boolean;
+  providerSettingsOverrides?: Partial<ProviderSettings>;
+  runtimeToolOverrides?: Partial<ProviderSettings["tools"]>;
   sourceChat?: ChatSummary;
+  toolSelectionPrompt?: string;
   userMessageSource?: ChatMessage["source"];
 }
 
@@ -357,6 +406,7 @@ export interface AssistantToolResponse {
   pendingToolCallContent?: string;
   progress?: ChatProgressItem;
   sources?: ChatSource[];
+  streamTiming?: ChatStreamTiming;
   toolCalls?: ChatToolCall[];
   waitingForApproval?: boolean;
 }
@@ -655,7 +705,9 @@ function createProjectRunRequestPrompt({
   root: string;
 }) {
   const cwd = action.cwd?.trim() || root;
-  const previewUrl = action.previewUrl?.trim();
+  const configuredPreviewUrl = action.previewUrl?.trim();
+  const previewUrl = getProjectRunActionPreviewUrl(action);
+  const previewPort = getPreviewUrlPort(previewUrl);
 
   return [
     `Run this project using the saved Run action "${action.label}".`,
@@ -666,21 +718,38 @@ function createProjectRunRequestPrompt({
     `Action kind: ${action.kind}`,
     `Shell: ${action.shell ?? "default"}`,
     `Background dev server/watch mode: ${action.background ? "yes" : "no"}`,
-    previewUrl ? `Configured preview URL: ${previewUrl}` : "Configured preview URL: none",
+    configuredPreviewUrl ? `Configured preview URL: ${configuredPreviewUrl}` : "Configured preview URL: none",
+    previewUrl && previewUrl !== configuredPreviewUrl ? `Inferred preview URL: ${previewUrl}` : null,
+    previewPort ? `Preview port: ${previewPort}` : "Preview port: unknown",
     "",
     "Command:",
     "```",
     action.command.trim(),
     "```",
     "",
-    "Use the real app tools for this run. First call terminal_list_sessions and terminal_dev_server_status with the working directory, command, and preview URL. Reuse only an app-owned session or external localhost server that matches this exact target command/cwd/preview URL. Do not treat unrelated reachable common localhost ports as reusable, and do not open them in the browser. Be honest that external Windows Terminal or PowerShell scrollback cannot be read; if full logs are needed, offer to restart or run the command inside Gilbert's integrated terminal.",
+    "Use the real app tools for this run. First call terminal_list_sessions and terminal_dev_server_status with the working directory, command, and configured/inferred preview URL and port above. Reuse only an app-owned session or external localhost server that matches this exact target command/cwd/preview URL. Do not treat unrelated reachable common localhost ports as reusable, and do not open them in the browser. Be honest that external Windows Terminal or PowerShell scrollback cannot be read; if full logs are needed, offer to restart or run the command inside Gilbert's integrated terminal.",
     "",
     action.background
-      ? "If no matching server is reusable, call terminal_run with background=true, backgroundWaitMs=8000, the command above, cwd/workingDirectory, shell when configured, and previewUrl when configured."
+      ? `If no matching server is reusable, call terminal_run with background=true, backgroundWaitMs=8000, the command above, cwd/workingDirectory, shell when configured${previewUrl ? `, and previewUrl "${previewUrl}"` : ""}.`
       : "If no matching completed run is reusable, call terminal_run with background=false, the command above, cwd/workingDirectory, and shell when configured.",
     "",
-    "After startup, call terminal_read_session for any app-owned session you started or reused. Open the browser preview at the configured target URL, or at a URL produced by the terminal_run output for this same command. Never open an unrelated localhost port from a broad diagnostic scan. Then call browser_console_read. Read terminal and browser diagnostics, fix important errors if this request requires code changes, and verify again after fixes.",
-  ].join("\n");
+    "Never call terminal_run more than once for this same command/cwd/preview target in one run. If startup output is quiet or incomplete, poll terminal_read_session on the existing session instead of starting another npm/dev-server process.",
+    "",
+    "After startup, call terminal_read_session for any app-owned session you started or reused. Open the browser preview at the configured/inferred target URL, or at a URL produced by the terminal_run output for this same command. Never open an unrelated localhost port from a broad diagnostic scan. Then call browser_console_read. Read terminal and browser diagnostics, fix important errors if this request requires code changes, and verify again after fixes.",
+  ].filter((line): line is string => line !== null).join("\n");
+}
+
+function getPreviewUrlPort(previewUrl: string | undefined) {
+  if (!previewUrl) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(previewUrl);
+    return url.port || (url.protocol === "https:" ? "443" : "80");
+  } catch {
+    return undefined;
+  }
 }
 
 interface WorkspaceAppProps {
@@ -709,7 +778,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     name: "Gilbert Codex",
     phase: "Public alpha",
     runtime: isTauriDesktopRuntime() ? "Tauri desktop" : "Frontend preview",
-    version: "0.5.0",
+    version: "0.5.5",
     platform: getHostPlatform(),
     arch: "browser",
   });
@@ -764,6 +833,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [modelContextWindows]);
   const [queuedChatSends, setQueuedChatSends] = useState<QueuedChatSend[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [automationState, setAutomationState] = useState<AutomationState>(() => loadAutomationState());
+  const [automationDraft, setAutomationDraft] = useState<AutomationTaskDraft | null>(null);
   const isDesktopRuntime = isTauriDesktopRuntime() || appInfo.runtime.toLowerCase().includes("tauri");
   const locationServicesEnabled = personalizationSettings.locationServicesEnabled;
   const toolSettings = createLocationAwareToolSettings(providerSettings.tools, locationServicesEnabled);
@@ -772,12 +843,16 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const activeRequestChatIdsRef = useRef(new Map<number, string>());
   const discordAutoStartKeyRef = useRef<string | null>(null);
   const discordBridgeSettingsRef = useRef(discordBridgeSettings);
+  const providerSettingsRef = useRef(providerSettings);
   const titleGenerationRequestsRef = useRef(new Map<string, AbortController>());
   const activeChatIdRef = useRef(activeChatId);
   const localWorkspaceRef = useRef(localWorkspace);
   const projectsRef = useRef<ProjectSummary[]>(projects);
   const pendingChatsRef = useRef<ChatSummary[]>(chats);
   const agentRunsRef = useRef<AgentRun[]>([]);
+  const automationStateRef = useRef(automationState);
+  const runningAutomationTaskIdsRef = useRef(new Set<string>());
+  const appStartAutomationTaskIdsRef = useRef(new Set<string>());
   const queuedChatSendsRef = useRef<QueuedChatSend[]>([]);
   const queuedStartersRef = useRef(new Set<string>());
   const sessionApprovalDecisionsRef = useRef<SessionApprovalDecisionsByWorkspace>({});
@@ -827,6 +902,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       syncPdfLibraryFromChats(nextChats);
     }, 250);
   }, [scheduleIdlePersistence]);
+
+  useEffect(() => {
+    automationStateRef.current = automationState;
+    scheduleIdlePersistence("automation-state", () => saveAutomationState(automationState), 350);
+  }, [automationState, scheduleIdlePersistence]);
   function persistChatState(nextChats: ChatSummary[], previousChats: ChatSummary[] = pendingChatsRef.current) {
     return (persistChatStateImpl as any)(runtime, nextChats, previousChats);
   }
@@ -1145,6 +1225,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, [projects, scheduleIdlePersistence]);
 
   useEffect(() => {
+    providerSettingsRef.current = providerSettings;
     scheduleIdlePersistence("provider-settings", () => saveProviderSettings(providerSettings), 500);
   }, [providerSettings, scheduleIdlePersistence]);
 
@@ -1272,9 +1353,25 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     const selectedSettings = activeChatProviderSettings;
     const selectedModel = selectedSettings.model.trim();
     const modelIds = Array.from(new Set([...PINNED_MODEL_IDS, selectedModel].filter(Boolean)));
-    const fallbackWindows = getFallbackModelContextWindows(modelIds);
+    const applyCodexContextWindowSetting = (modelId: string, window: ModelContextWindow): ModelContextWindow => {
+      if (selectedSettings.provider === "9router" && isNineRouterCodexModelId(modelId)) {
+        return {
+          ...window,
+          source: "provider",
+          tokens: getNineRouterCodexContextWindowTokens(selectedSettings.subscriptionOptimization?.codexContextWindow),
+        };
+      }
+
+      return window;
+    };
+    const fallbackWindows = Object.entries(getFallbackModelContextWindows(modelIds)).reduce<ModelContextWindowMap>((windows, [modelId, window]) => {
+      windows[modelId] = applyCodexContextWindowSetting(modelId, window);
+      return windows;
+    }, {});
     const manualSelectedOverride = selectedModel ? getManualModelBudgetOverride(selectedSettings, selectedModel) : null;
-    const configuredSelectedWindow = selectedModel && manualSelectedOverride?.contextWindowTokens
+    const configuredSelectedWindow = selectedModel && selectedSettings.provider === "9router" && isNineRouterCodexModelId(selectedModel)
+      ? { maxOutputTokens: manualSelectedOverride?.maxOutputTokens, source: "provider" as const, tokens: getNineRouterCodexContextWindowTokens(selectedSettings.subscriptionOptimization?.codexContextWindow) }
+      : selectedModel && manualSelectedOverride?.contextWindowTokens
       ? { maxOutputTokens: manualSelectedOverride.maxOutputTokens, source: "provider" as const, tokens: manualSelectedOverride.contextWindowTokens }
       : selectedModel ? getConfiguredContextWindow(selectedSettings) : null;
     if (selectedModel && configuredSelectedWindow) {
@@ -1297,13 +1394,14 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       const merged: ModelContextWindowMap = { ...fallbackWindows };
       for (const [modelId, existingWindow] of Object.entries(previousWindows)) {
         const fallback = merged[modelId];
+        const effectiveExistingWindow = applyCodexContextWindowSetting(modelId, existingWindow);
         const previousIsBetter =
-          existingWindow.source !== "estimate" ||
-          (fallback ? existingWindow.tokens > fallback.tokens : true);
+          effectiveExistingWindow.source !== "estimate" ||
+          (fallback ? effectiveExistingWindow.tokens > fallback.tokens : true);
         if (previousIsBetter) {
-          merged[modelId] = existingWindow;
+          merged[modelId] = effectiveExistingWindow;
         } else if (!fallback) {
-          merged[modelId] = existingWindow;
+          merged[modelId] = effectiveExistingWindow;
         }
       }
       return merged;
@@ -1314,7 +1412,9 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     // it. If we only have an older estimate but it's larger than the new
     // fallback, keep it (covers releases where the registry hasn't been
     // updated yet). Otherwise show the new fallback.
-    const previousWindowForModel = selectedModel ? modelContextWindowsRef.current[selectedModel] : null;
+    const previousWindowForModel = selectedModel && modelContextWindowsRef.current[selectedModel]
+      ? applyCodexContextWindowSetting(selectedModel, modelContextWindowsRef.current[selectedModel])
+      : null;
     const initialSelectedWindow =
       previousWindowForModel &&
       (previousWindowForModel.source !== "estimate" || previousWindowForModel.tokens >= fallbackCandidate.tokens)
@@ -1339,7 +1439,10 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
                 continue;
               }
               const fallbackTokens = fallbackWindows[model]?.tokens ?? 0;
-              const providerTokens = Math.max(tokens, fallbackTokens);
+              const providerTokens = applyCodexContextWindowSetting(model, {
+                source: "provider",
+                tokens: Math.max(tokens, fallbackTokens),
+              }).tokens;
               const existing = merged[model];
               if (!existing || providerTokens >= existing.tokens || existing.source === "estimate") {
                 merged[model] = { source: "provider", tokens: providerTokens };
@@ -1376,6 +1479,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     activeChatProviderSettings.baseUrls,
     activeChatProviderSettings.contextWindowTokens,
     activeChatProviderSettings.modelBudgetOverrides,
+    activeChatProviderSettings.subscriptionOptimization,
   ]);
 
   useEffect(() => {
@@ -1669,7 +1773,30 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   function handleAddAutomation() {
-    return (handleAddAutomationImpl as any)(runtime);
+    const latestUserMessage = [...activeChat.messages].reverse().find((message) => message.role === "user");
+    const sourcePrompt = latestUserMessage?.content.trim() || `Use the context from "${activeChat.title}" and run the recurring task I define.`;
+    const chatProviderSettings = createChatProviderSettings(activeChat);
+
+    setSearchOpen(false);
+    setAutomationDraft({
+      capabilityScope: {
+        autonomyLevel: "review",
+        capabilities: [],
+      },
+      notificationPolicy: {
+        desktop: true,
+        discord: false,
+        privacy: "summary",
+      },
+      model: chatProviderSettings.model,
+      prompt: sourcePrompt,
+      provider: chatProviderSettings.provider,
+      sourceChatId: activeChat.id,
+      status: "paused",
+      title: `Task: ${activeChat.title}`,
+      trigger: { kind: "manual" },
+    });
+    setActiveRoute("tasks");
   }
 
   async function handleOpenActiveChatInNewWindow() {
@@ -2116,8 +2243,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (shouldUseLighterThinkingForPromptImpl as any)(runtime, prompt);
   }
 
-  function createFinalOnlyProviderSettings(prompt?: string, chat: ChatSummary | null | undefined = activeChat): ProviderSettings {
-    return (createFinalOnlyProviderSettingsImpl as any)(runtime, prompt, chat);
+  function createFinalOnlyProviderSettings(prompt?: string, chat: ChatSummary | null | undefined = activeChat, overrides: Partial<ProviderSettings> = {}): ProviderSettings {
+    return (createFinalOnlyProviderSettingsImpl as any)(runtime, prompt, chat, overrides);
   }
 
   function rememberSessionApprovalDecision(approval: AgentApproval, decision: AgentApprovalDecision, workspaceSettings: LocalWorkspaceSettings, chatId?: string) {
@@ -2178,6 +2305,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   async function streamAssistantWithLocalTools(arg0: {
     approvalDecisions?: Record<string, AgentApprovalDecision>;
     approvedPlanExecution?: ApprovedPlanExecutionContext;
+    automationScope?: ToolAutomationScope;
     chatId: string;
     controller: AbortController;
     messageId: string;
@@ -2346,56 +2474,64 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (isAutoCompactionContinuationMessageImpl as any)(runtime, message);
   }
 
-  async function runParallelSubagents(tasks: LocalSubagentTask[], baseMessages: ChatMessage[], prompt: string, signal?: AbortSignal, chat: ChatSummary | null | undefined = activeChat): Promise<LocalSubagentResult[]> {
-    return (runParallelSubagentsImpl as any)(runtime, tasks, baseMessages, prompt, signal, chat);
+  function providerStreamingDeps(): ProviderStreamingDeps {
+    return runtime as unknown as ProviderStreamingDeps;
+  }
+
+  function sendActionsDeps(): SendActionsDeps {
+    return runtime as unknown as SendActionsDeps;
+  }
+
+  async function runParallelSubagents(tasks: LocalSubagentTask[], baseMessages: ChatMessage[], prompt: string, signal: AbortSignal, chat: ChatSummary | null | undefined = activeChat): Promise<LocalSubagentResult[]> {
+    return runParallelSubagentsImpl(providerStreamingDeps(), tasks, baseMessages, prompt, signal, chat);
   }
 
   async function streamProviderMessageWithRetry(chatId: string, settings: ProviderSettings, messages: ChatMessage[], onUpdate: Parameters<typeof streamProviderMessage>[2], options: Parameters<typeof streamProviderMessage>[3] = {}, messageId?: string) {
-    return (streamProviderMessageWithRetryImpl as any)(runtime, chatId, settings, messages, onUpdate, options, messageId);
+    return streamProviderMessageWithRetryImpl(providerStreamingDeps(), chatId, settings, messages, onUpdate, options, messageId);
   }
 
   async function runProviderRetryWithTimeout<T>(parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) {
-    return (runProviderRetryWithTimeoutImpl as any)(runtime, parentSignal, run);
+    return runProviderRetryWithTimeoutImpl(providerStreamingDeps(), parentSignal, run);
   }
 
   function createProviderRetryInstruction(messages: ChatMessage[], emptyResponse: boolean) {
-    return (createProviderRetryInstructionImpl as any)(runtime, messages, emptyResponse);
+    return createProviderRetryInstructionImpl(providerStreamingDeps(), messages, emptyResponse);
   }
 
   function isRetryableProviderMessageError(error: unknown) {
-    return (isRetryableProviderMessageErrorImpl as any)(runtime, error);
+    return isRetryableProviderMessageErrorImpl(providerStreamingDeps(), error);
   }
 
   function hasLocalToolEvidence(messages: ChatMessage[]) {
-    return (hasLocalToolEvidenceImpl as any)(runtime, messages);
+    return hasLocalToolEvidenceImpl(providerStreamingDeps(), messages);
   }
 
   function createEmptyResponseRetrySettings(settings: ProviderSettings): ProviderSettings {
-    return (createEmptyResponseRetrySettingsImpl as any)(runtime, settings);
+    return createEmptyResponseRetrySettingsImpl(providerStreamingDeps(), settings);
   }
 
   function updateGeneratedMessage(chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt = false) {
-    return (updateGeneratedMessageImpl as any)(runtime, chatId, messageId, updateMessage, sortByUpdatedAt);
+    return updateGeneratedMessageImpl(providerStreamingDeps(), chatId, messageId, updateMessage, sortByUpdatedAt);
   }
 
   function preserveVisibleResponseThinking(previousMessage: ChatMessage, nextMessage: ChatMessage): ChatMessage {
-    return (preserveVisibleResponseThinkingImpl as any)(runtime, previousMessage, nextMessage);
+    return preserveVisibleResponseThinkingImpl(providerStreamingDeps(), previousMessage, nextMessage);
   }
 
   function createInterruptedResponseContextMessages(message: ChatMessage, prompt: string) {
-    return (createInterruptedResponseContextMessagesImpl as any)(runtime, message, prompt);
+    return createInterruptedResponseContextMessagesImpl(providerStreamingDeps(), message, prompt);
   }
 
   function createSteeringInstruction(steerContent: string, originalPrompt: string) {
-    return (createSteeringInstructionImpl as any)(runtime, steerContent, originalPrompt);
+    return createSteeringInstructionImpl(providerStreamingDeps(), steerContent, originalPrompt);
   }
 
   function withSteeringProgress(progress: ChatProgressItem[] | undefined) {
-    return (withSteeringProgressImpl as any)(runtime, progress);
+    return withSteeringProgressImpl(providerStreamingDeps(), progress);
   }
 
   function removeSteeringProgress(progress: ChatProgressItem[] | undefined) {
-    return (removeSteeringProgressImpl as any)(runtime, progress);
+    return removeSteeringProgressImpl(providerStreamingDeps(), progress);
   }
 
 
@@ -2451,12 +2587,739 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }
 
   async function handleSendMessage(input: ChatSendInput) {
-    return (handleSendMessageImpl as any)(runtime, input);
+    return handleSendMessageImpl(sendActionsDeps(), input);
   }
 
   async function startSendMessage(input: ChatSendInput, queuedSend?: { chatId: string; queuedMessageId: string }, options: StartSendMessageOptions = {}) {
-    return (startSendMessageImpl as any)(runtime, input, queuedSend, options);
+    return startSendMessageImpl(sendActionsDeps(), input, queuedSend, options);
   }
+
+  function updateAutomationState(updater: (state: AutomationState, now: string) => AutomationState) {
+    const now = new Date().toISOString();
+    const nextState = normalizeAutomationState(updater(automationStateRef.current, now), now);
+    automationStateRef.current = nextState;
+    setAutomationState(nextState);
+    return nextState;
+  }
+
+  function handleCreateAutomationTask(draft: AutomationTaskDraft) {
+    const now = new Date().toISOString();
+    const task = createAutomationTaskFromDraft(draft, now);
+
+    updateAutomationState((state) => ({
+      ...state,
+      tasks: [task, ...state.tasks],
+      updatedAt: now,
+    }));
+  }
+
+  function handleUpdateAutomationTask(taskId: string, draft: AutomationTaskDraft) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      tasks: state.tasks.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        const normalizedDraft = createAutomationTaskFromDraft({
+          ...draft,
+          status: draft.status ?? task.status,
+        }, now);
+        const nextTask: AutomationTask = {
+          ...task,
+          capabilityScope: normalizedDraft.capabilityScope,
+          description: normalizedDraft.description,
+          model: normalizedDraft.model,
+          notificationPolicy: normalizedDraft.notificationPolicy,
+          prompt: normalizedDraft.prompt,
+          provider: normalizedDraft.provider,
+          runLimits: normalizedDraft.runLimits,
+          sourceChatId: normalizedDraft.sourceChatId,
+          status: normalizedDraft.status,
+          title: normalizedDraft.title,
+          trigger: normalizedDraft.trigger,
+          updatedAt: now,
+        };
+
+        return {
+          ...nextTask,
+          nextRunAt: computeNextRunAt(nextTask, now),
+        };
+      }),
+      updatedAt: now,
+    }));
+  }
+
+  function handlePauseAutomationTask(taskId: string, paused: boolean) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      tasks: state.tasks.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              nextRunAt: paused ? task.nextRunAt : computeNextRunAt(task, now),
+              status: paused ? "paused" : "enabled",
+              updatedAt: now,
+            }
+          : task,
+      ),
+      updatedAt: now,
+    }));
+  }
+
+  function handleDeleteAutomationTask(taskId: string) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      tasks: state.tasks.filter((task) => task.id !== taskId),
+      updatedAt: now,
+    }));
+  }
+
+  function handleDuplicateAutomationTask(taskId: string) {
+    updateAutomationState((state, now) => {
+      const sourceTask = state.tasks.find((task) => task.id === taskId);
+
+      if (!sourceTask) {
+        return state;
+      }
+
+      const duplicatedTask: AutomationTask = {
+        ...sourceTask,
+        chatId: undefined,
+        createdAt: now,
+        id: createId("task"),
+        lastResult: undefined,
+        lastRunAt: undefined,
+        nextRunAt: computeNextRunAt(sourceTask, now),
+        runCount: 0,
+        status: sourceTask.status,
+        title: `${sourceTask.title} copy`,
+        updatedAt: now,
+      };
+
+      return {
+        ...state,
+        tasks: [duplicatedTask, ...state.tasks],
+        updatedAt: now,
+      };
+    });
+  }
+
+  function handlePauseAllAutomationTasks(paused: boolean) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      globalPaused: paused,
+      updatedAt: now,
+    }));
+  }
+
+  function handleAcknowledgeAutomationRun(runId: string) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      runs: state.runs.map((run) => run.id === runId ? { ...run, acknowledgedAt: now, updatedAt: now } : run),
+      updatedAt: now,
+    }));
+  }
+
+  function handleSnoozeAutomationRun(runId: string, minutes: number) {
+    const snoozedUntil = new Date(Date.now() + Math.max(5, minutes) * 60_000).toISOString();
+
+    updateAutomationState((state, now) => ({
+      ...state,
+      runs: state.runs.map((run) => run.id === runId ? { ...run, snoozedUntil, updatedAt: now } : run),
+      updatedAt: now,
+    }));
+  }
+
+  function handleOpenAutomationRunChat(run: AutomationRun) {
+    if (!run.chatId) {
+      return;
+    }
+
+    setActiveChatId(run.chatId);
+    setActiveRoute("chat");
+  }
+
+  function handleRunAutomationTask(taskId: string) {
+    void runAutomationTask(taskId, "manual");
+  }
+
+  function handleSimulateAutomationTask(taskId: string) {
+    void runAutomationTask(taskId, "simulated", { dryRun: true });
+  }
+
+  function createAutomationProviderSettingsOverrides(task: AutomationTask): Partial<ProviderSettings> {
+    if (!task.provider || !task.model) {
+      return {};
+    }
+
+    return {
+      model: task.model,
+      provider: task.provider,
+      providerModels: {
+        ...providerSettingsRef.current.providerModels,
+        [task.provider]: task.model,
+      },
+    };
+  }
+
+  async function runAutomationTask(taskId: string, reason: AutomationRunReason, options: { dryRun?: boolean } = {}) {
+    const currentState = automationStateRef.current;
+    const task = currentState.tasks.find((candidate) => candidate.id === taskId);
+
+    if (!task || task.status === "archived") {
+      return;
+    }
+
+    if (!options.dryRun && currentState.globalPaused && reason !== "manual") {
+      return;
+    }
+
+    if (runningAutomationTaskIdsRef.current.has(task.id)) {
+      appendAutomationRun(task, {
+        error: "A previous run for this task is still active.",
+        finalSummary: "Skipped because this task is already running.",
+        reason,
+        status: "failed",
+      });
+      return;
+    }
+
+    runningAutomationTaskIdsRef.current.add(task.id);
+    const now = new Date().toISOString();
+    const runId = createId("automation-run");
+    const runReason: AutomationRunReason = options.dryRun ? "simulated" : reason;
+
+    const startedRun = appendAutomationRun(task, {
+      dryRun: options.dryRun,
+      id: runId,
+      model: task.model,
+      provider: task.provider,
+      reason: runReason,
+      status: options.dryRun ? "completed" : "running",
+      startedAt: now,
+    });
+
+    if (options.dryRun) {
+      const summary = createAutomationSimulationSummary(task);
+      finalizeAutomationRun(task.id, runId, {
+        content: summary,
+        status: "completed",
+      });
+      runningAutomationTaskIdsRef.current.delete(task.id);
+      return;
+    }
+
+    void sendAutomationRunStartedNotification(task, startedRun);
+
+    let created = false;
+    let settled = false;
+
+    try {
+      const sourceChat = resolveAutomationSourceChat(task);
+      const prompt = createAutomationRunPrompt(task, { reason });
+      const webSearchEnabled = task.capabilityScope.capabilities.includes("web.search");
+      const providerSettingsOverrides = createAutomationProviderSettingsOverrides(task);
+
+      await startSendMessage({
+        attachments: [],
+        content: prompt,
+        localWorkspace: localWorkspaceRef.current,
+        mode: "chat",
+        webSearch: {
+          enabled: webSearchEnabled,
+          maxResults: providerSettingsRef.current.webSearch.maxResults,
+          provider: providerSettingsRef.current.webSearch.provider,
+        },
+      }, undefined, {
+        automationScope: createAutomationToolScope(task),
+        background: true,
+        onAssistantMessageCreated: (details) => {
+          created = true;
+          updateAutomationState((state, eventAt) => ({
+            ...state,
+            runs: state.runs.map((run) =>
+              run.id === runId
+                ? {
+                    ...run,
+                    agentRunId: details.agentRunId,
+                    chatId: details.chatId,
+                    messageId: details.messageId,
+                    model: details.model,
+                    provider: details.provider,
+                    updatedAt: eventAt,
+                  }
+                : run,
+            ),
+            tasks: state.tasks.map((candidate) =>
+              candidate.id === task.id
+                ? {
+                    ...candidate,
+                    chatId: details.chatId,
+                    updatedAt: eventAt,
+                  }
+                : candidate,
+            ),
+            updatedAt: eventAt,
+          }));
+        },
+        onAssistantMessageSettled: (details) => {
+          settled = true;
+          finalizeAutomationRun(task.id, runId, {
+            agentRunId: details.agentRunId,
+            approvals: details.approvals,
+            chatId: details.chatId,
+            content: details.content,
+            error: details.error,
+            messageId: details.messageId,
+            model: details.model,
+            provider: details.provider,
+            sources: details.sources,
+            status: details.status,
+            toolCalls: details.toolCalls,
+          });
+        },
+        preserveExistingTitle: true,
+        preserveChatModelSelection: true,
+        providerSettingsOverrides,
+        runtimeToolOverrides: createAutomationRuntimeToolOverrides(task),
+        sourceChat,
+        toolSelectionPrompt: createAutomationToolSelectionPrompt(task),
+      });
+
+      if (!settled) {
+        finalizeAutomationRun(task.id, runId, {
+          content: created
+            ? "Task run stopped before producing a final result. It may have hit the task runtime limit or been interrupted."
+            : "Task run could not start. Check provider settings and whether this task chat is already running.",
+          error: created ? "Task run stopped before completion." : "Task run could not start.",
+          status: "failed",
+        });
+      }
+    } catch (error) {
+      const message = readErrorMessage(error, "Task run failed.");
+      finalizeAutomationRun(task.id, runId, {
+        content: message,
+        error: message,
+        status: "failed",
+      });
+    } finally {
+      runningAutomationTaskIdsRef.current.delete(task.id);
+    }
+  }
+
+  function appendAutomationRun(
+    task: AutomationTask,
+    partialRun: Partial<AutomationRun> & Pick<AutomationRun, "reason" | "status">,
+  ) {
+    const now = partialRun.startedAt ?? new Date().toISOString();
+    const run: AutomationRun = {
+      id: partialRun.id ?? createId("automation-run"),
+      notificationAttempts: [],
+      startedAt: now,
+      taskId: task.id,
+      updatedAt: now,
+      ...partialRun,
+    };
+
+    const nextState = updateAutomationState((state, eventAt) => ({
+      ...state,
+      runs: [run, ...state.runs].slice(0, 500),
+      tasks: state.tasks.map((candidate) =>
+        candidate.id === task.id
+          ? {
+              ...candidate,
+              lastRunAt: now,
+              runCount: candidate.runCount + 1,
+              updatedAt: eventAt,
+            }
+          : candidate,
+      ),
+      updatedAt: eventAt,
+    }));
+
+    return nextState.runs.find((candidate) => candidate.id === run.id) ?? run;
+  }
+
+  function finalizeAutomationRun(
+    taskId: string,
+    runId: string,
+    details: {
+      agentRunId?: string;
+      approvals?: AgentApproval[];
+      chatId?: string;
+      content: string;
+      error?: string;
+      messageId?: string;
+      model?: string;
+      provider?: ProviderSettings["provider"];
+      sources?: ChatSource[];
+      status: "completed" | "failed" | "waiting_for_approval";
+      toolCalls?: ChatToolCall[];
+    },
+  ) {
+    const completedAt = new Date().toISOString();
+    const nextState = updateAutomationState((state) => {
+      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      if (!task) {
+        return state;
+      }
+
+      const summary = details.content.trim() || details.error || "Task run finished.";
+      const nextTask: AutomationTask = {
+        ...task,
+        lastResult: summary,
+        lastRunAt: completedAt,
+        nextRunAt: computeNextRunAt({ ...task, lastRunAt: completedAt }, completedAt),
+        updatedAt: completedAt,
+      };
+
+      const runs = state.runs.map((run) => {
+        if (run.id !== runId) {
+          return run;
+        }
+
+        const nextRun: AutomationRun = {
+          ...run,
+          agentRunId: details.agentRunId ?? run.agentRunId,
+          approvalCount: details.approvals?.length ?? run.approvalCount ?? 0,
+          chatId: details.chatId ?? run.chatId,
+          completedAt,
+          error: details.error,
+          finalSummary: summary,
+          messageId: details.messageId ?? run.messageId,
+          model: details.model ?? run.model,
+          notificationAttempts: [
+            ...run.notificationAttempts,
+            {
+              at: completedAt,
+              channel: "tasks_inbox",
+              detail: "Saved to Tasks inbox.",
+              ok: true,
+            },
+          ],
+          sources: details.sources,
+          status: details.status,
+          provider: details.provider ?? run.provider,
+          toolCallCount: details.toolCalls?.length ?? run.toolCallCount ?? 0,
+          toolCalls: details.toolCalls,
+          updatedAt: completedAt,
+        };
+
+        return nextRun;
+      });
+
+      return {
+        ...state,
+        runs,
+        tasks: state.tasks.map((candidate) => candidate.id === taskId ? nextTask : candidate),
+        updatedAt: completedAt,
+      };
+    });
+
+    const notificationTask = nextState.tasks.find((task) => task.id === taskId);
+    const notificationRun = nextState.runs.find((run) => run.id === runId);
+
+    if (notificationTask && notificationRun) {
+      void sendAutomationNotifications(notificationTask, notificationRun);
+    }
+  }
+
+  function resolveAutomationSourceChat(task: AutomationTask): ChatSummary {
+    const existingChat = task.chatId
+      ? pendingChatsRef.current.find((chat) => chat.id === task.chatId && !chat.archived)
+      : undefined;
+
+    if (existingChat) {
+      return existingChat;
+    }
+
+    return {
+      ...createEmptyChat(DEFAULT_PROJECT),
+      isDraft: undefined,
+      title: `Task: ${task.title}`,
+    };
+  }
+
+  async function sendAutomationNotifications(task: AutomationTask, run: AutomationRun) {
+    const summary = formatAutomationNotificationSummary(task, run);
+
+    if (task.notificationPolicy.desktop) {
+      notifyAgentRunStatus({
+        chatId: run.chatId,
+        context: {
+          chatId: run.chatId,
+          chatTitle: task.title,
+          project: "Tasks",
+        },
+        notification: {
+          body: summary,
+          title: run.status === "waiting_for_approval" ? "Task needs approval" : `Task: ${task.title}`,
+        },
+      });
+      appendAutomationNotificationAttempt(run.id, {
+        channel: "desktop",
+        detail: "Desktop notification queued.",
+        ok: true,
+      });
+    }
+
+    if (task.notificationPolicy.discord) {
+      const result = await sendAutomationDiscordNotification(summary);
+      appendAutomationNotificationAttempt(run.id, {
+        channel: "discord",
+        detail: result.ok ? "Discord completion notification sent." : result.detail,
+        ok: result.ok,
+      });
+    }
+  }
+
+  async function sendAutomationRunStartedNotification(task: AutomationTask, run: AutomationRun) {
+    if (!task.notificationPolicy.discord) {
+      return;
+    }
+
+    const result = await sendAutomationDiscordNotification(formatAutomationRunStartedSummary(task, run));
+    appendAutomationNotificationAttempt(run.id, {
+      channel: "discord",
+      detail: result.ok ? "Discord start notification sent." : result.detail,
+      ok: result.ok,
+    });
+  }
+
+  function formatAutomationRunStartedSummary(task: AutomationTask, run: AutomationRun) {
+    const raw =
+      task.notificationPolicy.privacy === "private"
+        ? `${task.title}: task run started. Results will appear in Tasks.`
+        : `${task.title}: task run started (${run.reason}). Results will appear in Tasks when it finishes.`;
+    const maxChars = Math.max(120, Math.min(task.notificationPolicy.maxSummaryChars || 900, task.runLimits.maxNotificationChars || 900));
+
+    return raw.length > maxChars ? `${raw.slice(0, maxChars - 3).trim()}...` : raw;
+  }
+
+  function appendAutomationNotificationAttempt(
+    runId: string,
+    attempt: Pick<AutomationRun["notificationAttempts"][number], "channel" | "detail" | "ok">,
+  ) {
+    updateAutomationState((state, now) => ({
+      ...state,
+      runs: state.runs.map((run) =>
+        run.id === runId
+          ? {
+              ...run,
+              notificationAttempts: [
+                ...run.notificationAttempts,
+                {
+                  ...attempt,
+                  at: now,
+                },
+              ],
+              updatedAt: now,
+            }
+          : run,
+      ),
+      updatedAt: now,
+    }));
+  }
+
+  async function sendAutomationDiscordNotification(content: string): Promise<{ detail: string; ok: boolean }> {
+    const settings = discordBridgeSettingsRef.current;
+    const webhookUrl = settings.incomingWebhookUrl.trim();
+
+    if (!webhookUrl) {
+      return sendAutomationDiscordBotChannelNotification(content, settings);
+    }
+
+    try {
+      if (isTauriDesktopRuntime()) {
+        await sendDiscordWebhookMessage({
+          content,
+          webhookUrl,
+        });
+
+        return {
+          detail: "Discord notification sent.",
+          ok: true,
+        };
+      }
+
+      const response = await fetch(createDiscordWebhookWaitUrl(webhookUrl), {
+        body: JSON.stringify({
+          allowed_mentions: {
+            parse: [],
+          },
+          content,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+
+      return {
+        detail: response.ok ? "Discord notification sent." : await formatDiscordWebhookFailure(response),
+        ok: response.ok,
+      };
+    } catch (error) {
+      return {
+        detail: readErrorMessage(error, "Discord notification failed."),
+        ok: false,
+      };
+    }
+  }
+
+  function createDiscordWebhookWaitUrl(webhookUrl: string) {
+    const trimmed = webhookUrl.trim();
+
+    if (/\bwait=/.test(trimmed.split("?")[1] ?? "")) {
+      return trimmed;
+    }
+
+    return `${trimmed}${trimmed.includes("?") ? "&" : "?"}wait=true`;
+  }
+
+  async function formatDiscordWebhookFailure(response: Response) {
+    let body = "";
+
+    try {
+      body = await response.text();
+    } catch {
+      body = "";
+    }
+
+    const detail = body.trim();
+
+    if (!detail) {
+      return `Discord rejected the webhook message with status ${response.status}.`;
+    }
+
+    const limited = detail.length > 700 ? `${detail.slice(0, 684)} [truncated]` : detail;
+    return `Discord rejected the webhook message with status ${response.status}: ${limited}`;
+  }
+
+  async function sendAutomationDiscordBotChannelNotification(
+    content: string,
+    settings: DiscordBridgeSettings,
+  ): Promise<{ detail: string; ok: boolean }> {
+    const channelId = getFirstDiscordId(settings.allowedChannelIds);
+    const botToken = normalizeDiscordBotToken(settings.botToken);
+
+    if (!settings.enabled || !botToken || !channelId) {
+      return {
+        detail: "Discord task notifications need an incoming webhook, or an enabled Discord bridge with bot token and an allowed channel ID.",
+        ok: false,
+      };
+    }
+
+    try {
+      if (isTauriDesktopRuntime()) {
+        await sendDiscordChannelMessage({
+          botToken,
+          channelId,
+          content,
+        });
+
+        return {
+          detail: "Discord bot channel notification sent.",
+          ok: true,
+        };
+      }
+
+      const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`, {
+        body: JSON.stringify({ content }),
+        headers: {
+          authorization: `Bot ${botToken}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+      });
+
+      return {
+        detail: response.ok ? "Discord bot channel notification sent." : `Discord bot channel post returned ${response.status}.`,
+        ok: response.ok,
+      };
+    } catch (error) {
+      return {
+        detail: readErrorMessage(error, "Discord bot channel notification failed."),
+        ok: false,
+      };
+    }
+  }
+
+  function getFirstDiscordId(value: string) {
+    return value
+      .split(/[\s,;]+/)
+      .map((part) => part.trim())
+      .find((part) => /^\d{12,24}$/.test(part));
+  }
+
+  function normalizeDiscordBotToken(value: string) {
+    return value.trim().replace(/^Bot\s+/i, "").trim();
+  }
+
+  function runDueAutomationTasks() {
+    const state = automationStateRef.current;
+
+    if (state.globalPaused) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const dueTasks = state.tasks.filter((task) =>
+      task.trigger.kind !== "app_start" &&
+      isAutomationTaskDue(task, now) &&
+      !runningAutomationTaskIdsRef.current.has(task.id),
+    );
+
+    for (const task of dueTasks.slice(0, 3)) {
+      void runAutomationTask(task.id, "scheduled");
+    }
+  }
+
+  function runAppStartAutomationTasks() {
+    const state = automationStateRef.current;
+
+    if (state.globalPaused) {
+      return;
+    }
+
+    for (const task of state.tasks) {
+      if (task.status !== "enabled" || task.trigger.kind !== "app_start" || appStartAutomationTaskIdsRef.current.has(task.id)) {
+        continue;
+      }
+
+      appStartAutomationTaskIdsRef.current.add(task.id);
+      void runAutomationTask(task.id, "app_start");
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    let schedulerTimer: number | undefined;
+    let disposed = false;
+
+    const scheduleNextTick = (delayMs: number) => {
+      schedulerTimer = window.setTimeout(() => {
+        if (disposed) {
+          return;
+        }
+
+        runAppStartAutomationTasks();
+        runDueAutomationTasks();
+        scheduleNextTick(computeAutomationSchedulerDelayMs(automationStateRef.current));
+      }, delayMs);
+    };
+
+    scheduleNextTick(1_500);
+
+    return () => {
+      disposed = true;
+      if (schedulerTimer !== undefined) {
+        window.clearTimeout(schedulerTimer);
+      }
+    };
+  }, [automationState.globalPaused, automationState.tasks]);
 
   function saveProjectRunConfigForProject(projectName: string, config: ProjectRunConfig | undefined) {
     const normalizedProjectName = normalizeProjectName(projectName);
@@ -2643,6 +3506,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const handlePreloadRoute = useCallback((route: PrimaryRoute) => {
     if (route === "apps") {
       void loadAppsPage();
+    } else if (route === "tasks") {
+      void loadTasksPage();
     } else if (route === "settings") {
       void loadSettingsPage();
     } else if (route === "support") {
@@ -2659,6 +3524,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   useEffect(() => {
     return scheduleIdleTask(() => {
       void loadAppsPage();
+      void loadTasksPage();
       void loadSettingsPage();
       void loadSupportPage();
 
@@ -2693,6 +3559,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     applyProviderUsageToContextEstimate,
     approvedPlanRequiresMutation,
     AppsPage,
+    automationDraft,
+    automationState,
     attachLiveTerminalSession,
     AUTO_COMPACT_CONTEXT_TARGET,
     AUTO_COMPACT_CONTEXT_THRESHOLD,
@@ -2886,6 +3754,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     getToolMemoryProjectName,
     groupGitStatusFallbackFiles,
     handleActiveChatModelChange,
+    handleAcknowledgeAutomationRun,
     handleAddAutomation,
     handleArchiveActiveChat,
     handleComposerDraftChange,
@@ -2893,7 +3762,10 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     handleCopyChatMarkdown,
     handleCopySessionId,
     handleCopyWorkingDirectory,
+    handleCreateAutomationTask,
+    handleDeleteAutomationTask,
     handleDeleteQueuedMessage,
+    handleDuplicateAutomationTask,
     handleEditUserMessageAndRegenerate,
     handleForkActiveChatLocal,
     handleForkChatFromMessage,
@@ -2903,22 +3775,29 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     handleMessageFeedback,
     handleNewChat,
     handleOpenActiveChatInNewWindow,
+    handleOpenAutomationRunChat,
     handleOpenProjectInTool,
     handleOpenProjectRun,
     handleOpenRenameChat,
+    handlePauseAllAutomationTasks,
+    handlePauseAutomationTask,
     handleRegenerateResponse,
     handleRequestPlanRevision,
+    handleRunAutomationTask,
     handleResolveToolApproval,
     handleRouteChange,
     handleSelectChat,
     handleSelectProject,
     handleSendMessage,
+    handleSimulateAutomationTask,
+    handleSnoozeAutomationRun,
     handleSteerQueuedMessage,
     handleStopGeneration,
     handleSubscriptionSandboxUninstalled,
     handleSubmitPlanningInput,
     handleTogglePin,
     handleToggleTerminal,
+    handleUpdateAutomationTask,
     handleUpdateQueuedMessage,
     hasAnyLocalWorkspaceToolEnabled,
     hasComposerDraftContent,
@@ -3071,6 +3950,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     runPlanningMode,
     runProviderRetryWithTimeout,
     sameComposerDraft,
+    sameLocalWorkspaceSettings,
     samePathSet,
     sameProjectName,
     sanitizeLocalToolCallsForDisplay,
@@ -3100,6 +3980,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setAgentRunFailed,
     setAgentRuns,
     setAgentRunWaiting,
+    setAutomationDraft,
     setAppearanceMode,
     setAppearanceSettings,
     setBrowserPreviewTarget,
@@ -3170,6 +4051,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     syncPdfLibraryFromChats,
     takeNextDurableMemoryChatId,
     terminalOpen,
+    TasksPage,
     titleFromMessage,
     titleGenerationRequestsRef,
     toolSettings,

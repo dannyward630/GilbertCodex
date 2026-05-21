@@ -35,10 +35,12 @@ export interface ProviderModelBudgetOverride {
 export type ProviderModelBudgetOverrideMap = Partial<Record<ModelProviderId, Record<string, ProviderModelBudgetOverride>>>;
 export type ProviderModelVisibilityMap = Partial<Record<ModelProviderId, string[]>>;
 export type ProviderSecretMap = Partial<Record<ModelProviderId, string>>;
+export type SubscriptionCodexContextWindow = "standard" | "extended";
 export type SubscriptionFallbackMode = "off" | "smart-saver" | "always-free";
 export type SubscriptionTokenSaverLevel = "off" | "low" | "medium" | "high" | "max";
 
 export interface SubscriptionOptimizationSettings {
+  codexContextWindow: SubscriptionCodexContextWindow;
   fallbackMode: SubscriptionFallbackMode;
   tokenSaverLevel: SubscriptionTokenSaverLevel;
 }

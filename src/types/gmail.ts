@@ -62,7 +62,7 @@ export interface GmailCreateDraftRequest extends GmailAuthenticatedRequest {
   bcc?: string[];
   body: string;
   cc?: string[];
-  contentType?: "text/plain" | "text/html";
+  contentType?: "text/markdown" | "text/plain" | "text/html";
   from?: string;
   inReplyTo?: string;
   references?: string;
@@ -75,7 +75,7 @@ export interface GmailSendMessageRequest extends GmailAuthenticatedRequest {
   bcc?: string[];
   body: string;
   cc?: string[];
-  contentType?: "text/plain" | "text/html";
+  contentType?: "text/markdown" | "text/plain" | "text/html";
   from?: string;
   inReplyTo?: string;
   references?: string;
@@ -86,7 +86,7 @@ export interface GmailSendMessageRequest extends GmailAuthenticatedRequest {
 
 export interface GmailSendSeparateMessagesRequest extends GmailAuthenticatedRequest {
   body: string;
-  contentType?: "text/plain" | "text/html";
+  contentType?: "text/markdown" | "text/plain" | "text/html";
   from?: string;
   subject: string;
   to: string[];

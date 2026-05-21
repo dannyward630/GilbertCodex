@@ -2,8 +2,8 @@ import { BadgeDollarSign, Check, Eye, EyeOff, ServerCog, SlidersHorizontal } fro
 import { ThinkingModeControls } from "../../../components/thinking/ThinkingModeControls";
 import { DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS, getAutomaticHostedMaxOutputTokens, isLocalModelProvider } from "../../../lib/generationSettings";
 import { formatTokenCount } from "../../../lib/contextWindow";
-import { MODEL_PROVIDERS, formatModelPricingSummary, formatModelPricingTitle, type ChatModelOption, type ModelProviderCatalogItem } from "../../../lib/models";
-import type { ModelProviderId, ProviderSettings } from "../../../types/settings";
+import { MODEL_PROVIDERS, formatModelPricingSummary, formatModelPricingTitle, getEffectiveProviderModelContextWindowTokens, isNineRouterCodexModelId, type ChatModelOption, type ModelProviderCatalogItem } from "../../../lib/models";
+import type { ModelProviderId, ProviderSettings, SubscriptionCodexContextWindow } from "../../../types/settings";
 import type { LiveModelCatalogStatus } from "../types";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 
@@ -45,12 +45,14 @@ export function ModelSettingsPage({
   const localGenerationControls = isLocalModelProvider(settings.provider);
   const disabledModelSet = new Set(activeProviderDisabledModels);
   const activeModelOption = activeProviderAllModels.find((option) => option.value === settings.model);
-  const activeModelContextTokens = activeModelOption?.contextWindowTokens;
+  const activeModelContextTokens = getSettingsAwareModelContextTokens(settings, activeModelOption);
   const automaticHostedMaxTokens = getAutomaticHostedMaxOutputTokens(settings, activeModelContextTokens);
   const enabledModelCount = activeProviderAllModels.filter((option) => !disabledModelSet.has(option.value)).length;
   const localContextWindowTokens = settings.contextWindowTokens?.[settings.provider] ?? DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS;
   const activeModelBudgetOverride = settings.modelBudgetOverrides?.[settings.provider]?.[settings.model] ?? {};
   const activeProviderPresetLabel = settings.provider === "9router" ? "Subscription model" : `${activeProvider.label} preset`;
+  const activeCodexSubscriptionModel = settings.provider === "9router" && isNineRouterCodexModelId(settings.model);
+  const codexContextWindowMode = settings.subscriptionOptimization?.codexContextWindow ?? "standard";
 
   function patchActiveModelBudgetOverride(patch: { contextWindowTokens?: number; maxOutputTokens?: number }) {
     const model = settings.model.trim();
@@ -79,6 +81,15 @@ export function ModelSettingsPage({
       modelBudgetOverrides: {
         ...(settings.modelBudgetOverrides ?? {}),
         [settings.provider]: nextProviderOverrides,
+      },
+    });
+  }
+
+  function updateCodexContextWindow(mode: SubscriptionCodexContextWindow) {
+    onSettingsPatch({
+      subscriptionOptimization: {
+        ...settings.subscriptionOptimization,
+        codexContextWindow: mode,
       },
     });
   }
@@ -129,7 +140,7 @@ export function ModelSettingsPage({
                 ) : null}
                 {activeProviderModels.map((option) => (
                   <option key={option.id} value={option.value}>
-                    {option.label} - {formatPricingSummary(option.pricing)} - {formatModelContextTokens(option.contextWindowTokens)}
+                    {option.label} - {formatPricingSummary(option.pricing)} - {formatModelContextTokens(getSettingsAwareModelContextTokens(settings, option))}
                   </option>
                 ))}
               </select>
@@ -174,7 +185,7 @@ export function ModelSettingsPage({
                     </div>
                     <div className="settings-model-row-metrics">
                       <span title={formatPricingTitle(option.pricing)}>{formatPricingSummary(option.pricing)}</span>
-                      <span>{formatModelContextTokens(option.contextWindowTokens)}</span>
+                      <span>{formatModelContextTokens(getSettingsAwareModelContextTokens(settings, option))}</span>
                     </div>
                   </div>
                 );
@@ -197,23 +208,25 @@ export function ModelSettingsPage({
           </div>
           {localGenerationControls ? (
             <>
-              <label className="settings-field">
-                <span>Context window</span>
-                <input
-                  min="4096"
-                  step="1024"
-                  type="number"
-                  value={localContextWindowTokens}
-                  onChange={(event) =>
-                    onSettingsPatch({
-                      contextWindowTokens: {
-                        ...settings.contextWindowTokens,
-                        [settings.provider]: Number(event.target.value),
-                      },
-                    })
-                  }
-                />
-              </label>
+              {activeCodexSubscriptionModel ? null : (
+                <label className="settings-field">
+                  <span>Context window</span>
+                  <input
+                    min="4096"
+                    step="1024"
+                    type="number"
+                    value={localContextWindowTokens}
+                    onChange={(event) =>
+                      onSettingsPatch({
+                        contextWindowTokens: {
+                          ...settings.contextWindowTokens,
+                          [settings.provider]: Number(event.target.value),
+                        },
+                      })
+                    }
+                  />
+                </label>
+              )}
               <label className="settings-field">
                 <span>Temperature</span>
                 <input
@@ -263,20 +276,44 @@ export function ModelSettingsPage({
               <span className="settings-subtle-text">Sampling follows provider defaults. Hosted responses cap automatically at {formatTokenCount(automaticHostedMaxTokens)}.</span>
             </div>
           )}
+          {activeCodexSubscriptionModel ? (
+            <div className="settings-stack">
+              <strong>Codex subscription context</strong>
+              <span className="settings-subtle-text">Default 262k context keeps normal Codex subscription usage lower. 1M is for long repo or document runs and may cost more.</span>
+              <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Codex subscription context window">
+                {CODEX_CONTEXT_WINDOW_OPTIONS.map((option) => (
+                  <button
+                    aria-pressed={codexContextWindowMode === option.mode}
+                    data-selected={codexContextWindowMode === option.mode}
+                    key={option.mode}
+                    title={option.detail}
+                    type="button"
+                    onClick={() => updateCodexContextWindow(option.mode)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="settings-stack">
             <strong>Manual model budget override</strong>
             <span className="settings-subtle-text">Use only when a provider catalog is stale or a local runtime is configured below the model default.</span>
-            <label className="settings-field">
-              <span>Context window override</span>
-              <input
-                min="4096"
-                placeholder={activeModelContextTokens ? String(activeModelContextTokens) : "Auto"}
-                step="1024"
-                type="number"
-                value={activeModelBudgetOverride.contextWindowTokens ?? ""}
-                onChange={(event) => patchActiveModelBudgetOverride({ contextWindowTokens: event.target.value ? Number(event.target.value) : undefined })}
-              />
-            </label>
+            {activeCodexSubscriptionModel ? (
+              <span className="settings-subtle-text">Codex subscription context uses the 262k or 1M setting above.</span>
+            ) : (
+              <label className="settings-field">
+                <span>Context window override</span>
+                <input
+                  min="4096"
+                  placeholder={activeModelContextTokens ? String(activeModelContextTokens) : "Auto"}
+                  step="1024"
+                  type="number"
+                  value={activeModelBudgetOverride.contextWindowTokens ?? ""}
+                  onChange={(event) => patchActiveModelBudgetOverride({ contextWindowTokens: event.target.value ? Number(event.target.value) : undefined })}
+                />
+              </label>
+            )}
             <label className="settings-field">
               <span>Max output override</span>
               <input
@@ -313,6 +350,24 @@ export function ModelSettingsPage({
 
 function formatModelContextTokens(tokens: number | undefined) {
   return typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0 ? `${formatTokenCount(tokens)} ctx` : "Context n/a";
+}
+
+const CODEX_CONTEXT_WINDOW_OPTIONS: Array<{ detail: string; label: string; mode: SubscriptionCodexContextWindow }> = [
+  { detail: "Use the default 262k Codex subscription budget.", label: "262k", mode: "standard" },
+  { detail: "Allow the 1M Codex subscription budget for higher-cost long-context runs.", label: "1M", mode: "extended" },
+];
+
+function getSettingsAwareModelContextTokens(settings: ProviderSettings, option: ChatModelOption | undefined) {
+  if (!option?.contextWindowTokens) {
+    return option?.contextWindowTokens;
+  }
+
+  return getEffectiveProviderModelContextWindowTokens(
+    option.provider,
+    option.value,
+    option.contextWindowTokens,
+    settings.subscriptionOptimization,
+  );
 }
 
 const formatPricingSummary = formatModelPricingSummary;

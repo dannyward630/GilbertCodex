@@ -1,28 +1,207 @@
-// @ts-nocheck
-import type { SetStateAction } from "react";
+import type { MutableRefObject, SetStateAction } from "react";
 
-import type { AgentRuntimeDecision } from "../../../agentRuntime/codingAgent";
-import type { LocalComputerToolExecutionPolicy, LocalSubagentResult, LocalSubagentTask } from "../../../localWorkspace/localToolRuntimeDisabled";
-import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap, compactMessagesForContext } from "../../../lib/contextWindow";
+import type { ContextCompactionNotice } from "../../../lib/contextWindow";
 import type { PlanningProviderRequest } from "../../../services/planningClient";
-import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolMemorySearchRequest, ToolResultMessage } from "../../../toolBridge";
-import type { AppInfo } from "../../../types/app";
+import type { ProviderUsage } from "../../../services/modelProviderClient";
+import type { PlanResearchEvidence } from "../../../services/planResearchClient";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../../types/agentRun";
-import type { AuthSession } from "../../../types/auth";
-import type { ChatArtifact, ChatAttachment, ChatContextCompaction, ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch, ChatWorkTraceItem } from "../../../types/chat";
-import type { DiscordBridgeSettings } from "../../../types/discord";
+import type { ChatArtifact, ChatAttachment, ChatComposerDraft, ChatMessage, ChatPlanningInputRequest, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch } from "../../../types/chat";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { PrimaryRoute } from "../../../types/navigation";
-import type { CreateProjectOptions, ProjectSummary } from "../../../types/project";
-import type { ProviderReasoningState } from "../../../types/reasoning";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../../types/settings";
+import type { ProviderSettings, WebSearchSettings } from "../../../types/settings";
+import type { ToolAutomationScope } from "../../../toolBridge";
 import type { ToolRegistrySettings } from "../../../types/tools";
-import type { SettingsSectionId } from "../../../pages/settings/types";
-import type { DiscordInteractionEvent } from "../../tauriClient";
-import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
+import type { ApprovedPlanExecutionContext, AssistantToolResponse, DiscordReplyTarget, DiscordStreamUpdate, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
-export async function handleSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSendInput) {
+type QueuedSendTarget = { chatId: string; queuedMessageId: string };
+
+type NoticeDialogState = { description?: string; title: string } | null;
+
+interface DiscordResponseStreamer {
+  fail: (content: string) => Promise<void>;
+  finish: (content: string, update?: DiscordStreamUpdate) => Promise<void>;
+  update: (update: DiscordStreamUpdate) => void;
+}
+
+interface PlanningRunSnapshot {
+  content?: string;
+  progress: ChatProgressItem[];
+}
+
+interface PlanningRunResult extends PlanningRunSnapshot {
+  content: string;
+  providerRequest?: PlanningProviderRequest;
+  usage?: ProviderUsage;
+}
+
+export function resolveStoredChatModelSelection(
+  currentChat: Pick<ChatSummary, "model" | "provider">,
+  effectiveProviderSettings: Pick<ProviderSettings, "model" | "provider">,
+  options: Pick<StartSendMessageOptions, "preserveChatModelSelection"> = {},
+): Pick<ChatSummary, "model" | "provider"> {
+  return options.preserveChatModelSelection
+    ? {
+        model: currentChat.model,
+        provider: currentChat.provider,
+      }
+    : {
+        model: effectiveProviderSettings.model,
+        provider: effectiveProviderSettings.provider,
+      };
+}
+
+interface StreamAssistantWithLocalToolsOptions {
+  approvalDecisions?: Record<string, AgentApprovalDecision>;
+  approvedPlanExecution?: ApprovedPlanExecutionContext;
+  automationScope?: ToolAutomationScope;
+  chatId: string;
+  controller: AbortController;
+  memoryToolsEnabled?: boolean;
+  messageId: string;
+  messagesForProvider: ChatMessage[];
+  onExternalUpdate?: (update: DiscordStreamUpdate) => void;
+  previousToolCalls?: ChatToolCall[];
+  prompt: string;
+  providerSettingsOverrides?: Partial<ProviderSettings>;
+  requestId: number;
+  resumeToolCallContent?: string;
+  runId?: string;
+  runtimeToolOverrides?: Partial<ProviderSettings["tools"]>;
+  toolSelectionPrompt?: string;
+  webSearchSettingsOverride?: WebSearchSettings;
+  workspaceSettings: LocalWorkspaceSettings;
+}
+
+interface RunAppOwnedCodingAgentOptions {
+  chatId: string;
+  controller: AbortController;
+  messageId: string;
+  messagesForProvider: ChatMessage[];
+  onExternalUpdate?: (update: DiscordStreamUpdate) => void;
+  prompt: string;
+  requestId: number;
+  runId?: string;
+  webSearchSettingsOverride?: WebSearchSettings;
+  workspaceSettings: LocalWorkspaceSettings;
+}
+
+export interface SendActionsDeps extends Pick<WorkspaceRuntimeDeps, "activeChat" | "pendingChatsRef" | "setActiveChatId" | "setChats"> {
+  CONTEXT_COMPACTION_PROGRESS_ID: string;
+  createActiveGeneration: (
+    chatId: string,
+    previousChat: ChatSummary,
+    previousChatExisted: boolean,
+    restoreDraft: ChatComposerDraft,
+    target?: { messageId: string },
+  ) => { controller: AbortController; requestId: number };
+  createAgentRunForMessage: (params: {
+    chatId: string;
+    localWorkspace?: LocalWorkspaceSettings;
+    messageId: string;
+    mode: "chat" | "plan";
+    prompt: string;
+    title?: string;
+  }) => AgentRun;
+  createChatToolSelectionPrompt: (prompt: string, existingMessages: ChatMessage[], workspaceSettings: LocalWorkspaceSettings) => string;
+  createDiscordResponseStreamer: (target: DiscordReplyTarget) => DiscordResponseStreamer;
+  createDiscordRuntimeContextMessages: (workspaceSettings: LocalWorkspaceSettings, webSearchToolAvailable: boolean, webSearchProvider: WebSearchSettings["provider"]) => ChatMessage[];
+  createEmptyChat: (project?: string) => ChatSummary;
+  createFallbackChatTitle: (input: { attachments: ChatAttachment[]; content: string }) => string;
+  createId: (prefix: string) => string;
+  createMessage: (role: ChatMessage["role"], content: string, status?: ChatMessage["status"], reasoning?: string, attachments?: ChatAttachment[]) => ChatMessage;
+  createMessagesForProvider: (
+    existingMessages: ChatMessage[],
+    userMessage: ChatMessage,
+    projectName: string,
+    workspaceSettings: LocalWorkspaceSettings,
+    prompt: string,
+    webContextMessages: ChatMessage[],
+    settings: ProviderSettings,
+    onCompaction: (notice: ContextCompactionNotice) => void,
+  ) => Promise<ChatMessage[]>;
+  createPlanningExecutionApproval: (runId: string, messageId: string, planContent: string, prompt: string) => AgentApproval;
+  createPlanningInputRequest: (
+    settings: ProviderSettings,
+    messages: ChatMessage[],
+    options?: {
+      onProviderRequest?: (request: PlanningProviderRequest) => void;
+      onProviderUsage?: (request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
+      signal?: AbortSignal;
+    },
+  ) => Promise<ChatPlanningInputRequest | null>;
+  createPlanningProgress: (phase: "input" | "researching" | "drafting" | "complete", evidence?: { filesRead: number; searches: number }) => ChatProgressItem[];
+  createPlanResearchFollowupInstruction: (evidence: PlanResearchEvidence) => ChatMessage;
+  createPlanResearchInstruction: (originalRequest: string, context?: { workspaceRoots?: string[] }) => ChatMessage;
+  createPromptAwareProviderSettings: (prompt: string, overrides: Partial<ProviderSettings>, chat: ChatSummary | null | undefined) => ProviderSettings;
+  createToolAwareProviderSettings: (overrides: Partial<ProviderSettings>, chat: ChatSummary | null | undefined) => ProviderSettings;
+  DEFAULT_PROJECT: string;
+  enqueueChatSend: (input: ChatSendInput) => string | undefined;
+  finishActiveGeneration: (requestId: number) => void;
+  formatResearchPayload: (findings: string, evidence: PlanResearchEvidence) => string;
+  formatTokenCount: (tokens: number) => string;
+  getEnabledWorkspaceRoots: (workspaceSettings: LocalWorkspaceSettings) => string[];
+  getRuntimeWebSearchSettings: (settings: ProviderSettings, requestedWebSearch: ChatSendInput["webSearch"] | ChatWebSearch | undefined) => WebSearchSettings;
+  handleSteerQueuedMessage: (messageId: string, content: string) => void;
+  isAbortError: (error: unknown) => boolean;
+  isChatSending: (chatId: string | undefined) => boolean;
+  isRequestInactive: (requestId: number, controller: AbortController) => boolean;
+  isResearchDeepEnough: (evidence: PlanResearchEvidence) => boolean;
+  localWorkspaceRef: MutableRefObject<LocalWorkspaceSettings>;
+  mergeAgentApprovals: (existing: AgentApproval[], incoming: AgentApproval[]) => AgentApproval[];
+  mergeChatArtifacts: (existing: ChatArtifact[] | undefined, incoming: ChatArtifact[] | undefined) => ChatArtifact[] | undefined;
+  mergeChatSources: (existing: ChatSource[] | undefined, incoming: ChatSource[] | undefined) => ChatSource[] | undefined;
+  notifyPlanningInputNeeded: (inputRequest: ChatPlanningInputRequest, chatId: string) => void;
+  notifyRunComplete: (message: ChatMessage, chatId: string) => void;
+  notifyRunNeedsAttention: (message: string, chatId: string) => void;
+  PLAN_RESEARCH_BUDGET: { maxFollowupPasses: number };
+  preserveVisibleResponseThinking: (previousMessage: ChatMessage, nextMessage: ChatMessage) => ChatMessage;
+  recordPlanningProviderRequest: (chatId: string, request: PlanningProviderRequest) => void;
+  recordPlanningProviderUsage: (chatId: string, request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
+  resolveChatResearchReferences: (input: ChatSendInput, currentChatId: string) => ChatResearchReference[];
+  resolveWorkspaceForChatProject: (projectName: string, fallback: LocalWorkspaceSettings) => LocalWorkspaceSettings;
+  runAppOwnedCodingAgent: (options: RunAppOwnedCodingAgentOptions) => Promise<AssistantToolResponse>;
+  runPlanningMode: (options: {
+    messages: ChatMessage[];
+    onProviderRequest?: (request: PlanningProviderRequest) => void;
+    onProviderUsage?: (request: PlanningProviderRequest, usage: ProviderUsage | undefined) => void;
+    onUpdate: (snapshot: PlanningRunSnapshot) => void;
+    researchFindings?: string;
+    signal?: AbortSignal;
+    settings: ProviderSettings;
+  }) => Promise<PlanningRunResult>;
+  scheduleGeneratedChatTitle: (params: {
+    attachments: ChatAttachment[];
+    chatId: string;
+    content: string;
+    fallbackTitle: string;
+    settings: ProviderSettings;
+    userMessageId: string;
+  }) => void;
+  sendDiscordReply: (target: DiscordReplyTarget | undefined, content: string) => Promise<void>;
+  setActiveGenerationTarget: (requestId: number, chatId: string, messageId: string) => void;
+  setActiveRoute: (route: PrimaryRoute) => void;
+  setAgentRunCompleted: (runId: string | undefined, message: ChatMessage) => void;
+  setAgentRunFailed: (runId: string | undefined, errorMessage: string) => void;
+  setAgentRunWaiting: (runId: string | undefined, label: string, detail: string, approvals?: AgentApproval[], pendingToolCallContent?: string) => void;
+  setNoticeDialog: (action: SetStateAction<NoticeDialogState>) => void;
+  shouldStartAppAgentRun: (params: { mode: "chat" | "plan"; prompt: string; toolSettings: ToolRegistrySettings; workspace: LocalWorkspaceSettings }) => boolean;
+  sortChatsByUpdatedAt: (chats: ChatSummary[]) => ChatSummary[];
+  startSendMessage: (input: ChatSendInput, queuedSend?: QueuedSendTarget, options?: StartSendMessageOptions) => Promise<void>;
+  stopStaleStreamingMessages: (chatId: string, activeMessageId?: string) => void;
+  streamAssistantWithLocalTools: (options: StreamAssistantWithLocalToolsOptions) => Promise<AssistantToolResponse>;
+  summarizeResearchEvidence: (toolCalls: ChatToolCall[] | undefined) => PlanResearchEvidence;
+  toolSettings: ToolRegistrySettings;
+  touchProject: (projectName: string) => void;
+  updateAgentRun: (runId: string | undefined, updater: (run: AgentRun, now: string) => AgentRun) => AgentRun | undefined;
+  updateGeneratedMessage: (chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt?: boolean) => void;
+  withContextCompactionMarker: (message: ChatMessage, notice: ContextCompactionNotice | undefined) => ChatMessage;
+  withContextCompactionProgress: (compactionProgress: ChatProgressItem, progress: ChatProgressItem[] | undefined) => ChatProgressItem[];
+  withLocalComputerProgress: (localProgress: ChatProgressItem | undefined, progress: ChatProgressItem[] | undefined) => ChatProgressItem[] | undefined;
+  withWebSearchProgress: (webSearch: ChatWebSearch | undefined, progress: ChatProgressItem[] | undefined) => ChatProgressItem[] | undefined;
+}
+
+export async function handleSendMessage(deps: SendActionsDeps, input: ChatSendInput) {
   const { activeChat, enqueueChatSend, handleSteerQueuedMessage, isChatSending, startSendMessage } = deps;
 
     if (isChatSending(activeChat.id)) {
@@ -39,8 +218,8 @@ export async function handleSendMessage(deps: WorkspaceRuntimeDeps, input: ChatS
     await startSendMessage(input);
   }
 
-export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSendInput, queuedSend: { chatId: string; queuedMessageId: string }, options: StartSendMessageOptions) {
-  const { activeChat, CONTEXT_COMPACTION_PROGRESS_ID, createActiveGeneration, createAgentRunForMessage, createChatToolSelectionPrompt, createDiscordResponseStreamer, createDiscordRuntimeContextMessages, createEmptyChat, createFallbackChatTitle, createId, createMessage, createMessagesForProvider, createPlanningExecutionApproval, createPlanningInputRequest, createPlanningProgress, createPlanResearchFollowupInstruction, createPlanResearchInstruction, createPromptAwareProviderSettings, createToolAwareProviderSettings, DEFAULT_PROJECT, finishActiveGeneration, formatResearchPayload, formatTokenCount, getEnabledWorkspaceRoots, getRuntimeWebSearchSettings, isAbortError, isChatSending, isRequestInactive, isResearchDeepEnough, localWorkspaceRef, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, notifyPlanningInputNeeded, notifyRunComplete, notifyRunNeedsAttention, PENDING_CHAT_TITLE, pendingChatsRef, PLAN_RESEARCH_BUDGET, preserveVisibleResponseThinking, providerSettings, recordPlanningProviderRequest, recordPlanningProviderUsage, resolveChatResearchReferences, resolveWorkspaceForChatProject, runAppOwnedCodingAgent, runPlanningMode, scheduleGeneratedChatTitle, sendDiscordReply, setActiveChatId, setActiveGenerationTarget, setActiveRoute, setAgentRunCompleted, setAgentRunFailed, setAgentRunWaiting, setChats, setNoticeDialog, shouldStartAppAgentRun, sortChatsByUpdatedAt, stopStaleStreamingMessages, streamAssistantWithLocalTools, summarizeResearchEvidence, toolSettings, touchProject, updateAgentRun, updateGeneratedMessage, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withWebSearchProgress } = deps;
+export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInput, queuedSend?: QueuedSendTarget, options: StartSendMessageOptions = {}) {
+  const { activeChat, CONTEXT_COMPACTION_PROGRESS_ID, createActiveGeneration, createAgentRunForMessage, createChatToolSelectionPrompt, createDiscordResponseStreamer, createDiscordRuntimeContextMessages, createEmptyChat, createFallbackChatTitle, createId, createMessage, createMessagesForProvider, createPlanningExecutionApproval, createPlanningInputRequest, createPlanningProgress, createPlanResearchFollowupInstruction, createPlanResearchInstruction, createPromptAwareProviderSettings, createToolAwareProviderSettings, DEFAULT_PROJECT, finishActiveGeneration, formatResearchPayload, formatTokenCount, getEnabledWorkspaceRoots, getRuntimeWebSearchSettings, isAbortError, isChatSending, isRequestInactive, isResearchDeepEnough, localWorkspaceRef, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, notifyPlanningInputNeeded, notifyRunComplete, notifyRunNeedsAttention, pendingChatsRef, PLAN_RESEARCH_BUDGET, preserveVisibleResponseThinking, recordPlanningProviderRequest, recordPlanningProviderUsage, resolveChatResearchReferences, resolveWorkspaceForChatProject, runAppOwnedCodingAgent, runPlanningMode, scheduleGeneratedChatTitle, sendDiscordReply, setActiveChatId, setActiveGenerationTarget, setActiveRoute, setAgentRunCompleted, setAgentRunFailed, setAgentRunWaiting, setChats, setNoticeDialog, shouldStartAppAgentRun, sortChatsByUpdatedAt, stopStaleStreamingMessages, streamAssistantWithLocalTools, summarizeResearchEvidence, toolSettings, touchProject, updateAgentRun, updateGeneratedMessage, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withWebSearchProgress } = deps;
 
     const content = input.content.trim();
     const attachments = input.attachments;
@@ -63,8 +242,8 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
 
     const isPlanningMode = toolSettings.planning && input.mode === "plan";
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, input.localWorkspace ?? localWorkspaceRef.current);
-    const effectiveProviderSettings = createPromptAwareProviderSettings(content, {}, currentChat);
-    const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, input.webSearch);
+    const effectiveProviderSettings = createPromptAwareProviderSettings(content, options.providerSettingsOverrides ?? {}, currentChat);
+    const runtimeWebSearchSettings = getRuntimeWebSearchSettings(effectiveProviderSettings, input.webSearch);
     const webSearchToolAvailable = Boolean(toolSettings.webSearch && runtimeWebSearchSettings.enabled);
     const discordStreamer = options.discordReply ? createDiscordResponseStreamer(options.discordReply) : undefined;
     const queuedMessageIndex = queuedSend ? currentChat.messages.findIndex((message) => message.id === queuedSend.queuedMessageId && message.role === "user") : -1;
@@ -87,10 +266,16 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
       ? {
           ...currentChat,
           messages: [...messagesBeforeUser, ...messagesAfterUser],
-          title: shouldGenerateChatTitle ? "New chat" : currentChat.title,
+          title: shouldGenerateChatTitle ? fallbackChatTitle : currentChat.title,
         }
       : currentChat;
     const { controller, requestId } = createActiveGeneration(currentChat.id, previousChatSnapshot, currentChatExisted, restoreDraft);
+    const automationRuntimeTimeoutMs = options.automationScope?.maxRuntimeSeconds
+      ? Math.max(1, options.automationScope.maxRuntimeSeconds) * 1000
+      : 0;
+    const automationRuntimeTimer = automationRuntimeTimeoutMs > 0
+      ? setTimeout(() => controller.abort(), automationRuntimeTimeoutMs)
+      : undefined;
     const now = new Date().toISOString();
     const userMessage =
       queuedSend && queuedMessage
@@ -139,21 +324,32 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
     assistantMessage.agentRunId = agentRun.id;
     assistantMessage.agentRunStatus = agentRun.status;
     setActiveGenerationTarget(requestId, currentChat.id, assistantMessage.id);
+    options.onAssistantMessageCreated?.({
+      agentRunId: agentRun.id,
+      chatId: currentChat.id,
+      messageId: assistantMessage.id,
+      model: effectiveProviderSettings.model,
+      provider: effectiveProviderSettings.provider,
+      userMessageId: userMessage.id,
+    });
 
-    setActiveChatId(currentChat.id);
-    setActiveRoute("chat");
+    if (!options.background) {
+      setActiveChatId(currentChat.id);
+      setActiveRoute("chat");
+    }
 
     setChats((currentChats) => {
       const hasCurrentChat = currentChats.some((chat) => chat.id === currentChat.id);
       const nextMessages = queuedSend ? [...messagesBeforeUser, userMessage, assistantMessage, ...messagesAfterUser] : [...currentChat.messages, userMessage, assistantMessage];
+      const storedModelSelection = resolveStoredChatModelSelection(currentChat, effectiveProviderSettings, options);
       const updatedChat: ChatSummary = {
         ...currentChat,
         composerDraft: undefined,
         isDraft: undefined,
         messages: nextMessages,
-        model: effectiveProviderSettings.model,
-        provider: effectiveProviderSettings.provider,
-        title: shouldGenerateChatTitle ? PENDING_CHAT_TITLE : currentChat.title,
+        model: storedModelSelection.model,
+        provider: storedModelSelection.provider,
+        title: shouldGenerateChatTitle ? fallbackChatTitle : currentChat.title,
         updatedAt: now,
       };
 
@@ -166,7 +362,13 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
     stopStaleStreamingMessages(currentChat.id, assistantMessage.id);
     touchProject(currentChat.project);
 
-    if (shouldGenerateChatTitle) {
+    let titleGenerationScheduled = false;
+    const scheduleTitleGenerationAfterPrimaryStream = () => {
+      if (!shouldGenerateChatTitle || titleGenerationScheduled || controller.signal.aborted) {
+        return;
+      }
+
+      titleGenerationScheduled = true;
       scheduleGeneratedChatTitle({
         attachments,
         chatId: currentChat.id,
@@ -175,7 +377,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         settings: effectiveProviderSettings,
         userMessageId: userMessage.id,
       });
-    }
+    };
 
     try {
       const messagesForProvider = await createMessagesForProvider(messagesBeforeUser, userMessage, currentChat.project, workspaceSettings, content, discordContextMessages, effectiveProviderSettings, (notice) => {
@@ -257,7 +459,9 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         // Force-enable the read-only research tools regardless of chat-mode
         // toggles. The user opted into plan mode, which implies they want real
         // research — chat-mode toggles for fileSearch/fileBrowser/codeView
-        // shouldn't gate that. Edit/run tools remain governed by user prefs.
+        // shouldn't gate that. Runtime/browser tools remain governed by user prefs,
+        // but the selection prompt below makes them available when the request asks
+        // for preview, screenshots, console evidence, or dev-server diagnostics.
         const planResearchToolOverrides: Partial<ProviderSettings["tools"]> = {
           codeView: true,
           fileBrowser: true,
@@ -267,9 +471,27 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
         });
         const planResearchToolSelectionPrompt = [
-          "Plan mode codebase research. Search workspace directories, grep source files, and read relevant files before drafting.",
+          "Plan mode codebase research. Search workspace directories, grep source files, and read relevant files before drafting. If the request mentions runtime behavior, browser UI, localhost, preview, screenshots, or console errors, also use terminal diagnostics plus browser preview, screenshot, and console tools before drafting.",
           content,
         ].join("\n");
+        setChats((currentChats) =>
+          currentChats.map((chat) =>
+            chat.id === currentChat.id
+              ? {
+                  ...chat,
+                  messages: chat.messages.map((message) =>
+                    message.id === assistantMessage.id
+                      ? preserveVisibleResponseThinking(message, {
+                          ...message,
+                          content: "",
+                          progress: withWebSearchProgress(message.webSearch, createPlanningProgress("researching")),
+                        })
+                      : message,
+                  ),
+                }
+              : chat,
+          ),
+        );
         let researchMessages: ChatMessage[] = [...messagesForProvider, researchInstruction];
         let researchResponse = await streamAssistantWithLocalTools({
           chatId: currentChat.id,
@@ -497,7 +719,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         }
         return;
       } else {
-        const useAppAgentRuntime = shouldStartAppAgentRun({
+        const useAppAgentRuntime = !options.automationScope && shouldStartAppAgentRun({
           mode: "chat",
           prompt: content,
           toolSettings,
@@ -535,15 +757,18 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
               workspaceSettings,
             })
           : await streamAssistantWithLocalTools({
+              automationScope: options.automationScope,
               chatId: currentChat.id,
               controller,
               messageId: assistantMessage.id,
               messagesForProvider,
               onExternalUpdate: discordStreamer?.update,
               prompt: content,
+              providerSettingsOverrides: options.providerSettingsOverrides,
               requestId,
               runId: agentRun.id,
-              toolSelectionPrompt: createChatToolSelectionPrompt(content, messagesBeforeUser, workspaceSettings),
+              runtimeToolOverrides: options.runtimeToolOverrides,
+              toolSelectionPrompt: options.toolSelectionPrompt ?? createChatToolSelectionPrompt(content, messagesBeforeUser, workspaceSettings),
               webSearchSettingsOverride: runtimeWebSearchSettings,
               workspaceSettings,
             });
@@ -571,6 +796,7 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
                             isStreaming: false,
                             progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
                             sources: assistantResponse.sources && assistantResponse.sources.length > 0 ? mergeChatSources(message.sources, assistantResponse.sources) : message.sources,
+                            streamTiming: assistantResponse.streamTiming ?? message.streamTiming,
                             toolCalls: assistantResponse.toolCalls ?? message.toolCalls,
                             thinking: message.thinking
                               ? {
@@ -598,6 +824,18 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
             assistantResponse.approvalRequests ?? [],
             assistantResponse.pendingToolCallContent,
           );
+          options.onAssistantMessageSettled?.({
+            agentRunId: agentRun.id,
+            approvals: assistantResponse.approvalRequests,
+            chatId: currentChat.id,
+            content: assistantResponse.content,
+            messageId: assistantMessage.id,
+            model: effectiveProviderSettings.model,
+            provider: effectiveProviderSettings.provider,
+            sources: assistantResponse.sources,
+            status: "waiting_for_approval",
+            toolCalls: assistantResponse.toolCalls,
+          });
           notifyRunNeedsAttention("A tool action is waiting for your approval.", currentChat.id);
           touchProject(currentChat.project);
           if (discordStreamer) {
@@ -615,9 +853,21 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
           content: assistantResponse.content,
           isStreaming: false,
           sources: assistantResponse.sources && assistantResponse.sources.length > 0 ? mergeChatSources(assistantMessage.sources, assistantResponse.sources) : assistantMessage.sources,
+          streamTiming: assistantResponse.streamTiming,
           toolCalls: assistantResponse.toolCalls,
         };
         setAgentRunCompleted(agentRun.id, completedAssistantMessage);
+        options.onAssistantMessageSettled?.({
+          agentRunId: agentRun.id,
+          chatId: currentChat.id,
+          content: assistantResponse.content,
+          messageId: assistantMessage.id,
+          model: effectiveProviderSettings.model,
+          provider: effectiveProviderSettings.provider,
+          sources: assistantResponse.sources,
+          status: "completed",
+          toolCalls: assistantResponse.toolCalls,
+        });
         notifyRunComplete(completedAssistantMessage, currentChat.id);
         if (discordStreamer) {
           await discordStreamer.finish(assistantResponse.content, {
@@ -665,6 +915,16 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         ),
       );
       setAgentRunFailed(agentRun.id, errorContent);
+      options.onAssistantMessageSettled?.({
+        agentRunId: agentRun.id,
+        chatId: currentChat.id,
+        content: errorContent,
+        error: errorContent,
+        messageId: assistantMessage.id,
+        model: effectiveProviderSettings.model,
+        provider: effectiveProviderSettings.provider,
+        status: "failed",
+      });
       notifyRunNeedsAttention(errorContent, currentChat.id);
       touchProject(currentChat.project);
       if (discordStreamer) {
@@ -673,6 +933,10 @@ export async function startSendMessage(deps: WorkspaceRuntimeDeps, input: ChatSe
         await sendDiscordReply(options.discordReply, `Gilbert hit an error while handling the Discord request: ${errorContent}`);
       }
     } finally {
+      if (automationRuntimeTimer) {
+        clearTimeout(automationRuntimeTimer);
+      }
+      scheduleTitleGenerationAfterPrimaryStream();
       finishActiveGeneration(requestId);
     }
   }

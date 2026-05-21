@@ -1,10 +1,11 @@
-import { BookOpen, Bot, Copy, ExternalLink, Eye, EyeOff, MessageCircle, Network, Play, RefreshCw, ShieldCheck, Square, Webhook } from "lucide-react";
+import { BookOpen, Bot, Copy, ExternalLink, Eye, EyeOff, MessageCircle, Network, Play, RefreshCw, Send, ShieldCheck, Square, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   getDiscordBridgeStatus,
   isTauriDesktopRuntime,
   listenForDiscordBridgeStatus,
   registerDiscordSlashCommand,
+  sendDiscordWebhookMessage,
   startDiscordBridge,
   stopDiscordBridge,
   type DiscordBridgeStatus,
@@ -219,6 +220,37 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
       setRuntimeStatus({ kind: "success", text: `Registered /gilbert and /gilbertnewchat ${scope}.` });
     } catch (error) {
       setRuntimeStatus({ kind: "error", text: readErrorMessage(error, "Could not register Discord chat commands.") });
+    } finally {
+      setBridgeBusy(false);
+    }
+  }
+
+  async function sendWebhookTest() {
+    const webhookUrl = settings.incomingWebhookUrl.trim();
+
+    setCopyStatus(null);
+
+    if (!webhookUrl) {
+      setRuntimeStatus({ kind: "error", text: "Add the Discord incoming webhook URL before sending a test." });
+      return;
+    }
+
+    if (!desktopBridgeAvailable) {
+      setRuntimeStatus({ kind: "error", text: "Discord webhook tests are only available in the desktop app." });
+      return;
+    }
+
+    setBridgeBusy(true);
+    setRuntimeStatus({ kind: "warning", text: "Sending Discord webhook test..." });
+
+    try {
+      await sendDiscordWebhookMessage({
+        content: `Gilbert Discord webhook test sent at ${new Date().toLocaleString()}.`,
+        webhookUrl,
+      });
+      setRuntimeStatus({ kind: "success", text: "Discord webhook test sent. Check the selected channel." });
+    } catch (error) {
+      setRuntimeStatus({ kind: "error", text: readErrorMessage(error, "Could not send the Discord webhook test.") });
     } finally {
       setBridgeBusy(false);
     }
@@ -466,6 +498,17 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
             </div>
           </label>
 
+          <div className="settings-actions-row discord-action-row">
+            <button className="settings-primary-button" type="button" disabled={!desktopBridgeAvailable || bridgeBusy || !settings.incomingWebhookUrl.trim()} onClick={sendWebhookTest}>
+              <Send size={16} aria-hidden="true" />
+              Send test
+            </button>
+            <a className="settings-ghost-button discord-doc-link" href="https://docs.discord.com/developers/resources/webhook" rel="noreferrer" target="_blank">
+              <ExternalLink size={16} aria-hidden="true" />
+              Incoming webhooks
+            </a>
+          </div>
+
           <label className="settings-field">
             <span>Response style</span>
             <select value={settings.responseStyle} onChange={(event) => patchSettings({ responseStyle: event.target.value as DiscordBridgeResponseStyle })}>
@@ -536,6 +579,8 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
                 <li>Paste a bot token only when registering slash commands or testing gateway mode, then click Register commands.</li>
                 <li>Install the app into the target server with the applications.commands scope, then test <code>/gilbert</code> and <code>/gilbertnewchat</code>.</li>
                 <li>Use an incoming webhook only for one-way channel posts from Gilbert. It cannot read Discord messages.</li>
+                <li>After pasting a webhook URL, click Send test to confirm Discord accepted and saved the message.</li>
+                <li>Use a normal text channel webhook for task notifications. Forum and media channels need thread targeting that Tasks v1 does not configure yet.</li>
               </ol>
             </section>
 
@@ -618,6 +663,7 @@ function createDiscordSetupSummary(settings: DiscordBridgeSettings) {
     "",
     "Posting",
     `Incoming webhook URL: ${settings.incomingWebhookUrl ? "(saved locally)" : "(not set)"}`,
+    "After adding a webhook, use Send test before enabling task Discord notifications.",
   ].join("\n");
 }
 

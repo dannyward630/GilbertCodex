@@ -50,7 +50,7 @@ import {
   type NineRouterCombo,
   upsertNineRouterCombo,
 } from "../../../services/nineRouterFallbackRouting";
-import type { ModelProviderId, ProviderSettings, SubscriptionFallbackMode, SubscriptionTokenSaverLevel } from "../../../types/settings";
+import type { ModelProviderId, ProviderSettings, SubscriptionCodexContextWindow, SubscriptionFallbackMode, SubscriptionTokenSaverLevel } from "../../../types/settings";
 import type { ProviderUsageRecord } from "../../../types/usage";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -143,6 +143,15 @@ const TOKEN_SAVER_LEVEL_OPTIONS: Array<{ detail: string; label: string; level: S
   { detail: "Keeps only tighter tool evidence for cheaper long tool runs.", label: "High", level: "high" },
   { detail: "Most aggressive compression for max token savings.", label: "Max", level: "max" },
 ];
+const SUBSCRIPTION_OPTIMIZATION_DEFAULT: ProviderSettings["subscriptionOptimization"] = {
+  codexContextWindow: "standard",
+  fallbackMode: "off",
+  tokenSaverLevel: "low",
+};
+const CODEX_CONTEXT_WINDOW_OPTIONS: Array<{ detail: string; label: string; mode: SubscriptionCodexContextWindow }> = [
+  { detail: "Keep Codex subscription prompts inside the 262k cost-saving budget.", label: "262k", mode: "standard" },
+  { detail: "Allow 1M context for higher-cost long repository or document runs.", label: "1M", mode: "extended" },
+];
 
 export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsPageProps) {
   const [history, setHistory] = useState(() => loadUsageHistory());
@@ -211,9 +220,10 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
     [filteredRecords.length, liveModelRows, liveProviderRows, liveRequestsPerHour, localTrend, nineRouterStats, summary, topCostDriver, topModel],
   );
   const livePeriod = toNineRouterPeriod(period);
-  const subscriptionOptimization = settings.subscriptionOptimization ?? { fallbackMode: "off" as SubscriptionFallbackMode, tokenSaverLevel: "low" as SubscriptionTokenSaverLevel };
+  const subscriptionOptimization = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
   const fallbackMode = subscriptionOptimization.fallbackMode;
   const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
+  const codexContextWindow = subscriptionOptimization.codexContextWindow;
   const tokenSaverEnabled = tokenSaverLevel !== "off";
   const tokenSaverDetail = TOKEN_SAVER_LEVEL_OPTIONS.find((option) => option.level === tokenSaverLevel)?.detail ?? TOKEN_SAVER_LEVEL_OPTIONS[1].detail;
   const tokenSaverHelperLabel = tokenSaverHelper.status === "ready" ? tokenSaverHelper.rtkEnabled === false ? "Off" : "On" : tokenSaverEnabled ? "On after setup" : "Off";
@@ -398,7 +408,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   }
 
   function updateSubscriptionOptimization(partial: Partial<ProviderSettings["subscriptionOptimization"]>) {
-    const current: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" };
+    const current: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
     onSettingsChange({
       ...settings,
       subscriptionOptimization: {
@@ -475,7 +485,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   }
 
   function useSubscriptionProvider(modelOverride: string, mode: SubscriptionFallbackMode) {
-    const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" };
+    const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
     onSettingsChange({
       ...settings,
       baseUrls: {
@@ -654,6 +664,43 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
             ))}
           </div>
           <span className="settings-status">{tokenSaverDetail}</span>
+        </article>
+
+        <article className="settings-card usage-token-saver-card">
+          <div className="settings-card-heading">
+            <Layers3 size={19} aria-hidden="true" />
+            <div>
+              <h2>Codex context</h2>
+              <p>Default limit for OpenAI Codex subscription routes before compaction and tool-result budgeting.</p>
+            </div>
+          </div>
+          <div className="usage-token-saver-summary">
+            <div>
+              <span>Window</span>
+              <strong>{codexContextWindow === "extended" ? "1M" : "262k"}</strong>
+              <em>{codexContextWindow === "extended" ? "Higher cost" : "Cost saver"}</em>
+            </div>
+            <div>
+              <span>Applies to</span>
+              <strong>cx/*</strong>
+              <em>Codex subscription</em>
+            </div>
+          </div>
+          <div className="settings-segmented-control settings-segmented-control-compact usage-token-saver-levels" aria-label="Codex subscription context window">
+            {CODEX_CONTEXT_WINDOW_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.mode}
+                data-selected={codexContextWindow === option.mode}
+                aria-pressed={codexContextWindow === option.mode}
+                title={option.detail}
+                onClick={() => updateSubscriptionOptimization({ codexContextWindow: option.mode })}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <span className="settings-status">{CODEX_CONTEXT_WINDOW_OPTIONS.find((option) => option.mode === codexContextWindow)?.detail}</span>
         </article>
 
         <article className="settings-card usage-routing-card">

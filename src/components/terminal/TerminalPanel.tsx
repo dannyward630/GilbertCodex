@@ -45,6 +45,8 @@ const MIN_TERMINAL_HEIGHT = 184;
 const MAX_TERMINAL_HEIGHT = 720;
 const POLL_INTERVAL_MS = 90;
 const IDLE_POLL_INTERVAL_MS = 240;
+const DRAIN_TIMEOUT_BACKOFF_MS = 4_000;
+const DRAIN_TIMEOUT_NOTICE_INTERVAL_MS = 30_000;
 const RESIZE_STEP = 28;
 const MAX_REPLAY_BUFFER_CHARS = 2_000_000;
 
@@ -119,6 +121,8 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
   const activeProjectKeyRef = useRef(createProjectKey(workingDirectory));
   const activeTabIdRef = useRef(workspace.activeTabId);
   const cwdMenuRef = useRef<HTMLDivElement>(null);
+  const drainBackoffUntilRef = useRef<Record<string, number>>({});
+  const drainTimeoutNoticeAtRef = useRef<Record<string, number>>({});
   const fitAddonRef = useRef<FitAddon | null>(null);
   const ownedSessionIdsRef = useRef(new Set<string>());
   const replayedAttachedSessionRef = useRef(new Set<string>());
@@ -523,6 +527,11 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
             return;
           }
 
+          const backoffUntil = drainBackoffUntilRef.current[sessionId] ?? 0;
+          if (backoffUntil > Date.now()) {
+            return;
+          }
+
           try {
             const response = await drainTerminalSession(sessionId);
 
@@ -530,6 +539,8 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
               return;
             }
 
+            delete drainBackoffUntilRef.current[sessionId];
+            delete drainTimeoutNoticeAtRef.current[sessionId];
             appendTabChunks(tab.id, response.chunks);
 
             updateTab(tab.id, (current) => {
@@ -551,6 +562,21 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
             }
 
             const detail = error instanceof Error ? error.message : String(error);
+            if (isTerminalDrainTimeout(detail)) {
+              const now = Date.now();
+              drainBackoffUntilRef.current[sessionId] = now + DRAIN_TIMEOUT_BACKOFF_MS;
+
+              if ((drainTimeoutNoticeAtRef.current[sessionId] ?? 0) + DRAIN_TIMEOUT_NOTICE_INTERVAL_MS < now) {
+                drainTimeoutNoticeAtRef.current[sessionId] = now;
+                writeSystemMessage(tab.id, "Terminal output is still starting or busy; retrying...");
+              }
+
+              updateTab(tab.id, (current) => ({
+                status: current.status === "error" ? "running" : current.status,
+              }));
+              return;
+            }
+
             updateTab(tab.id, { status: "error" });
             writeSystemMessage(tab.id, `Terminal disconnected: ${detail}`);
           }
@@ -580,7 +606,10 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
 
     const existingAttachedTab = Object.values(workspaceCacheRef.current)
       .flatMap((projectWorkspace) => projectWorkspace.tabs)
-      .find((tab) => tab.sessionId === attachedSession.sessionId);
+      .find((tab) => tab.sessionId === attachedSession.sessionId)
+      ?? Object.values(workspaceCacheRef.current)
+        .flatMap((projectWorkspace) => projectWorkspace.tabs)
+        .find((tab) => attachedTerminalTabMatchesSession(tab, attachedSession));
     const attachedTab =
       existingAttachedTab ??
       createTerminalTab(attachedSession.workingDirectory ?? workingDirectory ?? "", attachedSession.shell ?? fallbackShell, {
@@ -611,8 +640,9 @@ export function TerminalPanel({ attachedSession, defaultShell, desktopRuntime, h
 
     activeTabIdRef.current = attachedTab.id;
 
-    if (!replayedAttachedSessionRef.current.has(attachedSession.sessionId)) {
-      replayedAttachedSessionRef.current.add(attachedSession.sessionId);
+    const replayKey = createAttachedSessionReplayKey(attachedSession);
+    if (!replayedAttachedSessionRef.current.has(replayKey)) {
+      replayedAttachedSessionRef.current.add(replayKey);
       const intro = `\r\nAttached to background command: ${attachedSession.command ?? attachedSession.sessionId}\r\n`;
       const recentOutput = attachedSession.initialOutput?.trim()
         ? `Recent output captured before attach:\r\n${attachedSession.initialOutput.endsWith("\n") ? attachedSession.initialOutput : `${attachedSession.initialOutput}\r\n`}`
@@ -1160,6 +1190,36 @@ function formatSessionTitle(tab: TerminalTab, index: number) {
   }
 
   return `${terminalShellLabel(tab.shell)} ${index + 1}`;
+}
+
+function attachedTerminalTabMatchesSession(tab: TerminalTab, session: TerminalAttachedSession) {
+  if (!tab.attached || !tab.activeCommand || !session.command) {
+    return false;
+  }
+
+  return normalizeAttachedCommandKey(tab.activeCommand) === normalizeAttachedCommandKey(session.command)
+    && normalizeAttachedPathKey(tab.workingDirectory) === normalizeAttachedPathKey(session.workingDirectory);
+}
+
+function createAttachedSessionReplayKey(session: TerminalAttachedSession) {
+  const commandKey = normalizeAttachedCommandKey(session.command);
+  const pathKey = normalizeAttachedPathKey(session.workingDirectory);
+
+  return commandKey && pathKey
+    ? `command:${commandKey}\ncwd:${pathKey}`
+    : `session:${session.sessionId}`;
+}
+
+function normalizeAttachedCommandKey(value: string | undefined) {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeAttachedPathKey(value: string | undefined) {
+  return (value ?? "").trim().replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function isTerminalDrainTimeout(detail: string) {
+  return /terminal output drain did not respond|terminal output drain timed out|timed out/i.test(detail);
 }
 
 function getStatusLabel(status: TerminalStatus, desktopRuntime: boolean) {

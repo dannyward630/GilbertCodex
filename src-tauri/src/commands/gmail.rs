@@ -5,15 +5,14 @@ use crate::{
     core::storage::{self, SYSTEM_NAMESPACE},
 };
 use base64::{engine::general_purpose, Engine as _};
+use regex::Regex;
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    env, fs,
     io::{BufRead, BufReader, ErrorKind, Write},
     net::TcpListener,
-    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
     thread,
@@ -28,6 +27,7 @@ const GMAIL_API_BASE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me
 const GMAIL_API_ROOT_URL: &str = "https://gmail.googleapis.com/gmail/v1";
 const GMAIL_PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const GMAIL_DATABASE_STORAGE_KEY: &str = "gmail-account.v1";
+const GOOGLE_OAUTH_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.google-oauth-settings.v1";
 const GMAIL_DATABASE_GENERATION: u32 = 2;
 const DEFAULT_OAUTH_SCOPE: &str = concat!(
     "openid email profile ",
@@ -52,11 +52,6 @@ const MAX_LIST_MESSAGE_COUNT: u32 = 25;
 const DEFAULT_MESSAGE_BODY_CHARS: usize = 16_000;
 const MAX_MESSAGE_BODY_CHARS: usize = 60_000;
 const USER_AGENT: &str = "GilbertCodex/0.1 (desktop Gmail)";
-const GOOGLE_OAUTH_CLIENT_SECRET_KEYS: [&str; 3] = [
-    "GILBERT_GOOGLE_OAUTH_CLIENT_SECRET",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "VITE_GOOGLE_OAUTH_CLIENT_SECRET",
-];
 
 #[derive(Default)]
 pub struct GmailState {
@@ -156,7 +151,15 @@ pub struct GmailAccountState {
 #[serde(rename_all = "camelCase")]
 pub struct GmailConnectOAuthRequest {
     pub client_id: String,
+    pub client_secret: Option<String>,
     pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleOAuthSettingsRecord {
+    client_id: Option<String>,
+    client_secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -579,7 +582,7 @@ pub fn gmail_get_state(
         .map_err(|_| "The Gmail account store is busy. Try again in a moment.".to_string())?;
     let mut database = load_database(&app)?;
 
-    if clear_resolved_setup_error(&mut database) {
+    if clear_resolved_setup_error(&app, &mut database) {
         save_database(&app, &database)?;
     }
 
@@ -598,7 +601,7 @@ pub fn gmail_install_plugin(
     let mut database = load_database(&app)?;
 
     mark_plugin_installed(&mut database);
-    clear_resolved_setup_error(&mut database);
+    clear_resolved_setup_error(&app, &mut database);
     save_database(&app, &database)?;
 
     Ok(create_connection_state(&database))
@@ -612,7 +615,7 @@ pub async fn gmail_connect_oauth(
 ) -> Result<GmailConnectionState, String> {
     let client_id = normalize_oauth_client_id(&request.client_id)?;
     let client_secret =
-        read_oauth_client_secret().ok_or_else(missing_oauth_client_secret_message)?;
+        resolve_oauth_client_secret(&app, Some(&client_id), request.client_secret.as_deref())?;
     let scope = normalize_oauth_scope(request.scope.as_deref())?;
     let previous_database = {
         let _guard = state
@@ -1034,12 +1037,7 @@ pub async fn gmail_create_draft(
         "raw": general_purpose::URL_SAFE_NO_PAD.encode(raw_message.as_bytes()),
     });
 
-    if let Some(thread_id) = request
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(thread_id) = normalize_optional_gmail_thread_id(request.thread_id.as_deref()) {
         message["threadId"] = json!(thread_id);
     }
 
@@ -1086,12 +1084,7 @@ pub async fn gmail_send_message(
         "raw": general_purpose::URL_SAFE_NO_PAD.encode(raw_message.as_bytes()),
     });
 
-    if let Some(thread_id) = request
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(thread_id) = normalize_optional_gmail_thread_id(request.thread_id.as_deref()) {
         message["threadId"] = json!(thread_id);
     }
 
@@ -1507,8 +1500,7 @@ async fn load_usable_access_token(
         .ok_or_else(|| {
             "Gmail needs to reconnect once so it can refresh Google access safely.".to_string()
         })?;
-    let client_secret =
-        read_oauth_client_secret().ok_or_else(missing_oauth_client_secret_message)?;
+    let client_secret = resolve_oauth_client_secret(app, Some(&client_id), None)?;
     let client = google_client()?;
     let token_response =
         refresh_oauth_token(&client, &client_id, &client_secret, &refresh_token).await?;
@@ -1949,6 +1941,12 @@ struct Rfc2822MessageInput<'a> {
     to: &'a [String],
 }
 
+enum OutgoingEmailBodyFormat {
+    Html,
+    Markdown,
+    Plain,
+}
+
 fn create_rfc2822_message(
     request: &GmailCreateDraftRequest,
     authenticated_email: Option<&str>,
@@ -2029,25 +2027,11 @@ fn create_rfc2822_message_from_input(
         .or(authenticated_email)
         .map(|value| sanitize_header_value(value, "from"))
         .transpose()?;
-    let content_type = match input
-        .content_type
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) if value.eq_ignore_ascii_case("text/html") => "text/html",
-        Some(value) if value.eq_ignore_ascii_case("text/plain") => "text/plain",
-        Some(_) => {
-            return Err(format!(
-                "{label} contentType must be text/plain or text/html."
-            ))
-        }
-        None => "text/plain",
-    };
-    let body = input
-        .body
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\n', "\r\n");
+    let (content_type, body) = render_outgoing_email_body(
+        input.body,
+        normalize_outgoing_content_type(input.content_type, label)?,
+    );
+    let body = normalize_rfc2822_body_line_endings(&body);
     let mut headers = Vec::new();
 
     if let Some(from) = from.filter(|value| !value.is_empty()) {
@@ -2061,20 +2045,10 @@ fn create_rfc2822_message_from_input(
         headers.push(format!("Bcc: {}", bcc.join(", ")));
     }
     headers.push(format!("Subject: {subject}"));
-    if let Some(in_reply_to) = input
-        .in_reply_to
-        .map(|value| sanitize_header_value(value, "inReplyTo"))
-        .transpose()?
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(in_reply_to) = sanitize_optional_header_value(input.in_reply_to, "inReplyTo")? {
         headers.push(format!("In-Reply-To: {in_reply_to}"));
     }
-    if let Some(references) = input
-        .references
-        .map(|value| sanitize_header_value(value, "references"))
-        .transpose()?
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(references) = sanitize_optional_header_value(input.references, "references")? {
         headers.push(format!("References: {references}"));
     }
     headers.push("MIME-Version: 1.0".to_string());
@@ -2082,6 +2056,231 @@ fn create_rfc2822_message_from_input(
     headers.push("Content-Transfer-Encoding: 8bit".to_string());
 
     Ok(format!("{}\r\n\r\n{body}", headers.join("\r\n")))
+}
+
+fn normalize_outgoing_content_type(
+    value: Option<&str>,
+    label: &str,
+) -> Result<OutgoingEmailBodyFormat, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case("text/html") => Ok(OutgoingEmailBodyFormat::Html),
+        Some(value)
+            if value.eq_ignore_ascii_case("text/markdown")
+                || value.eq_ignore_ascii_case("markdown") =>
+        {
+            Ok(OutgoingEmailBodyFormat::Markdown)
+        }
+        Some(value) if value.eq_ignore_ascii_case("text/plain") => {
+            Ok(OutgoingEmailBodyFormat::Plain)
+        }
+        Some(_) => Err(format!(
+            "{label} contentType must be text/markdown, text/plain, or text/html."
+        )),
+        None => Ok(OutgoingEmailBodyFormat::Markdown),
+    }
+}
+
+fn render_outgoing_email_body(
+    body: &str,
+    format: OutgoingEmailBodyFormat,
+) -> (&'static str, String) {
+    match format {
+        OutgoingEmailBodyFormat::Html => ("text/html", body.to_string()),
+        OutgoingEmailBodyFormat::Markdown => ("text/html", render_markdown_email_body(body)),
+        OutgoingEmailBodyFormat::Plain => ("text/plain", body.to_string()),
+    }
+}
+
+fn normalize_rfc2822_body_line_endings(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n")
+}
+
+fn render_markdown_email_body(value: &str) -> String {
+    let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+    let mut html = String::from("<div>");
+    let mut paragraph_lines: Vec<String> = Vec::new();
+    let mut list_kind: Option<&'static str> = None;
+
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+            close_markdown_list(&mut html, &mut list_kind);
+            continue;
+        }
+
+        if let Some((level, content)) = markdown_heading(trimmed) {
+            flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+            close_markdown_list(&mut html, &mut list_kind);
+            html.push_str(&format!(
+                "<h{level}>{}</h{level}>",
+                render_inline_markdown(content)
+            ));
+            continue;
+        }
+
+        if let Some(content) = markdown_unordered_list_item(trimmed) {
+            flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+            open_markdown_list(&mut html, &mut list_kind, "ul");
+            html.push_str(&format!("<li>{}</li>", render_inline_markdown(content)));
+            continue;
+        }
+
+        if let Some(content) = markdown_ordered_list_item(trimmed) {
+            flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+            open_markdown_list(&mut html, &mut list_kind, "ol");
+            html.push_str(&format!("<li>{}</li>", render_inline_markdown(content)));
+            continue;
+        }
+
+        if let Some(content) = trimmed.strip_prefix("> ") {
+            flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+            close_markdown_list(&mut html, &mut list_kind);
+            html.push_str(&format!(
+                "<blockquote>{}</blockquote>",
+                render_inline_markdown(content)
+            ));
+            continue;
+        }
+
+        close_markdown_list(&mut html, &mut list_kind);
+        paragraph_lines.push(trimmed.to_string());
+    }
+
+    flush_markdown_paragraph(&mut html, &mut paragraph_lines);
+    close_markdown_list(&mut html, &mut list_kind);
+    html.push_str("</div>");
+    html
+}
+
+fn flush_markdown_paragraph(html: &mut String, paragraph_lines: &mut Vec<String>) {
+    if paragraph_lines.is_empty() {
+        return;
+    }
+
+    let paragraph = paragraph_lines
+        .iter()
+        .map(|line| render_inline_markdown(line))
+        .collect::<Vec<_>>()
+        .join("<br>");
+    html.push_str(&format!("<p>{paragraph}</p>"));
+    paragraph_lines.clear();
+}
+
+fn open_markdown_list(
+    html: &mut String,
+    list_kind: &mut Option<&'static str>,
+    target_kind: &'static str,
+) {
+    if list_kind.as_deref() == Some(target_kind) {
+        return;
+    }
+
+    close_markdown_list(html, list_kind);
+    html.push_str(if target_kind == "ol" { "<ol>" } else { "<ul>" });
+    *list_kind = Some(target_kind);
+}
+
+fn close_markdown_list(html: &mut String, list_kind: &mut Option<&'static str>) {
+    match list_kind.take() {
+        Some("ol") => html.push_str("</ol>"),
+        Some("ul") => html.push_str("</ul>"),
+        _ => {}
+    }
+}
+
+fn markdown_heading(value: &str) -> Option<(usize, &str)> {
+    let marker_count = value
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+
+    if !(1..=6).contains(&marker_count) {
+        return None;
+    }
+
+    let content = value.get(marker_count..)?.strip_prefix(' ')?;
+    Some((marker_count, content.trim()))
+}
+
+fn markdown_unordered_list_item(value: &str) -> Option<&str> {
+    value
+        .strip_prefix("- ")
+        .or_else(|| value.strip_prefix("* "))
+        .map(str::trim)
+}
+
+fn markdown_ordered_list_item(value: &str) -> Option<&str> {
+    let (number, content) = value.split_once(". ")?;
+
+    if number.chars().all(|character| character.is_ascii_digit()) {
+        Some(content.trim())
+    } else {
+        None
+    }
+}
+
+fn render_inline_markdown(value: &str) -> String {
+    let mut rendered = escape_html(value);
+
+    rendered = Regex::new(r"\[([^\]]+)\]\(([^)\s]+)\)")
+        .expect("valid markdown link regex")
+        .replace_all(&rendered, |captures: &regex::Captures<'_>| {
+            let text = captures
+                .get(1)
+                .map(|match_| match_.as_str())
+                .unwrap_or_default();
+            let href = captures
+                .get(2)
+                .map(|match_| match_.as_str())
+                .unwrap_or_default();
+
+            if is_safe_email_href(href) {
+                format!("<a href=\"{href}\">{text}</a>")
+            } else {
+                text.to_string()
+            }
+        })
+        .to_string();
+    rendered = Regex::new(r"`([^`]+)`")
+        .expect("valid inline code regex")
+        .replace_all(&rendered, "<code>$1</code>")
+        .to_string();
+    rendered = Regex::new(r"\*\*([^*]+)\*\*")
+        .expect("valid strong emphasis regex")
+        .replace_all(&rendered, "<strong>$1</strong>")
+        .to_string();
+    rendered = Regex::new(r"__([^_]+)__")
+        .expect("valid underscore strong emphasis regex")
+        .replace_all(&rendered, "<strong>$1</strong>")
+        .to_string();
+    rendered = Regex::new(r"\*([^*]+)\*")
+        .expect("valid emphasis regex")
+        .replace_all(&rendered, "<em>$1</em>")
+        .to_string();
+    rendered = Regex::new(r"_([^_]+)_")
+        .expect("valid underscore emphasis regex")
+        .replace_all(&rendered, "<em>$1</em>")
+        .to_string();
+
+    rendered
+}
+
+fn is_safe_email_href(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.starts_with("https://") || value.starts_with("http://") || value.starts_with("mailto:")
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn normalize_email_list(values: &[String], field: &str) -> Result<Vec<String>, String> {
@@ -2124,6 +2323,52 @@ fn sanitize_header_value(value: &str, field: &str) -> Result<String, String> {
     }
 
     Ok(value.trim().to_string())
+}
+
+fn sanitize_optional_header_value(
+    value: Option<&str>,
+    field: &str,
+) -> Result<Option<String>, String> {
+    normalize_optional_gmail_metadata(value)
+        .map(|value| sanitize_header_value(&value, field))
+        .transpose()
+}
+
+fn normalize_optional_gmail_thread_id(value: Option<&str>) -> Option<String> {
+    let value = normalize_optional_gmail_metadata(value)?;
+
+    if is_plausible_gmail_thread_id(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn normalize_optional_gmail_metadata(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+
+    if value.is_empty() || is_optional_gmail_placeholder(value) {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn is_optional_gmail_placeholder(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+
+    matches!(
+        normalized.as_str(),
+        "n/a" | "na" | "none" | "null" | "undefined" | "(none)" | "[none]"
+    ) || normalized
+        .chars()
+        .all(|character| matches!(character, '-' | '\u{2014}'))
+}
+
+fn is_plausible_gmail_thread_id(value: &str) -> bool {
+    let value = value.trim();
+
+    value.len() >= 8 && value.chars().all(|character| character.is_ascii_hexdigit())
 }
 
 fn normalize_google_id(value: &str, label: &str) -> Result<String, String> {
@@ -3010,7 +3255,7 @@ fn mark_plugin_installed(database: &mut GmailDatabase) {
     }
 }
 
-fn clear_resolved_setup_error(database: &mut GmailDatabase) -> bool {
+fn clear_resolved_setup_error(app: &tauri::AppHandle, database: &mut GmailDatabase) -> bool {
     if database.access_token.is_some() || database.user.is_some() {
         return false;
     }
@@ -3023,7 +3268,12 @@ fn clear_resolved_setup_error(database: &mut GmailDatabase) -> bool {
         || normalized_error.contains("oauth client secret is missing")
         || normalized_error.contains("google oauth client secret is missing");
 
-    if missing_secret_error && read_oauth_client_secret().is_some() {
+    if missing_secret_error
+        && read_oauth_client_secret_from_user_settings(app, None)
+            .ok()
+            .flatten()
+            .is_some()
+    {
         database.last_connection_error = None;
         return true;
     }
@@ -3070,115 +3320,59 @@ fn normalize_oauth_scope(scope: Option<&str>) -> Result<String, String> {
     Ok(scopes.join(" "))
 }
 
-fn read_oauth_client_secret() -> Option<String> {
-    for key in GOOGLE_OAUTH_CLIENT_SECRET_KEYS {
-        if let Ok(value) = env::var(key) {
-            if let Some(secret) = normalize_optional_secret(&value) {
-                return Some(secret);
-            }
-        }
+fn resolve_oauth_client_secret(
+    app: &tauri::AppHandle,
+    requested_client_id: Option<&str>,
+    request_client_secret: Option<&str>,
+) -> Result<String, String> {
+    if let Some(secret) = request_client_secret.and_then(normalize_optional_secret) {
+        return Ok(secret);
     }
 
-    for value in [
-        option_env!("GILBERT_GOOGLE_OAUTH_CLIENT_SECRET"),
-        option_env!("GOOGLE_OAUTH_CLIENT_SECRET"),
-        option_env!("VITE_GOOGLE_OAUTH_CLIENT_SECRET"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Some(secret) = normalize_optional_secret(value) {
-            return Some(secret);
-        }
+    if let Some(secret) = read_oauth_client_secret_from_user_settings(app, requested_client_id)? {
+        return Ok(secret);
     }
 
-    read_oauth_client_secret_from_env_files()
+    Err(missing_oauth_client_secret_message())
 }
 
-fn read_oauth_client_secret_from_env_files() -> Option<String> {
-    for directory in candidate_env_directories() {
-        for file_name in [".env.local", ".env"] {
-            let path = directory.join(file_name);
+fn read_oauth_client_secret_from_user_settings(
+    app: &tauri::AppHandle,
+    requested_client_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    let Some(content) = storage::read_value(app, &namespace, GOOGLE_OAUTH_SETTINGS_STORAGE_KEY)?
+    else {
+        return Ok(None);
+    };
+    let settings = serde_json::from_str::<GoogleOAuthSettingsRecord>(&content)
+        .map_err(|error| format!("Could not parse the saved Google OAuth settings: {error}"))?;
+    let Some(secret) = settings
+        .client_secret
+        .as_deref()
+        .and_then(normalize_optional_secret)
+    else {
+        return Ok(None);
+    };
 
-            if !path.exists() {
-                continue;
-            }
+    if let Some(requested_client_id) = requested_client_id {
+        let saved_client_id = settings
+            .client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|client_id| !client_id.is_empty());
 
-            for key in GOOGLE_OAUTH_CLIENT_SECRET_KEYS {
-                if let Some(secret) = read_env_file_value(&path, key)
-                    .as_deref()
-                    .and_then(normalize_optional_secret)
-                {
-                    return Some(secret);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn candidate_env_directories() -> Vec<PathBuf> {
-    let mut directories = Vec::new();
-
-    if let Ok(current_dir) = env::current_dir() {
-        push_directory_and_parents(&mut directories, current_dir);
-    }
-
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            push_directory_and_parents(&mut directories, parent.to_path_buf());
-        }
-    }
-
-    directories
-}
-
-fn push_directory_and_parents(directories: &mut Vec<PathBuf>, start: PathBuf) {
-    for directory in start.ancestors().take(8) {
-        let directory = directory.to_path_buf();
-
-        if directories.iter().any(|existing| existing == &directory) {
-            continue;
+        if saved_client_id
+            .map(|client_id| client_id.eq_ignore_ascii_case(requested_client_id.trim()))
+            .unwrap_or(false)
+        {
+            return Ok(Some(secret));
         }
 
-        directories.push(directory);
-    }
-}
-
-fn read_env_file_value(path: &Path, key: &str) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
-
-    for line in content.lines() {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let (line_key, line_value) = line.split_once('=')?;
-
-        if line_key.trim() != key {
-            continue;
-        }
-
-        return Some(unquote_env_value(line_value.trim()));
+        return Ok(None);
     }
 
-    None
-}
-
-fn unquote_env_value(value: &str) -> String {
-    let trimmed = value.trim();
-
-    if trimmed.len() >= 2
-        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
-    {
-        trimmed[1..trimmed.len() - 1].to_string()
-    } else {
-        trimmed.to_string()
-    }
+    Ok(Some(secret))
 }
 
 fn normalize_optional_secret(value: &str) -> Option<String> {
@@ -3192,7 +3386,7 @@ fn normalize_optional_secret(value: &str) -> Option<String> {
 }
 
 fn missing_oauth_client_secret_message() -> String {
-    "Google OAuth client secret is missing. Add GOOGLE_OAUTH_CLIENT_SECRET to the ignored local .env file or release secrets, restart Gilbert Codex, then connect Gmail again.".to_string()
+    "Google OAuth client secret is missing. Save a desktop OAuth Client ID and Client secret in Settings > Google, then connect Gmail again.".to_string()
 }
 
 fn split_scope(scope: &str) -> Vec<String> {
@@ -3324,6 +3518,93 @@ mod tests {
                 sub: Some(format!("sub-{token}")),
             },
         }
+    }
+
+    #[test]
+    fn optional_gmail_thread_id_drops_placeholders_and_keeps_real_ids() {
+        assert_eq!(normalize_optional_gmail_thread_id(Some("-")), None);
+        assert_eq!(normalize_optional_gmail_thread_id(Some("thread-1")), None);
+        assert_eq!(
+            normalize_optional_gmail_thread_id(Some(" 18fabc123def456 ")),
+            Some("18fabc123def456".to_string())
+        );
+    }
+
+    #[test]
+    fn rfc2822_message_drops_placeholder_reply_headers() {
+        let to = vec!["recipient@example.com".to_string()];
+        let message = create_rfc2822_message_from_input(
+            Rfc2822MessageInput {
+                bcc: None,
+                body: "Hello",
+                cc: None,
+                content_type: None,
+                from: None,
+                in_reply_to: Some("-"),
+                references: Some("none"),
+                subject: "Hello",
+                to: &to,
+            },
+            Some("sender@example.com"),
+            "Gmail message",
+        )
+        .unwrap();
+
+        assert!(!message.contains("In-Reply-To:"));
+        assert!(!message.contains("References:"));
+    }
+
+    #[test]
+    fn rfc2822_message_renders_markdown_as_html_by_default() {
+        let to = vec!["recipient@example.com".to_string()];
+        let message = create_rfc2822_message_from_input(
+            Rfc2822MessageInput {
+                bcc: None,
+                body: "## Hello\n\nThis is **bold** and [safe](https://example.com).\n\n- One\n- Two\n\n<script>",
+                cc: None,
+                content_type: None,
+                from: None,
+                in_reply_to: None,
+                references: None,
+                subject: "Hello",
+                to: &to,
+            },
+            Some("sender@example.com"),
+            "Gmail message",
+        )
+        .unwrap();
+
+        assert!(message.contains("Content-Type: text/html; charset=\"UTF-8\""));
+        assert!(message.contains("<h2>Hello</h2>"));
+        assert!(message.contains("<strong>bold</strong>"));
+        assert!(message.contains("<a href=\"https://example.com\">safe</a>"));
+        assert!(message.contains("<li>One</li>"));
+        assert!(message.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn rfc2822_message_respects_explicit_plain_text() {
+        let to = vec!["recipient@example.com".to_string()];
+        let message = create_rfc2822_message_from_input(
+            Rfc2822MessageInput {
+                bcc: None,
+                body: "This is **literal markdown**.",
+                cc: None,
+                content_type: Some("text/plain"),
+                from: None,
+                in_reply_to: None,
+                references: None,
+                subject: "Hello",
+                to: &to,
+            },
+            Some("sender@example.com"),
+            "Gmail message",
+        )
+        .unwrap();
+
+        assert!(message.contains("Content-Type: text/plain; charset=\"UTF-8\""));
+        assert!(message.contains("This is **literal markdown**."));
+        assert!(!message.contains("<strong>literal markdown</strong>"));
     }
 
     #[test]

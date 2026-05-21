@@ -267,6 +267,22 @@ export interface ChatResearchReference {
   updatedAt: string;
 }
 
+export interface ChatStreamTiming {
+  completedAt?: string;
+  firstByteAt?: string;
+  firstProviderEventAt?: string;
+  firstTokenAt?: string;
+  firstVisibleTokenAt?: string;
+  requestStartedAt: string;
+  responseStartedAt?: string;
+  timeToFirstByteMs?: number;
+  timeToFirstProviderEventMs?: number;
+  timeToFirstTokenMs?: number;
+  timeToFirstVisibleTokenMs?: number;
+  timeToResponseStartMs?: number;
+  totalMs?: number;
+}
+
 export interface ChatMessage {
   agentRunId?: string;
   agentRunStatus?: AgentRunStatus;
@@ -289,6 +305,7 @@ export interface ChatMessage {
   source?: ChatMessageSource;
   sources?: ChatSource[];
   status?: "error" | "queued";
+  streamTiming?: ChatStreamTiming;
   thinking?: ChatThinking;
   toolCalls?: ChatToolCall[];
   webSearch?: ChatWebSearch;

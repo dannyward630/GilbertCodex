@@ -534,7 +534,7 @@ function PluginLogo({ plugin }: { plugin: PluginListing }) {
       {failed ? (
         <FallbackIcon size={21} aria-hidden="true" />
       ) : (
-        <img src={getPluginIconUrl(plugin)} alt="" aria-hidden="true" draggable={false} referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+        <img src={getPluginIconUrl(plugin)} alt="" aria-hidden="true" decoding="async" draggable={false} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
       )}
     </div>
   );

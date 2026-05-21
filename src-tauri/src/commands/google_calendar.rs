@@ -11,10 +11,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    env, fs,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
     thread,
@@ -28,6 +26,7 @@ const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/useri
 const GOOGLE_CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_TASKS_API_BASE_URL: &str = "https://tasks.googleapis.com";
 const CALENDAR_DATABASE_STORAGE_KEY: &str = "google-calendar-account.v1";
+const GOOGLE_OAUTH_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.google-oauth-settings.v1";
 const CALENDAR_DATABASE_GENERATION: u32 = 1;
 const DEFAULT_OAUTH_SCOPE: &str = concat!(
     "openid email profile ",
@@ -46,11 +45,6 @@ const DEFAULT_LIST_EVENT_COUNT: u32 = 10;
 const MAX_LIST_EVENT_COUNT: u32 = 50;
 const MAX_CALENDAR_ACCOUNTS: usize = 6;
 const USER_AGENT: &str = "GilbertCodex/0.1 (desktop Google Calendar)";
-const GOOGLE_OAUTH_CLIENT_SECRET_KEYS: [&str; 3] = [
-    "GILBERT_GOOGLE_OAUTH_CLIENT_SECRET",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "VITE_GOOGLE_OAUTH_CLIENT_SECRET",
-];
 
 #[derive(Default)]
 pub struct CalendarState {
@@ -150,7 +144,15 @@ pub struct CalendarAccountState {
 #[serde(rename_all = "camelCase")]
 pub struct CalendarConnectOAuthRequest {
     pub client_id: String,
+    pub client_secret: Option<String>,
     pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleOAuthSettingsRecord {
+    client_id: Option<String>,
+    client_secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -487,7 +489,7 @@ pub fn calendar_get_state(
     })?;
     let mut database = load_database(&app)?;
 
-    if clear_resolved_setup_error(&mut database) {
+    if clear_resolved_setup_error(&app, &mut database) {
         save_database(&app, &database)?;
     }
 
@@ -505,7 +507,7 @@ pub fn calendar_install_plugin(
     let mut database = load_database(&app)?;
 
     mark_plugin_installed(&mut database);
-    clear_resolved_setup_error(&mut database);
+    clear_resolved_setup_error(&app, &mut database);
     save_database(&app, &database)?;
 
     Ok(create_connection_state(&database))
@@ -519,7 +521,7 @@ pub async fn calendar_connect_oauth(
 ) -> Result<CalendarConnectionState, String> {
     let client_id = normalize_oauth_client_id(&request.client_id)?;
     let client_secret =
-        read_oauth_client_secret().ok_or_else(missing_oauth_client_secret_message)?;
+        resolve_oauth_client_secret(&app, Some(&client_id), request.client_secret.as_deref())?;
     let scope = normalize_oauth_scope(request.scope.as_deref())?;
     let previous_database = {
         let _guard = state.lock.lock().map_err(|_| {
@@ -1180,8 +1182,7 @@ async fn authorize_calendar_access(
         .ok_or_else(|| {
             "Google Calendar OAuth client id is missing. Reconnect Calendar.".to_string()
         })?;
-    let client_secret =
-        read_oauth_client_secret().ok_or_else(missing_oauth_client_secret_message)?;
+    let client_secret = resolve_oauth_client_secret(app, Some(&client_id), None)?;
     let client = google_client()?;
     let refreshed =
         refresh_access_token(&client, &client_id, &client_secret, &refresh_token).await?;
@@ -1567,7 +1568,7 @@ fn mark_plugin_installed(database: &mut CalendarDatabase) {
     }
 }
 
-fn clear_resolved_setup_error(database: &mut CalendarDatabase) -> bool {
+fn clear_resolved_setup_error(app: &tauri::AppHandle, database: &mut CalendarDatabase) -> bool {
     if database.access_token.is_some() || database.user.is_some() {
         return false;
     }
@@ -1580,7 +1581,12 @@ fn clear_resolved_setup_error(database: &mut CalendarDatabase) -> bool {
         || normalized_error.contains("oauth client secret is missing")
         || normalized_error.contains("google oauth client secret is missing");
 
-    if missing_secret_error && read_oauth_client_secret().is_some() {
+    if missing_secret_error
+        && read_oauth_client_secret_from_user_settings(app, None)
+            .ok()
+            .flatten()
+            .is_some()
+    {
         database.last_connection_error = None;
         return true;
     }
@@ -2469,115 +2475,59 @@ fn token_expires_soon(expires_at: Option<u64>) -> bool {
         .unwrap_or(false)
 }
 
-fn read_oauth_client_secret() -> Option<String> {
-    for key in GOOGLE_OAUTH_CLIENT_SECRET_KEYS {
-        if let Ok(value) = env::var(key) {
-            if let Some(secret) = normalize_optional_secret(&value) {
-                return Some(secret);
-            }
-        }
+fn resolve_oauth_client_secret(
+    app: &tauri::AppHandle,
+    requested_client_id: Option<&str>,
+    request_client_secret: Option<&str>,
+) -> Result<String, String> {
+    if let Some(secret) = request_client_secret.and_then(normalize_optional_secret) {
+        return Ok(secret);
     }
 
-    for value in [
-        option_env!("GILBERT_GOOGLE_OAUTH_CLIENT_SECRET"),
-        option_env!("GOOGLE_OAUTH_CLIENT_SECRET"),
-        option_env!("VITE_GOOGLE_OAUTH_CLIENT_SECRET"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Some(secret) = normalize_optional_secret(value) {
-            return Some(secret);
-        }
+    if let Some(secret) = read_oauth_client_secret_from_user_settings(app, requested_client_id)? {
+        return Ok(secret);
     }
 
-    read_oauth_client_secret_from_env_files()
+    Err(missing_oauth_client_secret_message())
 }
 
-fn read_oauth_client_secret_from_env_files() -> Option<String> {
-    for directory in candidate_env_directories() {
-        for file_name in [".env.local", ".env"] {
-            let path = directory.join(file_name);
+fn read_oauth_client_secret_from_user_settings(
+    app: &tauri::AppHandle,
+    requested_client_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let namespace = auth::current_user_storage_namespace(app)?;
+    let Some(content) = storage::read_value(app, &namespace, GOOGLE_OAUTH_SETTINGS_STORAGE_KEY)?
+    else {
+        return Ok(None);
+    };
+    let settings = serde_json::from_str::<GoogleOAuthSettingsRecord>(&content)
+        .map_err(|error| format!("Could not parse the saved Google OAuth settings: {error}"))?;
+    let Some(secret) = settings
+        .client_secret
+        .as_deref()
+        .and_then(normalize_optional_secret)
+    else {
+        return Ok(None);
+    };
 
-            if !path.exists() {
-                continue;
-            }
+    if let Some(requested_client_id) = requested_client_id {
+        let saved_client_id = settings
+            .client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|client_id| !client_id.is_empty());
 
-            for key in GOOGLE_OAUTH_CLIENT_SECRET_KEYS {
-                if let Some(secret) = read_env_file_value(&path, key)
-                    .as_deref()
-                    .and_then(normalize_optional_secret)
-                {
-                    return Some(secret);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn candidate_env_directories() -> Vec<PathBuf> {
-    let mut directories = Vec::new();
-
-    if let Ok(current_dir) = env::current_dir() {
-        push_directory_and_parents(&mut directories, current_dir);
-    }
-
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            push_directory_and_parents(&mut directories, parent.to_path_buf());
-        }
-    }
-
-    directories
-}
-
-fn push_directory_and_parents(directories: &mut Vec<PathBuf>, start: PathBuf) {
-    for directory in start.ancestors().take(8) {
-        let directory = directory.to_path_buf();
-
-        if directories.iter().any(|existing| existing == &directory) {
-            continue;
+        if saved_client_id
+            .map(|client_id| client_id.eq_ignore_ascii_case(requested_client_id.trim()))
+            .unwrap_or(false)
+        {
+            return Ok(Some(secret));
         }
 
-        directories.push(directory);
-    }
-}
-
-fn read_env_file_value(path: &Path, key: &str) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
-
-    for line in content.lines() {
-        let line = line.trim();
-
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let (line_key, line_value) = line.split_once('=')?;
-
-        if line_key.trim() != key {
-            continue;
-        }
-
-        return Some(unquote_env_value(line_value.trim()));
+        return Ok(None);
     }
 
-    None
-}
-
-fn unquote_env_value(value: &str) -> String {
-    let trimmed = value.trim();
-
-    if trimmed.len() >= 2
-        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
-    {
-        trimmed[1..trimmed.len() - 1].to_string()
-    } else {
-        trimmed.to_string()
-    }
+    Ok(Some(secret))
 }
 
 fn normalize_optional_secret(value: &str) -> Option<String> {
@@ -2591,7 +2541,7 @@ fn normalize_optional_secret(value: &str) -> Option<String> {
 }
 
 fn missing_oauth_client_secret_message() -> String {
-    "Google OAuth client secret is missing. Add GOOGLE_OAUTH_CLIENT_SECRET to the ignored local .env file or release secrets, restart Gilbert Codex, then connect Google Calendar again.".to_string()
+    "Google OAuth client secret is missing. Save a desktop OAuth Client ID and Client secret in Settings > Google, then connect Google Calendar again.".to_string()
 }
 
 fn split_scope(scope: &str) -> Vec<String> {

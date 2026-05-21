@@ -4,6 +4,7 @@ pub mod auth;
 pub mod browser;
 pub mod computer;
 pub mod database;
+pub mod dictation;
 pub mod discord;
 pub mod github;
 pub mod gmail;

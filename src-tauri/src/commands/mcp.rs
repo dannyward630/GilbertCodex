@@ -806,7 +806,7 @@ async fn initialize_server(
             "capabilities": {},
             "clientInfo": {
                 "name": "Gilbert Codex",
-                "version": "0.5.0"
+                "version": "0.5.5"
             }
         })),
         None,
@@ -1077,7 +1077,7 @@ fn initialize_stdio_server(session: &mut StdioMcpSession) -> Result<McpInitializ
             "capabilities": {},
             "clientInfo": {
                 "name": "Gilbert Codex",
-                "version": "0.5.0"
+                "version": "0.5.5"
             }
         })),
     )?;

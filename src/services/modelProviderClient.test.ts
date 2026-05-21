@@ -7,11 +7,13 @@ import {
   MINIMAX_M25_FREE_MODEL,
   MODEL_PROVIDERS,
   NEMOTRON_3_SUPER_MODEL,
+  NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS,
+  NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
   OPENROUTER_FREE_AUTO_MODEL,
 } from "../lib/models";
 import type { ChatMessage } from "../types/chat";
 import type { ProviderSettings, ReasoningEffort } from "../types/settings";
-import { createProviderRequestBody, fetchProviderModels, sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
+import { createProviderRequestBody, fetchProviderModelContextLengths, fetchProviderModels, sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
 
 const TITLE_STRUCTURED_OUTPUT = {
   description: "A concise generated title for a chat conversation.",
@@ -391,6 +393,33 @@ describe("subscription route request errors", () => {
     ]);
   });
 
+  it("caps live Codex subscription context lengths unless the 1M option is enabled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({
+        data: [
+          { context_length: NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS, id: "cx/gpt-5.5" },
+        ],
+      }),
+      {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      },
+    )));
+
+    await expect(fetchProviderModelContextLengths(createNineRouterSettings("cx/gpt-5.5"), ["cx/gpt-5.5"])).resolves.toEqual({
+      "cx/gpt-5.5": NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
+    });
+    await expect(fetchProviderModelContextLengths({
+      ...createNineRouterSettings("cx/gpt-5.5"),
+      subscriptionOptimization: {
+        ...defaultProviderSettings.subscriptionOptimization,
+        codexContextWindow: "extended",
+      },
+    }, ["cx/gpt-5.5"])).resolves.toEqual({
+      "cx/gpt-5.5": NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS,
+    });
+  });
+
   it("normalizes unavailable GitHub Copilot integrator models before sending", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
@@ -554,6 +583,31 @@ describe("streamProviderMessage tool call parsing", () => {
     const response = await streamProviderMessage(createOpenRouterSettings(), [createMessage()], vi.fn());
 
     expect(response.content).toBe("ok");
+  });
+
+  it("records streaming latency marks through the first visible token", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => streamResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "hello" } }] })}`,
+      "data: [DONE]",
+    ])));
+    const updates: Array<Parameters<Parameters<typeof streamProviderMessage>[2]>[0]> = [];
+
+    const response = await streamProviderMessage(createSettings(), [createMessage()], (snapshot) => {
+      updates.push(snapshot);
+    });
+
+    expect(response.content).toBe("hello");
+    expect(response.streamTiming?.requestStartedAt).toBeTruthy();
+    expect(response.streamTiming?.timeToResponseStartMs).toBeGreaterThanOrEqual(0);
+    expect(response.streamTiming?.timeToFirstByteMs).toBeGreaterThanOrEqual(0);
+    expect(response.streamTiming?.timeToFirstProviderEventMs).toBeGreaterThanOrEqual(0);
+    expect(response.streamTiming?.timeToFirstTokenMs).toBeGreaterThanOrEqual(0);
+    expect(response.streamTiming?.totalMs).toBeGreaterThanOrEqual(0);
+    expect(updates[updates.length - 1]?.streamTiming?.timeToFirstTokenMs).toBeGreaterThanOrEqual(0);
   });
 
   it("keeps OpenRouter reasoning details as opaque state and out of response text", async () => {
@@ -743,6 +797,92 @@ describe("streamProviderMessage tool call parsing", () => {
     expect(requestBodies).toHaveLength(2);
     expect(requestBodies[0]?.model).toBe(IMAGE_REASONING_MODEL);
     expect(requestBodies[1]?.model).toBe("openai/gpt-oss-120b:free");
+  });
+
+  it("keeps image uploads native for direct OpenAI models instead of using media fallback", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+
+    const requestBodies: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+      expect(body.model).toBe("gpt-5.5");
+      expect(JSON.stringify(body)).toContain("image_url");
+      expect(JSON.stringify(body)).not.toContain("Media analysis");
+
+      return streamResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "native" } }] })}`,
+        "data: [DONE]",
+      ]);
+    }));
+
+    const response = await streamProviderMessage({
+      ...createSettings(),
+      model: "gpt-5.5",
+    }, [createImageMessage()], vi.fn());
+
+    expect(response.content).toBe("native");
+    expect(requestBodies).toHaveLength(1);
+  });
+
+  it("keeps image uploads native for Codex subscription routes instead of using media fallback", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+
+    const requestBodies: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestBodies.push(body);
+      expect(body.model).toBe("cx/gpt-5.5");
+      expect(JSON.stringify(body)).toContain("image_url");
+      expect(JSON.stringify(body)).not.toContain("Media analysis");
+
+      return streamResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "subscription native" } }] })}`,
+        "data: [DONE]",
+      ]);
+    }));
+
+    const response = await streamProviderMessage({
+      ...defaultProviderSettings,
+      model: "cx/gpt-5.5",
+      provider: "9router",
+      thinking: {
+        effort: "low",
+        enabled: false,
+      },
+    }, [createImageMessage()], vi.fn());
+
+    expect(response.content).toBe("subscription native");
+    expect(requestBodies).toHaveLength(1);
+  });
+
+  it("serializes native OpenAI Responses image inputs when thinking mode is enabled", () => {
+    const body = createProviderRequestBody(withThinking({
+      ...createSettings(),
+      model: "gpt-5.5",
+    }), [createImageMessage()], undefined, false) as Record<string, unknown>;
+    const input = body.input as Array<{ content: unknown; role: string }>;
+    const content = input[0]?.content;
+
+    expect(body.model).toBe("gpt-5.5");
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toContainEqual({
+      detail: "auto",
+      image_url: "data:image/png;base64,aW1hZ2U=",
+      type: "input_image",
+    });
+    expect(content).toContainEqual(expect.objectContaining({
+      text: expect.stringContaining("screenshot.png"),
+      type: "input_text",
+    }));
   });
 
   it("serializes video attachments for OpenRouter video-capable models", () => {

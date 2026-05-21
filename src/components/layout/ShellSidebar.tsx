@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Folder, FolderOpen, FolderPlus, Heart, ListPlus, LogOut, MessageSquarePlus, Pin, Puzzle, Search, Settings, Trash2, UserRound } from "lucide-react";
+import { Folder, FolderOpen, FolderPlus, Heart, ListPlus, LogOut, MessageSquarePlus, Pin, Puzzle, Search, Settings, Trash2, UserRound, Workflow } from "lucide-react";
 import { DEFAULT_PROJECT, formatChatAge, hasComposerDraftContent, isDiscardableEmptyChat, isEmptyChat, isNoProjectName, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { SettingsSideMenu } from "../../pages/settings/SettingsSideMenu";
 import { SidebarSection } from "../sidebar/SidebarSection";
@@ -351,6 +351,18 @@ export const ShellSidebar = memo(function ShellSidebar({
         >
           <Puzzle size={17} aria-hidden="true" />
           <span>Apps</span>
+        </button>
+        <button
+          className="sidebar-action"
+          data-active={activeRoute === "tasks"}
+          data-latency-label="sidebar:tasks"
+          type="button"
+          onFocus={() => onPreloadRoute?.("tasks")}
+          onMouseEnter={() => onPreloadRoute?.("tasks")}
+          onClick={() => onRouteChange("tasks")}
+        >
+          <Workflow size={17} aria-hidden="true" />
+          <span>Tasks</span>
         </button>
       </div>
 

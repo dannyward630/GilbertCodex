@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { loadGoogleOAuthSettings } from "../lib/appStorage";
 import { isTauriDesktopRuntime } from "./tauriClient";
 import type {
   GmailActionResponse,
@@ -45,6 +46,7 @@ const DEFAULT_GMAIL_OAUTH_SCOPE = GMAIL_CORE_OAUTH_SCOPES.join(" ");
 
 export interface GmailConnectOAuthRequest {
   clientId: string;
+  clientSecret?: string;
   scope?: string;
 }
 
@@ -53,7 +55,11 @@ export function gmailDesktopAvailable() {
 }
 
 export function getDefaultGoogleOAuthClientId() {
-  return (import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID ?? "").trim();
+  return loadGoogleOAuthSettings().clientId;
+}
+
+export function getDefaultGoogleOAuthClientSecret() {
+  return loadGoogleOAuthSettings().clientSecret;
 }
 
 export function getDefaultGmailOAuthScope() {
@@ -75,6 +81,7 @@ export async function connectGmailOAuth(request: GmailConnectOAuthRequest): Prom
   return invoke<GmailConnectionState>("gmail_connect_oauth", {
     request: {
       clientId: request.clientId,
+      clientSecret: request.clientSecret,
       scope: request.scope || DEFAULT_GMAIL_OAUTH_SCOPE,
     },
   });

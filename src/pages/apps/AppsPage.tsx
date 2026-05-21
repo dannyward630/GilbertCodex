@@ -1,13 +1,13 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowLeft, BadgeCheck, CalendarDays, CheckCircle2, ChevronDown, Github, Globe2, KeyRound, LogIn, LogOut, Mail, Plus, PlugZap, Puzzle, RefreshCw, Search, Server, ShieldCheck, Sparkles, TerminalSquare, Trash2, UserCheck, Wrench, X } from "lucide-react";
 import {
   connectGmailOAuth,
   disconnectGmailAccount as disconnectGmailAccountByEmail,
   getDefaultGmailOAuthScope,
   getDefaultGoogleOAuthClientId,
+  getDefaultGoogleOAuthClientSecret,
   getGmailState,
   gmailDesktopAvailable,
-  GMAIL_CORE_OAUTH_SCOPES,
   installGmailPlugin,
   setActiveGmailAccount,
 } from "../../app/gmailClient";
@@ -17,7 +17,6 @@ import {
   getDefaultGoogleCalendarOAuthScope,
   getGoogleCalendarState,
   googleCalendarDesktopAvailable,
-  GOOGLE_CALENDAR_CORE_OAUTH_SCOPES,
   installGoogleCalendarPlugin,
   setActiveGoogleCalendarAccount,
 } from "../../app/googleCalendarClient";
@@ -46,6 +45,7 @@ interface AppsPageProps {
   locationServicesEnabled: boolean;
   onBackToChat: () => void;
   onOpenGithubSettings: () => void;
+  onOpenGoogleSettings: () => void;
   onOpenRadar: () => void;
   onOpenSupport: () => void;
 }
@@ -112,7 +112,9 @@ const EMPTY_MCP_DRAFT: McpServerDraft = {
   workingDirectory: "",
 };
 
-export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) {
+const EMPTY_MCP_SERVERS: McpServerState[] = [];
+
+export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSettings }: AppsPageProps) {
   const [activeCatalogSection, setActiveCatalogSection] = useState<AppsCatalogSection>("all");
   const [appSearchQuery, setAppSearchQuery] = useState("");
   const [expandedAppCardIds, setExpandedAppCardIds] = useState<Set<string>>(() => new Set());
@@ -133,42 +135,48 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [mcpDraft, setMcpDraft] = useState<McpServerDraft>(EMPTY_MCP_DRAFT);
   const [mcpStatus, setMcpStatus] = useState<AppsStatusMessage | null>(null);
+  const deferredSearchQuery = useDeferredValue(appSearchQuery);
   const googleTestingHint = import.meta.env.DEV ? " If Google shows access_denied because the app is in testing, add this Google account as a test user in Google Auth Platform > Audience." : "";
   const googleOAuthClientId = getDefaultGoogleOAuthClientId();
-  const googleClientReady = Boolean(googleOAuthClientId);
+  const googleOAuthClientSecret = getDefaultGoogleOAuthClientSecret();
+  const googleClientReady = Boolean(googleOAuthClientId && googleOAuthClientSecret);
   const gmailAvailable = gmailDesktopAvailable();
   const gmailBusy = gmailActionState !== "idle";
   const gmailMaxAccounts = gmailConnection.maxAccounts || GMAIL_ACCOUNT_LIMIT;
-  const gmailAccountRows = normalizeGmailAccountRows(gmailConnection);
+  const gmailAccountRows = useMemo(() => normalizeGmailAccountRows(gmailConnection), [gmailConnection]);
   const gmailActiveAccount = gmailAccountRows.find((account) => account.active) ?? gmailAccountRows[0];
   const gmailActiveEmail = gmailConnection.activeAccountEmail ?? gmailActiveAccount?.email ?? gmailConnection.user?.email;
   const gmailConnected = gmailConnection.connected || gmailAccountRows.length > 0;
   const gmailInstalled = gmailConnection.pluginInstalled || gmailConnected;
   const gmailNeedsSetup = Boolean(gmailConnection.lastConnectionError) && !gmailConnected;
-  const gmailStatusLabel = gmailConnected ? "Connected" : gmailNeedsSetup ? "Needs setup" : gmailInstalled ? "Installed" : googleClientReady && gmailAvailable ? "Ready to install" : "Unavailable";
+  const gmailStatusLabel = gmailConnected ? "Connected" : gmailNeedsSetup ? "Needs setup" : gmailInstalled ? "Installed" : googleClientReady && gmailAvailable ? "Ready to install" : gmailAvailable ? "Needs Google setup" : "Unavailable";
   const gmailStatusKind = gmailConnected ? "connected" : gmailNeedsSetup ? "setup" : gmailInstalled ? "installed" : googleClientReady && gmailAvailable ? "ready" : "setup";
   const gmailCanAddAccount = gmailAccountRows.length < gmailMaxAccounts;
   const gmailAccountLabel = gmailAccountRows.length > 0
     ? `${gmailAccountRows.length}/${gmailMaxAccounts} accounts connected${gmailActiveEmail ? ` | Active: ${gmailActiveEmail}` : ""}`
     : gmailInstalled
       ? "Installed locally. Google account not connected."
+      : gmailAvailable && !googleClientReady
+        ? "Add Google OAuth setup first"
       : "Install to choose a Google account";
   const calendarAvailable = googleCalendarDesktopAvailable();
   const calendarBusy = calendarActionState !== "idle";
   const calendarMaxAccounts = calendarConnection.maxAccounts || GOOGLE_CALENDAR_ACCOUNT_LIMIT;
-  const calendarAccountRows = normalizeCalendarAccountRows(calendarConnection);
+  const calendarAccountRows = useMemo(() => normalizeCalendarAccountRows(calendarConnection), [calendarConnection]);
   const calendarActiveAccount = calendarAccountRows.find((account) => account.active) ?? calendarAccountRows[0];
   const calendarActiveEmail = calendarConnection.activeAccountEmail ?? calendarActiveAccount?.email ?? calendarConnection.user?.email;
   const calendarConnected = calendarConnection.connected || calendarAccountRows.length > 0;
   const calendarInstalled = calendarConnection.pluginInstalled || calendarConnected;
   const calendarNeedsSetup = Boolean(calendarConnection.lastConnectionError) && !calendarConnected;
-  const calendarStatusLabel = calendarConnected ? "Connected" : calendarNeedsSetup ? "Needs setup" : calendarInstalled ? "Installed" : googleClientReady && calendarAvailable ? "Ready to install" : "Unavailable";
+  const calendarStatusLabel = calendarConnected ? "Connected" : calendarNeedsSetup ? "Needs setup" : calendarInstalled ? "Installed" : googleClientReady && calendarAvailable ? "Ready to install" : calendarAvailable ? "Needs Google setup" : "Unavailable";
   const calendarStatusKind = calendarConnected ? "connected" : calendarNeedsSetup ? "setup" : calendarInstalled ? "installed" : googleClientReady && calendarAvailable ? "ready" : "setup";
   const calendarCanAddAccount = calendarAccountRows.length < calendarMaxAccounts;
   const calendarAccountLabel = calendarAccountRows.length > 0
     ? `${calendarAccountRows.length}/${calendarMaxAccounts} accounts connected${calendarActiveEmail ? ` | Active: ${calendarActiveEmail}` : ""}`
     : calendarInstalled
       ? "Installed locally. Google account not connected."
+      : calendarAvailable && !googleClientReady
+        ? "Add Google OAuth setup first"
       : "Install to choose a Google account";
   const githubAvailable = githubDesktopAvailable();
   const githubBusy = githubActionState !== "idle";
@@ -183,10 +191,39 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
       : "Install to use the existing GitHub setup path";
   const mcpAvailable = mcpDesktopAvailable();
   const mcpBusy = mcpActionState !== "idle";
-  const mcpServers = mcpConnection.servers ?? [];
-  const mcpEnabledCount = mcpServers.filter((server) => server.enabled).length;
+  const mcpServers = mcpConnection.servers ?? EMPTY_MCP_SERVERS;
+  const mcpSummary = useMemo(() => {
+    let enabledCount = 0;
+    let toolCount = 0;
+    const searchParts: string[] = [];
+
+    for (const server of mcpServers) {
+      if (server.enabled) {
+        enabledCount += 1;
+      }
+
+      const tools = server.tools ?? [];
+      toolCount += tools.length;
+      searchParts.push(server.name, server.endpoint ?? "", server.command ?? "", server.transport, server.serverName ?? "");
+
+      for (const tool of tools) {
+        searchParts.push(tool.name);
+      }
+    }
+
+    return {
+      enabledCount,
+      searchText: searchParts.join(" "),
+      toolCount,
+    };
+  }, [mcpServers]);
+  const githubRepoSearchText = useMemo(
+    () => githubRepos.map((repo) => [repo.fullName, repo.description, repo.defaultBranch].filter(Boolean).join(" ")).join(" "),
+    [githubRepos],
+  );
+  const mcpEnabledCount = mcpSummary.enabledCount;
   const mcpMaxServers = mcpConnection.maxServers || MCP_SERVER_LIMIT;
-  const mcpToolCount = mcpServers.reduce((total, server) => total + (server.tools?.length ?? 0), 0);
+  const mcpToolCount = mcpSummary.toolCount;
   const mcpConfigured = mcpServers.length > 0;
   const mcpConnected = mcpConnection.connected || mcpEnabledCount > 0;
   const mcpStatusLabel = mcpConnected ? "Connected" : mcpConfigured ? "Configured" : mcpAvailable ? "Ready" : "Desktop only";
@@ -196,7 +233,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
     : mcpAvailable
       ? "Add a Streamable HTTP or stdio MCP server"
       : "Open the desktop app to connect MCP servers";
-  const normalizedSearchQuery = appSearchQuery.trim().toLowerCase();
+  const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
   const gmailMatchesSearch =
     sectionMatches(activeCatalogSection, "plugins") &&
     matchesAppsSearch(normalizedSearchQuery, [
@@ -252,7 +289,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
       "made by Gilbert Codex",
       githubStatusLabel,
       githubAccountLabel,
-      ...githubRepos.flatMap((repo) => [repo.fullName, repo.description, repo.defaultBranch]),
+      githubRepoSearchText,
     ]);
   const mcpMatchesSearch =
     sectionMatches(activeCatalogSection, "mcp") &&
@@ -271,7 +308,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
       "permissions",
       mcpStatusLabel,
       mcpAccountLabel,
-      ...mcpServers.flatMap((server) => [server.name, server.endpoint, server.command, server.transport, server.serverName, ...(server.tools ?? []).map((tool) => tool.name)]),
+      mcpSummary.searchText,
     ]);
   const visibleUpcomingCards = useMemo(
     () =>
@@ -387,31 +424,19 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
 
     setGithubActionState("refresh");
     void getGithubState()
-      .then(async (connection) => {
+      .then((connection) => {
         if (disposed) {
           return;
         }
 
         setGithubConnection(connection);
+        setGithubRepos([]);
 
         if (connection.connected) {
-          try {
-            const repositories = await listGithubRepositories({ perPage: 6, sort: "updated" });
-
-            if (!disposed) {
-              setGithubRepos(repositories);
-              setGithubStatus({ kind: "success", text: formatConnectedGithubStatus(connection, repositories) });
-            }
-          } catch (error) {
-            if (!disposed) {
-              setGithubRepos([]);
-              setGithubStatus({ kind: "warning", text: `GitHub connected as ${connection.user?.login ?? "your account"}, but repository preview could not load: ${error instanceof Error ? error.message : "unknown GitHub error"}` });
-            }
-          }
+          setGithubStatus({ kind: "success", text: `GitHub connected as ${connection.user?.login ?? "your account"}.` });
           return;
         }
 
-        setGithubRepos([]);
         setGithubStatus(connection.pluginInstalled ? { kind: "warning", text: "GitHub plugin is installed locally. Connect GitHub in Settings before GitHub tools can access repositories." } : null);
       })
       .catch((error) => {
@@ -490,7 +515,15 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
 
     if (!googleOAuthClientId) {
       setGmailActionState("idle");
-      setGmailStatus({ kind: "error", text: "Gmail plugin is installed locally, but this build cannot open Google sign-in yet." });
+      setGmailStatus({ kind: "warning", text: "Gmail needs Google OAuth setup first. Opening Settings > Google." });
+      onOpenGoogleSettings();
+      return;
+    }
+
+    if (!googleOAuthClientSecret) {
+      setGmailActionState("idle");
+      setGmailStatus({ kind: "warning", text: "Gmail needs the matching Google desktop Client secret. Opening Settings > Google." });
+      onOpenGoogleSettings();
       return;
     }
 
@@ -500,6 +533,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
     try {
       const connection = await connectGmailOAuth({
         clientId: googleOAuthClientId,
+        clientSecret: googleOAuthClientSecret,
         scope: getDefaultGmailOAuthScope(),
       });
 
@@ -563,8 +597,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
     }
 
     if (!googleClientReady) {
-      setGmailStatus({ kind: "error", text: "Gmail install is not available in this build yet. Install an updated build to connect Gmail." });
-      setGmailConnectOpen(true);
+      setGmailConnectOpen(false);
+      setGmailStatus({ kind: "warning", text: "Gmail install needs Google OAuth setup first. Opening Settings > Google." });
+      onOpenGoogleSettings();
       return;
     }
 
@@ -597,7 +632,15 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
 
     if (!googleOAuthClientId) {
       setCalendarActionState("idle");
-      setCalendarStatus({ kind: "error", text: "Google Calendar plugin is installed locally, but this build cannot open Google sign-in yet." });
+      setCalendarStatus({ kind: "warning", text: "Google Calendar needs Google OAuth setup first. Opening Settings > Google." });
+      onOpenGoogleSettings();
+      return;
+    }
+
+    if (!googleOAuthClientSecret) {
+      setCalendarActionState("idle");
+      setCalendarStatus({ kind: "warning", text: "Google Calendar needs the matching Google desktop Client secret. Opening Settings > Google." });
+      onOpenGoogleSettings();
       return;
     }
 
@@ -607,6 +650,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
     try {
       const connection = await connectGoogleCalendarOAuth({
         clientId: googleOAuthClientId,
+        clientSecret: googleOAuthClientSecret,
         scope: getDefaultGoogleCalendarOAuthScope(),
       });
 
@@ -670,8 +714,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
     }
 
     if (!googleClientReady) {
-      setCalendarStatus({ kind: "error", text: "Google Calendar install is not available in this build yet. Install an updated build to connect Calendar." });
-      setCalendarConnectOpen(true);
+      setCalendarConnectOpen(false);
+      setCalendarStatus({ kind: "warning", text: "Google Calendar install needs Google OAuth setup first. Opening Settings > Google." });
+      onOpenGoogleSettings();
       return;
     }
 
@@ -1016,6 +1061,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <span>{gmailAccountLabel}</span>
               </div>
 
+              <div className="apps-plugin-top-actions">
+                <button className="apps-plugin-primary" type="button" disabled={gmailBusy} onClick={handleGmailPrimaryAction}>
+                  {gmailActionState === "connect" ? "Opening Google" : gmailActionState === "install" ? "Installing" : gmailConnected ? "Manage" : gmailInstalled ? "Sign in" : "Install"}
+                </button>
+              </div>
+
               {gmailStatus && (!gmailConnected || gmailStatus.kind !== "success" || gmailExpanded) ? (
                 <div className="apps-plugin-message" data-kind={gmailStatus.kind}>
                   {gmailStatus.text}
@@ -1052,14 +1103,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               ) : null}
 
               <div className="apps-plugin-actions">
-                <button className="apps-plugin-primary" type="button" disabled={gmailBusy} onClick={handleGmailPrimaryAction}>
-                  {gmailActionState === "connect" ? "Opening Google" : gmailActionState === "install" ? "Installing" : gmailConnected ? "Manage" : gmailInstalled ? "Sign in" : "Install"}
-                </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={gmailExpanded} onClick={() => toggleAppCardExpanded("gmail")}>
                   <ChevronDown size={14} aria-hidden="true" />
                   {gmailExpanded ? "Collapse" : "Expand"}
                 </button>
-                <span>{gmailConnected ? `${gmailAccountRows.length}/${gmailMaxAccounts} connected. Tools use the active account by default` : gmailInstalled ? "Connect Google before Gmail tools can read mail" : "Installs locally and opens Google account selection"}</span>
               </div>
             </article>
           ) : null}
@@ -1088,6 +1135,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               <div className="apps-plugin-account" data-connected={calendarConnected}>
                 <CalendarDays size={15} aria-hidden="true" />
                 <span>{calendarAccountLabel}</span>
+              </div>
+
+              <div className="apps-plugin-top-actions">
+                <button className="apps-plugin-primary" type="button" disabled={calendarBusy} onClick={handleCalendarPrimaryAction}>
+                  {calendarActionState === "connect" ? "Opening Google" : calendarActionState === "install" ? "Installing" : calendarConnected ? "Manage" : calendarInstalled ? "Sign in" : "Install"}
+                </button>
               </div>
 
               {calendarStatus && (!calendarConnected || calendarStatus.kind !== "success" || calendarExpanded) ? (
@@ -1127,14 +1180,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               ) : null}
 
               <div className="apps-plugin-actions">
-                <button className="apps-plugin-primary" type="button" disabled={calendarBusy} onClick={handleCalendarPrimaryAction}>
-                  {calendarActionState === "connect" ? "Opening Google" : calendarActionState === "install" ? "Installing" : calendarConnected ? "Manage" : calendarInstalled ? "Sign in" : "Install"}
-                </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={calendarExpanded} onClick={() => toggleAppCardExpanded("google-calendar")}>
                   <ChevronDown size={14} aria-hidden="true" />
                   {calendarExpanded ? "Collapse" : "Expand"}
                 </button>
-                <span>{calendarConnected ? `${calendarAccountRows.length}/${calendarMaxAccounts} connected. Tools use the active account by default` : calendarInstalled ? "Connect Google before Calendar tools can read events" : "Installs locally and opens Google account selection"}</span>
               </div>
             </article>
           ) : null}
@@ -1163,6 +1212,15 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               <div className="apps-plugin-account" data-connected={githubConnected}>
                 <Github size={15} aria-hidden="true" />
                 <span>{githubAccountLabel}</span>
+              </div>
+
+              <div className="apps-plugin-top-actions">
+                <button className="apps-plugin-primary" type="button" disabled={githubBusy} onClick={() => void installOrOpenGithub()}>
+                  {githubActionState === "install" ? "Installing" : githubConnected ? "Manage" : githubInstalled ? "Sign in" : "Install"}
+                </button>
+                <button className="apps-plugin-secondary apps-plugin-icon-action" type="button" aria-label="Refresh GitHub" title="Refresh GitHub" disabled={githubBusy || !githubAvailable} onClick={() => void refreshGithubConnection()}>
+                  <RefreshCw size={14} aria-hidden="true" />
+                </button>
               </div>
 
               {githubStatus && (!githubConnected || githubStatus.kind !== "success" || githubExpanded) ? (
@@ -1203,17 +1261,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               ) : null}
 
               <div className="apps-plugin-actions">
-                <button className="apps-plugin-primary" type="button" disabled={githubBusy} onClick={() => void installOrOpenGithub()}>
-                  {githubActionState === "install" ? "Installing" : githubConnected ? "Manage" : githubInstalled ? "Sign in" : "Install"}
-                </button>
-                <button className="apps-plugin-secondary apps-plugin-icon-action" type="button" aria-label="Refresh GitHub" title="Refresh GitHub" disabled={githubBusy || !githubAvailable} onClick={() => void refreshGithubConnection()}>
-                  <RefreshCw size={14} aria-hidden="true" />
-                </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={githubExpanded} onClick={() => toggleAppCardExpanded("github")}>
                   <ChevronDown size={14} aria-hidden="true" />
                   {githubExpanded ? "Collapse" : "Expand"}
                 </button>
-                <span>{githubConnected ? "Tools use the connected GitHub account and the current workspace by default" : githubInstalled ? "Finish sign-in in Settings before GitHub tools can access repositories" : "Installs locally and reuses the existing GitHub settings sign-in"}</span>
               </div>
             </article>
           ) : null}
@@ -1242,6 +1293,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               <div className="apps-plugin-account" data-connected={mcpConfigured}>
                 <Server size={15} aria-hidden="true" />
                 <span>{mcpAccountLabel}</span>
+              </div>
+
+              <div className="apps-plugin-top-actions">
+                <button className="apps-plugin-primary" type="button" disabled={mcpBusy && mcpActionState !== "refresh"} onClick={() => openMcpServerDialog()}>
+                  {mcpConfigured ? "Manage" : "Add server"}
+                </button>
               </div>
 
               {mcpStatus && (!mcpConnected || mcpStatus.kind !== "success" || mcpExpanded) ? (
@@ -1299,14 +1356,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
               ) : null}
 
               <div className="apps-plugin-actions">
-                <button className="apps-plugin-primary" type="button" disabled={mcpBusy && mcpActionState !== "refresh"} onClick={() => openMcpServerDialog()}>
-                  {mcpConfigured ? "Manage" : "Add server"}
-                </button>
                 <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={mcpExpanded} onClick={() => toggleAppCardExpanded("mcp")}>
                   <ChevronDown size={14} aria-hidden="true" />
                   {mcpExpanded ? "Collapse" : "Expand"}
                 </button>
-                <span>{mcpConfigured ? `${mcpToolCount} cached tools across ${mcpServers.length} configured server${mcpServers.length === 1 ? "" : "s"}` : "Connect HTTPS, localhost, or command-line stdio servers"}</span>
               </div>
             </article>
           ) : null}
@@ -1351,23 +1404,13 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
         </section>
       </main>
 
-      <DialogShell
-        description={`Connect up to ${gmailMaxAccounts} Google accounts. Gilbert uses the active Gmail by default unless a tool call names another account.`}
+      {gmailConnectOpen ? (
+        <DialogShell
+        description={`${gmailAccountRows.length}/${gmailMaxAccounts} connected`}
         icon={Mail}
         open={gmailConnectOpen}
-        title={gmailConnected ? "Manage Gmail accounts" : gmailInstalled ? "Connect Gmail" : "Install Gmail"}
+        title="Gmail accounts"
         onClose={() => setGmailConnectOpen(false)}
-        actions={
-          <>
-            <button className="dialog-button" type="button" onClick={() => setGmailConnectOpen(false)}>
-              Close
-            </button>
-            <button className="dialog-button dialog-button-primary" type="button" disabled={gmailBusy || !gmailAvailable || !googleClientReady || !gmailCanAddAccount} onClick={() => void startGmailConnection()}>
-              {gmailConnected ? <Plus size={15} aria-hidden="true" /> : <LogIn size={15} aria-hidden="true" />}
-              {gmailActionState === "connect" ? "Waiting for Google" : gmailActionState === "install" ? "Installing" : gmailConnected ? "Add account" : gmailInstalled ? "Connect Google" : "Install with Google"}
-            </button>
-          </>
-        }
       >
         <div className="gmail-connect-dialog">
           <section className="gmail-account-manager" aria-label="Connected Gmail accounts">
@@ -1376,9 +1419,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <strong>Accounts</strong>
                 <small>{gmailAccountRows.length}/{gmailMaxAccounts} connected</small>
               </span>
-              <button className="gmail-account-add-button" type="button" disabled={gmailBusy || !gmailCanAddAccount || !gmailAvailable || !googleClientReady} onClick={() => void startGmailConnection()}>
-                <Plus size={15} aria-hidden="true" />
-                Add account
+              <button className="gmail-account-add-button" type="button" disabled={gmailBusy || !gmailCanAddAccount || !gmailAvailable} onClick={() => void startGmailConnection()}>
+                <LogIn size={15} aria-hidden="true" />
+                Sign in
               </button>
             </div>
 
@@ -1387,11 +1430,11 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 {gmailAccountRows.map((account) => (
                   <div key={account.email} className="gmail-account-row" data-active={account.active}>
                     <span className="gmail-account-avatar">
-                      {account.user.picture ? <img src={account.user.picture} alt="" referrerPolicy="no-referrer" /> : <Mail size={16} aria-hidden="true" />}
+                      {account.user.picture ? <img src={account.user.picture} alt="" decoding="async" loading="lazy" referrerPolicy="no-referrer" /> : <Mail size={16} aria-hidden="true" />}
                     </span>
                     <span className="gmail-account-details">
                       <strong>{account.email}</strong>
-                      <small>{account.active ? "Active account for Gmail tools" : "Connected and ready"}</small>
+                      <small>{account.active ? "Active" : "Connected"}</small>
                     </span>
                     <span className="gmail-account-actions">
                       {account.active ? (
@@ -1418,68 +1461,28 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <Mail size={18} aria-hidden="true" />
                 <span>
                   <strong>No Gmail account connected</strong>
-                  <small>Add an account to activate Gmail tools.</small>
+                  <small>Sign in to connect an account.</small>
                 </span>
               </div>
             )}
           </section>
 
-          {gmailStatus ? (
+          {gmailStatus && gmailStatus.kind !== "success" ? (
             <div className="gmail-connect-status" data-kind={gmailStatus.kind}>
               {gmailStatus.text}
             </div>
           ) : null}
-
-          <div className="gmail-connect-quick-notes" aria-label="Gmail account behavior">
-            <span>
-              <UserCheck size={15} aria-hidden="true" />
-              Active account is used by default.
-            </span>
-            <span>
-              <ShieldCheck size={15} aria-hidden="true" />
-              Full Gmail API scopes unlock read, write, send, settings, and cleanup tools.
-            </span>
-          </div>
-
-          <div className="gmail-connect-permissions">
-            <div className="gmail-connect-permissions-heading">
-              <ShieldCheck size={16} aria-hidden="true" />
-              <span>Requested access</span>
-            </div>
-            <div className="gmail-connect-scope-list">
-              {GMAIL_CORE_OAUTH_SCOPES.map((scope) => (
-                <code key={scope}>{scope}</code>
-              ))}
-            </div>
-            <p>Full Gmail access is needed for mailbox reads, labels, drafts, direct sends, filters, settings, history, archive/trash actions, and generic Gmail API operations.</p>
-          </div>
-
-          <div className="gmail-connect-setup" data-ready={googleClientReady && gmailAvailable}>
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>
-              {googleClientReady ? "This build can connect installed Gmail plugins with Google account selection." : "This build can install Gmail locally, but Google sign-in is not enabled yet."}
-            </span>
-          </div>
         </div>
-      </DialogShell>
+        </DialogShell>
+      ) : null}
 
-      <DialogShell
-        description={`Connect up to ${calendarMaxAccounts} Google accounts. Gilbert uses the active Google Calendar by default unless a tool call names another account.`}
+      {calendarConnectOpen ? (
+        <DialogShell
+        description={`${calendarAccountRows.length}/${calendarMaxAccounts} connected`}
         icon={CalendarDays}
         open={calendarConnectOpen}
-        title={calendarConnected ? "Manage Google Calendar accounts" : calendarInstalled ? "Connect Google Calendar" : "Install Google Calendar"}
+        title="Google Calendar accounts"
         onClose={() => setCalendarConnectOpen(false)}
-        actions={
-          <>
-            <button className="dialog-button" type="button" onClick={() => setCalendarConnectOpen(false)}>
-              Close
-            </button>
-            <button className="dialog-button dialog-button-primary" type="button" disabled={calendarBusy || !calendarAvailable || !googleClientReady || !calendarCanAddAccount} onClick={() => void startCalendarConnection()}>
-              {calendarConnected ? <Plus size={15} aria-hidden="true" /> : <LogIn size={15} aria-hidden="true" />}
-              {calendarActionState === "connect" ? "Waiting for Google" : calendarActionState === "install" ? "Installing" : calendarConnected ? "Add account" : calendarInstalled ? "Connect Google" : "Install with Google"}
-            </button>
-          </>
-        }
       >
         <div className="gmail-connect-dialog">
           <section className="gmail-account-manager" aria-label="Connected Google Calendar accounts">
@@ -1488,9 +1491,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <strong>Accounts</strong>
                 <small>{calendarAccountRows.length}/{calendarMaxAccounts} connected</small>
               </span>
-              <button className="gmail-account-add-button" type="button" disabled={calendarBusy || !calendarCanAddAccount || !calendarAvailable || !googleClientReady} onClick={() => void startCalendarConnection()}>
-                <Plus size={15} aria-hidden="true" />
-                Add account
+              <button className="gmail-account-add-button" type="button" disabled={calendarBusy || !calendarCanAddAccount || !calendarAvailable} onClick={() => void startCalendarConnection()}>
+                <LogIn size={15} aria-hidden="true" />
+                Sign in
               </button>
             </div>
 
@@ -1499,11 +1502,11 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 {calendarAccountRows.map((account) => (
                   <div key={account.email} className="gmail-account-row" data-active={account.active}>
                     <span className="gmail-account-avatar">
-                      {account.user.picture ? <img src={account.user.picture} alt="" referrerPolicy="no-referrer" /> : <CalendarDays size={16} aria-hidden="true" />}
+                      {account.user.picture ? <img src={account.user.picture} alt="" decoding="async" loading="lazy" referrerPolicy="no-referrer" /> : <CalendarDays size={16} aria-hidden="true" />}
                     </span>
                     <span className="gmail-account-details">
                       <strong>{account.email}</strong>
-                      <small>{account.active ? "Active account for Google Calendar tools" : "Connected and ready"}</small>
+                      <small>{account.active ? "Active" : "Connected"}</small>
                     </span>
                     <span className="gmail-account-actions">
                       {account.active ? (
@@ -1530,52 +1533,23 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
                 <CalendarDays size={18} aria-hidden="true" />
                 <span>
                   <strong>No Google Calendar account connected</strong>
-                  <small>Add an account to activate Calendar tools.</small>
+                  <small>Sign in to connect an account.</small>
                 </span>
               </div>
             )}
           </section>
 
-          {calendarStatus ? (
+          {calendarStatus && calendarStatus.kind !== "success" ? (
             <div className="gmail-connect-status" data-kind={calendarStatus.kind}>
               {calendarStatus.text}
             </div>
           ) : null}
-
-          <div className="gmail-connect-quick-notes" aria-label="Google Calendar account behavior">
-            <span>
-              <UserCheck size={15} aria-hidden="true" />
-              Active account is used by default.
-            </span>
-            <span>
-              <ShieldCheck size={15} aria-hidden="true" />
-              Event changes require review before execution.
-            </span>
-          </div>
-
-          <div className="gmail-connect-permissions">
-            <div className="gmail-connect-permissions-heading">
-              <ShieldCheck size={16} aria-hidden="true" />
-              <span>Requested access</span>
-            </div>
-            <div className="gmail-connect-scope-list">
-              {GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.map((scope) => (
-                <code key={scope}>{scope}</code>
-              ))}
-            </div>
-            <p>Calendar access is used for agenda reads, free-busy checks, and user-approved event create, update, or delete actions.</p>
-          </div>
-
-          <div className="gmail-connect-setup" data-ready={googleClientReady && calendarAvailable}>
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>
-              {googleClientReady ? "This build can connect installed Google Calendar plugins with Google account selection." : "This build can install Google Calendar locally, but Google sign-in is not enabled yet."}
-            </span>
-          </div>
         </div>
-      </DialogShell>
+        </DialogShell>
+      ) : null}
 
-      <DialogShell
+      {mcpDialogOpen ? (
+        <DialogShell
         description={`Connect up to ${mcpMaxServers} Streamable HTTP or command-line stdio MCP servers. Enabled servers become available to chat as MCP tools when settings allow them.`}
         icon={Server}
         open={mcpDialogOpen}
@@ -1738,7 +1712,8 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings }: AppsPageProps) 
             </span>
           </div>
         </div>
-      </DialogShell>
+        </DialogShell>
+      ) : null}
     </section>
   );
 }
@@ -1748,7 +1723,7 @@ function WebAppLogo({ className, fallback, src }: { className: string; fallback:
 
   return (
     <span className={`apps-plugin-logo ${className}`}>
-      {failed ? fallback : <img src={src} alt="" aria-hidden="true" draggable={false} referrerPolicy="no-referrer" onError={() => setFailed(true)} />}
+      {failed ? fallback : <img src={src} alt="" aria-hidden="true" decoding="async" draggable={false} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />}
     </span>
   );
 }
@@ -1795,7 +1770,7 @@ function formatGmailConnectionError(error: unknown) {
   }
 
   if (normalized.includes("client_secret is missing") || normalized.includes("oauth client secret is missing")) {
-    return "Gmail plugin is installed locally, but this build is missing the backend Google OAuth client secret. Add GOOGLE_OAUTH_CLIENT_SECRET to the ignored local .env file or release secrets, restart Gilbert Codex, then try Connect Google again.";
+    return "Gmail plugin is installed locally, but Google OAuth is missing the matching Client secret. Add it in Settings > Google, then try Connect Google again.";
   }
 
   return message;
@@ -1852,7 +1827,7 @@ function formatCalendarConnectionError(error: unknown) {
   }
 
   if (normalized.includes("client_secret is missing") || normalized.includes("oauth client secret is missing")) {
-    return "Google Calendar plugin is installed locally, but this build is missing the backend Google OAuth client secret. Add GOOGLE_OAUTH_CLIENT_SECRET to the ignored local .env file or release secrets, restart Gilbert Codex, then try Connect Google again.";
+    return "Google Calendar plugin is installed locally, but Google OAuth is missing the matching Client secret. Add it in Settings > Google, then try Connect Google again.";
   }
 
   return message;

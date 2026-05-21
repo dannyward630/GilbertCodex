@@ -1,28 +1,66 @@
-// @ts-nocheck
-import type { SetStateAction } from "react";
+import type { MutableRefObject, SetStateAction } from "react";
 
-import type { AgentRuntimeDecision } from "../../../agentRuntime/codingAgent";
-import type { LocalComputerToolExecutionPolicy, LocalSubagentResult, LocalSubagentTask } from "../../../localWorkspace/localToolRuntimeDisabled";
-import type { ContextCompactionNotice, ContextWindowUsage, ModelContextWindowMap, compactMessagesForContext } from "../../../lib/contextWindow";
-import type { PlanningProviderRequest } from "../../../services/planningClient";
-import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolCallRequest, ToolDefinition, ToolExecutionContext, ToolMemorySearchRequest, ToolResultMessage } from "../../../toolBridge";
-import type { AppInfo } from "../../../types/app";
-import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../../types/agentRun";
-import type { AuthSession } from "../../../types/auth";
-import type { ChatArtifact, ChatAttachment, ChatContextCompaction, ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch, ChatWorkTraceItem } from "../../../types/chat";
-import type { DiscordBridgeSettings } from "../../../types/discord";
-import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
-import type { PrimaryRoute } from "../../../types/navigation";
-import type { CreateProjectOptions, ProjectSummary } from "../../../types/project";
-import type { ProviderReasoningState } from "../../../types/reasoning";
-import type { AppPersonalizationSettings, AppearanceMode, ProviderSettings, WebSearchSettings } from "../../../types/settings";
-import type { ToolRegistrySettings } from "../../../types/tools";
-import type { SettingsSectionId } from "../../../pages/settings/types";
-import type { DiscordInteractionEvent } from "../../tauriClient";
-import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
-import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import type { LocalSubagentResult, LocalSubagentTask } from "../../../localWorkspace/localToolRuntimeDisabled";
+import type { ContextCompactionNotice, ContextWindowUsage, compactMessagesForContext } from "../../../lib/contextWindow";
+import type { createMessage as createMessageFn } from "../../../lib/chatUtils";
+import type { sendProviderMessage, streamProviderMessage } from "../../../services/modelProviderClient";
+import type { ChatMessage, ChatProgressItem, ChatSummary } from "../../../types/chat";
+import type { ProviderSettings } from "../../../types/settings";
+import type { ProviderToolBridgeOptions } from "../../../toolBridge";
+import type { mergeMessageWorkTrace as mergeMessageWorkTraceFn } from "../workspaceHelpers";
 
-export async function runParallelSubagents(deps: WorkspaceRuntimeDeps, tasks: LocalSubagentTask[], baseMessages: ChatMessage[], prompt: string, signal: AbortSignal, chat: ChatSummary | null | undefined): Promise<LocalSubagentResult[]> {
+type ProviderStreamUpdate = Parameters<typeof streamProviderMessage>[2];
+type ProviderStreamOptions = Parameters<typeof streamProviderMessage>[3];
+type ProviderMessageResult = Awaited<ReturnType<typeof streamProviderMessage>>;
+type ProviderCompactionResult = ReturnType<typeof compactMessagesForContext> & { contextCompaction?: ContextCompactionNotice };
+
+export interface ProviderStreamingDeps {
+  compactProviderMessages: (messages: ChatMessage[], settingsOverride: ProviderSettings, options: { target?: number; threshold?: number; toolBridge?: ProviderToolBridgeOptions }) => ProviderCompactionResult;
+  createContextCompactionProgress: (compaction: ProviderCompactionResult) => ChatProgressItem;
+  createEmptyResponseRetrySettings: (settings: ProviderSettings) => ProviderSettings;
+  createFinalOnlyProviderSettings: (prompt?: string, chat?: ChatSummary | null | undefined) => ProviderSettings;
+  createId: (prefix: string) => string;
+  createInterruptedResponseContinuationInstruction: (prompt: string, message: ChatMessage) => string;
+  createMessage: typeof createMessageFn;
+  createProviderPayloadGuardrailProgress: (usage: ContextWindowUsage) => ChatProgressItem | null;
+  createProviderRetryInstruction: (messages: ChatMessage[], emptyResponse: boolean) => string;
+  hasLocalToolEvidence: (messages: ChatMessage[]) => boolean;
+  isProviderEmptyResponseError: (error: unknown) => boolean;
+  isRetryableProviderMessageError: (error: unknown) => boolean;
+  isToolResultFallbackAnswer: (content: string) => boolean;
+  LOCAL_TOOL_FINAL_MIN_TOKENS: number;
+  mergeMessageWorkTrace: typeof mergeMessageWorkTraceFn;
+  MESSAGE_RETRY_TIMEOUT_MS: number;
+  pendingChatsRef: MutableRefObject<ChatSummary[]>;
+  preserveVisibleResponseThinking: (previousMessage: ChatMessage, nextMessage: ChatMessage) => ChatMessage;
+  recordProviderActualUsage: (
+    chatId: string,
+    messages: ChatMessage[],
+    settings: ProviderSettings,
+    usage: ProviderMessageResult["usage"],
+    options: { allowDecrease?: boolean; stream?: boolean; toolBridge?: ProviderToolBridgeOptions },
+  ) => void;
+  recordProviderContextUsage: (
+    chatId: string,
+    messages: ChatMessage[],
+    settings: ProviderSettings,
+    options: { allowDecrease?: boolean; stream?: boolean; toolBridge?: ProviderToolBridgeOptions },
+  ) => ContextWindowUsage;
+  resolveContextWindowForModel: (model: string, settings: ProviderSettings) => { maxOutputTokens?: number; source: "estimate" | "openrouter" | "provider"; tokens: number };
+  removeSteeringProgress: (progress: ChatProgressItem[] | undefined) => ChatProgressItem[] | undefined;
+  runProviderRetryWithTimeout: <T>(parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  sendProviderMessage: typeof sendProviderMessage;
+  setChats: (action: SetStateAction<ChatSummary[]>) => void;
+  sortChatsByUpdatedAt: (chats: ChatSummary[]) => ChatSummary[];
+  STEERING_PROGRESS_ID: string;
+  streamProviderMessage: typeof streamProviderMessage;
+  updateGeneratedMessage: (chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt?: boolean) => void;
+  withContextCompactionMarker: (message: ChatMessage, notice: ContextCompactionNotice | undefined) => ChatMessage;
+  withContextCompactionProgress: (compactionProgress: ChatProgressItem, progress: ChatProgressItem[] | undefined) => ChatProgressItem[];
+  withProviderPayloadGuardrailProgress: (guardrailProgress: ChatProgressItem | null, progress: ChatProgressItem[] | undefined) => ChatProgressItem[];
+}
+
+export async function runParallelSubagents(deps: ProviderStreamingDeps, tasks: LocalSubagentTask[], baseMessages: ChatMessage[], prompt: string, signal: AbortSignal, chat: ChatSummary | null | undefined): Promise<LocalSubagentResult[]> {
   const { createFinalOnlyProviderSettings, createMessage, resolveContextWindowForModel, sendProviderMessage } = deps;
 
     const baseSubagentSettings = createFinalOnlyProviderSettings(undefined, chat);
@@ -75,7 +113,7 @@ export async function runParallelSubagents(deps: WorkspaceRuntimeDeps, tasks: Lo
     );
   }
 
-export async function streamProviderMessageWithRetry(deps: WorkspaceRuntimeDeps, chatId: string, settings: ProviderSettings, messages: ChatMessage[], onUpdate: Parameters<typeof streamProviderMessage>[2], options: Parameters<typeof streamProviderMessage>[3], messageId: string) {
+export async function streamProviderMessageWithRetry(deps: ProviderStreamingDeps, chatId: string, settings: ProviderSettings, messages: ChatMessage[], onUpdate: ProviderStreamUpdate, options: ProviderStreamOptions = {}, messageId?: string) {
   const { compactProviderMessages, createContextCompactionProgress, createEmptyResponseRetrySettings, createMessage, createProviderPayloadGuardrailProgress, createProviderRetryInstruction, isProviderEmptyResponseError, isRetryableProviderMessageError, recordProviderActualUsage, recordProviderContextUsage, runProviderRetryWithTimeout, streamProviderMessage, updateGeneratedMessage, withContextCompactionMarker, withContextCompactionProgress, withProviderPayloadGuardrailProgress } = deps;
 
     const initialUsage = recordProviderContextUsage(chatId, messages, settings, { toolBridge: options.toolBridge });
@@ -143,8 +181,8 @@ export async function streamProviderMessageWithRetry(deps: WorkspaceRuntimeDeps,
     }
   }
 
-export async function runProviderRetryWithTimeout<T>(deps: WorkspaceRuntimeDeps, parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) {
-  const { DOMException, MESSAGE_RETRY_TIMEOUT_MS } = deps;
+export async function runProviderRetryWithTimeout<T>(deps: ProviderStreamingDeps, parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) {
+  const { MESSAGE_RETRY_TIMEOUT_MS } = deps;
 
     const retryController = new AbortController();
     const abortRetry = () => retryController.abort();
@@ -171,7 +209,7 @@ export async function runProviderRetryWithTimeout<T>(deps: WorkspaceRuntimeDeps,
     }
   }
 
-export function createProviderRetryInstruction(deps: WorkspaceRuntimeDeps, messages: ChatMessage[], emptyResponse: boolean) {
+export function createProviderRetryInstruction(deps: ProviderStreamingDeps, messages: ChatMessage[], emptyResponse: boolean) {
   const { hasLocalToolEvidence } = deps;
 
     return [
@@ -185,7 +223,7 @@ export function createProviderRetryInstruction(deps: WorkspaceRuntimeDeps, messa
     ].join("\n\n");
   }
 
-export function isRetryableProviderMessageError(deps: WorkspaceRuntimeDeps, error: unknown) {
+export function isRetryableProviderMessageError(deps: ProviderStreamingDeps, error: unknown) {
   const { isProviderEmptyResponseError } = deps;
 
     if (isProviderEmptyResponseError(error)) {
@@ -205,7 +243,7 @@ export function isRetryableProviderMessageError(deps: WorkspaceRuntimeDeps, erro
     );
   }
 
-export function hasLocalToolEvidence(deps: WorkspaceRuntimeDeps, messages: ChatMessage[]) {
+export function hasLocalToolEvidence(_deps: ProviderStreamingDeps, messages: ChatMessage[]) {
 
     return messages.some(
       (message) =>
@@ -215,7 +253,7 @@ export function hasLocalToolEvidence(deps: WorkspaceRuntimeDeps, messages: ChatM
     );
   }
 
-export function createEmptyResponseRetrySettings(deps: WorkspaceRuntimeDeps, settings: ProviderSettings): ProviderSettings {
+export function createEmptyResponseRetrySettings(deps: ProviderStreamingDeps, settings: ProviderSettings): ProviderSettings {
   const { LOCAL_TOOL_FINAL_MIN_TOKENS } = deps;
 
     const retrySettings: ProviderSettings = {
@@ -238,7 +276,7 @@ export function createEmptyResponseRetrySettings(deps: WorkspaceRuntimeDeps, set
     };
   }
 
-export function updateGeneratedMessage(deps: WorkspaceRuntimeDeps, chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt) {
+export function updateGeneratedMessage(deps: ProviderStreamingDeps, chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt = false) {
   const { pendingChatsRef, preserveVisibleResponseThinking, setChats, sortChatsByUpdatedAt } = deps;
 
     setChats((currentChats) => {
@@ -258,7 +296,7 @@ export function updateGeneratedMessage(deps: WorkspaceRuntimeDeps, chatId: strin
     });
   }
 
-export function preserveVisibleResponseThinking(deps: WorkspaceRuntimeDeps, previousMessage: ChatMessage, nextMessage: ChatMessage): ChatMessage {
+export function preserveVisibleResponseThinking(deps: ProviderStreamingDeps, previousMessage: ChatMessage, nextMessage: ChatMessage): ChatMessage {
   const { mergeMessageWorkTrace } = deps;
 
     if (previousMessage.role !== "assistant" || nextMessage.role !== "assistant") {
@@ -273,7 +311,7 @@ export function preserveVisibleResponseThinking(deps: WorkspaceRuntimeDeps, prev
     };
   }
 
-export function createInterruptedResponseContextMessages(deps: WorkspaceRuntimeDeps, message: ChatMessage, prompt: string) {
+export function createInterruptedResponseContextMessages(deps: ProviderStreamingDeps, message: ChatMessage, prompt: string) {
   const { createId, createInterruptedResponseContinuationInstruction, createMessage, isToolResultFallbackAnswer } = deps;
 
     const content = message.content.includes("I reached the agent tool budget for this run") || isToolResultFallbackAnswer(message.content) ? "" : message.content;
@@ -289,7 +327,7 @@ export function createInterruptedResponseContextMessages(deps: WorkspaceRuntimeD
     return [assistantContext, createMessage("user", createInterruptedResponseContinuationInstruction(prompt, message))];
   }
 
-export function createSteeringInstruction(deps: WorkspaceRuntimeDeps, steerContent: string, originalPrompt: string) {
+export function createSteeringInstruction(_deps: ProviderStreamingDeps, steerContent: string, originalPrompt: string) {
 
     return [
       "USER STEERING MESSAGE",
@@ -302,7 +340,7 @@ export function createSteeringInstruction(deps: WorkspaceRuntimeDeps, steerConte
       .join("\n\n");
   }
 
-export function withSteeringProgress(deps: WorkspaceRuntimeDeps, progress: ChatProgressItem[] | undefined) {
+export function withSteeringProgress(deps: ProviderStreamingDeps, progress: ChatProgressItem[] | undefined) {
   const { removeSteeringProgress, STEERING_PROGRESS_ID } = deps;
 
     const progressWithoutSteering = removeSteeringProgress(progress) ?? [];
@@ -318,7 +356,7 @@ export function withSteeringProgress(deps: WorkspaceRuntimeDeps, progress: ChatP
     ];
   }
 
-export function removeSteeringProgress(deps: WorkspaceRuntimeDeps, progress: ChatProgressItem[] | undefined) {
+export function removeSteeringProgress(deps: ProviderStreamingDeps, progress: ChatProgressItem[] | undefined) {
   const { STEERING_PROGRESS_ID } = deps;
 
     const nextProgress = (progress ?? []).filter((item) => item.id !== STEERING_PROGRESS_ID);

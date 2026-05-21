@@ -88,6 +88,7 @@ export function AppTopBar({
         { label: "Terminal", shortcut: shortcut("Ctrl+`"), checked: terminalOpen, disabled: !desktopRuntime, onSelect: onToggleTerminal },
         { label: "Chat", checked: activeRoute === "chat", separatorBefore: true, onPreload: preloadRoute("chat"), onSelect: () => onRouteChange("chat") },
         { label: "Apps", checked: activeRoute === "apps", onPreload: preloadRoute("apps"), onSelect: () => onRouteChange("apps") },
+        { label: "Tasks", checked: activeRoute === "tasks", onPreload: preloadRoute("tasks"), onSelect: () => onRouteChange("tasks") },
         ...(locationServicesEnabled ? [{ label: "Radar", checked: activeRoute === "radar", onPreload: preloadRoute("radar"), onSelect: () => onRouteChange("radar") }] : []),
         { label: "Settings", checked: activeRoute === "settings", onPreload: preloadRoute("settings"), onSelect: () => onRouteChange("settings") },
         { label: "System theme", checked: appearanceMode === "system", separatorBefore: true, onSelect: () => onAppearanceModeChange("system") },

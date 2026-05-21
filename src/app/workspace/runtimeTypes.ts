@@ -10,9 +10,10 @@ import type { AppAppearanceSettings, AppGeneralSettings, AppPersonalizationSetti
 import type { TerminalAttachedSession } from "../../types/terminal";
 import type { ComposerDraftRestoreRequest, QueuedChatSend } from "./WorkspaceApp";
 
-export interface WorkspaceRuntimeDeps extends Record<string, any> {
+export interface WorkspaceRuntimeDeps {
   activeChat: ChatSummary;
   activeChatId: string;
+  activeToolAwareProviderSettings?: ProviderSettings;
   agentRuns: AgentRun[];
   appInfo: AppInfo;
   appearanceMode: AppearanceMode;

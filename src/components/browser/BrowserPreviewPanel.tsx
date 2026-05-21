@@ -33,6 +33,10 @@ import {
   type BrowserConsoleSnapshot,
 } from "../../lib/browserConsole";
 import {
+  clearBrowserPreviewCaptureState,
+  updateBrowserPreviewCaptureState,
+} from "../../lib/browserPreviewCapture";
+import {
   addBrowserDomain,
   clearBrowserPreviewSessionStorage,
   evaluateBrowserNavigationPolicy,
@@ -657,8 +661,85 @@ export function BrowserPreviewPanel({
     };
   }, [activeUrl, nativeBrowserEnabled, showFrame, syncNativeBrowserBounds]);
 
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    if (!activeUrl || !showFrame || closing || pendingNavigation) {
+      clearBrowserPreviewCaptureState(activeTab.id);
+      return undefined;
+    }
+
+    let frameRequest: number | null = null;
+
+    const syncCaptureState = () => {
+      frameRequest = null;
+      const mode = nativeBrowserEnabled ? "native" : "iframe";
+      const nativeInstance = nativeBrowserRef.current;
+      const targetElement = mode === "native"
+        ? nativeFrameRef.current
+        : document.querySelector<HTMLElement>('.browser-preview-frame[data-active="true"]');
+      const bounds = targetElement ? getBrowserCaptureBounds(targetElement) : null;
+
+      if (!bounds) {
+        clearBrowserPreviewCaptureState(activeTab.id);
+        return;
+      }
+
+      updateBrowserPreviewCaptureState({
+        activeTabId: activeTab.id,
+        clip: mode === "iframe" ? bounds : undefined,
+        mode,
+        nativeLabel: mode === "native" ? nativeInstance?.label : undefined,
+        status: mode === "native" ? nativeBrowserStatus : activeLocalStatus,
+        title: formatBrowserPreviewTitle(activeUrl),
+        updatedAt: new Date().toISOString(),
+        url: activeUrl,
+      });
+    };
+
+    const scheduleSync = () => {
+      if (frameRequest !== null) {
+        return;
+      }
+
+      frameRequest = window.requestAnimationFrame(syncCaptureState);
+    };
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleSync) : null;
+    const nativeFrame = nativeFrameRef.current;
+    const activeFrame = document.querySelector<HTMLElement>('.browser-preview-frame[data-active="true"]');
+
+    if (nativeFrame) {
+      resizeObserver?.observe(nativeFrame);
+    }
+
+    if (activeFrame) {
+      resizeObserver?.observe(activeFrame);
+    }
+
+    scheduleSync();
+    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("scroll", scheduleSync, true);
+    const steadySyncInterval = window.setInterval(scheduleSync, 1_000);
+
+    return () => {
+      if (frameRequest !== null) {
+        window.cancelAnimationFrame(frameRequest);
+      }
+
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      window.removeEventListener("scroll", scheduleSync, true);
+      window.clearInterval(steadySyncInterval);
+      clearBrowserPreviewCaptureState(activeTab.id);
+    };
+  }, [activeLocalStatus, activeTab.id, activeUrl, closing, nativeBrowserEnabled, nativeBrowserStatus, pendingNavigation, previewWidth, showFrame]);
+
   useEffect(() => {
     return () => {
+      clearBrowserPreviewCaptureState();
       closeAllNativeBrowserInstances();
     };
   }, [closeAllNativeBrowserInstances]);
@@ -2142,6 +2223,12 @@ function getNativeBrowserBounds(element: HTMLElement): NativeBrowserBounds | nul
     x: Math.max(0, Math.round(rect.left)),
     y: Math.max(0, Math.round(rect.top)),
   };
+}
+
+function getBrowserCaptureBounds(element: HTMLElement): NativeBrowserBounds & { scale: number } | null {
+  const bounds = getNativeBrowserBounds(element);
+
+  return bounds ? { ...bounds, scale: 1 } : null;
 }
 
 async function setNativeBrowserBounds(webview: Webview, bounds: NativeBrowserBounds) {

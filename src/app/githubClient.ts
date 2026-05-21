@@ -163,9 +163,9 @@ export function githubDesktopAvailable() {
   return isTauriDesktopRuntime();
 }
 
-/** Reads the public OAuth App client ID used by device-flow sign-in. */
+/** Returns the initial OAuth App client ID used by device-flow sign-in. */
 export function getDefaultGithubOAuthClientId() {
-  return (import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID ?? "").trim();
+  return "";
 }
 
 /** Returns the space-delimited scope string sent to GitHub's device-flow endpoint. */

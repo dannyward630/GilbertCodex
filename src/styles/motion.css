@@ -366,19 +366,6 @@
   }
 }
 
-@keyframes gil-live-dot {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: translateY(0) scale(0.8);
-  }
-
-  50% {
-    opacity: 1;
-    transform: translateY(-1px) scale(1);
-  }
-}
-
 @keyframes gil-soft-pulse {
   0%,
   100% {
@@ -800,19 +787,6 @@
 
   .message-block[data-role="user"] .message-content:hover {
     transform: translateY(-1px) scale(1.002);
-  }
-
-  .markdown-message[data-streaming="true"]::after {
-    content: "";
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-left: 7px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--blue) 76%, white 24%);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 12%, transparent);
-    animation: gil-live-dot 880ms var(--motion-ease) infinite;
-    vertical-align: baseline;
   }
 
   .message-block[data-role="assistant"][data-streaming="true"] .message-content {

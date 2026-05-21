@@ -17,6 +17,8 @@ import {
   filterEnabledProviderModelOptions,
   formatModelPricingSummary,
   formatModelPricingTitle,
+  getEffectiveProviderModelContextWindowTokens,
+  isModelProviderAvailableForSelection,
   type ChatModelOption,
   type ProviderModelMetadata,
 } from "../../lib/models";
@@ -52,7 +54,6 @@ interface ModelSelectorEntryGroup {
   label: string;
 }
 
-const SUBSCRIPTION_PROVIDER_ID: ModelProviderId = "9router";
 const LOCAL_RUNTIME_PROVIDER_IDS = new Set<ModelProviderId>(["lmstudio", "ollama", "vllm"]);
 const RECOMMENDED_HOSTED_MODEL_ORDER = [
   OPENROUTER_FREE_AUTO_MODEL,
@@ -412,33 +413,46 @@ export function buildSelectorEntries(
 ): ModelSelectorEntry[] {
   return MODEL_PROVIDERS.flatMap((provider) => {
     const rawLiveModels = liveModelCatalogs[provider.id];
-    const liveModels = provider.id === SUBSCRIPTION_PROVIDER_ID && liveModelCatalogStatus[provider.id] !== "ready" ? undefined : rawLiveModels;
+    const liveStatus = liveModelCatalogStatus[provider.id];
+    const liveModels = liveStatus === "ready" ? rawLiveModels : undefined;
     const providerModel = provider.id === providerSettings.provider ? currentModel : providerSettings.providerModels[provider.id] || provider.defaultModel;
 
-    if (isLocalRuntimeProvider(provider.id) && !hasReadyLiveModelCatalog(rawLiveModels, liveModelCatalogStatus[provider.id])) {
+    if (!isModelProviderAvailableForSelection(providerSettings, provider.id, rawLiveModels, liveStatus)) {
       return [];
     }
 
     const providerOptions = filterEnabledProviderModelOptions(buildProviderModelOptions(provider.id, liveModels, providerModel), providerSettings.disabledModels[provider.id]);
 
-    return providerOptions.map((option) => ({
-      contextWindow:
+    return providerOptions.map((option) => {
+      const resolvedContextWindow =
         modelContextWindows[option.value] ??
         (option.contextWindowTokens
           ? {
               source: "provider" as const,
               tokens: option.contextWindowTokens,
             }
-          : getFallbackModelContextWindow(option.value)),
-      option,
-      provider,
-      selected: option.value === currentModel.trim() && option.provider === providerSettings.provider,
-    }));
-  });
-}
+          : getFallbackModelContextWindow(option.value));
+      const effectiveTokens = getEffectiveProviderModelContextWindowTokens(
+        option.provider,
+        option.value,
+        resolvedContextWindow.tokens,
+        providerSettings.subscriptionOptimization,
+      );
 
-function hasReadyLiveModelCatalog(liveModels: ProviderModelMetadata[] | undefined, liveStatus: LiveModelCatalogStatus | undefined) {
-  return liveStatus === "ready" && Boolean(liveModels && liveModels.length > 0);
+      return {
+        contextWindow: effectiveTokens && effectiveTokens !== resolvedContextWindow.tokens
+          ? {
+              ...resolvedContextWindow,
+              source: "provider" as const,
+              tokens: effectiveTokens,
+            }
+          : resolvedContextWindow,
+        option,
+        provider,
+        selected: option.value === currentModel.trim() && option.provider === providerSettings.provider,
+      };
+    });
+  });
 }
 
 function sortRecommendedEntries(entries: ModelSelectorEntry[]) {

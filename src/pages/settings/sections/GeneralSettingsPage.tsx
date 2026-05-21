@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Bell,
   Check,
@@ -17,6 +18,7 @@ import {
   UserRound,
   Zap,
 } from "lucide-react";
+import { getNativeDictationStatus, isTauriDesktopRuntime, prepareNativeDictation, type NativeDictationStatus } from "../../../app/tauriClient";
 import { formatHostPlatformLabel } from "../../../lib/hostPlatform";
 import { getAvailableTerminalShells, terminalShellLabel } from "../../../lib/terminalShells";
 import { localPermissionModeLabel, localWorkspaceScopeLabel } from "../../../localWorkspace/files";
@@ -114,9 +116,31 @@ export function GeneralSettingsPage({
   showHeading = true,
 }: GeneralSettingsPageProps) {
   const approvalPolicy = currentApprovalPolicy(localWorkspace);
+  const [dictationPreparing, setDictationPreparing] = useState(false);
+  const [dictationStatus, setDictationStatus] = useState<NativeDictationStatus | null>(null);
   const sandboxMode = currentSandboxMode(localWorkspace);
   const projectOpenTargets = getProjectOpenTargetsForPlatform(appInfo.platform);
   const terminalShells = getAvailableTerminalShells();
+
+  useEffect(() => {
+    let disposed = false;
+
+    getNativeDictationStatus()
+      .then((status) => {
+        if (!disposed) {
+          setDictationStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setDictationStatus(null);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   function updateGeneral(patch: Partial<AppGeneralSettings>) {
     onGeneralSettingsChange({
@@ -145,6 +169,19 @@ export function GeneralSettingsPage({
 
   function toggleSavedHotkey(currentValue: string, nextValue: string) {
     return currentValue ? "" : nextValue;
+  }
+
+  async function warmDictationEngine() {
+    if (!isTauriDesktopRuntime()) {
+      return;
+    }
+
+    setDictationPreparing(true);
+    try {
+      setDictationStatus(await prepareNativeDictation());
+    } finally {
+      setDictationPreparing(false);
+    }
   }
 
   return (
@@ -409,10 +446,22 @@ export function GeneralSettingsPage({
             <Mic size={19} aria-hidden="true" />
             <div>
               <h2>Dictation</h2>
-              <p>Voice input uses the browser or desktop speech engine when available.</p>
+              <p>Voice input uses local Whisper in the desktop app; browser preview uses browser speech.</p>
             </div>
           </div>
           <div className="settings-row-list">
+            <div className="settings-row settings-row-control">
+              <span>Offline engine</span>
+              <strong>{formatDictationStatusLabel(dictationStatus)}</strong>
+              <button className="settings-ghost-button" type="button" disabled={!isTauriDesktopRuntime() || dictationPreparing} onClick={warmDictationEngine}>
+                {dictationPreparing ? <RotateCcw size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
+                {dictationPreparing ? "Warming" : "Warm"}
+              </button>
+            </div>
+            <div className="settings-row settings-row-control">
+              <span>Privacy</span>
+              <strong>Microphone audio stays local and is captured only while dictating.</strong>
+            </div>
             <div className="settings-row settings-row-control">
               <span>Hold-to-dictate hotkey</span>
               <strong>{generalSettings.dictation.holdHotkey || "Off"}</strong>
@@ -525,6 +574,62 @@ export function GeneralSettingsPage({
       </div>
     </>
   );
+}
+
+function formatDictationStatusLabel(status: NativeDictationStatus | null) {
+  if (!status) {
+    return isTauriDesktopRuntime() ? "Checking local Whisper" : "Browser speech fallback";
+  }
+
+  if (!isTauriDesktopRuntime()) {
+    return "Browser speech fallback";
+  }
+
+  if (status.state === "ready" || status.modelLoaded) {
+    return `${status.model} ready (${formatDictationAccelerator(status)})`;
+  }
+
+  if (status.state === "warming") {
+    return `${status.model} warming`;
+  }
+
+  if (status.state === "recording") {
+    return "Recording locally";
+  }
+
+  if (status.state === "transcribing") {
+    return "Transcribing locally";
+  }
+
+  if (status.state === "missingModel") {
+    return "Whisper model missing";
+  }
+
+  if (status.state === "blocked") {
+    return "Microphone blocked";
+  }
+
+  if (status.state === "error") {
+    return "Offline engine error";
+  }
+
+  return `${status.model} idle`;
+}
+
+function formatDictationAccelerator(status: NativeDictationStatus) {
+  if (status.accelerator === "nvidia-cuda") {
+    return status.gpuDeviceName || "NVIDIA GPU";
+  }
+
+  if (status.accelerator === "vulkan-gpu") {
+    return status.gpuDeviceName ? `GPU: ${status.gpuDeviceName}` : "GPU";
+  }
+
+  if (status.accelerator === "cpu-fallback") {
+    return "CPU fallback";
+  }
+
+  return "CPU";
 }
 
 function SwitchRow({

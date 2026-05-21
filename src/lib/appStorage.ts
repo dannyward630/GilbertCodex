@@ -41,6 +41,7 @@ import type {
   ChatProgressItem,
   ChatResearchReference,
   ChatSource,
+  ChatStreamTiming,
   ChatThinking,
   ChatSummary,
   ChatToolCall,
@@ -79,6 +80,7 @@ import {
   type ProviderModelVisibilityMap,
   type ProviderSettings,
   type ReasoningEffort,
+  type SubscriptionCodexContextWindow,
   type SubscriptionFallbackMode,
   type SubscriptionOptimizationSettings,
   type SubscriptionTokenSaverLevel,
@@ -87,7 +89,6 @@ import {
   type WebSearchSettings,
 } from "../types/settings";
 import { DEFAULT_PROJECT_OPEN_TARGET_ID, PROJECT_OPEN_TARGETS, type ProjectOpenTargetId } from "../types/projectOpen";
-import type { TerminalShellId } from "../types/terminal";
 
 const CHATS_KEY = "gilbert-codex.chats.v1";
 const PROJECTS_KEY = "gilbert-codex.projects.v1";
@@ -101,6 +102,7 @@ const ACTIVE_CHAT_KEY = "gilbert-codex.active-chat.v1";
 const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
 const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
 const GITHUB_OAUTH_CLIENT_ID_KEY = "gilbert-codex.github-oauth-client-id.v1";
+const GOOGLE_OAUTH_SETTINGS_KEY = "gilbert-codex.google-oauth-settings.v1";
 const DISCORD_BRIDGE_KEY = "gilbert-codex.discord-bridge.v1";
 const BROWSER_SETTINGS_KEY = "gilbert-codex.browser-settings.v1";
 const BROWSER_HISTORY_KEY = "gilbert-codex.browser-history.v1";
@@ -126,6 +128,7 @@ const PERSISTED_STORAGE_KEYS = [
   LOCAL_WORKSPACE_KEY,
   TOOL_REGISTRY_KEY,
   GITHUB_OAUTH_CLIENT_ID_KEY,
+  GOOGLE_OAUTH_SETTINGS_KEY,
   DISCORD_BRIDGE_KEY,
   BROWSER_SETTINGS_KEY,
   BROWSER_HISTORY_KEY,
@@ -171,6 +174,7 @@ export const defaultProviderSettings: ProviderSettings = {
   provider: DEFAULT_PROVIDER_ID,
   providerModels: getDefaultProviderModels(),
   subscriptionOptimization: {
+    codexContextWindow: "standard",
     fallbackMode: "off",
     tokenSaverLevel: "low",
   },
@@ -221,6 +225,16 @@ export const defaultAppGeneralSettings: AppGeneralSettings = {
 
 export const defaultAppPersonalizationSettings: AppPersonalizationSettings = {
   locationServicesEnabled: true,
+};
+
+export interface GoogleOAuthSettings {
+  clientId: string;
+  clientSecret: string;
+}
+
+export const DEFAULT_GOOGLE_OAUTH_SETTINGS: GoogleOAuthSettings = {
+  clientId: "",
+  clientSecret: "",
 };
 
 export function setStorageNamespace(userId: string | null) {
@@ -503,6 +517,18 @@ export function saveGithubOAuthClientId(clientId: string) {
   writeString(GITHUB_OAUTH_CLIENT_ID_KEY, clientId.trim());
 }
 
+export function loadGoogleOAuthSettings(): GoogleOAuthSettings {
+  return normalizeGoogleOAuthSettings(readJson<Partial<GoogleOAuthSettings>>(GOOGLE_OAUTH_SETTINGS_KEY));
+}
+
+export function saveGoogleOAuthSettings(settings: GoogleOAuthSettings) {
+  writeJson(GOOGLE_OAUTH_SETTINGS_KEY, normalizeGoogleOAuthSettings(settings));
+}
+
+export function clearGoogleOAuthSettings() {
+  writeJson(GOOGLE_OAUTH_SETTINGS_KEY, DEFAULT_GOOGLE_OAUTH_SETTINGS);
+}
+
 export function loadDiscordBridgeSettings(): DiscordBridgeSettings {
   return normalizeDiscordBridgeSettings(readJson<Partial<DiscordBridgeSettings>>(DISCORD_BRIDGE_KEY) ?? DEFAULT_DISCORD_BRIDGE_SETTINGS);
 }
@@ -572,6 +598,13 @@ function readJson<T>(key: string): T | null {
 
 function writeJson(key: string, value: unknown) {
   writeString(key, JSON.stringify(value));
+}
+
+function normalizeGoogleOAuthSettings(settings: Partial<GoogleOAuthSettings> | null | undefined): GoogleOAuthSettings {
+  return {
+    clientId: typeof settings?.clientId === "string" ? settings.clientId.trim() : "",
+    clientSecret: typeof settings?.clientSecret === "string" ? settings.clientSecret.trim() : "",
+  };
 }
 
 function readString(key: string) {
@@ -1164,6 +1197,7 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     source: normalizeChatMessageSource(message.source) ?? legacyDiscordMessage?.source,
     sources: normalizeChatSources(message.sources),
     status: message.status === "error" ? "error" : undefined,
+    streamTiming: normalizeChatStreamTiming(message.streamTiming),
     thinking: normalizeChatThinking(message.thinking),
     toolCalls: normalizeToolCalls(message.toolCalls),
     webSearch: normalizeChatWebSearch(message.webSearch),
@@ -1243,6 +1277,34 @@ function normalizeChatThinking(value: unknown): ChatThinking | undefined {
     completedAt,
     effort: normalizeReasoningEffort(value.effort),
     startedAt: startedAt ?? completedAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeChatStreamTiming(value: unknown): ChatStreamTiming | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const requestStartedAt = normalizeOptionalText(value.requestStartedAt);
+
+  if (!requestStartedAt) {
+    return undefined;
+  }
+
+  return {
+    completedAt: normalizeOptionalText(value.completedAt),
+    firstByteAt: normalizeOptionalText(value.firstByteAt),
+    firstProviderEventAt: normalizeOptionalText(value.firstProviderEventAt),
+    firstTokenAt: normalizeOptionalText(value.firstTokenAt),
+    firstVisibleTokenAt: normalizeOptionalText(value.firstVisibleTokenAt),
+    requestStartedAt,
+    responseStartedAt: normalizeOptionalText(value.responseStartedAt),
+    timeToFirstByteMs: normalizeNonNegativeNumber(value.timeToFirstByteMs),
+    timeToFirstProviderEventMs: normalizeNonNegativeNumber(value.timeToFirstProviderEventMs),
+    timeToFirstTokenMs: normalizeNonNegativeNumber(value.timeToFirstTokenMs),
+    timeToFirstVisibleTokenMs: normalizeNonNegativeNumber(value.timeToFirstVisibleTokenMs),
+    timeToResponseStartMs: normalizeNonNegativeNumber(value.timeToResponseStartMs),
+    totalMs: normalizeNonNegativeNumber(value.totalMs),
   };
 }
 
@@ -2076,6 +2138,10 @@ function normalizeOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function normalizeNonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
 function normalizePdfLibraryState(value: unknown): PdfLibraryState {
   const state = typeof value === "object" && value ? (value as Partial<PdfLibraryState>) : {};
   const deletedSourceIds = Array.isArray(state.deletedSourceIds)
@@ -2528,9 +2594,14 @@ function normalizeSubscriptionOptimizationSettings(value: unknown): Subscription
   const storedSettings = typeof value === "object" && value ? (value as Partial<SubscriptionOptimizationSettings>) : {};
 
   return {
+    codexContextWindow: normalizeSubscriptionCodexContextWindow(storedSettings.codexContextWindow),
     fallbackMode: normalizeSubscriptionFallbackMode(storedSettings.fallbackMode),
     tokenSaverLevel: normalizeSubscriptionTokenSaverLevel(storedSettings.tokenSaverLevel),
   };
+}
+
+function normalizeSubscriptionCodexContextWindow(value: unknown): SubscriptionCodexContextWindow {
+  return value === "extended" || value === "1m" || value === "full" ? "extended" : defaultProviderSettings.subscriptionOptimization.codexContextWindow;
 }
 
 function normalizeSubscriptionFallbackMode(value: unknown): SubscriptionFallbackMode {

@@ -32,6 +32,7 @@ const MAX_HTTP_BODY_BYTES: usize = 256 * 1024;
 const NGROK_API_ADDR: &str = "127.0.0.1:4040";
 const NGROK_PUBLIC_URL_WAIT_MS: u64 = 20_000;
 const DISCORD_MESSAGE_LIMIT: usize = 1_900;
+const DISCORD_ERROR_BODY_LIMIT: usize = 700;
 
 #[derive(Default)]
 pub struct DiscordBridgeState {
@@ -86,6 +87,21 @@ pub struct DiscordInteractionResponseRequest {
     pub application_id: String,
     pub content: String,
     pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordChannelMessageRequest {
+    pub bot_token: String,
+    pub channel_id: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordWebhookMessageRequest {
+    pub content: String,
+    pub webhook_url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -333,6 +349,91 @@ pub async fn discord_bridge_send_interaction_response(
         "Discord rejected the interaction response. Edit status: {}. Follow-up status: {}.",
         edit_status,
         followup_response.status()
+    ))
+}
+
+#[tauri::command]
+pub async fn discord_bridge_send_channel_message(
+    request: DiscordChannelMessageRequest,
+) -> Result<(), String> {
+    let bot_token = normalize_discord_bot_token(&request.bot_token);
+    let channel_id = request.channel_id.trim();
+
+    if bot_token.is_empty() || channel_id.is_empty() {
+        return Err("Discord channel message is missing the bot token or channel ID.".to_string());
+    }
+
+    if !is_valid_discord_id(channel_id) {
+        return Err("Discord channel ID must be a numeric Discord snowflake.".to_string());
+    }
+
+    let body = json!({
+        "allowed_mentions": {
+            "parse": []
+        },
+        "content": limit_discord_message(&request.content),
+    });
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
+    let response = client
+        .post(&url)
+        .header("authorization", format!("Bot {}", bot_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("Could not send the Discord channel message: {}", error))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let response_body = response.text().await.unwrap_or_default();
+    Err(format_discord_rejection(
+        "channel message",
+        status,
+        &response_body,
+    ))
+}
+
+#[tauri::command]
+pub async fn discord_bridge_send_webhook_message(
+    request: DiscordWebhookMessageRequest,
+) -> Result<(), String> {
+    let webhook_url = request.webhook_url.trim();
+
+    if !webhook_url.starts_with("https://") || !webhook_url.contains("/api/webhooks/") {
+        return Err("Discord webhook URL must be an HTTPS Discord webhook URL.".to_string());
+    }
+
+    let body = json!({
+        "allowed_mentions": {
+            "parse": []
+        },
+        "content": limit_discord_message(&request.content),
+    });
+    let webhook_url = append_discord_webhook_wait_param(webhook_url);
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&webhook_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("Could not send the Discord webhook message: {}", error))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let response_body = response.text().await.unwrap_or_default();
+    Err(format_discord_rejection(
+        "webhook message",
+        status,
+        &response_body,
     ))
 }
 
@@ -1352,6 +1453,72 @@ fn limit_discord_message(content: &str) -> String {
     limited
 }
 
+fn append_discord_webhook_wait_param(webhook_url: &str) -> String {
+    let trimmed = webhook_url.trim();
+
+    if trimmed
+        .split_once('?')
+        .map(|(_, query)| {
+            query.split('&').any(|part| {
+                part.split_once('=')
+                    .map(|(key, _)| key == "wait")
+                    .unwrap_or(part == "wait")
+            })
+        })
+        .unwrap_or(false)
+    {
+        return trimmed.to_string();
+    }
+
+    let separator = if trimmed.contains('?') { '&' } else { '?' };
+    format!("{trimmed}{separator}wait=true")
+}
+
+fn format_discord_rejection(
+    action: &str,
+    status: reqwest::StatusCode,
+    response_body: &str,
+) -> String {
+    match limit_discord_error_detail(response_body) {
+        Some(detail) => format!("Discord rejected the {action} with status {status}: {detail}"),
+        None => format!("Discord rejected the {action} with status {status}."),
+    }
+}
+
+fn limit_discord_error_detail(response_body: &str) -> Option<String> {
+    let detail = response_body.trim();
+
+    if detail.is_empty() {
+        return None;
+    }
+
+    if detail.chars().count() <= DISCORD_ERROR_BODY_LIMIT {
+        return Some(detail.to_string());
+    }
+
+    let mut limited = detail
+        .chars()
+        .take(DISCORD_ERROR_BODY_LIMIT - 16)
+        .collect::<String>();
+    limited.push_str(" [truncated]");
+    Some(limited)
+}
+
+fn normalize_discord_bot_token(value: &str) -> String {
+    let trimmed = value.trim();
+    trimmed
+        .strip_prefix("Bot ")
+        .or_else(|| trimmed.strip_prefix("bot "))
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
+fn is_valid_discord_id(value: &str) -> bool {
+    let len = value.len();
+    (12..=24).contains(&len) && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1363,6 +1530,37 @@ fn now_millis() -> u64 {
 mod tests {
     use super::*;
     use std::{fs, path::Path};
+
+    #[test]
+    fn appends_wait_param_to_webhook_urls() {
+        let url = append_discord_webhook_wait_param("https://discord.com/api/webhooks/123/token");
+
+        assert_eq!(url, "https://discord.com/api/webhooks/123/token?wait=true");
+    }
+
+    #[test]
+    fn preserves_existing_wait_param_for_webhook_urls() {
+        let url = append_discord_webhook_wait_param(
+            "https://discord.com/api/webhooks/123/token?thread_id=456&wait=true",
+        );
+
+        assert_eq!(
+            url,
+            "https://discord.com/api/webhooks/123/token?thread_id=456&wait=true"
+        );
+    }
+
+    #[test]
+    fn appends_wait_param_after_existing_webhook_query() {
+        let url = append_discord_webhook_wait_param(
+            "https://discord.com/api/webhooks/123/token?thread_id=456",
+        );
+
+        assert_eq!(
+            url,
+            "https://discord.com/api/webhooks/123/token?thread_id=456&wait=true"
+        );
+    }
 
     #[test]
     fn resolves_default_ngrok_from_repo_tools_folder() {

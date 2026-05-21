@@ -505,10 +505,11 @@ describe("app storage", () => {
     expect(loadedSettings.disabledModels.anthropic).toEqual(["claude-opus-4-6"]);
   });
 
-  it("persists subscription Token saver and fallback mode settings", () => {
+  it("persists subscription optimizer and Codex context settings", () => {
     saveProviderSettings({
       ...defaultProviderSettings,
       subscriptionOptimization: {
+        codexContextWindow: "extended",
         fallbackMode: "smart-saver",
         tokenSaverLevel: "max",
       },
@@ -517,6 +518,7 @@ describe("app storage", () => {
     const loadedSettings = loadProviderSettings();
 
     expect(loadedSettings.subscriptionOptimization).toEqual({
+      codexContextWindow: "extended",
       fallbackMode: "smart-saver",
       tokenSaverLevel: "max",
     });

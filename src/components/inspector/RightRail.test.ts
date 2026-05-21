@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatHasPendingRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "./RightRail";
+import { chatHasAutoOpenRightRailAction, chatHasPendingRightRailAction, chatHasPlanReviewContent, chatHasRightRailContent } from "./RightRail";
 import type { ChatMessage, ChatSummary } from "../../types/chat";
 
 function chatWith(message: ChatMessage): ChatSummary {
@@ -96,6 +96,7 @@ describe("right rail visibility", () => {
 
     expect(chatHasRightRailContent(chat)).toBe(true);
     expect(chatHasPendingRightRailAction(chat)).toBe(true);
+    expect(chatHasAutoOpenRightRailAction(chat)).toBe(true);
   });
 
   it("recognizes the selected plan message as rail content", () => {
@@ -127,5 +128,7 @@ describe("right rail visibility", () => {
     }));
 
     expect(chatHasPlanReviewContent(chat, "plan-message")).toBe(true);
+    expect(chatHasPendingRightRailAction(chat)).toBe(true);
+    expect(chatHasAutoOpenRightRailAction(chat)).toBe(false);
   });
 });

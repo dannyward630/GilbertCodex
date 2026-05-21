@@ -105,6 +105,10 @@ export function getSelectedProjectRunAction(config: ProjectRunConfig | undefined
   return config.actions.find((action) => action.id === config.selectedActionId) ?? config.actions[0];
 }
 
+export function getProjectRunActionPreviewUrl(action: Pick<ProjectRunAction, "command" | "kind" | "previewUrl">) {
+  return normalizePreviewUrl(action.previewUrl) ?? inferPreviewUrlFromCommand(action.command, action.kind);
+}
+
 export function saveProjectRunAction(config: ProjectRunConfig | undefined, action: ProjectRunAction): ProjectRunConfig {
   const normalizedAction = createProjectRunAction({
     ...action,
@@ -135,7 +139,7 @@ export function updateProjectRunLastRun(
     ...nextConfig,
     lastRun: {
       actionId: action.id,
-      previewUrl: patch.previewUrl ?? action.previewUrl,
+      previewUrl: patch.previewUrl ?? getProjectRunActionPreviewUrl(action),
       ranAt: patch.ranAt ?? new Date().toISOString(),
       sessionId: patch.sessionId,
       status: patch.status,
@@ -580,23 +584,77 @@ function createNodeScriptCommand(packageManager: string, script: string) {
 }
 
 function detectPreviewUrl(scriptBody: string, scriptName: string) {
-  const explicitUrl = scriptBody.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/[^\s"'<>)]*)?/i)?.[0];
+  const explicitTarget = inferExplicitPreviewUrl(scriptBody);
+
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+
+  if (scriptName === "app:dev" || /\btauri\s+dev\b/i.test(scriptBody)) {
+    return "http://localhost:1420/";
+  }
+
+  if (/\bnext\s+dev\b/i.test(scriptBody)) {
+    return "http://localhost:3000/";
+  }
+
+  if (/\bvite\s+preview\b/i.test(scriptBody)) {
+    return "http://localhost:4173/";
+  }
+
+  return "http://localhost:5173/";
+}
+
+function inferPreviewUrlFromCommand(command: string, kind: ProjectRunActionKind) {
+  const explicitTarget = inferExplicitPreviewUrl(command);
+
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+
+  const normalized = command.trim().replace(/\s+/g, " ").toLowerCase();
+
+  if (/\b(?:app:dev|tauri\s+dev)\b/.test(normalized)) {
+    return "http://localhost:1420/";
+  }
+
+  if (/\b(?:vite\s+preview|(?:npm|pnpm|yarn|bun)\s+run\s+preview)\b/.test(normalized)) {
+    return "http://localhost:4173/";
+  }
+
+  if (/\b(?:next\s+dev|(?:npm|pnpm|yarn|bun)\s+run\s+start)\b/.test(normalized)) {
+    return "http://localhost:3000/";
+  }
+
+  if (/\bpython\s+manage\.py\s+runserver\b/.test(normalized)) {
+    return "http://localhost:8000/";
+  }
+
+  if (/\b(?:vite|(?:npm|pnpm|yarn|bun)\s+run\s+(?:dev|serve))\b/.test(normalized)) {
+    return "http://localhost:5173/";
+  }
+
+  if (kind === "dev-server" && /\bpython\s+(?:app|main)\.py\b/.test(normalized)) {
+    return "http://localhost:5000/";
+  }
+
+  return undefined;
+}
+
+function inferExplicitPreviewUrl(value: string) {
+  const explicitUrl = value.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/[^\s"'<>)]*)?/i)?.[0];
   const normalizedExplicitUrl = normalizePreviewUrl(explicitUrl);
 
   if (normalizedExplicitUrl) {
     return normalizedExplicitUrl;
   }
 
-  const explicitPort = scriptBody.match(/(?:--port(?:=|\s+)|\bPORT=|\bPORT\s*=\s*)(\d{2,5})/i)?.[1];
-  if (explicitPort) {
-    return `http://localhost:${explicitPort}/`;
+  const explicitPort = value.match(/(?:--port(?:=|\s+)|(?:^|\s)-p\s+|\bPORT=|\bPORT\s*=\s*|\$env:PORT\s*=\s*["']?)(\d{2,5})/i)?.[1];
+  if (!explicitPort) {
+    return undefined;
   }
 
-  if (scriptName === "app:dev") {
-    return "http://localhost:1420/";
-  }
-
-  return "http://localhost:5173/";
+  return normalizePreviewUrl(`http://localhost:${explicitPort}/`);
 }
 
 function dedupeActions(actions: ProjectRunAction[]) {

@@ -10,7 +10,7 @@ import type { ProviderToolBridgeOptions, ToolBridgeExecutionBatch, ToolBridgeToo
 import type { AppInfo } from "../../../types/app";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../../types/agentRun";
 import type { AuthSession } from "../../../types/auth";
-import type { ChatArtifact, ChatAttachment, ChatContextCompaction, ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch, ChatWorkTraceItem } from "../../../types/chat";
+import type { ChatArtifact, ChatAttachment, ChatContextCompaction, ChatComposerDraft, ChatMessage, ChatPlanningInputAnswer, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatStreamTiming, ChatSummary, ChatToolCall, ChatWebSearch, ChatWorkTraceItem } from "../../../types/chat";
 import type { DiscordBridgeSettings } from "../../../types/discord";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { PrimaryRoute } from "../../../types/navigation";
@@ -33,9 +33,26 @@ import {
 const CAPABILITY_INVENTORY_PROMPT_PATTERN =
   /\b(?:what|which|list|show|tell(?:\s+me)?|explain|describe)\b[\s\S]{0,180}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b[\s\S]{0,180}\b(?:available|enabled|installed|connected|do\s+you\s+have|can\s+you\s+(?:access|call|use|do))\b/i;
 
+function markFirstVisibleStreamToken(timing: ChatStreamTiming | undefined, visibleContent: string): ChatStreamTiming | undefined {
+  if (!timing || timing.firstVisibleTokenAt || !visibleContent.trim()) {
+    return timing;
+  }
+
+  const now = new Date();
+  const startedAtMs = Date.parse(timing.requestStartedAt);
+  const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, now.getTime() - startedAtMs) : undefined;
+
+  return {
+    ...timing,
+    firstVisibleTokenAt: now.toISOString(),
+    timeToFirstVisibleTokenMs: elapsedMs,
+  };
+}
+
 export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, {
     approvalDecisions,
     approvedPlanExecution,
+    automationScope,
     chatId,
     controller,
     messageId,
@@ -44,6 +61,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     onExternalUpdate,
     previousToolCalls,
     prompt,
+    providerSettingsOverrides,
     requestId,
     runId,
     resumeToolCallContent,
@@ -54,6 +72,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
   }: {
     approvalDecisions?: Record<string, AgentApprovalDecision>;
     approvedPlanExecution?: ApprovedPlanExecutionContext;
+    automationScope?: ToolExecutionContext["automationScope"];
     chatId: string;
     controller: AbortController;
     messageId: string;
@@ -62,6 +81,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     onExternalUpdate?: (update: DiscordStreamUpdate) => void;
     previousToolCalls?: ChatToolCall[];
     prompt: string;
+    providerSettingsOverrides?: Partial<ProviderSettings>;
     requestId: number;
     runId?: string;
     resumeToolCallContent?: string;
@@ -102,13 +122,13 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     let emptyScaffoldRecoveryUsed = false;
 
     let passIndex = 0;
-    const baseRuntimeSettings = applyToolOverrides(createPromptAwareProviderSettings(prompt, {}, runtimeChat));
+    const baseRuntimeSettings = applyToolOverrides(createPromptAwareProviderSettings(prompt, providerSettingsOverrides ?? {}, runtimeChat));
     const toolExecutionPolicy = createContextBoundLocalToolExecutionPolicy(STANDARD_LOCAL_COMPUTER_TOOL_EXECUTION_POLICY);
     const runtimeWebSearchSettings = getRuntimeWebSearchSettings(providerSettings, webSearchSettingsOverride);
     const runtimeWebSearchMaxResults = runtimeWebSearchSettings.maxResults;
     const simpleLocalScaffoldRequest = isSimpleLocalScaffoldRequest(prompt);
-    const maxToolPasses = simpleLocalScaffoldRequest ? 5 : MAX_LOCAL_TOOL_PASSES;
-    const maxToolExecutions = simpleLocalScaffoldRequest ? 16 : MAX_LOCAL_TOOL_EXECUTIONS;
+    const maxToolPasses = Math.max(1, Math.min(automationScope?.maxModelLoops ?? (simpleLocalScaffoldRequest ? 5 : MAX_LOCAL_TOOL_PASSES), simpleLocalScaffoldRequest ? 5 : MAX_LOCAL_TOOL_PASSES));
+    const maxToolExecutions = Math.max(0, Math.min(automationScope?.maxToolCalls ?? (simpleLocalScaffoldRequest ? 16 : MAX_LOCAL_TOOL_EXECUTIONS), simpleLocalScaffoldRequest ? 16 : MAX_LOCAL_TOOL_EXECUTIONS));
     const bridgeRegistry = createDefaultToolRegistry();
     const bridgeToolResultMessages: ToolResultMessage[] = [];
     let bridgeReasoningState: ProviderReasoningState | undefined;
@@ -124,6 +144,20 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     const bridgeTelemetry = runId
       ? (event) => updateCodingRun((run) => withCodingTelemetryEvent(run, event))
       : undefined;
+
+    function createActiveBridgeToolPreviews(calls: ToolCallRequest[], activePassIndex: number): ChatToolCall[] {
+      return stampLocalToolCallIds(
+        calls.map((call) =>
+          createBridgeChatToolCall(
+            call,
+            bridgeRegistry.get(call.name),
+            { content: "Preparing tool call.", ok: true },
+            "active",
+          ),
+        ),
+        activePassIndex,
+      );
+    }
 
     function maybeFinishSimpleLocalScaffold(): typeof finalResponse | null {
       if (!simpleLocalScaffoldRequest) {
@@ -388,7 +422,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         status: allToolCalls.length > 0 ? "Writing final answer from gathered tool results..." : "Continuing from the work log...",
       });
 
-      const baseSynthesisSettings = createFinalOnlyProviderSettings(prompt, runtimeChat);
+      const baseSynthesisSettings = createFinalOnlyProviderSettings(prompt, runtimeChat, providerSettingsOverrides ?? {});
       const synthesisSettings: ProviderSettings = {
         ...baseSynthesisSettings,
         maxTokens: Math.max(baseSynthesisSettings.maxTokens, LOCAL_TOOL_FINAL_MIN_TOKENS),
@@ -736,6 +770,63 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         : undefined;
     }
 
+    function createBridgeRunVisualEvidenceMessages(run: ToolBridgeExecutionBatch): ChatMessage[] {
+      const attachments = findBridgeRunVisualEvidenceAttachments(run);
+
+      if (attachments.length === 0) {
+        return [];
+      }
+
+      const names = attachments.map((attachment) => attachment.name).join(", ");
+
+      return [
+        createMessage(
+          "user",
+          [
+            "BROWSER SCREENSHOT EVIDENCE",
+            `The attached image${attachments.length === 1 ? "" : "s"} came from browser_screenshot_capture in this same app tool run: ${names}.`,
+            "Use the screenshot as visual evidence for layout, rendering, browser UI, and before/after verification. If more work is needed, continue with file edits, terminal checks, browser console reads, and another screenshot.",
+          ].join("\n\n"),
+          undefined,
+          undefined,
+          attachments,
+        ),
+      ];
+    }
+
+    function findBridgeRunVisualEvidenceAttachments(run: ToolBridgeExecutionBatch): ChatAttachment[] {
+      const artifacts = findBridgeRunArtifacts(run);
+
+      return artifacts
+        .filter((artifact) => artifact.kind === "image" && typeof artifact.url === "string" && artifact.url.startsWith("data:image/"))
+        .slice(0, 4)
+        .map((artifact, index) => {
+          const mimeType = artifact.mimeType || readDataUrlMimeType(artifact.url) || "image/png";
+
+          return {
+            createdAt: new Date().toISOString(),
+            dataUrl: artifact.url!,
+            height: artifact.height,
+            id: artifact.id || `bridge-visual-evidence-${index + 1}`,
+            kind: "image",
+            mimeType,
+            name: artifact.title || `Browser screenshot ${index + 1}`,
+            size: artifact.sizeBytes ?? estimateDataUrlBytes(artifact.url!),
+            width: artifact.width,
+          };
+        });
+    }
+
+    function readDataUrlMimeType(dataUrl: string) {
+      return dataUrl.match(/^data:([^;,]+)[;,]/i)?.[1];
+    }
+
+    function estimateDataUrlBytes(dataUrl: string) {
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",").pop() ?? "" : dataUrl;
+
+      return Math.max(0, Math.floor((base64.length * 3) / 4));
+    }
+
     function normalizeBridgeSource(source: unknown, index: number): ChatSource[] {
       if (!source || typeof source !== "object" || Array.isArray(source)) {
         return [];
@@ -1011,18 +1102,19 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           continue;
         }
 
-        const shell = createBridgeApprovalShell(call, tool);
+        const normalizedCall = validation.args ? { ...call, arguments: validation.args } : call;
+        const shell = createBridgeApprovalShell(normalizedCall, tool);
         const reusableDecision = runtimeDecisions[createApprovalSessionDecisionKey(shell)];
 
         if (reusableDecision?.status === "approved") {
           continue;
         }
 
-        const preview = await createBridgeApprovalPreview(tool, call, bridgeContext);
-        const approval = createBridgeApprovalShell(call, tool, preview);
+        const preview = await createBridgeApprovalPreview(tool, normalizedCall, bridgeContext);
+        const approval = createBridgeApprovalShell(normalizedCall, tool, preview);
         approvals.push(approval);
         waitingToolCalls.push(createBridgeChatToolCall(
-          call,
+          normalizedCall,
           tool,
           { content: preview || permission.reason || "Approval required before this tool action can run.", ok: true },
           "waiting_approval",
@@ -1088,16 +1180,17 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           continue;
         }
 
-        const preview = await createBridgeApprovalPreview(tool, call, bridgeContext);
+        const normalizedCall = validation.args ? { ...call, arguments: validation.args } : call;
+        const preview = await createBridgeApprovalPreview(tool, normalizedCall, bridgeContext);
         const approval = {
-          ...createBridgeApprovalShell(call, tool, preview),
+          ...createBridgeApprovalShell(normalizedCall, tool, preview),
           detail: "Review the revised action before it runs. Gilbert rebuilt this approval after the edit request so nothing can send or change silently.",
           messageId,
         };
 
         approvals.push(approval);
         waitingToolCalls.push(createBridgeChatToolCall(
-          call,
+          normalizedCall,
           tool,
           { content: preview || "Review the revised action before it runs.", ok: true },
           "waiting_approval",
@@ -1225,7 +1318,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     }
 
     function cleanRevisedEmailBody(value: string) {
-      return stripMarkdownFormatting(value)
+      return value
         .replace(/^\s*```(?:text|markdown)?\s*/i, "")
         .replace(/\s*```\s*$/i, "")
         .trim();
@@ -1314,6 +1407,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const activeProgress = createLocalComputerProgress("active", "Running approved tool action");
       const resumeBridgeContext: ToolExecutionContext = {
         agentEnvironment: baseRuntimeSettings.agentEnvironment ?? generalSettings.agentEnvironment,
+        automationScope,
         memorySearch,
         model: baseRuntimeSettings.model,
         permissionMode: workspaceSettings.permissionMode,
@@ -1325,18 +1419,21 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         webSearchSettings: runtimeWebSearchSettings,
         workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
       };
-      let liveToolCalls: ChatToolCall[] = [];
+      const approvedBridgeResumeCalls = applyEditedBridgeApprovalArgs(approvedBridgeResume.calls, submittedDecision);
+      const activeApprovedBridgeToolCalls = createActiveBridgeToolPreviews(approvedBridgeResumeCalls, passIndex);
+      let liveToolCalls: ChatToolCall[] = activeApprovedBridgeToolCalls;
 
       updateGeneratedMessage(chatId, messageId, (message) => ({
         ...withStreamingWorkThinking(message, "I’m resuming the approved tool action now.", "active"),
         agentRunStatus: "running",
         content: "",
         progress: withLocalComputerProgress(activeProgress, message.progress),
+        toolCalls: activeApprovedBridgeToolCalls.length > 0 ? activeApprovedBridgeToolCalls : message.toolCalls,
       }));
 
       const bridgeRun = await executeToolBridgeCalls({
         approval: () => ({ approved: true }),
-        calls: applyEditedBridgeApprovalArgs(approvedBridgeResume.calls, submittedDecision),
+        calls: approvedBridgeResumeCalls,
         context: resumeBridgeContext,
         onToolCallUpdate: (toolCall) => {
           const [stampedToolCall] = stampLocalToolCallIds([toolCall], passIndex);
@@ -1381,6 +1478,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           "If the approved action failed because the tool arguments were invalid JSON or failed validation, retry with corrected valid JSON instead of stopping on the raw error.",
           "If no more work is needed, finish the user's request normally.",
         ].join("\n")),
+        ...createBridgeRunVisualEvidenceMessages(bridgeRun),
       ];
       passIndex += 1;
       resumeToolCallContent = undefined;
@@ -1518,7 +1616,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const latestUserPromptNeedsWebSearch = shouldAttachWebSearch(prompt);
       const freshLocalEvidenceNeeded = needsFreshLocalToolEvidence(bridgeSelectionPrompt, workspaceSettings.enabled);
       const freshLocalEvidenceRequiredForPass = freshLocalEvidenceNeeded && allToolCalls.length === 0 && !toolBudgetReached;
-      const runtimeSettings = applyToolOverrides(toolBudgetReached ? createFinalOnlyProviderSettings(prompt, runtimeChat) : createPromptAwareProviderSettings(prompt, {}, runtimeChat));
+      const runtimeSettings = applyToolOverrides(toolBudgetReached ? createFinalOnlyProviderSettings(prompt, runtimeChat, providerSettingsOverrides ?? {}) : createPromptAwareProviderSettings(prompt, providerSettingsOverrides ?? {}, runtimeChat));
       const minPassTokens = localProgress ? LOCAL_TOOL_FINAL_MIN_TOKENS : 0;
       const passSettings: ProviderSettings = minPassTokens > 0
         ? {
@@ -1544,6 +1642,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         (!workspaceToolCallRequiredForPass || latestUserPromptNeedsWebSearch);
       const bridgeContext: ToolExecutionContext = {
         agentEnvironment: passSettings.agentEnvironment ?? generalSettings.agentEnvironment,
+        automationScope,
         memorySearch,
         model: passSettings.model,
         permissionMode: workspaceSettings.permissionMode,
@@ -1811,11 +1910,13 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             const visibleContent = shouldHideVisibleContent ? "" : sanitizedContent;
             const workThinkingContent = shouldHideVisibleContent && rawSanitizedContent.trim() ? rawSanitizedContent : "";
             const hostThinkingContent = workThinkingContent || createVisibleToolPlanThinking([...streamingToolCalls, ...streamingBridgeToolCalls]);
+            const streamTiming = markFirstVisibleStreamToken(snapshot.streamTiming, visibleContent);
 
             updateGeneratedMessage(chatId, messageId, (message) => ({
               ...(hostThinkingContent ? withStreamingWorkThinking(message, hostThinkingContent, "active") : completeStreamingWorkThinking(message)),
               content: visibleContent,
               progress: streamingLocalProgress ? withLocalComputerProgress(streamingLocalProgress, message.progress) : message.progress,
+              streamTiming: streamTiming ?? message.streamTiming,
               thinking: message.thinking,
               toolCalls: streamingToolCalls.length > 0
                 ? [...allToolCalls, ...streamingToolCalls]
@@ -1921,18 +2022,13 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           return finalResponse;
         }
 
+        const activeBridgeToolCalls = createActiveBridgeToolPreviews(bridgeToolCalls, passIndex);
+        liveBridgeToolCalls = activeBridgeToolCalls;
         updateGeneratedMessage(chatId, messageId, (message) => ({
-          ...withStreamingWorkThinking(message, createVisibleToolPlanThinking(bridgeToolCalls.map((call) =>
-            createBridgeChatToolCall(
-              call,
-              bridgeRegistry.get(call.name),
-              { content: "Preparing tool call.", ok: true },
-              "active",
-            ),
-          )), "active"),
+          ...withStreamingWorkThinking(message, createVisibleToolPlanThinking(activeBridgeToolCalls), "active"),
           content: "",
           progress: withLocalComputerProgress(activeProgress, message.progress),
-          toolCalls: allToolCalls.length > 0 ? allToolCalls : message.toolCalls,
+          toolCalls: [...allToolCalls, ...activeBridgeToolCalls],
         }));
         onExternalUpdate?.({
           progress: activeProgress,
@@ -1991,6 +2087,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       messages = [
         ...messages,
         createMessage("user", createBridgeToolContinuationInstruction(bridgeRun)),
+        ...createBridgeRunVisualEvidenceMessages(bridgeRun),
       ];
       passIndex += 1;
       continue;
@@ -2004,10 +2101,13 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       );
       const assistantHasLocalToolCalls = hasLocalComputerToolCalls(assistantToolRequestContent, toolExecutionPolicy);
 
+      const finalVisibleContent = assistantHasLocalToolCalls ? "" : stripLeadingToolPreludeForDisplay(sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy));
+
       finalResponse = {
         artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-        content: assistantHasLocalToolCalls ? "" : stripLeadingToolPreludeForDisplay(sanitizeLocalToolCallsForDisplay(assistantResponse.content, toolExecutionPolicy)),
+        content: finalVisibleContent,
         sources: allSources.length > 0 ? allSources : undefined,
+        streamTiming: markFirstVisibleStreamToken(assistantResponse.streamTiming, finalVisibleContent),
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       };
 

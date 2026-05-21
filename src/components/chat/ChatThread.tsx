@@ -8,6 +8,7 @@ import { MessageBlock } from "./MessageBlock";
 import { PlanReviewCard } from "./PlanReviewCard";
 import { isInterruptedAssistantMessage } from "../../app/chatRuntime";
 import { extractInlineThinking } from "../../lib/inlineThinkingExtractor";
+import { scheduleIdleTask } from "../../lib/idleTask";
 import { getSavedPlanContent, isPlanExecutionContent } from "../../lib/planReview";
 import { stripVisibleToolProtocol } from "../../lib/visibleToolProtocol";
 import type { AppInfo } from "../../types/app";
@@ -21,6 +22,8 @@ const INTERNAL_ASSISTANT_STATUS_MESSAGES = new Set([
 ]);
 
 const THREAD_BOTTOM_THRESHOLD_PX = 96;
+const INITIAL_THREAD_RENDER_MESSAGE_COUNT = 40;
+const THREAD_HISTORY_RENDER_INCREMENT = 80;
 
 interface ChatThreadProps {
   active?: boolean;
@@ -62,8 +65,21 @@ function ChatThreadComponent({
   const latestUserMessageKeyRef = useRef<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
+  const [historyRenderCounts, setHistoryRenderCounts] = useState<ReadonlyMap<string, number>>(
+    () => new Map([[chat.id, getInitialHistoryRenderCount(chat.messages.length)]]),
+  );
   const latestUserMessageKey = getLatestUserMessageKey(chat);
   const scrollAnchorMessage = getScrollAnchorMessage(chat);
+  const renderedMessageCount = Math.min(
+    chat.messages.length,
+    historyRenderCounts.get(chat.id) ?? getInitialHistoryRenderCount(chat.messages.length),
+  );
+  const historyHydrated = renderedMessageCount >= chat.messages.length;
+  const visibleMessageOffset = Math.max(0, chat.messages.length - renderedMessageCount);
+  const visibleMessages = useMemo(
+    () => visibleMessageOffset === 0 ? chat.messages : chat.messages.slice(visibleMessageOffset),
+    [chat.messages, visibleMessageOffset],
+  );
   const regenerableMessageIds = useMemo(() => getRegenerableMessageIds(chat.messages), [chat.messages]);
   const streamMarker = scrollAnchorMessage
     ? `${chat.messages.length}:${scrollAnchorMessage.id}:${scrollAnchorMessage.content.length}:${scrollAnchorMessage.responseThinking?.length ?? 0}:${createMessageActivityMarker(scrollAnchorMessage)}:${scrollAnchorMessage.isStreaming ? "1" : "0"}`
@@ -117,6 +133,32 @@ function ChatThreadComponent({
     setThreadBottomState(true);
     scrollToThreadBottom();
   }, [active, chat.id]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    ensureHistoryRenderCount(chat.id, getInitialHistoryRenderCount(chat.messages.length));
+  }, [active, chat.id, chat.messages.length]);
+
+  useEffect(() => {
+    if (!active || historyHydrated) {
+      return;
+    }
+
+    return scheduleIdleTask(() => {
+      increaseRenderedHistory(chat.id, THREAD_HISTORY_RENDER_INCREMENT);
+    }, 1_800);
+  }, [active, chat.id, historyHydrated, renderedMessageCount]);
+
+  useEffect(() => {
+    if (!active || !shouldStickToBottomRef.current) {
+      return;
+    }
+
+    scrollToThreadBottom();
+  }, [active, chat.id, renderedMessageCount]);
 
   useEffect(() => {
     if (!active) {
@@ -224,6 +266,9 @@ function ChatThreadComponent({
 
     const currentScrollTop = thread.scrollTop;
     const scrollingUp = currentScrollTop < lastThreadScrollTopRef.current - 1;
+    if (scrollingUp && !historyHydrated && currentScrollTop < 260) {
+      increaseRenderedHistory(chat.id, THREAD_HISTORY_RENDER_INCREMENT * 2);
+    }
     const atBottom = !scrollingUp && isThreadNearBottom(thread);
     lastThreadScrollTopRef.current = currentScrollTop;
     shouldStickToBottomRef.current = atBottom;
@@ -258,6 +303,33 @@ function ChatThreadComponent({
       window.cancelAnimationFrame(scrollFollowupFrameRef.current);
       scrollFollowupFrameRef.current = null;
     }
+  }
+
+  function ensureHistoryRenderCount(chatId: string, minimumCount: number) {
+    setHistoryRenderCounts((currentCounts) => {
+      if ((currentCounts.get(chatId) ?? 0) >= minimumCount) {
+        return currentCounts;
+      }
+
+      const nextCounts = new Map(currentCounts);
+      nextCounts.set(chatId, minimumCount);
+      return nextCounts;
+    });
+  }
+
+  function increaseRenderedHistory(chatId: string, increment: number) {
+    setHistoryRenderCounts((currentCounts) => {
+      const currentCount = currentCounts.get(chatId) ?? getInitialHistoryRenderCount(chat.messages.length);
+      const nextCount = Math.min(chat.messages.length, currentCount + increment);
+
+      if (nextCount <= currentCount) {
+        return currentCounts;
+      }
+
+      const nextCounts = new Map(currentCounts);
+      nextCounts.set(chatId, nextCount);
+      return nextCounts;
+    });
   }
 
   function handleStartEditMessage(messageId: string) {
@@ -311,10 +383,12 @@ function ChatThreadComponent({
     <div className="chat-thread-shell">
       <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
         <div ref={threadContentRef} className="chat-thread-content">
-          {chat.messages.map((message, messageIndex) => {
+          {visibleMessages.map((message, visibleMessageIndex) => {
             if (message.status === "queued") {
               return null;
             }
+
+            const messageIndex = visibleMessageOffset + visibleMessageIndex;
 
             return (
               <ChatMessageRow
@@ -407,6 +481,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const showPlanReview = shouldShowPlanReviewCard(message);
   const savedPlanContent = message.role === "assistant" ? getSavedPlanContent(message) : "";
   const showPlanExecutionContent = message.role === "assistant" && showPlanReview && isPlanExecutionContent(message, displayMessage.content);
+  const showResponseRecoveryActions = message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerate;
   const isEditingUserMessage = message.role === "user" && editingMessageId === message.id;
   const activitySnapshot = message.role === "assistant"
     ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
@@ -478,9 +553,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
               onEditMessage={onEditUserMessage ? onStartEditMessage : undefined}
               onForkFromMessage={onForkFromMessage}
               onMessageFeedback={onMessageFeedback}
+              onRegenerateResponse={!showResponseRecoveryActions && canRegenerate ? onRegenerateResponse : undefined}
             />
           )}
-          {message.role === "assistant" && !message.isStreaming && isInterruptedAssistantMessage(message) && canRegenerate ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
+          {showResponseRecoveryActions ? <ResponseRecoveryActions messageId={message.id} onRegenerateResponse={onRegenerateResponse} /> : null}
         </MessageBlock>
       ) : null}
     </Fragment>
@@ -940,6 +1016,10 @@ function getLatestUserMessageKey(chat: ChatSummary) {
 function isThreadNearBottom(thread: HTMLDivElement) {
   const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
   return distanceFromBottom <= THREAD_BOTTOM_THRESHOLD_PX;
+}
+
+function getInitialHistoryRenderCount(messageCount: number) {
+  return Math.min(messageCount, INITIAL_THREAD_RENDER_MESSAGE_COUNT);
 }
 
 function createMessageActivityMarker(message: ChatMessage) {

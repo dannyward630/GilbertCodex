@@ -19,6 +19,7 @@ const CHATS_STORAGE_KEY: &str = "gilbert-codex.chats.v1";
 const PROVIDER_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.provider-settings.v1";
 const DISCORD_BRIDGE_STORAGE_KEY: &str = "gilbert-codex.discord-bridge.v1";
 const MAPBOX_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.mapbox-settings.v1";
+const GOOGLE_OAUTH_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.google-oauth-settings.v1";
 const GITHUB_ACCOUNT_STORAGE_KEY: &str = "github-account.v1";
 const MCP_SERVERS_STORAGE_KEY: &str = "mcp-servers.v1";
 const AGENT_RUNS_STORAGE_KEY: &str = "agent-runs.v1";
@@ -770,6 +771,9 @@ fn prepare_storage_value(
         MAPBOX_SETTINGS_STORAGE_KEY => {
             protect_mapbox_settings(namespace, key, value, &mut references)?
         }
+        GOOGLE_OAUTH_SETTINGS_STORAGE_KEY => {
+            protect_google_oauth_settings(namespace, key, value, &mut references)?
+        }
         GITHUB_ACCOUNT_STORAGE_KEY => {
             protect_github_account(namespace, key, value, &mut references)?
         }
@@ -788,6 +792,7 @@ fn hydrate_storage_value(namespace: &str, key: &str, value: &str) -> Result<Stri
         PROVIDER_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         DISCORD_BRIDGE_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         MAPBOX_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
+        GOOGLE_OAUTH_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         GITHUB_ACCOUNT_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         MCP_SERVERS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         _ => Ok(value.to_string()),
@@ -882,6 +887,30 @@ fn protect_mapbox_settings(
 
     serde_json::to_string(&json_value)
         .map_err(|error| format!("Could not serialize protected Mapbox settings: {error}"))
+}
+
+fn protect_google_oauth_settings(
+    namespace: &str,
+    storage_key: &str,
+    value: &str,
+    references: &mut Vec<SecureSecretReference>,
+) -> Result<String, String> {
+    let Ok(mut json_value) = serde_json::from_str::<Value>(value) else {
+        return Ok(value.to_string());
+    };
+
+    if let Some(client_secret) = json_value.get_mut("clientSecret") {
+        protect_json_string_secret(
+            namespace,
+            storage_key,
+            "clientSecret",
+            client_secret,
+            references,
+        )?;
+    }
+
+    serde_json::to_string(&json_value)
+        .map_err(|error| format!("Could not serialize protected Google OAuth settings: {error}"))
 }
 
 fn protect_github_account(

@@ -54,10 +54,19 @@ import {
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
-import { MODEL_PROVIDERS, buildProviderModelOptions, prefersLiveModelCatalog, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
+import { MODEL_PROVIDERS, buildProviderModelOptions, getProviderApiKeyForProvider, prefersLiveModelCatalog, supportsModelInputModality, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
+import {
+  cancelNativeDictation,
+  getNativeDictationAudioLevel,
+  isTauriDesktopRuntime,
+  prepareNativeDictation,
+  startNativeDictation,
+  stopNativeDictation,
+  type NativeDictationStatus,
+} from "../../app/tauriClient";
 import { SkillMentionPicker } from "../../features/plugins/SkillMentionPicker";
 import { getSkillMentionMatches, type PluginSkillOption } from "../../features/plugins/pluginCatalog";
 import {
@@ -76,7 +85,13 @@ import type { CreateProjectOptions, ProjectSummary } from "../../types/project";
 import type { AppFollowUpBehavior, ProviderSettings, ThinkingSettings, WebSearchSettings } from "../../types/settings";
 
 type ComposerMenu = "attach" | "context" | "model" | "workspace" | null;
-type VoiceState = "blocked" | "error" | "idle" | "listening" | "requesting" | "unsupported";
+export type VoiceState = "blocked" | "error" | "idle" | "listening" | "requesting" | "transcribing" | "unsupported";
+const DICTATION_WAVE_BAR_COUNT = 128;
+const DICTATION_WAVE_BARS = Array.from({ length: DICTATION_WAVE_BAR_COUNT }, (_, index) => index);
+const DICTATION_WAVE_FLOOR = 0.11;
+const DICTATION_WAVE_POLL_INTERVAL_MS = 55;
+
+type BrowserAudioContextConstructor = new () => AudioContext;
 
 interface BuiltInSpeechRecognitionAlternative {
   transcript: string;
@@ -268,11 +283,31 @@ function createLiveModelCatalogRequestKey(settings: ProviderSettings) {
 }
 
 function getLiveModelCatalogProviders(settings: ProviderSettings) {
-  return MODEL_PROVIDERS.filter((provider) => shouldLoadLiveModelCatalogProvider(provider.id, settings.provider));
+  return MODEL_PROVIDERS.filter((provider) => {
+    if (!shouldLoadLiveModelCatalogProvider(provider.id, settings.provider)) {
+      return false;
+    }
+
+    if (provider.requiresApiKey) {
+      return Boolean(getProviderApiKeyForProvider(settings, provider.id).trim());
+    }
+
+    return true;
+  });
 }
 
 export function shouldLoadLiveModelCatalogProvider(provider: ProviderSettings["provider"], activeProvider: ProviderSettings["provider"]) {
   return usesLiveModelCatalog(provider) && (provider === "openrouter" || provider === "9router" || provider === activeProvider || prefersLiveModelCatalog(provider));
+}
+
+export function shouldShowMediaFallbackNotice(attachments: ChatAttachment[], provider: ProviderSettings["provider"], model: string) {
+  return attachments.some((attachment) => {
+    if (!isMediaAttachment(attachment)) {
+      return false;
+    }
+
+    return !supportsModelInputModality(provider, model, isVideoAttachment(attachment) ? "video" : "image");
+  });
 }
 
 function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
@@ -373,8 +408,14 @@ function ChatComposerComponent({
   const draftChangeTimerRef = useRef<number | null>(null);
   const pendingDraftChangeRef = useRef<{ draft: ChatComposerDraft | null; onDraftChange?: (draft: ChatComposerDraft | null) => void } | null>(null);
   const voiceBaseMessageRef = useRef("");
+  const voiceStartedAtRef = useRef<number | null>(null);
+  const voiceNativeActiveRef = useRef(false);
   const voiceRecognitionRef = useRef<BuiltInSpeechRecognition | null>(null);
   const voiceRequestRef = useRef(0);
+  const voicePointerStartedRef = useRef(false);
+  const voiceWaveAudioContextRef = useRef<AudioContext | null>(null);
+  const voiceWaveFrameRef = useRef<number | null>(null);
+  const voiceWaveStreamRef = useRef<MediaStream | null>(null);
   const [message, setMessage] = useState("");
   const [contextDraftMessage, setContextDraftMessage] = useState("");
   const deferredMessage = useDeferredValue(contextDraftMessage);
@@ -398,19 +439,46 @@ function ChatComposerComponent({
   const [gitCommitMessage, setGitCommitMessage] = useState("");
   const [gitBranchName, setGitBranchName] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
+  const [voiceElapsedMs, setVoiceElapsedMs] = useState(0);
+  const [voiceWaveLevels, setVoiceWaveLevels] = useState(() => createDictationWaveRestingLevels());
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const voiceBusy = voiceState === "requesting" || voiceState === "transcribing";
+  const voiceActive = voiceState === "listening" || voiceBusy;
   const readyAttachments = useMemo(() => attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : [])), [attachments]);
-  const hasMediaAttachment = useMemo(() => readyAttachments.some(isMediaAttachment), [readyAttachments]);
   const hasPendingAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "loading"), [attachments]);
   const hasFailedAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "error"), [attachments]);
-  const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
+  const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments && !voiceActive;
   const selectedModel = useMemo(
     () => modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]),
     [liveModelCatalogs, model, providerSettings.provider],
   );
+  const showMediaFallbackNotice = useMemo(
+    () => shouldShowMediaFallbackNotice(readyAttachments, providerSettings.provider, selectedModel.value),
+    [providerSettings.provider, readyAttachments, selectedModel.value],
+  );
   const webSearchProviderLabel = formatWebSearchProviderLabel(webSearch.provider);
   const imageGenerationEnabled = providerSettings.tools.imageGeneration;
+  const hasConversationMessages = chat.messages.length > 0;
+  const isPlanningGeneration = useMemo(
+    () =>
+      isGenerating &&
+      chat.messages.some(
+        (chatMessage) =>
+          chatMessage.role === "assistant" &&
+          chatMessage.isStreaming &&
+          (chatMessage.mode === "plan" || Boolean(chatMessage.planning)),
+      ),
+    [chat.messages, isGenerating],
+  );
+  const placeholderOptions = useMemo(
+    () => getComposerPlaceholderOptions({ hasConversationMessages, isGenerating, isPlanningGeneration, planModeEnabled: planMode.enabled }),
+    [hasConversationMessages, isGenerating, isPlanningGeneration, planMode.enabled],
+  );
+  const placeholderKey = placeholderOptions.join("\n");
+  const activePlaceholder = placeholderOptions[placeholderIndex % placeholderOptions.length] ?? "Ask Gilbert Codex to build, inspect, or change this project";
+  const showPlaceholderCycle = !message.trim();
   const estimatedContextUsage = useMemo(
     () =>
       estimateModelProviderContextWindowUsage({
@@ -580,12 +648,224 @@ function ChatComposerComponent({
     };
   }, []);
 
+  useEffect(() => {
+    if (!active || !isTauriDesktopRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+
+    const prepare = () => {
+      if (voiceNativeActiveRef.current) {
+        return;
+      }
+
+      prepareNativeDictation()
+      .then((status) => {
+        if (disposed || !mountedRef.current) {
+          return;
+        }
+
+        if (status.state === "blocked" || status.state === "error") {
+          setVoiceStatus(status.message);
+          setVoiceState(status.state);
+        }
+      })
+      .catch(() => {
+        // The composer reports native dictation failures when the user starts dictation.
+      });
+    };
+
+    prepare();
+    const interval = window.setInterval(prepare, 30_000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [active]);
+
   useDismissableLayer({
     active: openMenu !== null,
     ignoreSelectors: [".model-selector-popover"],
     onDismiss: () => setOpenMenu(null),
     refs: [composerRef],
   });
+
+  useEffect(() => {
+    setPlaceholderIndex(0);
+
+    if (placeholderOptions.length <= 1 || typeof window === "undefined") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setPlaceholderIndex((currentIndex) => (currentIndex + 1) % placeholderOptions.length);
+    }, 3_600);
+
+    return () => window.clearInterval(interval);
+  }, [placeholderKey, placeholderOptions.length]);
+
+  useEffect(() => {
+    if (!voiceActive || typeof window === "undefined") {
+      voiceStartedAtRef.current = null;
+      setVoiceElapsedMs(0);
+      return;
+    }
+
+    if (voiceStartedAtRef.current === null) {
+      voiceStartedAtRef.current = Date.now();
+    }
+
+    const updateElapsedTime = () => {
+      setVoiceElapsedMs(Date.now() - (voiceStartedAtRef.current ?? Date.now()));
+    };
+
+    updateElapsedTime();
+    const interval = window.setInterval(updateElapsedTime, 1_000);
+
+    return () => window.clearInterval(interval);
+  }, [voiceActive]);
+
+  useEffect(() => {
+    const closeBrowserWaveformCapture = () => {
+      if (voiceWaveFrameRef.current !== null) {
+        window.cancelAnimationFrame(voiceWaveFrameRef.current);
+        voiceWaveFrameRef.current = null;
+      }
+
+      const stream = voiceWaveStreamRef.current;
+      voiceWaveStreamRef.current = null;
+      stream?.getTracks().forEach((track) => track.stop());
+
+      const audioContext = voiceWaveAudioContextRef.current;
+      voiceWaveAudioContextRef.current = null;
+      if (audioContext) {
+        void audioContext.close().catch(() => undefined);
+      }
+    };
+
+    if (!voiceActive || typeof window === "undefined") {
+      closeBrowserWaveformCapture();
+      setVoiceWaveLevels(createDictationWaveRestingLevels());
+      return;
+    }
+
+    let disposed = false;
+    let fallbackInterval: number | null = null;
+    setVoiceWaveLevels(createDictationWaveRestingLevels());
+
+    if (isTauriDesktopRuntime()) {
+      let polling = false;
+      const appendNativeLevel = () => {
+        if (polling || disposed) {
+          return;
+        }
+
+        polling = true;
+        getNativeDictationAudioLevel()
+          .then((response) => {
+            if (!disposed) {
+              setVoiceWaveLevels((currentLevels) => pushDictationWaveLevel(currentLevels, response.level));
+            }
+          })
+          .catch(() => {
+            if (!disposed) {
+              setVoiceWaveLevels((currentLevels) => pushDictationWaveLevel(currentLevels, 0));
+            }
+          })
+          .finally(() => {
+            polling = false;
+          });
+      };
+
+      appendNativeLevel();
+      const interval = window.setInterval(appendNativeLevel, DICTATION_WAVE_POLL_INTERVAL_MS);
+      return () => {
+        disposed = true;
+        window.clearInterval(interval);
+      };
+    }
+
+    const startQuietFallback = () => {
+      if (fallbackInterval !== null) {
+        return;
+      }
+
+      fallbackInterval = window.setInterval(() => {
+        setVoiceWaveLevels((currentLevels) => pushDictationWaveLevel(currentLevels, 0));
+      }, DICTATION_WAVE_POLL_INTERVAL_MS);
+    };
+
+    const AudioContextConstructor = getBrowserAudioContextConstructor();
+    const mediaDevices = navigator.mediaDevices;
+    if (!AudioContextConstructor || !mediaDevices?.getUserMedia) {
+      startQuietFallback();
+      return () => {
+        disposed = true;
+        if (fallbackInterval !== null) {
+          window.clearInterval(fallbackInterval);
+        }
+        closeBrowserWaveformCapture();
+      };
+    }
+
+    void mediaDevices
+      .getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+      .then((stream) => {
+        if (disposed) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        const audioContext = new AudioContextConstructor();
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.72;
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+        const samples = new Uint8Array(analyser.fftSize);
+        let lastUpdate = 0;
+
+        voiceWaveStreamRef.current = stream;
+        voiceWaveAudioContextRef.current = audioContext;
+
+        const renderWaveform = (timestamp: number) => {
+          if (disposed) {
+            return;
+          }
+
+          if (timestamp - lastUpdate >= DICTATION_WAVE_POLL_INTERVAL_MS) {
+            analyser.getByteTimeDomainData(samples);
+            setVoiceWaveLevels((currentLevels) => pushDictationWaveLevel(currentLevels, calculateDictationWaveLevel(samples)));
+            lastUpdate = timestamp;
+          }
+
+          voiceWaveFrameRef.current = window.requestAnimationFrame(renderWaveform);
+        };
+
+        voiceWaveFrameRef.current = window.requestAnimationFrame(renderWaveform);
+      })
+      .catch(() => {
+        if (!disposed) {
+          startQuietFallback();
+        }
+      });
+
+    return () => {
+      disposed = true;
+      if (fallbackInterval !== null) {
+        window.clearInterval(fallbackInterval);
+      }
+      closeBrowserWaveformCapture();
+    };
+  }, [voiceActive]);
 
   useEffect(() => {
     if (!active) {
@@ -765,14 +1045,14 @@ function ChatComposerComponent({
 
       if (dictationToggleHotkey && matchesHotkey(event, dictationToggleHotkey)) {
         event.preventDefault();
-        handleVoiceToggle();
+        void handleVoiceToggle();
         return;
       }
 
       if (dictationHoldHotkey && matchesHotkey(event, dictationHoldHotkey)) {
         event.preventDefault();
         if (voiceState !== "listening" && voiceState !== "requesting") {
-          handleVoiceToggle();
+          void handleVoiceToggle();
         }
       }
     }
@@ -784,7 +1064,7 @@ function ChatComposerComponent({
 
       event.preventDefault();
       if (voiceState === "listening" || voiceState === "requesting") {
-        handleVoiceToggle();
+        void handleVoiceToggle();
       }
     }
 
@@ -800,9 +1080,7 @@ function ChatComposerComponent({
   providerSettingsRef.current = providerSettings;
 
   useEffect(() => {
-    const subscriptionProviderReady =
-      providerSettings.provider === "9router" ||
-      Boolean(providerSettings.providerModels["9router"]?.trim());
+    const subscriptionProviderReady = providerSettings.provider === "9router";
 
     if (subscriptionProviderReady) {
       return;
@@ -819,7 +1097,7 @@ function ChatComposerComponent({
       delete next["9router"];
       return next;
     });
-  }, [providerSettings.provider, providerSettings.providerModels]);
+  }, [providerSettings.provider]);
 
   useEffect(() => {
     if (openMenu !== "model") {
@@ -1141,10 +1419,14 @@ function ChatComposerComponent({
     }
 
     const referencedChatIds = resolveComposerResearchChatIds(content, selectedResearchChatIds, researchChatOptions);
+    const submittingPlanMode = planMode.enabled;
 
     setComposerMessage("", { immediate: true, notifyDraft: false });
     setAttachments([]);
     setSelectedResearchChatIds([]);
+    if (submittingPlanMode) {
+      setPlanMode({ enabled: false });
+    }
     closeSkillMentionPicker();
     closeChatResearchMentionPicker();
     cancelPendingDraftChange();
@@ -1155,8 +1437,8 @@ function ChatComposerComponent({
       content,
       followUpBehavior,
       localWorkspace,
-      mode: planMode.enabled ? "plan" : "chat",
-      planning: planMode.enabled ? {} : undefined,
+      mode: submittingPlanMode ? "plan" : "chat",
+      planning: submittingPlanMode ? {} : undefined,
       referencedChatIds: referencedChatIds.length > 0 ? referencedChatIds : undefined,
       webSearch: {
         enabled: webSearch.enabled,
@@ -1405,6 +1687,11 @@ function ChatComposerComponent({
 
   function cancelVoiceInput(updateState = true) {
     voiceRequestRef.current += 1;
+    if (voiceNativeActiveRef.current) {
+      voiceNativeActiveRef.current = false;
+      void cancelNativeDictation().catch(() => undefined);
+    }
+
     const recognition = voiceRecognitionRef.current;
     voiceRecognitionRef.current = null;
 
@@ -1421,7 +1708,38 @@ function ChatComposerComponent({
     }
   }
 
-  function finishVoiceInput() {
+  async function finishVoiceInput() {
+    if (voiceNativeActiveRef.current) {
+      const requestId = voiceRequestRef.current;
+      setVoiceStatus("Transcribing locally");
+      setVoiceState("transcribing");
+
+      try {
+        const response = await stopNativeDictation();
+
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        voiceNativeActiveRef.current = false;
+        const nextMessage = buildDictationTextMessage(messageRef.current, response.transcript, dictationDictionary);
+        if (nextMessage !== messageRef.current) {
+          setComposerMessage(nextMessage, { immediate: true });
+        }
+        setVoiceStatus(null);
+        setVoiceState("idle");
+      } catch (error) {
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        voiceNativeActiveRef.current = false;
+        setVoiceStatus(readErrorMessage(error, "Offline dictation could not complete."));
+        setVoiceState("error");
+      }
+      return;
+    }
+
     const recognition = voiceRecognitionRef.current;
 
     if (!recognition) {
@@ -1430,12 +1748,12 @@ function ChatComposerComponent({
     }
 
     recognition.stop();
-    setVoiceStatus("Finishing dictation");
+    setVoiceStatus("Finishing browser dictation");
   }
 
-  function handleVoiceToggle() {
+  async function handleVoiceToggle() {
     if (voiceState === "listening") {
-      finishVoiceInput();
+      await finishVoiceInput();
       return;
     }
 
@@ -1444,6 +1762,72 @@ function ChatComposerComponent({
       return;
     }
 
+    if (voiceState === "transcribing") {
+      return;
+    }
+
+    if (isTauriDesktopRuntime()) {
+      const requestId = voiceRequestRef.current + 1;
+      voiceRequestRef.current = requestId;
+      setVoiceStatus("Opening microphone");
+      setVoiceState("requesting");
+
+      try {
+        const status = await startNativeDictation();
+
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        if (status.state === "recording") {
+          voiceNativeActiveRef.current = true;
+          voiceBaseMessageRef.current = messageRef.current;
+          setVoiceStatus("Recording locally");
+          setVoiceState("listening");
+          return;
+        }
+
+        applyNativeVoiceStatus(status);
+        return;
+      } catch (error) {
+        if (!mountedRef.current || voiceRequestRef.current !== requestId) {
+          return;
+        }
+
+        setVoiceStatus(readErrorMessage(error, "Offline dictation could not start."));
+        setVoiceState("error");
+        return;
+      }
+    }
+
+    startBuiltInSpeechRecognition();
+  }
+
+  function handleVoiceButtonPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0 || (event.pointerType === "mouse" && (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey))) {
+      return;
+    }
+
+    event.preventDefault();
+    voicePointerStartedRef.current = true;
+    void handleVoiceToggle();
+  }
+
+  function handleVoiceButtonClick() {
+    if (voicePointerStartedRef.current) {
+      voicePointerStartedRef.current = false;
+      return;
+    }
+
+    void handleVoiceToggle();
+  }
+
+  function applyNativeVoiceStatus(status: NativeDictationStatus) {
+    setVoiceStatus(nativeDictationStatusMessage(status));
+    setVoiceState(nativeDictationVoiceState(status));
+  }
+
+  function startBuiltInSpeechRecognition() {
     const SpeechRecognitionConstructor = getBuiltInSpeechRecognition();
     if (!SpeechRecognitionConstructor) {
       setVoiceStatus(null);
@@ -1453,7 +1837,7 @@ function ChatComposerComponent({
 
     const requestId = voiceRequestRef.current + 1;
     voiceRequestRef.current = requestId;
-    setVoiceStatus("Opening microphone");
+    setVoiceStatus("Opening browser speech");
     setVoiceState("requesting");
 
     try {
@@ -1471,7 +1855,7 @@ function ChatComposerComponent({
         }
 
         setComposerMessage(buildDictationMessage(voiceBaseMessageRef.current, event.results, dictationDictionary), { immediate: true });
-        setVoiceStatus("Listening");
+        setVoiceStatus("Browser speech listening");
       };
 
       recognition.onerror = (event) => {
@@ -1492,7 +1876,9 @@ function ChatComposerComponent({
         }
 
         if (event.error === "no-speech") {
-          setVoiceStatus("No speech detected");
+          setVoiceStatus(null);
+          setVoiceState("idle");
+          return;
         } else {
           setVoiceStatus(formatSpeechRecognitionError(event.error));
         }
@@ -1510,7 +1896,7 @@ function ChatComposerComponent({
       };
 
       recognition.start();
-      setVoiceStatus("Listening");
+      setVoiceStatus("Browser speech listening");
       setVoiceState("listening");
     } catch (error) {
       if (mountedRef.current && voiceRequestRef.current === requestId) {
@@ -1521,14 +1907,16 @@ function ChatComposerComponent({
     }
   }
 
-  const voiceBusy = voiceState === "requesting";
   const voiceLabel = formatVoiceLabel(voiceState);
+  const voiceElapsedLabel = formatDictationElapsedTime(voiceElapsedMs);
 
   return (
     <>
       <form
         className="composer-shell"
         data-layout={layout}
+        data-voice-active={voiceActive ? "true" : undefined}
+        data-voice-state={voiceActive ? voiceState : undefined}
         ref={composerRef}
         onPointerDownCapture={handleComposerPointerDownCapture}
         onSubmit={(event) => {
@@ -1575,7 +1963,7 @@ function ChatComposerComponent({
         onHoldMessage={onHoldQueuedMessage}
         onSteerMessage={steerQueuedMessage}
       />
-      <div className="composer-input-wrap" data-indicators={activeModeCount > 0 ? "true" : "false"}>
+      <div className="composer-input-wrap" data-has-text={message.trim() ? "true" : "false"} data-indicators={activeModeCount > 0 && !voiceActive ? "true" : "false"} data-voice-active={voiceActive ? "true" : undefined}>
         <label className="sr-only" htmlFor="composer-message-input">Message Gilbert Codex</label>
         <textarea
           id="composer-message-input"
@@ -1583,17 +1971,7 @@ function ChatComposerComponent({
           aria-autocomplete="list"
           aria-controls={skillMention.open ? "composer-skill-mention-picker" : chatResearchMention.open ? "composer-chat-research-picker" : undefined}
           aria-expanded={skillMention.open || chatResearchMention.open}
-          placeholder={
-            isGenerating
-              ? "Add a follow-up or steer the next turn"
-              : voiceState === "requesting"
-                ? "Opening microphone..."
-              : voiceState === "listening"
-                ? "Listening... click the mic again when finished"
-                : planMode.enabled
-                  ? "Ask for a plan before Gilbert Codex starts coding"
-                  : "Ask Gilbert Codex to build, inspect, or change this project"
-          }
+          placeholder=""
           rows={2}
           defaultValue=""
           onChange={handleMessageChange}
@@ -1601,7 +1979,12 @@ function ChatComposerComponent({
           onClick={handleTextSelection}
           onKeyDown={handleTextKeyDown}
         />
-        {activeModeCount > 0 ? (
+        {showPlaceholderCycle ? (
+          <div key={activePlaceholder} className="composer-placeholder-cycle" aria-hidden="true">
+            {activePlaceholder}
+          </div>
+        ) : null}
+        {activeModeCount > 0 && !voiceActive ? (
           <div className="composer-inline-indicators" aria-label="Active composer modes">
             {webSearch.enabled ? (
               <span title={`${webSearchProviderLabel} web search on`} aria-label={`${webSearchProviderLabel} web search on`}>
@@ -1748,60 +2131,75 @@ function ChatComposerComponent({
             ) : null}
           </div>
         </div>
-        <div className="composer-actions-left">
-          <div className="composer-menu-anchor composer-workspace-root">
-            <button
-              className="workspace-toggle"
-              type="button"
-              aria-haspopup="dialog"
-              aria-expanded={openMenu === "workspace"}
-              aria-label={workspaceButtonLabel}
-              data-active={openMenu === "workspace"}
-              data-permission={localWorkspace.permissionMode}
-              onClick={() => toggleMenu("workspace")}
-            >
-              <FolderGit2 size={14} aria-hidden="true" />
-              <span>
-                <strong>{projectLabel}</strong>
-                <small>{workspaceMetaLabel}</small>
-              </span>
-              <ChevronDown size={13} aria-hidden="true" />
-            </button>
-            {openMenu === "workspace" ? (
-              <WorkspacePopover
-                actionNotice={gitActionNotice}
-                actionRunning={gitActionRunning}
-                activeProjectName={chat.project}
-                branchName={gitBranchName}
-                commitMessage={gitCommitMessage}
-                initNotice={gitInitNotice}
-                initializing={gitInitRunning}
-                loading={gitStatusLoading}
-                onBranchNameChange={setGitBranchName}
-                onCommit={commitComposerGitChanges}
-                onCommitMessageChange={setGitCommitMessage}
-                onCreateProject={onCreateProject}
-                onCreateBranch={createComposerGitBranch}
-                onInitialize={initializeGitRepository}
-                onLocalWorkspaceChange={onLocalWorkspaceChange}
-                onPull={pullComposerGitBranch}
-                onPush={pushComposerGitBranch}
-                onReviewChanges={onReviewChanges}
-                onSelectProject={(projectName) => {
-                  onSelectProject(projectName);
-                  setOpenMenu(null);
-                }}
-                onStageAll={stageAllComposerGitChanges}
-                projectLabel={projectLabel}
-                projectSearch={projectSearch}
-                projects={projects}
-                root={activeRoot}
-                setProjectSearch={setProjectSearch}
-                status={gitStatus}
-                workspace={localWorkspace}
-              />
-            ) : null}
-          </div>
+        <div className="composer-actions-left" data-voice-active={voiceActive ? "true" : undefined}>
+          {voiceActive ? (
+            <div className="composer-dictation-strip" aria-label={`Dictation elapsed ${voiceElapsedLabel}`}>
+              <div className="composer-dictation-wave" aria-hidden="true">
+                <div className="composer-dictation-wave-track">
+                  {DICTATION_WAVE_BARS.map((bar) => (
+                    <span key={bar} style={getDictationWaveBarStyle(voiceWaveLevels[bar] ?? DICTATION_WAVE_FLOOR, bar)} />
+                  ))}
+                </div>
+              </div>
+              <time className="composer-dictation-time" dateTime={formatDictationElapsedDateTime(voiceElapsedMs)} aria-label={`Dictation time ${voiceElapsedLabel}`}>
+                {voiceElapsedLabel}
+              </time>
+            </div>
+          ) : (
+            <div className="composer-menu-anchor composer-workspace-root">
+              <button
+                className="workspace-toggle"
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={openMenu === "workspace"}
+                aria-label={workspaceButtonLabel}
+                data-active={openMenu === "workspace"}
+                data-permission={localWorkspace.permissionMode}
+                onClick={() => toggleMenu("workspace")}
+              >
+                <FolderGit2 size={14} aria-hidden="true" />
+                <span>
+                  <strong>{projectLabel}</strong>
+                  <small>{workspaceMetaLabel}</small>
+                </span>
+                <ChevronDown size={13} aria-hidden="true" />
+              </button>
+              {openMenu === "workspace" ? (
+                <WorkspacePopover
+                  actionNotice={gitActionNotice}
+                  actionRunning={gitActionRunning}
+                  activeProjectName={chat.project}
+                  branchName={gitBranchName}
+                  commitMessage={gitCommitMessage}
+                  initNotice={gitInitNotice}
+                  initializing={gitInitRunning}
+                  loading={gitStatusLoading}
+                  onBranchNameChange={setGitBranchName}
+                  onCommit={commitComposerGitChanges}
+                  onCommitMessageChange={setGitCommitMessage}
+                  onCreateProject={onCreateProject}
+                  onCreateBranch={createComposerGitBranch}
+                  onInitialize={initializeGitRepository}
+                  onLocalWorkspaceChange={onLocalWorkspaceChange}
+                  onPull={pullComposerGitBranch}
+                  onPush={pushComposerGitBranch}
+                  onReviewChanges={onReviewChanges}
+                  onSelectProject={(projectName) => {
+                    onSelectProject(projectName);
+                    setOpenMenu(null);
+                  }}
+                  onStageAll={stageAllComposerGitChanges}
+                  projectLabel={projectLabel}
+                  projectSearch={projectSearch}
+                  projects={projects}
+                  root={activeRoot}
+                  setProjectSearch={setProjectSearch}
+                  status={gitStatus}
+                  workspace={localWorkspace}
+                />
+              ) : null}
+            </div>
+          )}
         </div>
         <div className="composer-actions-right">
           <div className="composer-menu-anchor composer-context-root">
@@ -1852,24 +2250,22 @@ function ChatComposerComponent({
             ) : null}
           </div>
           <button
-            className="composer-tool"
+            className="composer-tool composer-voice-toggle"
             type="button"
             aria-label={voiceLabel}
             title={voiceLabel}
-            data-active={voiceState === "listening" || voiceBusy}
-            data-busy={voiceBusy}
+            data-active={voiceState === "listening" || voiceBusy ? "true" : undefined}
+            data-busy={voiceBusy ? "true" : undefined}
+            data-processing={voiceState === "transcribing" ? "true" : undefined}
+            data-recording={voiceState === "listening" ? "true" : undefined}
             data-warning={voiceState === "blocked" || voiceState === "unsupported" || voiceState === "error"}
-            onClick={handleVoiceToggle}
+            onPointerDown={handleVoiceButtonPointerDown}
+            onClick={handleVoiceButtonClick}
           >
             {voiceBusy ? (
               <LoaderCircle size={18} aria-hidden="true" />
             ) : voiceState === "listening" ? (
-              <span className="voice-waveform" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
+              <Square size={12} aria-hidden="true" />
             ) : voiceState === "error" || voiceState === "blocked" || voiceState === "unsupported" ? (
               <MicOff size={18} aria-hidden="true" />
             ) : (
@@ -1888,11 +2284,11 @@ function ChatComposerComponent({
       </div>
       <div className="composer-footer">
         {voiceState === "blocked" ? <span className="composer-status composer-status-warning">Mic permission is blocked</span> : null}
-        {voiceState === "unsupported" ? <span className="composer-status composer-status-warning">Mic is not available in this preview</span> : null}
+        {voiceState === "unsupported" ? <span className="composer-status composer-status-warning">{voiceUnsupportedStatusMessage(voiceStatus)}</span> : null}
         {voiceState === "error" && voiceStatus ? <span className="composer-status composer-status-warning">{voiceStatus}</span> : null}
-        {voiceState !== "blocked" && voiceState !== "unsupported" && voiceState !== "error" && voiceStatus ? <span className="composer-status">{voiceStatus}</span> : null}
+        {!voiceActive && voiceState !== "blocked" && voiceState !== "unsupported" && voiceState !== "error" && voiceStatus ? <span className="composer-status">{voiceStatus}</span> : null}
         {hasPendingAttachments ? <span className="composer-status">Preparing attachments</span> : null}
-        {hasMediaAttachment ? <span className="composer-status">Media uploads use Nemotron Omni when needed</span> : null}
+        {showMediaFallbackNotice ? <span className="composer-status">Media uploads use Nemotron Omni when needed</span> : null}
         {hasFailedAttachments ? <span className="composer-status composer-status-warning">Remove failed attachments to send</span> : null}
         {visibleQueuedMessageCount > 0 ? <span className="composer-status composer-status-queued">{visibleQueuedMessageCount === 1 ? "1 queued" : `${visibleQueuedMessageCount} queued`}</span> : null}
       </div>
@@ -2545,6 +2941,10 @@ function formatVoiceLabel(voiceState: VoiceState) {
     return "Stop voice input";
   }
 
+  if (voiceState === "transcribing") {
+    return "Transcribing voice input";
+  }
+
   if (voiceState === "requesting") {
     return "Cancel voice input";
   }
@@ -2562,6 +2962,162 @@ function formatVoiceLabel(voiceState: VoiceState) {
   }
 
   return "Start voice input";
+}
+
+export function formatDictationElapsedTime(elapsedMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDictationElapsedDateTime(elapsedMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const parts = ["PT"];
+
+  if (hours > 0) {
+    parts.push(`${hours}H`);
+  }
+
+  if (minutes > 0) {
+    parts.push(`${minutes}M`);
+  }
+
+  if (seconds > 0 || parts.length === 1) {
+    parts.push(`${seconds}S`);
+  }
+
+  return parts.join("");
+}
+
+export function getComposerPlaceholderOptions({
+  hasConversationMessages,
+  isGenerating,
+  isPlanningGeneration = false,
+  planModeEnabled,
+}: {
+  hasConversationMessages: boolean;
+  isGenerating: boolean;
+  isPlanningGeneration?: boolean;
+  planModeEnabled: boolean;
+}) {
+  if (isGenerating) {
+    if (isPlanningGeneration) {
+      return ["Add context for the plan", "Tell Gilbert what to consider", "Adjust the plan before it starts"];
+    }
+
+    return ["Ask for follow-up changes", "Steer the next turn", "Add more context while Gilbert works"];
+  }
+
+  if (planModeEnabled) {
+    return ["Ask for a plan first", "Map the change before coding", "Have Gilbert inspect then propose steps"];
+  }
+
+  if (hasConversationMessages) {
+    return ["Ask for follow-up changes", "Add another detail", "Tell Gilbert what to adjust next"];
+  }
+
+  return ["Ask Gilbert Codex to build, inspect, or change this project", "Paste a screenshot or file here", "Describe the first thing you want done"];
+}
+
+export function nativeDictationVoiceState(status: Pick<NativeDictationStatus, "state">): VoiceState {
+  if (status.state === "recording") {
+    return "listening";
+  }
+
+  if (status.state === "transcribing" || status.state === "warming") {
+    return status.state === "transcribing" ? "transcribing" : "requesting";
+  }
+
+  if (status.state === "blocked") {
+    return "blocked";
+  }
+
+  if (status.state === "missingModel") {
+    return "unsupported";
+  }
+
+  if (status.state === "error") {
+    return "error";
+  }
+
+  return "idle";
+}
+
+export function nativeDictationStatusMessage(status: Pick<NativeDictationStatus, "message" | "state">) {
+  const message = status.message.trim() || "Offline Whisper dictation is not active.";
+
+  if (status.state === "missingModel") {
+    return `${message} Desktop dictation will not use browser speech fallback; rebuild with offline dictation enabled and the bundled model present.`;
+  }
+
+  if (status.state === "error") {
+    return `${message} Desktop dictation will not silently fall back to browser speech.`;
+  }
+
+  return message;
+}
+
+export function voiceUnsupportedStatusMessage(status?: string | null) {
+  return status?.trim() || "Mic is not available in this preview";
+}
+
+function createDictationWaveRestingLevels() {
+  return DICTATION_WAVE_BARS.map(() => DICTATION_WAVE_FLOOR);
+}
+
+export function normalizeDictationWaveLevel(level: number) {
+  if (!Number.isFinite(level)) {
+    return DICTATION_WAVE_FLOOR;
+  }
+
+  const clampedLevel = Math.min(1, Math.max(0, level));
+  const boostedLevel = Math.pow(clampedLevel, 0.68);
+  return Math.min(1, Math.max(DICTATION_WAVE_FLOOR, boostedLevel));
+}
+
+export function pushDictationWaveLevel(currentLevels: readonly number[], level: number) {
+  const levels = currentLevels.length === DICTATION_WAVE_BAR_COUNT ? currentLevels : createDictationWaveRestingLevels();
+  return [...levels.slice(1), normalizeDictationWaveLevel(level)];
+}
+
+export function calculateDictationWaveLevel(samples: Uint8Array) {
+  if (samples.length === 0) {
+    return DICTATION_WAVE_FLOOR;
+  }
+
+  let peak = 0;
+  let sumSquares = 0;
+  for (const sample of samples) {
+    const centered = Math.abs((sample - 128) / 128);
+    peak = Math.max(peak, centered);
+    sumSquares += centered * centered;
+  }
+
+  const rms = Math.sqrt(sumSquares / samples.length);
+  return normalizeDictationWaveLevel(Math.sqrt((rms * 7.5) + (peak * 0.35)));
+}
+
+function getDictationWaveBarStyle(level: number, index: number): CSSProperties {
+  const normalizedLevel = normalizeDictationWaveLevel(level);
+  const edgeFade = Math.sin(((index + 0.5) / DICTATION_WAVE_BAR_COUNT) * Math.PI);
+  const height = 4 + normalizedLevel * 27;
+  const opacity = 0.54 + normalizedLevel * 0.4;
+  const edgeOpacity = 0.42 + edgeFade * 0.58;
+
+  return {
+    "--voice-wave-height": `${height.toFixed(2)}px`,
+    "--voice-wave-opacity": Math.min(0.98, opacity * edgeOpacity).toFixed(2),
+  } as CSSProperties;
 }
 
 function findSkillMentionTrigger(message: string, cursorPosition: number): SkillMentionTrigger | null {
@@ -2659,6 +3215,14 @@ function getBuiltInSpeechRecognition() {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
+function getBrowserAudioContextConstructor() {
+  const audioWindow = window as Window & {
+    webkitAudioContext?: BrowserAudioContextConstructor;
+  };
+
+  return window.AudioContext ?? audioWindow.webkitAudioContext ?? null;
+}
+
 function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecognitionResultList, dictionary: string) {
   const transcriptParts: string[] = [];
 
@@ -2670,7 +3234,11 @@ function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecogn
     }
   }
 
-  const transcript = applyDictationDictionary(formatDictationTranscript(transcriptParts.join(" ")), dictionary);
+  return buildDictationTextMessage(baseMessage, transcriptParts.join(" "), dictionary);
+}
+
+export function buildDictationTextMessage(baseMessage: string, rawTranscript: string, dictionary: string) {
+  const transcript = applyDictationDictionary(formatDictationTranscript(rawTranscript), dictionary);
 
   if (!transcript) {
     return baseMessage;
@@ -2687,11 +3255,35 @@ function buildDictationMessage(baseMessage: string, results: BuiltInSpeechRecogn
 function formatDictationTranscript(text: string) {
   const normalizedText = text.replace(/\s+/g, " ").trim();
 
-  if (!normalizedText) {
+  if (isEmptyDictationTranscript(normalizedText)) {
     return "";
   }
 
   return `${normalizedText.charAt(0).toUpperCase()}${normalizedText.slice(1)}`;
+}
+
+export function isEmptyDictationTranscript(text: string) {
+  const normalizedText = text
+    .replace(/[_-]+/g, " ")
+    .replace(/[\[\](){}<>.,!?;:"'`]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!normalizedText) {
+    return true;
+  }
+
+  return (
+    normalizedText === "blank audio" ||
+    normalizedText === "audio blank" ||
+    normalizedText === "empty audio" ||
+    normalizedText === "no audio" ||
+    normalizedText === "no speech" ||
+    normalizedText === "no speech detected" ||
+    normalizedText === "silence" ||
+    normalizedText === "silent audio"
+  );
 }
 
 function applyDictationDictionary(text: string, dictionary: string) {

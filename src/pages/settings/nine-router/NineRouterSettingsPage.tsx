@@ -44,7 +44,7 @@ import {
   type NineRouterExchangeResponse,
   type NineRouterOAuthPollResponse,
 } from "../../../services/nineRouterClient";
-import type { ProviderSettings, SubscriptionFallbackMode, SubscriptionTokenSaverLevel } from "../../../types/settings";
+import type { ProviderSettings, SubscriptionCodexContextWindow, SubscriptionTokenSaverLevel } from "../../../types/settings";
 import { ConfirmDialog } from "../../../components/dialogs/AppDialog";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -121,6 +121,16 @@ type NineRouterDisconnectTarget = {
   provider: NineRouterAccountProvider;
 };
 
+const SUBSCRIPTION_OPTIMIZATION_DEFAULT: ProviderSettings["subscriptionOptimization"] = {
+  codexContextWindow: "standard",
+  fallbackMode: "off",
+  tokenSaverLevel: "low",
+};
+const CODEX_CONTEXT_WINDOW_OPTIONS: Array<{ detail: string; label: string; mode: SubscriptionCodexContextWindow }> = [
+  { detail: "Default 262k context for lower normal subscription usage.", label: "262k", mode: "standard" },
+  { detail: "Allow 1M context for higher-cost long-context Codex runs.", label: "1M", mode: "extended" },
+];
+
 const NINE_ROUTER_MODEL_TEST_MESSAGE = "Reply with OK only.";
 const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
   detail: "",
@@ -178,9 +188,10 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     () => chooseNineRouterModel(savedNineRouterModel, modelCatalog),
     [modelCatalog, savedNineRouterModel],
   );
-  const subscriptionOptimization = settings.subscriptionOptimization ?? { fallbackMode: "off" as SubscriptionFallbackMode, tokenSaverLevel: "low" as SubscriptionTokenSaverLevel };
+  const subscriptionOptimization = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
   const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
   const fallbackMode = subscriptionOptimization.fallbackMode;
+  const codexContextWindow = subscriptionOptimization.codexContextWindow;
   const savedModelMissingFromCatalog =
     modelCatalog.status === "ready" &&
     modelCatalog.models.length > 0 &&
@@ -1017,7 +1028,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
   }
 
   function useNineRouterProvider(modelOverride = selectedNineRouterModel, optimizationOverride?: Partial<ProviderSettings["subscriptionOptimization"]>) {
-    const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" };
+    const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
     onSettingsChange({
       ...settings,
       baseUrls: {
@@ -1037,6 +1048,16 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       },
     });
     setStatusMessage({ kind: "success", text: "Subscription routing is now active." });
+  }
+
+  function updateCodexContextWindow(mode: SubscriptionCodexContextWindow) {
+    onSettingsChange({
+      ...settings,
+      subscriptionOptimization: {
+        ...(settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT),
+        codexContextWindow: mode,
+      },
+    });
   }
 
   return (
@@ -1196,6 +1217,11 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                   <strong>{selectedNineRouterModel}</strong>
                 </div>
                 <div className="settings-row">
+                  <span>Codex context</span>
+                  <strong>{codexContextWindow === "extended" ? "1M" : "262k"}</strong>
+                  <span className="settings-row-static-pill">{codexContextWindow === "extended" ? "Higher cost" : "Default"}</span>
+                </div>
+                <div className="settings-row">
                   <span>Image generation</span>
                   <strong>{settings.tools.imageGeneration ? "Available in chat" : "Disabled"}</strong>
                   <button
@@ -1216,6 +1242,24 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                   >
                     <span />
                   </button>
+                </div>
+              </div>
+              <div className="settings-stack">
+                <strong>Codex subscription context</strong>
+                <span className="settings-subtle-text">262k is the default cost-saving context limit. 1M is available for long-context Codex work at higher cost.</span>
+                <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Codex subscription context window">
+                  {CODEX_CONTEXT_WINDOW_OPTIONS.map((option) => (
+                    <button
+                      aria-pressed={codexContextWindow === option.mode}
+                      data-selected={codexContextWindow === option.mode}
+                      key={option.mode}
+                      title={option.detail}
+                      type="button"
+                      onClick={() => updateCodexContextWindow(option.mode)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
               </div>
               {savedModelMissingFromCatalog ? (
@@ -1420,7 +1464,7 @@ function createSubscriptionSandboxUninstalledSettings(settings: ProviderSettings
     provider: "openrouter",
     providerModels,
     subscriptionOptimization: {
-      ...(settings.subscriptionOptimization ?? { fallbackMode: "off", tokenSaverLevel: "low" }),
+      ...(settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT),
       fallbackMode: "off",
     },
   };

@@ -90,7 +90,7 @@ function parseEmailRevisionRecipients(value?: string) {
 }
 
 function cleanRevisedEmailBody(value: string) {
-  return stripMarkdownFormatting(value)
+  return value
     .replace(/^\s*```(?:text|markdown)?\s*/i, "")
     .replace(/\s*```\s*$/i, "")
     .trim();

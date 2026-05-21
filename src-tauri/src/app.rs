@@ -19,6 +19,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::auth::AuthState::default())
         .manage(commands::computer::files::ComputerFileIndexState::default())
+        .manage(commands::dictation::DictationState::default())
         .manage(commands::discord::DiscordBridgeState::default())
         .manage(commands::gmail::GmailState::default())
         .manage(commands::google_calendar::CalendarState::default())
@@ -46,6 +47,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::auth::auth_logout,
             commands::app_info::get_app_info,
             commands::browser::browser_automation,
+            commands::browser::browser_preview_capture,
             commands::browser::browser_preview_get_url,
             commands::browser::browser_preview_navigate,
             commands::browser::browser_preview_reload,
@@ -82,7 +84,15 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::database::gilbert_database_reset,
             commands::database::gilbert_database_set_value,
             commands::database::gilbert_database_set_values,
+            commands::dictation::dictation_cancel,
+            commands::dictation::dictation_audio_level,
+            commands::dictation::dictation_prepare,
+            commands::dictation::dictation_start,
+            commands::dictation::dictation_status,
+            commands::dictation::dictation_stop,
+            commands::discord::discord_bridge_send_channel_message,
             commands::discord::discord_bridge_send_interaction_response,
+            commands::discord::discord_bridge_send_webhook_message,
             commands::discord::discord_bridge_start,
             commands::discord::discord_bridge_status,
             commands::discord::discord_bridge_stop,

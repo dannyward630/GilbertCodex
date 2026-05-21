@@ -1654,6 +1654,38 @@ mod tests {
     }
 
     #[test]
+    fn parses_duckduckgo_lite_links_and_normalizes_redirects() {
+        let html = r#"
+            <table>
+              <tr>
+                <td>
+                  <a class="result-link" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs%3Fa%3D1%26b%3D2&amp;rut=test">
+                    Example &amp; Docs
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td class="result-snippet">Useful &amp; current docs.</td>
+              </tr>
+              <tr>
+                <td>
+                  <a class="result-link" href="https://example.com/docs?a=1&amp;b=2">
+                    Duplicate direct URL
+                  </a>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        let results = parse_duckduckgo_results(html, MAX_DUCKDUCKGO_RESULTS);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Example & Docs");
+        assert_eq!(results[0].url, "https://example.com/docs?a=1&b=2");
+        assert_eq!(results[0].snippet, "Useful & current docs.");
+    }
+
+    #[test]
     fn parses_brave_web_results_with_extra_snippets() {
         let payload = serde_json::json!({
             "web": {

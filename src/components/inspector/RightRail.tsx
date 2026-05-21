@@ -10,6 +10,7 @@ import type {
   ChatPlanningQuestion,
   ChatSummary,
 } from "../../types/chat";
+import { MarkdownMessage } from "../chat/MarkdownMessage";
 import { PlanReviewPanel } from "./PlanReviewPanel";
 
 const MAX_RAIL_ITEMS = Number.POSITIVE_INFINITY;
@@ -99,6 +100,10 @@ export function chatHasPlanReviewContent(chat: ChatSummary, messageId?: string |
 
 export function chatHasPendingRightRailAction(chat: ChatSummary) {
   return chat.messages.some((message) => message.role === "assistant" && hasPendingReviewAction(message));
+}
+
+export function chatHasAutoOpenRightRailAction(chat: ChatSummary) {
+  return chat.messages.some((message) => message.role === "assistant" && hasAutoOpenReviewAction(message));
 }
 
 interface ReviewRailCardProps {
@@ -373,7 +378,7 @@ function ApprovalPreview({ approval, display }: { approval: AgentApproval; displ
       {preview.body ? (
         <div className="approval-preview-body">
           <small>{display.family === "gmail" ? "Message" : "Notes"}</small>
-          <p>{preview.body}</p>
+          {display.family === "gmail" ? <MarkdownMessage className="approval-preview-body-markdown" content={preview.body} /> : <p>{preview.body}</p>}
         </div>
       ) : null}
       {preview.raw.length > 0 ? <pre>{preview.raw.join("\n")}</pre> : null}
@@ -453,13 +458,14 @@ function parseApprovalPreview(value: string) {
   const lines = limitPreviewText(value, 1600)
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
-    .filter((line) => line.trim());
+    .filter((line, index, allLines) => line.trim() || index > 0 && index < allLines.length - 1);
   const [title = "", ...rest] = lines;
   const fields: Array<{ label: string; value: string }> = [];
   const raw: string[] = [];
   let body = "";
 
-  for (const line of rest) {
+  for (let index = 0; index < rest.length; index += 1) {
+    const line = rest[index] ?? "";
     const match = line.match(/^([^:]{2,36}):\s*(.*)$/);
 
     if (!match) {
@@ -470,7 +476,13 @@ function parseApprovalPreview(value: string) {
     const label = match[1].trim();
     const fieldValue = match[2].trim();
 
-    if (/body preview|description|notes?/i.test(label)) {
+    if (/body preview|body markdown|message markdown|description|notes?/i.test(label)) {
+      if (!fieldValue && /body markdown|message markdown/i.test(label)) {
+        const block = rest.slice(index + 1).join("\n").trim();
+        body = body ? `${body}\n${block}` : block;
+        break;
+      }
+
       body = body ? `${body}\n${fieldValue}` : fieldValue;
       continue;
     }
@@ -710,6 +722,13 @@ function getLatestReviewMessage(chat: ChatSummary) {
 function hasPendingReviewAction(message: ChatMessage) {
   return Boolean(
     message.approvals?.some((approval) => approval.status === "pending") ||
+      getPlanningInputRequests(message).some((request) => !request.answeredAt),
+  );
+}
+
+function hasAutoOpenReviewAction(message: ChatMessage) {
+  return Boolean(
+    message.approvals?.some((approval) => approval.status === "pending" && approval.tool !== "planning_handoff") ||
       getPlanningInputRequests(message).some((request) => !request.answeredAt),
   );
 }

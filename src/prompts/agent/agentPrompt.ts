@@ -91,9 +91,9 @@ function formatCurrentRuntimeContext() {
     `User/local timezone: ${timezone}`,
     `Primary user/device language: ${deviceLanguage.primaryLocale}.`,
     deviceLanguage.preferredLocales.length > 1 ? `User/device language preferences: ${deviceLanguage.preferredLocales.join(", ")}.` : "",
-    `Default assistant language: reply in the primary device language/locale (${deviceLanguage.primaryLocale}) unless the user explicitly asks for another language or the task requires preserving exact source text, code, logs, file names, quoted content, or API output.`,
-    "Treat this date/time as authoritative for relative dates such as today, tomorrow, yesterday, latest, recent, currently, and now.",
-    "For current, latest, changing, official, or source-backed external facts, call web_search when that tool is enabled and current evidence is needed. If live web evidence is unavailable, say what could not be verified instead of relying on stale model memory.",
+    `Default assistant language: reply in the primary device language/locale (${deviceLanguage.primaryLocale}); preserve exact source/code/log/API text when required.`,
+    "Use this date/time for relative dates such as today, tomorrow, yesterday, latest, recent, currently, and now.",
+    "For current, changing, official, or source-backed external facts, call web_search when enabled; if live evidence is unavailable, say what could not be verified.",
   ].filter(Boolean).join("\n");
 }
 
@@ -276,12 +276,12 @@ function formatPromptOptimizationSection(selectedChunks: SelectedPromptChunk[]) 
     .join(", ");
 
   if (!loadedSkills) {
-    return "# Prompt Loading Policy\n\nOnly the stable core instructions were loaded because no specialized prompt chunk was needed.";
+    return "# Prompt Loading Policy\n\nOnly stable core instructions were loaded; no specialized chunk matched this request.";
   }
 
   return [
     "# Prompt Loading Policy",
-    "The app loaded only the relevant instruction chunks for this request using the local prompt vector index. Follow loaded chunks; do not assume unloaded skills apply unless tool results or the user request make them relevant.",
+    "The app loaded only the relevant instruction chunks for this request. Follow loaded chunks; do not assume unloaded skills apply unless tool results or the user request make them relevant.",
     `Loaded chunks: ${loadedSkills}.`,
   ].join("\n\n");
 }

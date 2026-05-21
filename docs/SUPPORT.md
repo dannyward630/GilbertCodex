@@ -2,11 +2,9 @@
 
 Gilbert Codex can show voluntary project-funding options inside the app without handling payments directly. The desktop app only opens public hosted provider links in the user's browser.
 
-## Current First Setup
+## Current Setup
 
-No personal funding link is checked into the repository. Add only public hosted provider links through local or release environment values.
-
-PayPal stays visible as `Coming soon` until the real PayPal link is added.
+Funding links are disabled by default unless a local build is configured with public hosted links. Stripe and Cash App stay hidden until real hosted links are configured. PayPal stays visible as `Coming soon` until the real PayPal link is added.
 
 ## Optional Stripe Setup
 
@@ -36,7 +34,7 @@ VITE_SUPPORT_CASHAPP_URL=
 
 Empty Stripe and Cash App values are hidden until configured. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
 
-For GitHub release builds, set the same `VITE_SUPPORT_*` names as repository variables or secrets. The release workflow passes them to the Tauri build so the packaged app can include the hosted links without committing them to the public source tree. These are app-facing values, so they must be public hosted URLs only; never use private account secrets, access tokens, webhook secrets, or raw API keys.
+The public GitHub release workflow does not require `VITE_SUPPORT_*` variables. If a maintainer makes a custom local build with support links, those values are baked into the packaged frontend and can be inspected by app users, so use only public hosted URLs; never use private account secrets, access tokens, webhook secrets, or raw API keys.
 
 ## Safety Rules
 

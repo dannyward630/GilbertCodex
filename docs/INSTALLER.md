@@ -40,7 +40,6 @@ The GitHub `Release` workflow builds the Windows NSIS installer with the same up
 - `GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY`
 - `GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN`
 - `GILBERT_PRIVATE_RELEASE_OVERLAY_REF` when the private overlay should build from a branch or tag other than `main`
-- `GOOGLE_OAUTH_CLIENT_SECRET`
 
 The private release overlay is a private repository that is checked out only inside GitHub Actions. It lets the public repository stay clean while the release runner restores app-only files before packaging. The overlay can contain:
 
@@ -52,29 +51,23 @@ plugins/
 
 `src/toolBridge/index.ts` is required for release builds. `plugins/` and `.agents/plugins/` are optional, but if they exist in the private overlay they are copied into the build workspace before the installer is compiled. These files remain absent from the public GitHub tree.
 
-Add these repository variables or secrets before publishing a release build that needs built-in app-facing configuration:
+The release workflow does not require GitHub OAuth, Google OAuth, support-link, provider-key, or other app-user credentials. GitHub and Google OAuth setup is entered by each user in Settings, provider keys stay in local app storage, and optional funding links are local build configuration only. Do not add app-user OAuth client secrets, tokens, downloaded Google credential JSON, provider keys, or private account data to release variables.
 
-- `VITE_GITHUB_OAUTH_CLIENT_ID`
-- `VITE_GOOGLE_OAUTH_CLIENT_ID`
-- `VITE_SUPPORT_CASHAPP_URL`
-- `VITE_SUPPORT_PAYPAL_URL`
-- `VITE_SUPPORT_STRIPE_MONTHLY_URL`
-- `VITE_SUPPORT_STRIPE_ONE_TIME_URL`
-
-The `VITE_*` values are baked into the packaged frontend and can be inspected by app users, so only put public OAuth client IDs or public hosted funding URLs there. Keep private values in non-`VITE_` GitHub Secrets such as `GOOGLE_OAUTH_CLIENT_SECRET` and the Tauri signing key.
+Offline dictation is prepared during release builds. The workflow downloads and verifies the Whisper `ggml-base.en.bin` model, prepares pinned LLVM/libclang and Vulkan SDK assets under `.tools`, and builds with the `offline-dictation-gpu` feature so the packaged Windows app can use bundled offline voice input without committing the large model or SDK to the public repository.
 
 ## What The Installer Includes
 
 - The compiled Gilbert Codex desktop executable.
 - The built React frontend from `dist`.
 - Bundled Rust-side runtime dependencies, including SQLite through `rusqlite`'s bundled feature.
+- Offline dictation resources prepared during the build, including the verified Whisper model bundled as a Tauri resource.
 - App icons, Windows shortcut metadata, publisher metadata, homepage metadata, and the MIT license page.
 - A WebView2 runtime check. If WebView2 is missing or older than the configured minimum, the installer downloads and runs Microsoft's bootstrapper silently.
 - A selectable install scope so the user can install for the current account or system-wide.
 
 ## What Stays Local
 
-Provider API keys, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, updater private keys, and private release overlay repository credentials are not bundled into public installers. Those are created or connected by the user after installation or used only by GitHub Actions during packaging.
+Provider API keys, OAuth client secrets, GitHub tokens, Discord settings, local accounts, logs, local databases, workspace files, local scan artifacts, release signing credentials, updater private keys, and private release overlay repository credentials are not bundled into public installers. Those are created or connected by the user after installation or used only by GitHub Actions during packaging.
 
 ## Light And Dark Mode
 

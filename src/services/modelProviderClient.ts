@@ -10,6 +10,7 @@ import { applyLocalSamplingParameters } from "../lib/generationSettings";
 import { extractInlineThinking } from "../lib/inlineThinkingExtractor";
 import {
   getDefaultModelForProvider,
+  getEffectiveProviderModelContextWindowTokens,
   getModelProvider,
   getProviderApiKey,
   getProviderBaseUrl,
@@ -25,7 +26,7 @@ import type { ModelPricing, ProviderModelMetadata } from "../lib/models";
 import { buildAgentSystemPrompt } from "../prompts/agent";
 import { ensureNineRouterLocal, isTauriDesktopRuntime, nineRouterLocalHttp, nineRouterLocalStream } from "../app/tauriClient";
 import type { NineRouterHttpStreamEvent } from "../app/tauriClient";
-import type { ChatAttachment, ChatMessage } from "../types/chat";
+import type { ChatAttachment, ChatMessage, ChatStreamTiming } from "../types/chat";
 import { createProviderReasoningState, type ProviderReasoningEntry, type ProviderReasoningState } from "../types/reasoning";
 import type { ModelProviderId, ProviderSettings, ReasoningEffort } from "../types/settings";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, type ToolRegistryId, type ToolRegistrySettings } from "../types/tools";
@@ -281,6 +282,7 @@ interface ProviderErrorPayload {
 interface StreamSnapshot {
   content: string;
   reasoningState?: ProviderReasoningState;
+  streamTiming?: ChatStreamTiming;
   toolCalls?: ToolCallRequest[];
   usage?: ProviderUsage;
 }
@@ -323,6 +325,7 @@ interface ProviderRequestOptions {
 interface ProviderMessageResult {
   content: string;
   reasoningState?: ProviderReasoningState;
+  streamTiming?: ChatStreamTiming;
   toolCalls?: ToolCallRequest[];
   usage?: ProviderUsage;
 }
@@ -364,6 +367,20 @@ type ProviderMessageContent =
           videoUrl: {
             url: string;
           };
+        }
+    >;
+
+type ResponsesMessageContent =
+  | string
+  | Array<
+      | {
+          text: string;
+          type: "input_text";
+        }
+      | {
+          detail: "auto";
+          image_url: string;
+          type: "input_image";
         }
     >;
 
@@ -1012,6 +1029,11 @@ export async function streamProviderMessage(
   const preparedMessages = await prepareMessagesForMediaFallback(settings, messages, options);
   const model = modelForMessages(settings, preparedMessages);
   const useResponsesApi = usesResponsesApi(settings, model);
+  const requestStartedAt = new Date().toISOString();
+  const requestStartedMs = nowHighResolutionMs();
+  const timingMarks: Partial<ChatStreamTiming> = {
+    requestStartedAt,
+  };
 
   assertUsableSettings(settings.provider, apiKey, model);
   await ensureProviderRuntimeReady(settings, options.signal);
@@ -1038,6 +1060,7 @@ export async function streamProviderMessage(
       PROVIDER_RESPONSE_START_TIMEOUT_MS,
       { stream: true },
     );
+    markStreamTiming(timingMarks, requestStartedMs, "responseStarted");
   } catch (error) {
     requestTimeout.throwIfTimedOut();
     throw createProviderFetchError(settings.provider, provider.label, requestUrl, error);
@@ -1070,7 +1093,9 @@ export async function streamProviderMessage(
   let flushTimer: number | null = null;
   let lastFlushedContent = "";
   let lastFlushedReasoning = "";
-  let lastFlushedToolCalls = "";
+  let lastFlushedToolCallRevision = -1;
+  let toolCallRevision = 0;
+  let lastFlushedToolCallsSnapshot: ToolCallRequest[] = [];
   let lastMeaningfulStreamEventAt = Date.now();
   const toolCallAccumulator = new Map<number, StreamToolCallAccumulatorEntry>();
 
@@ -1085,19 +1110,22 @@ export async function streamProviderMessage(
     const nextReasoningState = settings.thinking.enabled
       ? snapshotReasoningState ?? createStreamProviderReasoningState(settings.provider, [reasoning, separatedContent.reasoning].filter(Boolean).join(""), reasoningStateEntries)
       : undefined;
-    const nextToolCalls = finalizeStreamToolCalls(settings.provider, toolCallAccumulator);
-    const nextToolCallsKey = JSON.stringify(nextToolCalls.map((call) => [call.id, call.name, call.arguments]));
+    const nextReasoningKey = createReasoningFlushKey(nextReasoningState, reasoning, separatedContent.reasoning);
+    const toolCallsChanged = force || toolCallRevision !== lastFlushedToolCallRevision;
+    const nextToolCalls = toolCallsChanged ? finalizeStreamToolCalls(settings.provider, toolCallAccumulator) : lastFlushedToolCallsSnapshot;
 
-    if (!force && nextContent === lastFlushedContent && getReasoningStateKey(nextReasoningState) === lastFlushedReasoning && nextToolCallsKey === lastFlushedToolCalls) {
+    if (!force && nextContent === lastFlushedContent && nextReasoningKey === lastFlushedReasoning && !toolCallsChanged) {
       return;
     }
 
     lastFlushedContent = nextContent;
-    lastFlushedReasoning = getReasoningStateKey(nextReasoningState);
-    lastFlushedToolCalls = nextToolCallsKey;
+    lastFlushedReasoning = nextReasoningKey;
+    lastFlushedToolCallRevision = toolCallRevision;
+    lastFlushedToolCallsSnapshot = nextToolCalls;
     onUpdate({
       content: nextContent,
       reasoningState: nextReasoningState,
+      streamTiming: createStreamTimingSnapshot(timingMarks),
       toolCalls: nextToolCalls.length > 0 ? nextToolCalls : undefined,
       usage,
     });
@@ -1138,6 +1166,15 @@ export async function streamProviderMessage(
     reasoningTrimmed = reasoningTrimmed || rawNextReasoning.length > MAX_STREAM_REASONING_CHARS;
 
     if (nextContent !== content || nextReasoning !== reasoning || toolCallsChanged || reasoningStateEntries.length !== previousReasoningEntryCount || delta.reasoningState) {
+      markStreamTiming(timingMarks, requestStartedMs, "firstProviderEvent");
+      if (toolCallsChanged) {
+        toolCallRevision += 1;
+      }
+
+      if (!timingMarks.firstTokenAt && separateInlineThinking(nextContent).content.trim()) {
+        markStreamTiming(timingMarks, requestStartedMs, "firstToken");
+      }
+
       content = nextContent;
       reasoning = nextReasoning;
       scheduleSnapshot();
@@ -1160,6 +1197,7 @@ export async function streamProviderMessage(
         break;
       }
 
+      markStreamTiming(timingMarks, requestStartedMs, "firstByte");
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? "";
@@ -1176,6 +1214,7 @@ export async function streamProviderMessage(
     }
 
     applyStreamDelta(parseProviderStreamLine(settings.provider, buffer, useResponsesApi));
+    markStreamTiming(timingMarks, requestStartedMs, "completed");
     flushSnapshot(true);
   } finally {
     if (flushTimer) {
@@ -1203,6 +1242,7 @@ export async function streamProviderMessage(
     reasoningState: settings.thinking.enabled
       ? snapshotReasoningState ?? createStreamProviderReasoningState(settings.provider, finalReasoning, reasoningStateEntries, reasoningTrimmed)
       : undefined,
+    streamTiming: createStreamTimingSnapshot(timingMarks, true),
     toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
     usage,
   };
@@ -1276,7 +1316,15 @@ export async function fetchProviderModelContextLengths(settings: ProviderSetting
 
   return providerModels.reduce<Record<string, number>>((contextLengths, model) => {
     if (requestedModels.has(model.id) && typeof model.contextWindowTokens === "number" && Number.isFinite(model.contextWindowTokens) && model.contextWindowTokens > 0) {
-      contextLengths[model.id] = Math.round(model.contextWindowTokens);
+      const effectiveTokens = getEffectiveProviderModelContextWindowTokens(
+        settings.provider,
+        model.id,
+        model.contextWindowTokens,
+        settings.subscriptionOptimization,
+      );
+      if (effectiveTokens) {
+        contextLengths[model.id] = effectiveTokens;
+      }
     }
 
     return contextLengths;
@@ -1574,8 +1622,25 @@ export function createProviderMessageContent(message: ChatMessage, contextOption
   ];
 }
 
-function createResponsesMessageContent(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}) {
-  return createMessageTextForProvider(message, contextOptions) || message.content || " ";
+function createResponsesMessageContent(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}): ResponsesMessageContent {
+  const imageAttachments = message.attachments?.filter(isImageAttachment) ?? [];
+  const text = createMessageTextForProvider(message, contextOptions);
+
+  if (imageAttachments.length === 0) {
+    return text || message.content || " ";
+  }
+
+  return [
+    {
+      text: text || "User attached image.",
+      type: "input_text",
+    },
+    ...imageAttachments.map((attachment) => ({
+      detail: "auto" as const,
+      image_url: attachment.dataUrl,
+      type: "input_image" as const,
+    })),
+  ];
 }
 
 export function createMessageTextForProvider(message: ChatMessage, contextOptions: ContextSurfaceOptions = {}) {
@@ -2200,6 +2265,94 @@ function finalizeStreamToolCalls(provider: ModelProviderId, accumulator: Map<num
 
 function formatTimeoutSeconds(timeoutMs: number) {
   return Math.round(timeoutMs / 1000);
+}
+
+function nowHighResolutionMs() {
+  return typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
+}
+
+function elapsedTimingMs(requestStartedMs: number) {
+  return Math.max(0, Math.round(nowHighResolutionMs() - requestStartedMs));
+}
+
+function markStreamTiming(
+  timing: Partial<ChatStreamTiming>,
+  requestStartedMs: number,
+  mark: "completed" | "firstByte" | "firstProviderEvent" | "firstToken" | "responseStarted",
+) {
+  const at = new Date().toISOString();
+  const elapsedMs = elapsedTimingMs(requestStartedMs);
+
+  switch (mark) {
+    case "completed":
+      if (!timing.completedAt) {
+        timing.completedAt = at;
+        timing.totalMs = elapsedMs;
+      }
+      break;
+    case "firstByte":
+      if (!timing.firstByteAt) {
+        timing.firstByteAt = at;
+        timing.timeToFirstByteMs = elapsedMs;
+      }
+      break;
+    case "firstProviderEvent":
+      if (!timing.firstProviderEventAt) {
+        timing.firstProviderEventAt = at;
+        timing.timeToFirstProviderEventMs = elapsedMs;
+      }
+      break;
+    case "firstToken":
+      if (!timing.firstTokenAt) {
+        timing.firstTokenAt = at;
+        timing.timeToFirstTokenMs = elapsedMs;
+      }
+      break;
+    case "responseStarted":
+      if (!timing.responseStartedAt) {
+        timing.responseStartedAt = at;
+        timing.timeToResponseStartMs = elapsedMs;
+      }
+      break;
+  }
+}
+
+function createStreamTimingSnapshot(timing: Partial<ChatStreamTiming>, final = false): ChatStreamTiming {
+  return {
+    completedAt: final ? timing.completedAt : undefined,
+    firstByteAt: timing.firstByteAt,
+    firstProviderEventAt: timing.firstProviderEventAt,
+    firstTokenAt: timing.firstTokenAt,
+    firstVisibleTokenAt: timing.firstVisibleTokenAt,
+    requestStartedAt: timing.requestStartedAt ?? new Date().toISOString(),
+    responseStartedAt: timing.responseStartedAt,
+    timeToFirstByteMs: timing.timeToFirstByteMs,
+    timeToFirstProviderEventMs: timing.timeToFirstProviderEventMs,
+    timeToFirstTokenMs: timing.timeToFirstTokenMs,
+    timeToFirstVisibleTokenMs: timing.timeToFirstVisibleTokenMs,
+    timeToResponseStartMs: timing.timeToResponseStartMs,
+    totalMs: final ? timing.totalMs : undefined,
+  };
+}
+
+function createReasoningFlushKey(
+  reasoningState: ProviderReasoningState | undefined,
+  reasoning: string,
+  inlineReasoning: string,
+) {
+  if (!reasoningState) {
+    return "";
+  }
+
+  return [
+    getReasoningStateKey(reasoningState),
+    createStreamTextFingerprint(reasoning),
+    createStreamTextFingerprint(inlineReasoning),
+  ].join(":");
+}
+
+function createStreamTextFingerprint(value: string) {
+  return `${value.length}:${value.slice(-64)}`;
 }
 
 function limitReasoningText(reasoning: string) {

@@ -74,6 +74,7 @@ export function ConversationHeader({
   browserPreviewOpen,
   browserPreviewEnabled,
   codingSidecarOpen,
+  onAddAutomation,
   onArchive,
   onCopyDeeplink,
   onCopyMarkdown,
@@ -164,9 +165,9 @@ export function ConversationHeader({
       onSelect: onForkWorktree,
     },
     {
-      disabled: true,
       icon: Clock3,
-      label: "Add automation (coming soon)",
+      label: "Create task from this chat",
+      onSelect: onAddAutomation,
     },
     {
       icon: ExternalLink,

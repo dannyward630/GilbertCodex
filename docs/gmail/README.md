@@ -9,40 +9,24 @@ The user flow should stay simple:
 5. Approve the permission screen.
 6. Return to Gilbert Codex when the browser says Gmail connected.
 
-Installing Gmail opens Google account selection automatically. Users should never paste Google secrets, tokens, refresh tokens, or authorization codes into Gilbert Codex.
-
-End users do not complete developer setup. A release build should already include the public Google OAuth client ID needed to open Google account selection.
+If Google OAuth is not configured yet, the Apps page opens Settings > Google automatically. Users should paste only their own Desktop OAuth Client ID and Client secret there. Users should never paste Google access tokens, refresh tokens, authorization codes, or downloaded credential JSON into Gilbert Codex.
 
 Users can connect up to six Gmail accounts. Tool calls use the active account by default and can target another connected account with `accountEmail`.
 
-## Release Setup
-
-Official downloadable builds should include the public Google OAuth desktop client ID at build time:
-
-1. Create or choose the production Google Cloud project for Gilbert Codex.
-2. Enable the Gmail API.
-3. Configure the OAuth consent screen for external users.
-4. Create a Desktop app OAuth client.
-5. Add the client ID to GitHub as a repository variable named `VITE_GOOGLE_OAUTH_CLIENT_ID`.
-6. Add the desktop OAuth client secret to GitHub as a repository secret named `GOOGLE_OAUTH_CLIENT_SECRET`.
-7. Use a repository secret for the client ID only if you prefer to hide it from repository settings viewers.
-
-The release workflow fails before building if either value is missing. The client ID is public application identity. The desktop client secret is backend-only and must not be exposed through `VITE_` variables or committed to source control; shipped desktop apps can still contain it because installed-app OAuth clients cannot keep client secrets truly confidential. Never put user access tokens, refresh tokens, or exported user credential JSON in GitHub variables, GitHub secrets, `.env`, or source files.
-
-## Developer Setup
+## Google Setup
 
 1. Open Google Cloud Console.
 2. Create or choose a Google Cloud project.
 3. Enable the Gmail API.
 4. Create an OAuth client for a desktop app.
-5. Copy `.env.example` to `.env`.
-6. Set `VITE_GOOGLE_OAUTH_CLIENT_ID` to the public OAuth client ID.
-7. Set `GOOGLE_OAUTH_CLIENT_SECRET` to the desktop OAuth client secret.
-8. Restart Gilbert Codex, Vite, or Tauri after changing environment values.
+5. Open Settings > Google in the desktop app.
+6. Paste the Desktop app Client ID and Client secret.
+7. Save the Google setup.
+8. Return to Apps and install Gmail.
 
 If Google shows `Error 403: access_denied` with a message that Gilbert Codex has not completed verification, open Google Auth Platform > Audience and add the Gmail account as a test user. While the app is in Testing, only listed test users can authorize Gmail scopes.
 
-The Google OAuth client ID is public app identity. Keep `GOOGLE_OAUTH_CLIENT_SECRET` in ignored local `.env` files or GitHub release secrets only. Do not commit downloaded credential JSON, access tokens, refresh tokens, or Gmail payload exports.
+Do not commit Desktop OAuth Client IDs, Client secrets, downloaded credential JSON, access tokens, refresh tokens, or Gmail payload exports.
 
 ## Current Scope Bundle
 
@@ -50,6 +34,11 @@ The Google OAuth client ID is public app identity. Keep `GOOGLE_OAUTH_CLIENT_SEC
 - `email`
 - `profile`
 - `https://www.googleapis.com/auth/gmail.modify`
+- `https://www.googleapis.com/auth/gmail.compose`
+- `https://www.googleapis.com/auth/gmail.send`
+- `https://www.googleapis.com/auth/gmail.labels`
+- `https://www.googleapis.com/auth/gmail.settings.basic`
+- `https://www.googleapis.com/auth/gmail.settings.sharing`
 
 Google classifies `gmail.modify` as a restricted Gmail scope. Keep it only because the product goal is more than read-only Gmail: labels, drafts, archive/trash actions, and send proposals need broad Gmail action support.
 
@@ -64,6 +53,8 @@ Gmail tools are exposed through the local tool bridge, backed by Tauri commands 
 - Confirmation-gated destructive tools: `gmail_delete_draft`, `gmail_trash_message`
 
 The tool bridge treats send, draft deletion, and trash as destructive so the app approval path stays visible before the operation runs.
+
+Outgoing draft and send bodies use Markdown by default. The approval card shows the Markdown body for review, and the desktop Gmail command renders that Markdown to safe HTML before it calls Gmail so recipients see formatted headings, lists, links, and emphasis. Explicit `contentType: "text/plain"` keeps the Markdown characters literal; explicit `contentType: "text/html"` sends trusted HTML as provided.
 
 Full-content reads are also approval-gated. Metadata tools can show sender, recipient, subject, date, labels, snippets, ids, and thread ids without exposing the full body. Approved full reads can return body text, attachment metadata, detected image attachments, and detected links. Detected links are never opened automatically.
 

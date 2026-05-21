@@ -1,4 +1,4 @@
-import type { ModelProviderId, ProviderModelVisibilityMap, ProviderSecretMap } from "../types/settings";
+import type { ModelProviderId, ProviderModelVisibilityMap, ProviderSecretMap, SubscriptionCodexContextWindow, SubscriptionOptimizationSettings } from "../types/settings";
 
 export const OPENROUTER_FREE_AUTO_MODEL = "openrouter/free";
 export const OPENROUTER_AUTO_MODEL = "openrouter/auto";
@@ -8,7 +8,8 @@ export const GPT_OSS_120B_FREE_MODEL = "openai/gpt-oss-120b:free";
 export const GPT_OSS_20B_FREE_MODEL = "openai/gpt-oss-20b:free";
 export const MINIMAX_M25_FREE_MODEL = "minimax/minimax-m2.5:free";
 export const QWEN3_CODER_FREE_MODEL = "qwen/qwen3-coder:free";
-export const IMAGE_REASONING_MODEL = "google/gemma-4-26b-a4b-it:free";
+export const NEMOTRON_3_NANO_OMNI_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
+export const IMAGE_REASONING_MODEL = NEMOTRON_3_NANO_OMNI_MODEL;
 export const GEMMA_4_31B_FREE_MODEL = "google/gemma-4-31b-it:free";
 export const QWEN3_NEXT_80B_FREE_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free";
 export const LLAMA_33_70B_FREE_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
@@ -42,7 +43,6 @@ const RETIRED_OPENROUTER_FREE_MODELS = new Set<string>([
   GPT_OSS_20B_FREE_MODEL,
   "inclusionai/ring-2.6-1t:free",
   LLAMA_33_70B_FREE_MODEL,
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
   "poolside/laguna-xs.2:free",
   QWEN3_CODER_FREE_MODEL,
   QWEN3_NEXT_80B_FREE_MODEL,
@@ -56,6 +56,8 @@ export const NINE_ROUTER_CODEX_MODEL_IDS = [
   "cx/gpt-5.3-codex-xhigh",
 ] as const;
 const NINE_ROUTER_CODEX_MODEL_ID_SET = new Set<string>(NINE_ROUTER_CODEX_MODEL_IDS);
+export const NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS = 262_144;
+export const NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS = 1_000_000;
 export const NINE_ROUTER_SMART_SAVER_MODEL = "gilbert-smart-saver";
 export const NINE_ROUTER_ALWAYS_FREE_MODEL = "gilbert-always-free";
 export const NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS = [
@@ -590,26 +592,26 @@ function getModelProviderLabel(provider: ModelProviderId) {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "Subscription route for connected Codex / ChatGPT accounts.", 1_000_000, {
-    capabilities: ["Local gateway", "Subscription", "Reasoning"],
+  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "Subscription route for connected Codex / ChatGPT accounts.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
+    capabilities: ["Local gateway", "Subscription", "Reasoning", "Multimodal"],
     category: "reasoning",
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use when the user has connected Codex or ChatGPT and wants Gilbert to use that subscription route.",
   }),
-  modelOption("9router", "9router-codex-gpt-54", "Codex GPT-5.4", "cx/gpt-5.4", "Balanced subscription-backed coding and chat route.", 1_000_000, {
-    capabilities: ["Local gateway", "Subscription", "Coding"],
+  modelOption("9router", "9router-codex-gpt-54", "Codex GPT-5.4", "cx/gpt-5.4", "Balanced subscription-backed coding and chat route.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
+    capabilities: ["Local gateway", "Subscription", "Coding", "Multimodal"],
     category: "coding",
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use as the balanced Codex route when the user wants strong coding without jumping to GPT-5.5.",
   }),
-  modelOption("9router", "9router-codex-gpt-53-codex", "Codex GPT-5.3 Codex", "cx/gpt-5.3-codex", "Codex-tuned coding route for connected subscription accounts.", 400_000, {
-    capabilities: ["Local gateway", "Subscription", "Coding"],
+  modelOption("9router", "9router-codex-gpt-53-codex", "Codex GPT-5.3 Codex", "cx/gpt-5.3-codex", "Codex-tuned coding route for connected subscription accounts.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
+    capabilities: ["Local gateway", "Subscription", "Coding", "Multimodal"],
     category: "coding",
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use when the user wants the Codex-tuned model through their connected Codex account.",
   }),
-  modelOption("9router", "9router-codex-gpt-53-codex-xhigh", "Codex GPT-5.3 Codex xHigh", "cx/gpt-5.3-codex-xhigh", "Codex coding route with xHigh reasoning through the connected account.", 400_000, {
-    capabilities: ["Local gateway", "Subscription", "Coding", "High reasoning"],
+  modelOption("9router", "9router-codex-gpt-53-codex-xhigh", "Codex GPT-5.3 Codex xHigh", "cx/gpt-5.3-codex-xhigh", "Codex coding route with xHigh reasoning through the connected account.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
+    capabilities: ["Local gateway", "Subscription", "Coding", "High reasoning", "Multimodal"],
     category: "reasoning",
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use for harder coding turns where the Codex xHigh route is available through the subscription account.",
@@ -747,49 +749,49 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     useCase: "High-value coding, long-context analysis, and guided workflows at aggressive token pricing.",
   }),
   modelOption("openai", "openai-gpt-55", "GPT-5.5", "gpt-5.5", "OpenAI flagship model for complex reasoning, coding, and professional work.", 1_050_000, {
-    capabilities: ["Reasoning", "Coding", "Structured"],
+    capabilities: ["Reasoning", "Coding", "Structured", "Multimodal"],
     category: "recommended",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, note: "Standard short-context rate. OpenAI lists higher long-context rates for GPT-5.5.", outputPerMillionTokens: 30 }),
     useCase: "Best direct OpenAI default for hard coding, agent work, and complex professional reasoning.",
   }),
   modelOption("openai", "openai-gpt-55-pro", "GPT-5.5 Pro", "gpt-5.5-pro", "Smarter, more precise GPT-5.5 variant for the highest-value direct OpenAI work.", 1_050_000, {
-    capabilities: ["Reasoning", "Coding", "Structured", "Precision"],
+    capabilities: ["Reasoning", "Coding", "Structured", "Precision", "Multimodal"],
     category: "reasoning",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { inputPerMillionTokens: 30, note: "Standard short-context rate. OpenAI lists higher long-context rates for GPT-5.5 Pro and no cached-input rate.", outputPerMillionTokens: 180 }),
     useCase: "Use when answer precision matters more than latency or cost.",
   }),
   modelOption("openai", "openai-gpt-54", "GPT-5.4", "gpt-5.4", "More affordable OpenAI model for coding and professional work.", 1_050_000, {
-    capabilities: ["Coding", "Reasoning", "Structured"],
+    capabilities: ["Coding", "Reasoning", "Structured", "Multimodal"],
     category: "coding",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.25, inputPerMillionTokens: 2.5, note: "Standard short-context rate. OpenAI lists higher long-context rates for GPT-5.4.", outputPerMillionTokens: 15 }),
     useCase: "Lower-cost direct OpenAI choice for coding, structured output, and reliable professional work.",
   }),
   modelOption("openai", "openai-gpt-54-mini", "GPT-5.4 Mini", "gpt-5.4-mini", "OpenAI mini model for coding, computer use, and subagents.", 400_000, {
-    capabilities: ["Fast", "Coding", "Structured"],
+    capabilities: ["Fast", "Coding", "Structured", "Multimodal"],
     category: "fast",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.075, inputPerMillionTokens: 0.75, outputPerMillionTokens: 4.5 }),
     useCase: "Subagents, focused implementation work, and lower-cost coding passes.",
   }),
   modelOption("openai", "openai-gpt-54-nano", "GPT-5.4 Nano", "gpt-5.4-nano", "OpenAI's smallest current GPT-5.4 model for high-volume background tasks.", 400_000, {
-    capabilities: ["Fast", "Low cost"],
+    capabilities: ["Fast", "Low cost", "Multimodal"],
     category: "fast",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.02, inputPerMillionTokens: 0.2, outputPerMillionTokens: 1.25 }),
     useCase: "Classification, summarization, extraction, and inexpensive background work.",
   }),
   modelOption("openai", "openai-gpt-54-pro", "GPT-5.4 Pro", "gpt-5.4-pro", "More precise GPT-5.4 variant for difficult professional tasks.", 1_050_000, {
-    capabilities: ["Reasoning", "Coding", "Structured", "Precision"],
+    capabilities: ["Reasoning", "Coding", "Structured", "Precision", "Multimodal"],
     category: "reasoning",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { inputPerMillionTokens: 30, note: "Standard short-context rate. OpenAI lists higher long-context rates for GPT-5.4 Pro and no cached-input rate.", outputPerMillionTokens: 180 }),
     useCase: "High-precision coding, analysis, and professional work where Pro cost is acceptable.",
   }),
   modelOption("openai", "openai-gpt-53-codex", "GPT-5.3 Codex", "gpt-5.3-codex", "OpenAI's specialized agentic coding model for Codex-like coding environments.", 400_000, {
-    capabilities: ["Coding", "Agents", "Reasoning", "Structured"],
+    capabilities: ["Coding", "Agents", "Reasoning", "Structured", "Multimodal"],
     category: "coding",
     maxOutputTokens: 128_000,
     pricing: providerPricing("openai", { cachedInputPerMillionTokens: 0.175, inputPerMillionTokens: 1.75, outputPerMillionTokens: 14 }),
@@ -1021,7 +1023,26 @@ export function isOpenRouterFreeModel(model: string) {
 }
 
 export function isNineRouterCodexModelId(model: string) {
-  return NINE_ROUTER_CODEX_MODEL_ID_SET.has(model.trim());
+  const normalizedModel = model.trim().toLowerCase();
+
+  return NINE_ROUTER_CODEX_MODEL_ID_SET.has(normalizedModel) || normalizedModel.startsWith("cx/gpt-");
+}
+
+export function getNineRouterCodexContextWindowTokens(mode?: SubscriptionCodexContextWindow) {
+  return mode === "extended" ? NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS : NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS;
+}
+
+export function getEffectiveProviderModelContextWindowTokens(
+  provider: ModelProviderId,
+  model: string,
+  tokens: number | undefined,
+  subscriptionOptimization?: Pick<SubscriptionOptimizationSettings, "codexContextWindow">,
+) {
+  if (provider === "9router" && isNineRouterCodexModelId(model)) {
+    return getNineRouterCodexContextWindowTokens(subscriptionOptimization?.codexContextWindow);
+  }
+
+  return typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0 ? Math.round(tokens) : undefined;
 }
 
 export function isNineRouterGithubCopilotModelId(model: string) {
@@ -1170,6 +1191,14 @@ export function supportsModelInputModality(provider: ModelProviderId, model: str
   }
 
   if (modality === "image") {
+    if (provider === "openai" && supportsOpenAiNativeImageInput(normalizedModel)) {
+      return true;
+    }
+
+    if (provider === "9router" && supportsNineRouterNativeImageInput(normalizedModel)) {
+      return true;
+    }
+
     if (provider === "anthropic") {
       return !normalizedModel || /claude-(opus|sonnet|haiku|3-7)/.test(normalizedModel);
     }
@@ -1190,14 +1219,48 @@ export function supportsModelInputModality(provider: ModelProviderId, model: str
   return false;
 }
 
-export function getProviderApiKey(settings: { apiKeys?: ProviderSecretMap; openRouterApiKey?: string; provider: ModelProviderId }) {
-  const providerApiKey = settings.apiKeys?.[settings.provider] ?? "";
+function supportsOpenAiNativeImageInput(normalizedModel: string) {
+  return !normalizedModel || /^(?:gpt-|chatgpt-|o[1-9])/.test(normalizedModel);
+}
 
-  if (settings.provider === "openrouter") {
+function supportsNineRouterNativeImageInput(normalizedModel: string) {
+  return normalizedModel.startsWith("cx/") && supportsOpenAiNativeImageInput(normalizedModel.slice(3));
+}
+
+export function getProviderApiKeyForProvider(settings: { apiKeys?: ProviderSecretMap; openRouterApiKey?: string }, provider: ModelProviderId) {
+  const providerApiKey = settings.apiKeys?.[provider] ?? "";
+
+  if (provider === "openrouter") {
     return providerApiKey || settings.openRouterApiKey || "";
   }
 
   return providerApiKey;
+}
+
+export function getProviderApiKey(settings: { apiKeys?: ProviderSecretMap; openRouterApiKey?: string; provider: ModelProviderId }) {
+  return getProviderApiKeyForProvider(settings, settings.provider);
+}
+
+export function isModelProviderAvailableForSelection(
+  settings: { apiKeys?: ProviderSecretMap; openRouterApiKey?: string },
+  provider: ModelProviderId,
+  discoveredModels: ProviderModelMetadata[] | undefined,
+  catalogStatus: "error" | "idle" | "loading" | "ready" | undefined,
+) {
+  if (provider === "9router") {
+    return catalogStatus === "ready";
+  }
+
+  if (prefersLiveModelCatalog(provider)) {
+    return catalogStatus === "ready" && Boolean(discoveredModels?.length);
+  }
+
+  const definition = getModelProvider(provider);
+  if (definition.requiresApiKey) {
+    return Boolean(getProviderApiKeyForProvider(settings, provider).trim());
+  }
+
+  return true;
 }
 
 export function getProviderBaseUrl(settings: { baseUrls?: ProviderSecretMap; provider: ModelProviderId }) {

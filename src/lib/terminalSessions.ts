@@ -31,6 +31,15 @@ export function registerBackgroundTerminalSession(session: {
 }) {
   const now = Date.now();
   const existing = sessions.get(session.sessionId);
+  const sessionKey = createSessionReuseKey(session.command, session.workingDirectory);
+  if (sessionKey) {
+    for (const [sessionId, candidate] of sessions.entries()) {
+      if (sessionId !== session.sessionId && createSessionReuseKey(candidate.command, candidate.workingDirectory) === sessionKey) {
+        sessions.delete(sessionId);
+      }
+    }
+  }
+
   sessions.set(session.sessionId, {
     ...existing,
     browserPreviewUrl: session.browserPreviewUrl ?? existing?.browserPreviewUrl,
@@ -160,6 +169,13 @@ function trimOutputPreview(value?: string) {
   return trimmed.length > MAX_OUTPUT_PREVIEW_CHARS
     ? trimmed.slice(trimmed.length - MAX_OUTPUT_PREVIEW_CHARS)
     : trimmed;
+}
+
+function createSessionReuseKey(command?: string, workingDirectory?: string) {
+  const commandKey = command?.trim().replace(/\s+/g, " ").toLowerCase();
+  const pathKey = workingDirectory?.trim().replace(/[\\/]+$/, "").toLowerCase();
+
+  return commandKey && pathKey ? `${pathKey}\n${commandKey}` : undefined;
 }
 
 function pruneBackgroundTerminalSessions() {

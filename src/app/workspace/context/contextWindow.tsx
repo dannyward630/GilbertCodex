@@ -22,6 +22,7 @@ import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 import { recordModelProviderUsage } from "../../../services/usageTracker";
+import { getNineRouterCodexContextWindowTokens, isNineRouterCodexModelId } from "../../../lib/models";
 
 export function compactProviderMessages(deps: WorkspaceRuntimeDeps, messages: ChatMessage[], settingsOverride: ProviderSettings, options: { target?: number; threshold?: number; toolBridge?: ProviderToolBridgeOptions }) {
   const { AUTO_COMPACT_CONTEXT_TARGET, AUTO_COMPACT_CONTEXT_THRESHOLD, compactMessagesForContext, createToolAwareProviderSettings, estimateModelProviderPayloadUsage, getProviderCompactionBaseline, recordContextCompaction, resolveContextWindowForModel } = deps;
@@ -95,6 +96,15 @@ export function resolveContextWindowForModel(deps: WorkspaceRuntimeDeps, model: 
 
     const normalizedModel = model.trim();
     const manualOverride = getManualModelBudgetOverride(settings, normalizedModel || settings.model.trim());
+    const resolvedModel = normalizedModel || settings.model.trim();
+    if (settings.provider === "9router" && isNineRouterCodexModelId(resolvedModel)) {
+      return {
+        maxOutputTokens: manualOverride?.maxOutputTokens,
+        source: "provider",
+        tokens: getNineRouterCodexContextWindowTokens(settings.subscriptionOptimization?.codexContextWindow),
+      };
+    }
+
     if (manualOverride?.contextWindowTokens) {
       return {
         maxOutputTokens: manualOverride.maxOutputTokens,
@@ -500,6 +510,7 @@ export function hasRequestScopedWorkspaceToolsEnabled(deps: WorkspaceRuntimeDeps
       settings.tools.codeEdit ||
       settings.tools.fileCreation ||
       settings.tools.terminal ||
+      settings.tools.browserPreview ||
       settings.tools.sourceControl,
     );
   }
@@ -524,12 +535,13 @@ export function shouldUseLighterThinkingForPrompt(deps: WorkspaceRuntimeDeps, pr
     return wordCount <= SIMPLE_THINKING_PROMPT_MAX_WORDS && SIMPLE_THINKING_PROMPT_PATTERN.test(normalizedPrompt);
   }
 
-export function createFinalOnlyProviderSettings(deps: WorkspaceRuntimeDeps, prompt: string, chat: ChatSummary | null | undefined): ProviderSettings {
+export function createFinalOnlyProviderSettings(deps: WorkspaceRuntimeDeps, prompt: string, chat: ChatSummary | null | undefined, overrides: Partial<ProviderSettings> = {}): ProviderSettings {
   const { createLocationAwareToolSettings, createPromptAwareThinkingSettings, createToolAwareProviderSettings, locationServicesEnabled, providerSettings } = deps;
 
-    const tools = createLocationAwareToolSettings(providerSettings.tools, locationServicesEnabled);
+    const tools = createLocationAwareToolSettings(overrides.tools ?? providerSettings.tools, locationServicesEnabled);
 
     const settings = createToolAwareProviderSettings({
+      ...overrides,
       tools: {
         ...tools,
         browserPreview: false,
