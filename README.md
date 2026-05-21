@@ -28,7 +28,7 @@
 
 ## v0.5.5 Public Alpha
 
-Gilbert Codex v0.5.5 is a release-readiness update focused on making the app feel more complete without loosening its local-first boundaries. It keeps the big v0.5.0 foundation and adds stronger Apps and Plugins surfaces, Google/Gmail/Calendar setup through Settings, task automation, voice dictation, browser/terminal polish, deeper customization, and a cleaner runtime path for provider streaming, planning, approvals, and source-backed work.
+Gilbert Codex v0.5.5 is a release-readiness update focused on making the app feel more complete without loosening its local-first boundaries. It adds stronger Apps and Plugins surfaces, Google/Gmail/Calendar setup through Settings, task automation, voice dictation, browser/terminal polish, deeper customization, and a cleaner runtime path for provider streaming, planning, approvals, and source-backed work.
 
 This is still alpha software. Windows x64 is the verified packaged target. macOS support is in active development and should land soon; Linux remains source-first until native testing catches up. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
 
