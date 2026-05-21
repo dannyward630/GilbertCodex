@@ -160,9 +160,16 @@ jobs:
       - name: Prepare offline dictation release assets
         shell: pwsh
         run: |
-          npm run dictation:model
-          npm run dictation:llvm
-          npm run dictation:vulkan-sdk
+          function Invoke-CheckedCommand([string]$FilePath, [string[]]$Arguments) {
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "$FilePath $($Arguments -join ' ') exited with code $LASTEXITCODE"
+            }
+          }
+
+          Invoke-CheckedCommand "npm" @("run", "dictation:model")
+          Invoke-CheckedCommand "npm" @("run", "dictation:llvm")
+          Invoke-CheckedCommand "npm" @("run", "dictation:vulkan-sdk")
 
           $libClang = Get-ChildItem -LiteralPath ".tools\llvm" -Recurse -Filter "libclang.dll" |
             Select-Object -First 1
@@ -220,8 +227,28 @@ jobs:
             throw "Could not find the NSIS setup executable to checksum."
           }
 
+          function Get-FileHashHex([string]$Path, [string]$Algorithm) {
+            $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+            $stream = [System.IO.File]::OpenRead($resolvedPath)
+            try {
+              $hasher = switch ($Algorithm.ToUpperInvariant()) {
+                "SHA1" { [System.Security.Cryptography.SHA1]::Create() }
+                "SHA256" { [System.Security.Cryptography.SHA256]::Create() }
+                default { throw "Unsupported hash algorithm: $Algorithm" }
+              }
+
+              try {
+                return ([BitConverter]::ToString($hasher.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+              } finally {
+                $hasher.Dispose()
+              }
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
           $assetName = "Gilbert-Codex-$version-x64-setup.exe"
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
+          $hash = Get-FileHashHex -Path $installer.FullName -Algorithm SHA256
           $checksumPath = Join-Path $env:RUNNER_TEMP "$assetName.sha256"
           "$hash  $assetName" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
           gh release upload $tag $checksumPath --clobber

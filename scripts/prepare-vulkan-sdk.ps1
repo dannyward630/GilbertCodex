@@ -18,6 +18,26 @@ function Test-VulkanSdkReady([string]$Path) {
     (Test-Path (Join-Path $Path "Bin\glslc.exe"))
 }
 
+function Get-FileHashHex([string]$Path, [string]$Algorithm) {
+  $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+  $stream = [System.IO.File]::OpenRead($resolvedPath)
+  try {
+    $hasher = switch ($Algorithm.ToUpperInvariant()) {
+      "SHA1" { [System.Security.Cryptography.SHA1]::Create() }
+      "SHA256" { [System.Security.Cryptography.SHA256]::Create() }
+      default { throw "Unsupported hash algorithm: $Algorithm" }
+    }
+
+    try {
+      return ([BitConverter]::ToString($hasher.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $hasher.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 New-Item -ItemType Directory -Force $downloadsDir | Out-Null
 
 if (Test-VulkanSdkReady $sdkRoot) {
@@ -30,7 +50,7 @@ if (-not (Test-Path $installerPath)) {
   Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath
 }
 
-$hash = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$hash = Get-FileHashHex -Path $installerPath -Algorithm SHA256
 if ($hash -ne $ExpectedSha256.ToLowerInvariant()) {
   throw "Vulkan SDK hash mismatch. Expected $ExpectedSha256 but got $hash for $installerPath"
 }

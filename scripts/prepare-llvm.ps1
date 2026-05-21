@@ -18,6 +18,26 @@ function Test-LlvmReady([string]$Path) {
     (Test-Path (Join-Path $Path "bin\clang.exe"))
 }
 
+function Get-FileHashHex([string]$Path, [string]$Algorithm) {
+  $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+  $stream = [System.IO.File]::OpenRead($resolvedPath)
+  try {
+    $hasher = switch ($Algorithm.ToUpperInvariant()) {
+      "SHA1" { [System.Security.Cryptography.SHA1]::Create() }
+      "SHA256" { [System.Security.Cryptography.SHA256]::Create() }
+      default { throw "Unsupported hash algorithm: $Algorithm" }
+    }
+
+    try {
+      return ([BitConverter]::ToString($hasher.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $hasher.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 New-Item -ItemType Directory -Force $downloadsDir | Out-Null
 New-Item -ItemType Directory -Force $llvmRoot | Out-Null
 
@@ -31,7 +51,7 @@ if (-not (Test-Path $archivePath)) {
   Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
 }
 
-$hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$hash = Get-FileHashHex -Path $archivePath -Algorithm SHA256
 if ($hash -ne $ExpectedSha256.ToLowerInvariant()) {
   throw "LLVM archive hash mismatch. Expected $ExpectedSha256 but got $hash for $archivePath"
 }
