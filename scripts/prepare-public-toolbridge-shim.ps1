@@ -32,13 +32,28 @@ Write-ShimFile "types.ts" @'
 import type { ChatToolCall } from "../types/chat";
 import type { LocalPermissionMode } from "../types/localWorkspace";
 import type { ProviderReasoningState } from "../types/reasoning";
-import type { ModelProviderId, WebSearchSettings } from "../types/settings";
+import type { AppAgentEnvironment, ModelProviderId, WebSearchSettings } from "../types/settings";
+import type { TerminalShellId } from "../types/terminal";
 
 export type ToolBridgeProviderFormat = "openai-compatible" | "anthropic-messages" | "openai-responses";
 export type ToolBridgeRisk = "diagnostic" | "read" | "mutating" | "terminal" | "network" | "destructive" | "credential" | "publish";
+export type ToolBridgeToolFamily = "diagnostic" | "files" | "editing" | "terminal" | "git" | "github" | "web" | "media" | "mcp" | "browser" | "workflow" | "memory" | "gmail" | "calendar";
 export type ToolBridgePermissionRequirement = "diagnostic" | "read-only" | "mutating" | "terminal" | "network" | "destructive" | "external-path" | "credential" | "publish";
 export type ToolBridgeToolChoice = "auto" | "none" | "required";
 export type ToolBridgeSchedulerMode = "parallel" | "exclusive";
+export type ToolIntent =
+  | "none"
+  | "workspace_evidence"
+  | "workspace_mutation"
+  | "git_review"
+  | "web_search"
+  | "terminal"
+  | "browser"
+  | "media_generation"
+  | "memory"
+  | "gmail"
+  | "calendar"
+  | "diagnostic";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -63,6 +78,8 @@ export interface ToolMemorySearchResponse {
 }
 
 export interface ToolExecutionContext {
+  agentEnvironment?: AppAgentEnvironment;
+  automationScope?: ToolAutomationScope;
   memorySearch?: (request: ToolMemorySearchRequest) => Promise<ToolMemorySearchResponse> | ToolMemorySearchResponse;
   model: string;
   permissionMode: LocalPermissionMode;
@@ -70,9 +87,21 @@ export interface ToolExecutionContext {
   providerApiKey?: string;
   reportProgress?: ToolExecutionProgressReporter;
   signal?: AbortSignal;
+  terminalDefaultShell?: TerminalShellId;
   webSearchMaxResults?: number;
   webSearchSettings?: WebSearchSettings;
   workspaceRoots?: string[];
+}
+
+export interface ToolAutomationScope {
+  allowedFamilies?: ToolBridgeToolFamily[];
+  allowedToolIds?: string[];
+  autonomous: boolean;
+  maxModelLoops?: number;
+  maxRuntimeSeconds?: number;
+  maxToolCalls?: number;
+  taskId: string;
+  taskTitle?: string;
 }
 
 export interface ToolExecutionResult {
@@ -89,7 +118,7 @@ export interface ToolDefinition {
   compatibleProviders?: ToolBridgeProviderFormat[];
   description: string;
   executorMetadata?: {
-    family: "diagnostic" | "files" | "editing" | "terminal" | "git" | "web" | "media" | "mcp" | "browser" | "workflow" | "memory";
+    family: ToolBridgeToolFamily;
     version: number;
   };
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<ToolExecutionResult> | ToolExecutionResult;
@@ -99,6 +128,27 @@ export interface ToolDefinition {
   risk: ToolBridgeRisk;
   scheduler?: { mode?: ToolBridgeSchedulerMode };
   title: string;
+}
+
+export interface ToolCapabilityBlockedReason {
+  code: string;
+  detail: string;
+  family?: ToolBridgeToolFamily;
+  toolId?: string;
+}
+
+export interface ToolCapabilityPlan {
+  blockedReasons: ToolCapabilityBlockedReason[];
+  canCallProvider: boolean;
+  intent: ToolIntent[];
+  mustUseTools: boolean;
+  prompt: string;
+  providerFormat?: ToolBridgeProviderFormat;
+  providerVisibleToolIds: string[];
+  requiredFamilies: ToolBridgeToolFamily[];
+  selectedToolIds: string[];
+  selectedTools: ToolDefinition[];
+  toolChoice: ToolBridgeToolChoice;
 }
 
 export interface ToolCallRequest {
@@ -122,6 +172,8 @@ export interface ProviderToolBridgeOptions {
   maxToolResultContentChars?: number | null;
   parallelToolCalls?: boolean;
   reasoningState?: ProviderReasoningState;
+  capabilityPlan?: ToolCapabilityPlan;
+  providerVisibleToolIds?: string[];
   resultsHistoryAlreadyContainsAssistantTurns?: boolean;
   runtimeBudget?: {
     maxExecutions?: number;
@@ -184,7 +236,25 @@ export interface ToolApprovalDecision {
 }
 
 export type ToolApprovalCallback = (request: ToolApprovalRequest) => Promise<ToolApprovalDecision> | ToolApprovalDecision;
-export type ToolBridgeTelemetryEvent = { [key: string]: unknown; type: string };
+export type ToolBridgeTelemetryEvent =
+  | {
+      callId: string;
+      durationMs: number;
+      error?: string;
+      family?: string;
+      ok: boolean;
+      toolId: string;
+      type: "tool-invoked";
+      version?: number;
+    }
+  | { callId: string; reason: string; toolId: string; type: "tool-skipped" }
+  | { callId: string; error: string; toolId: string; type: "tool-validation-failed" }
+  | { callId: string; reason?: string; toolId: string; type: "tool-approval-requested" }
+  | { approved: boolean; callId: string; reason?: string; toolId: string; type: "tool-approval-resolved" }
+  | { coalescedCount: number; fromToolIds: string[]; requestedCount: number; toToolIds: string[]; type: "tool-batch-coalesced" }
+  | { exclusiveCount: number; parallelCount: number; segmentCount: number; type: "tool-batch-scheduled" }
+  | { loopIndex: number; reason: "max-loops" | "signal"; type: "tool-loop-aborted" }
+  | { callId: string; toolName: string; type: "tool-call-duplicate" };
 export type ToolBridgeTelemetrySink = (event: ToolBridgeTelemetryEvent) => void;
 '@
 
@@ -329,7 +399,7 @@ export function normalizeToolBridgePermissionMode(value: unknown): LocalPermissi
   return value === "auto-review" || value === "full-access" || value === "default" ? value : "default";
 }
 
-export function resolveToolPermission(_tool: ToolDefinition | undefined, _context?: ToolExecutionContext): ToolPermissionDecision {
+export function resolveToolPermission(_tool: ToolDefinition, _context: Pick<ToolExecutionContext, "automationScope" | "permissionMode">): ToolPermissionDecision {
   return {
     allowed: false,
     reason: "Provider tool bridge is not bundled in this public build.",
@@ -337,12 +407,68 @@ export function resolveToolPermission(_tool: ToolDefinition | undefined, _contex
   };
 }
 
-export function filterToolsForPermission(tools: ToolDefinition[] = [], _options: FilterToolsForPermissionOptions = {}) {
+export function filterToolsForPermission(
+  tools: ToolDefinition[] = [],
+  _context?: Pick<ToolExecutionContext, "automationScope" | "permissionMode">,
+  _options: FilterToolsForPermissionOptions = {},
+) {
   return tools;
 }
 
 export function toolBridgePermissionLabel(value: unknown) {
   return String(value ?? "default");
+}
+'@
+
+Write-ShimFile "registry.ts" @'
+import type { ToolBridgeProviderFormat, ToolDefinition, ToolExecutionContext } from "./types";
+import { filterToolsForPermission, type FilterToolsForPermissionOptions } from "./permissions";
+
+export type ToolRegistryListOptions = FilterToolsForPermissionOptions;
+
+export class ToolRegistry {
+  private readonly tools = new Map<string, ToolDefinition>();
+
+  constructor(tools: ToolDefinition[] = []) {
+    for (const tool of tools) {
+      this.register(tool);
+    }
+  }
+
+  get(id: string) {
+    return this.tools.get(id);
+  }
+
+  has(id: string) {
+    return this.tools.has(id);
+  }
+
+  list() {
+    return [...this.tools.values()];
+  }
+
+  listForContext(
+    context: Pick<ToolExecutionContext, "automationScope" | "permissionMode">,
+    providerFormat?: ToolBridgeProviderFormat,
+    options?: ToolRegistryListOptions,
+  ) {
+    return filterToolsForPermission(this.list(), context, options).filter((tool) =>
+      isToolCompatibleWithProvider(tool, providerFormat),
+    );
+  }
+
+  register(tool: ToolDefinition) {
+    this.tools.set(tool.id, tool);
+    return this;
+  }
+}
+
+export function createDefaultToolRegistry() {
+  return new ToolRegistry();
+}
+
+export function isToolCompatibleWithProvider(tool: ToolDefinition, providerFormat: ToolBridgeProviderFormat | undefined) {
+  return !providerFormat || !tool.compatibleProviders || tool.compatibleProviders.includes(providerFormat);
 }
 '@
 
@@ -395,67 +521,33 @@ export function parseResponsesToolCalls(..._args: unknown[]): ToolCallRequest[] 
 
 Write-ShimFile "index.ts" @'
 import type { ChatToolCall } from "../types/chat";
+import type { ProviderSettings } from "../types/settings";
+import type { ToolRegistry } from "./registry";
 import type {
   ToolBridgeExecutionBatch,
+  ToolBridgeProviderFormat,
+  ToolBridgeToolChoice,
+  ToolBridgeToolFamily,
   ToolCallRequest,
+  ToolCapabilityBlockedReason,
+  ToolCapabilityPlan,
   ToolDefinition,
   ToolExecutionContext,
   ToolExecutionResult,
+  ToolIntent,
   ToolResultMessage,
   ToolValidationResult,
 } from "./types";
 
 export * from "./types";
 export * from "./permissions";
+export { ToolRegistry, createDefaultToolRegistry, isToolCompatibleWithProvider, type ToolRegistryListOptions } from "./registry";
 export * from "./resultFinalizer";
 export { applyToolBridgeToProviderRequest } from "./adapters";
 export { parseVisibleTextToolCalls } from "./parsers";
 export { createProviderVisibleToolSchema, decrementRemainingChars, normalizeRemainingChars } from "./adapters/sharedUtils";
 
 export const BRIDGE_TOOL_CALL_ID_PREFIX = "bridge-tool-";
-
-export class ToolRegistry {
-  private readonly tools = new Map<string, ToolDefinition>();
-
-  constructor(tools: ToolDefinition[] = []) {
-    for (const tool of tools) {
-      this.tools.set(tool.id, tool);
-    }
-  }
-
-  get(id: string) {
-    return this.tools.get(id);
-  }
-
-  has(id: string) {
-    return this.tools.has(id);
-  }
-
-  list() {
-    return [...this.tools.values()];
-  }
-
-  listForContext(_context?: ToolExecutionContext, _provider?: unknown, _settings?: unknown) {
-    return this.list();
-  }
-
-  register(tool: ToolDefinition) {
-    this.tools.set(tool.id, tool);
-    return this;
-  }
-}
-
-export function createDefaultToolRegistry() {
-  return new ToolRegistry();
-}
-
-export function isToolCompatibleWithProvider() {
-  return false;
-}
-
-export interface ToolRegistryListOptions {
-  [key: string]: unknown;
-}
 
 export function createBridgeChatToolCall(call: ToolCallRequest, tool: ToolDefinition | undefined, result: ToolExecutionResult, status: ChatToolCall["status"] = result.ok ? "complete" : "error"): ChatToolCall {
   return {
@@ -528,6 +620,74 @@ export function validateToolArguments(_tool: ToolDefinition | undefined, args: u
 
 export function selectAdvertisedBridgeTools() {
   return [] as ToolDefinition[];
+}
+
+export interface SelectToolCapabilityPlanOptions {
+  availableTools: ToolDefinition[];
+  blockedReasons?: ToolCapabilityBlockedReason[];
+  mustUseTools?: boolean;
+  prompt: string;
+  providerFormat?: ToolBridgeProviderFormat;
+  requiredFamilies?: ToolBridgeToolFamily[];
+  requestedToolChoice?: ToolBridgeToolChoice;
+  toolBudgetReached?: boolean;
+  toolIntent?: ToolIntent[];
+}
+
+export function inferProviderToolBridgeFormat(settings: ProviderSettings): ToolBridgeProviderFormat {
+  if (settings.provider === "anthropic") {
+    return "anthropic-messages";
+  }
+
+  if (settings.provider === "openai" && settings.thinking.enabled) {
+    return "openai-responses";
+  }
+
+  return "openai-compatible";
+}
+
+export function createToolCapabilityPlan(options: {
+  blockedReasons?: ToolCapabilityBlockedReason[];
+  mustUseTools?: boolean;
+  prompt: string;
+  providerFormat?: ToolBridgeProviderFormat;
+  requestedToolChoice?: ToolBridgeToolChoice;
+  requiredFamilies?: ToolBridgeToolFamily[];
+  selectedTools: ToolDefinition[];
+  toolBudgetReached?: boolean;
+  toolIntent?: ToolIntent[];
+}): ToolCapabilityPlan {
+  const selectedTools = options.toolBudgetReached ? [] : options.selectedTools;
+  const providerVisibleToolIds = selectedTools.map((tool) => tool.id);
+  const canCallProvider = !options.mustUseTools || (providerVisibleToolIds.length > 0 && !options.toolBudgetReached);
+
+  return {
+    blockedReasons: options.blockedReasons ?? [],
+    canCallProvider,
+    intent: options.toolIntent?.length ? [...new Set(options.toolIntent)] : ["none"],
+    mustUseTools: Boolean(options.mustUseTools),
+    prompt: options.prompt,
+    providerFormat: options.providerFormat,
+    providerVisibleToolIds,
+    requiredFamilies: [...new Set(options.requiredFamilies ?? [])],
+    selectedToolIds: selectedTools.map((tool) => tool.id),
+    selectedTools,
+    toolChoice: options.toolBudgetReached || !canCallProvider ? "none" : options.requestedToolChoice ?? (options.mustUseTools ? "required" : "auto"),
+  };
+}
+
+export function selectToolCapabilityPlan(options: SelectToolCapabilityPlanOptions): ToolCapabilityPlan {
+  return createToolCapabilityPlan({
+    blockedReasons: options.blockedReasons,
+    mustUseTools: options.mustUseTools,
+    prompt: options.prompt,
+    providerFormat: options.providerFormat,
+    requestedToolChoice: options.requestedToolChoice,
+    requiredFamilies: options.requiredFamilies,
+    selectedTools: options.availableTools,
+    toolBudgetReached: options.toolBudgetReached,
+    toolIntent: options.toolIntent,
+  });
 }
 
 export function shouldAttachWebSearch(prompt = "") {
