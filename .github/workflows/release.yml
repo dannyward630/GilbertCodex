@@ -29,7 +29,7 @@ jobs:
       - name: Check private release overlay config
         shell: pwsh
         env:
-          GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
           GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
         run: |
           if (Test-Path -LiteralPath "src/toolBridge/index.ts") {
@@ -37,14 +37,14 @@ jobs:
           }
 
           if (-not $env:GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY -or -not $env:GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN) {
-            throw "Missing private release overlay. Add GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY and GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN secrets so release builds can restore src/toolBridge and optional local plugin bundles without committing them to the public repo."
+            throw "Missing private release overlay. Add GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY as a repository variable or secret, and add GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN as a repository secret, so release builds can restore src/toolBridge and optional local plugin bundles without committing them to the public repo."
           }
 
       - name: Check out private release overlay
         uses: actions/checkout@v4
         with:
-          repository: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
-          ref: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
+          repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
           token: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
           path: .private-release-overlay
 
