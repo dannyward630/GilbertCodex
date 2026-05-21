@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $modelDir = Join-Path $repoRoot "resources\models\whisper"
