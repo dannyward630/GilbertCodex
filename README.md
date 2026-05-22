@@ -36,7 +36,7 @@ This is still alpha software. Windows x64 is the verified packaged target. macOS
 
 Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace work. It can inspect files, but write/edit tool calls are not completing reliably on that route yet. Use the other available Codex/ChatGPT, OpenRouter, or local routes for file changes until this is fixed.
 
-The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
+The repository is kept open-source ready by default
 
 ## Highlights
 
