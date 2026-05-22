@@ -16,7 +16,9 @@ import {
   getProviderBaseUrl,
   IMAGE_REASONING_MODEL,
   isOpenRouterRouterModel,
+  NINE_ROUTER_ALWAYS_FREE_MODEL,
   NINE_ROUTER_GITHUB_COPILOT_FALLBACK_MODEL,
+  NINE_ROUTER_SMART_SAVER_MODEL,
   normalizeNineRouterDiscoveredModelId,
   normalizeProviderModelId,
   supportsModelInputModality,
@@ -44,6 +46,17 @@ import {
 import type { ProviderToolBridgeOptions, ToolCallRequest } from "../toolBridge/types";
 import { applyOpenRouterFreeModelRouting } from "./openRouterRouting";
 import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "./nativeHttp";
+import {
+  buildNineRouterFallbackModels,
+  findNineRouterCombo,
+  getNineRouterComboModels,
+  hasUnusableNineRouterFallbackModels,
+  isOpenCodeFreeModel,
+  loadNineRouterCombos,
+  NINE_ROUTER_ALWAYS_FREE_COMBO_NAME,
+  upsertNineRouterCombo,
+} from "./nineRouterFallbackRouting";
+import { loadNineRouterModels, NINE_ROUTER_DASHBOARD_FALLBACK } from "./nineRouterClient";
 
 const STREAM_FLUSH_MS = 80;
 const MAX_STREAM_REASONING_CHARS = 500_000;
@@ -682,9 +695,11 @@ function createProviderFetchError(providerId: ModelProviderId, _providerLabel: s
   return error;
 }
 
-async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: AbortSignal | undefined) {
+type NineRouterRuntimeStatus = Awaited<ReturnType<typeof ensureNineRouterLocal>>;
+
+async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: AbortSignal | undefined): Promise<NineRouterRuntimeStatus | undefined> {
   if (settings.provider !== "9router" || !isTauriDesktopRuntime()) {
-    return;
+    return undefined;
   }
 
   throwIfSignalAborted(signal);
@@ -694,6 +709,69 @@ async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: Ab
   if (!status.running) {
     throw new Error(status.message || "Subscriptions are not ready. Open Subscriptions, then retry.");
   }
+
+  return status;
+}
+
+async function ensureNineRouterSelectedAutoRoute(settings: ProviderSettings, model: string, runtimeStatus: NineRouterRuntimeStatus | undefined, signal: AbortSignal | undefined) {
+  if (settings.provider !== "9router") {
+    return;
+  }
+
+  const mode = getNineRouterAutoRouteMode(model);
+  if (!mode) {
+    return;
+  }
+
+  throwIfSignalAborted(signal);
+  const baseUrl = settings.baseUrls["9router"]?.trim() || runtimeStatus?.baseUrl || getProviderBaseUrl(settings);
+  const dashboardUrl = runtimeStatus?.dashboardUrl || NINE_ROUTER_DASHBOARD_FALLBACK;
+
+  try {
+    const [liveModels, combos] = await Promise.all([
+      loadNineRouterModels(baseUrl),
+      loadNineRouterCombos(dashboardUrl),
+    ]);
+    throwIfSignalAborted(signal);
+
+    const comboName = NINE_ROUTER_ALWAYS_FREE_COMBO_NAME;
+    const combo = findNineRouterCombo(combos, comboName);
+    const installedModels = getNineRouterComboModels(combo);
+    const needsRepair =
+      !combo ||
+      installedModels.length === 0 ||
+      hasUnusableNineRouterFallbackModels(installedModels, liveModels) ||
+      !installedModels.some(isOpenCodeFreeModel);
+
+    if (!needsRepair) {
+      return;
+    }
+
+    const fallbackModels = buildNineRouterFallbackModels(mode, model, liveModels);
+    if (fallbackModels.length === 0) {
+      return;
+    }
+
+    await upsertNineRouterCombo(dashboardUrl, comboName, fallbackModels, "fallback");
+    throwIfSignalAborted(signal);
+  } catch (error) {
+    throwIfSignalAborted(signal);
+    console.warn("Could not refresh 9Router Free Auto route before sending; continuing with the selected route.", error);
+  }
+}
+
+function getNineRouterAutoRouteMode(model: string) {
+  const normalizedModel = model.trim();
+
+  if (normalizedModel === NINE_ROUTER_ALWAYS_FREE_MODEL) {
+    return "always-free" as const;
+  }
+
+  if (normalizedModel === NINE_ROUTER_SMART_SAVER_MODEL) {
+    return "always-free" as const;
+  }
+
+  return null;
 }
 
 function createProviderHttpError(settings: ProviderSettings, providerLabel: string, model: string, payload: ProviderErrorPayload, response: Response) {
@@ -738,15 +816,15 @@ function formatNineRouterRequestError(model: string, providerMessage: string | u
     const providerId = credentialMatch[1];
     const providerName = formatNineRouterProviderName(providerId);
 
-    if (model === "free-combo") {
-      return `Subscription routing is running, but the selected free-combo route is not ready. It fell through to ${providerName} with no active credentials. Open Subscriptions, connect a provider or create the free-combo, then choose a live subscription model.`;
+    if (model === "free-combo" || model === NINE_ROUTER_SMART_SAVER_MODEL || model === NINE_ROUTER_ALWAYS_FREE_MODEL) {
+      return `9Router is running, but the selected Free Auto route fell through to ${providerName} with no active credentials. Open Usage, refresh Free Auto routing, then retry.`;
     }
 
     return `Subscription routing is running, but ${providerName} is not connected for ${model}. Open Subscriptions, connect ${providerName}, then retry or choose a connected subscription model.`;
   }
 
-  if (status === 404 && model === "free-combo") {
-    return "Subscription routing is running, but free-combo is not available in the local model catalog. Create that combo in Subscriptions or switch Gilbert to a live subscription model.";
+  if (status === 404 && (model === "free-combo" || model === NINE_ROUTER_SMART_SAVER_MODEL || model === NINE_ROUTER_ALWAYS_FREE_MODEL)) {
+    return "9Router is running, but the selected Free Auto route is not available in the local catalog. Open Usage, refresh Free Auto routing, then retry.";
   }
 
   return "";
@@ -915,7 +993,8 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
   const model = modelForMessages(settings, preparedMessages);
 
   assertUsableSettings(settings.provider, apiKey, model);
-  await ensureProviderRuntimeReady(settings, options.signal);
+  const nineRouterRuntimeStatus = await ensureProviderRuntimeReady(settings, options.signal);
+  await ensureNineRouterSelectedAutoRoute(settings, model, nineRouterRuntimeStatus, options.signal);
 
   if (provider.apiStyle === "anthropic-messages") {
     const { payload, response } = await fetchProviderJson<AnthropicMessageResponse>(
@@ -1036,7 +1115,8 @@ export async function streamProviderMessage(
   };
 
   assertUsableSettings(settings.provider, apiKey, model);
-  await ensureProviderRuntimeReady(settings, options.signal);
+  const nineRouterRuntimeStatus = await ensureProviderRuntimeReady(settings, options.signal);
+  await ensureNineRouterSelectedAutoRoute(settings, model, nineRouterRuntimeStatus, options.signal);
 
   const requestTimeout = createProviderTimeout(
     options.signal,

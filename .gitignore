@@ -26,6 +26,7 @@ test-results/
 target/
 src-tauri/target/
 src-tauri/.tauri/
+.cargo/*-target/
 
 # Claude / Cursor local agent settings (may contain machine-specific paths)
 .claude/

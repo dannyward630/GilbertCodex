@@ -497,10 +497,9 @@ export function GeneralSettingsPage({
           <div className="settings-row-list">
             <label className="settings-row settings-row-control">
               <span>Turn completion notifications</span>
-              <strong>Set when Gilbert alerts you that it is finished.</strong>
+              <strong>Set whether Gilbert alerts you when it finishes in the background.</strong>
               <select value={generalSettings.notifications.turnCompletion} onChange={(event) => updateNotifications({ turnCompletion: event.target.value as AppGeneralSettings["notifications"]["turnCompletion"] })}>
-                <option value="unfocused">Only when unfocused</option>
-                <option value="always">Always</option>
+                <option value="unfocused">Background only</option>
                 <option value="off">Off</option>
               </select>
             </label>

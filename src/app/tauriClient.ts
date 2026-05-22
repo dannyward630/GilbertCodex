@@ -1,5 +1,5 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppInfo } from "../types/app";
 import type { DiscordBridgeResponseStyle, DiscordTunnelProvider } from "../types/discord";
 import type { ProjectOpenTargetId } from "../types/projectOpen";
@@ -22,7 +22,7 @@ declare global {
 
 const fallbackAppInfo: AppInfo = {
   name: "Gilbert Codex",
-  version: "0.5.5",
+  version: "0.5.6",
   phase: "Public alpha",
   runtime: "Browser preview",
   platform: getHostPlatform(),
@@ -31,6 +31,22 @@ const fallbackAppInfo: AppInfo = {
 
 const DISCORD_INTERACTION_EVENT = "discord-interaction";
 const DISCORD_BRIDGE_STATUS_EVENT = "discord-bridge-status";
+const DESKTOP_NOTIFICATION_ACTIVATED_EVENT = "desktop-notification-activated";
+
+export type DesktopNotificationKind = "completion" | "permission" | "question";
+
+export interface NativeDesktopNotificationRequest {
+  body: string;
+  chatId?: string;
+  id: number;
+  kind: DesktopNotificationKind;
+  title: string;
+}
+
+export interface NativeDesktopNotificationActivation {
+  chatId?: string;
+  kind?: DesktopNotificationKind;
+}
 
 /** Request shape for the native browser-preview helper. */
 export interface BrowserAutomationRequest {
@@ -108,6 +124,10 @@ export interface NativeDictationStopResponse {
   durationMs: number;
   status: NativeDictationStatus;
   transcript: string;
+}
+
+export interface NativeDictationStopRequest {
+  dictionary?: string;
 }
 
 export interface NativeDictationAudioLevelResponse {
@@ -360,6 +380,28 @@ export async function openProjectInExternalTool(request: ProjectOpenRequest): Pr
   return invoke<ProjectOpenResponse>("project_open_external_tool", { request });
 }
 
+export async function showNativeDesktopNotification(request: NativeDesktopNotificationRequest): Promise<boolean> {
+  if (!isTauriDesktopRuntime()) {
+    return false;
+  }
+
+  try {
+    return await invoke<boolean>("desktop_notification_show", { request });
+  } catch {
+    return false;
+  }
+}
+
+export async function listenForDesktopNotificationActivations(onActivation: (activation: NativeDesktopNotificationActivation) => void): Promise<UnlistenFn> {
+  if (!isTauriDesktopRuntime()) {
+    return () => undefined;
+  }
+
+  return await listen<NativeDesktopNotificationActivation>(DESKTOP_NOTIFICATION_ACTIVATED_EVENT, (event) => {
+    onActivation(event.payload);
+  });
+}
+
 export async function ensureNineRouterLocal(): Promise<NineRouterLocalStatus> {
   if (!isTauriDesktopRuntime()) {
     return {
@@ -564,12 +606,12 @@ export async function startNativeDictation(): Promise<NativeDictationStatus> {
   return invoke<NativeDictationStatus>("dictation_start");
 }
 
-export async function stopNativeDictation(): Promise<NativeDictationStopResponse> {
+export async function stopNativeDictation(request?: NativeDictationStopRequest): Promise<NativeDictationStopResponse> {
   if (!isTauriDesktopRuntime()) {
     throw new Error("Offline dictation is available in the desktop app.");
   }
 
-  return invoke<NativeDictationStopResponse>("dictation_stop");
+  return invoke<NativeDictationStopResponse>("dictation_stop", { request });
 }
 
 export async function cancelNativeDictation(): Promise<NativeDictationStatus> {

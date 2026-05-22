@@ -7,6 +7,7 @@ import {
   MINIMAX_M25_FREE_MODEL,
   MODEL_PROVIDERS,
   NEMOTRON_3_SUPER_MODEL,
+  NINE_ROUTER_ALWAYS_FREE_MODEL,
   NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS,
   NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
   OPENROUTER_FREE_AUTO_MODEL,
@@ -316,6 +317,7 @@ describe("provider structured output request bodies", () => {
 
 describe("subscription route request errors", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -418,6 +420,117 @@ describe("subscription route request errors", () => {
     }, ["cx/gpt-5.5"])).resolves.toEqual({
       "cx/gpt-5.5": NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS,
     });
+  });
+
+  it("creates the selected Free Auto route before sending through 9Router", async () => {
+    const comboBodies: Array<{ kind?: string; models?: string[]; name?: string }> = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || "GET").toUpperCase();
+      const requestUrl = String(url);
+
+      if (requestUrl.endsWith("/v1/models")) {
+        return new Response(JSON.stringify({
+          data: [
+            { id: "cx/gpt-5.5" },
+            { id: "glm/glm-5.1" },
+            { id: "oc/deepseek-v4-flash-free" },
+          ],
+        }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      if (requestUrl.endsWith("/api/combos") && method === "GET") {
+        return new Response(JSON.stringify({ data: [] }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      if (requestUrl.endsWith("/api/combos") && method === "POST") {
+        comboBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return new Response(JSON.stringify({ id: NINE_ROUTER_ALWAYS_FREE_MODEL }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      if (requestUrl.endsWith("/v1/chat/completions") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+        expect(body.model).toBe(NINE_ROUTER_ALWAYS_FREE_MODEL);
+
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "OK", role: "assistant" } }],
+        }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected request ${method} ${requestUrl}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(sendProviderMessage(createNineRouterSettings(NINE_ROUTER_ALWAYS_FREE_MODEL), [createMessage()])).resolves.toMatchObject({
+      content: "OK",
+    });
+
+    expect(comboBodies).toEqual([{
+      kind: "fallback",
+      models: [
+        "oc/big-pickle",
+        "oc/nemotron-3-super-free",
+        "oc/deepseek-v4-flash-free",
+      ],
+      name: NINE_ROUTER_ALWAYS_FREE_MODEL,
+    }]);
+  });
+
+  it("does not block a 9Router response when Free Auto route repair needs dashboard auth", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || "GET").toUpperCase();
+      const requestUrl = String(url);
+
+      if (requestUrl.endsWith("/v1/models")) {
+        return new Response(JSON.stringify({
+          data: [{ id: "oc/deepseek-v4-flash-free" }],
+        }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      if (requestUrl.endsWith("/api/combos") && method === "GET") {
+        return new Response(JSON.stringify({
+          error: { message: "Unauthorized" },
+        }), {
+          headers: { "content-type": "application/json" },
+          status: 401,
+        });
+      }
+
+      if (requestUrl.endsWith("/v1/chat/completions") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+        expect(body.model).toBe(NINE_ROUTER_ALWAYS_FREE_MODEL);
+
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "OK after repair miss", role: "assistant" } }],
+        }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected request ${method} ${requestUrl}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(sendProviderMessage(createNineRouterSettings(NINE_ROUTER_ALWAYS_FREE_MODEL), [createMessage()])).resolves.toMatchObject({
+      content: "OK after repair miss",
+    });
+    expect(warnSpy).toHaveBeenCalledOnce();
   });
 
   it("normalizes unavailable GitHub Copilot integrator models before sending", async () => {

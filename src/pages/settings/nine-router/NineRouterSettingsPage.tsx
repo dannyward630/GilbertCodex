@@ -138,7 +138,6 @@ const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
   percent: 0,
   status: "idle",
 };
-const NINE_ROUTER_SMART_SAVER_COMBO_NAME = NINE_ROUTER_SMART_SAVER_MODEL;
 const NINE_ROUTER_ALWAYS_FREE_COMBO_NAME = NINE_ROUTER_ALWAYS_FREE_MODEL;
 export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandboxUninstalled, settings }: NineRouterSettingsPageProps) {
   const [busy, setBusy] = useState<NineRouterBusyState>(null);
@@ -191,6 +190,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
   const subscriptionOptimization = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
   const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
   const fallbackMode = subscriptionOptimization.fallbackMode;
+  const effectiveFallbackMode = fallbackMode === "smart-saver" ? "always-free" : fallbackMode;
   const codexContextWindow = subscriptionOptimization.codexContextWindow;
   const savedModelMissingFromCatalog =
     modelCatalog.status === "ready" &&
@@ -596,11 +596,11 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
   }
 
   async function repairActiveFallbackRouteIfNeeded(combos: NineRouterCombo[]) {
-    if (fallbackMode === "off") {
+    if (effectiveFallbackMode === "off") {
       return combos;
     }
 
-    const comboName = fallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : NINE_ROUTER_SMART_SAVER_COMBO_NAME;
+    const comboName = NINE_ROUTER_ALWAYS_FREE_COMBO_NAME;
     const combo = findNineRouterCombo(combos, comboName);
     const installedModels = getNineRouterComboModels(combo);
     const liveModels = modelCatalog.status === "ready" ? modelCatalog.models : await refreshModelCatalog({ quiet: true });
@@ -608,13 +608,13 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       !combo ||
       installedModels.length === 0 ||
       hasUnusableNineRouterFallbackModels(installedModels, liveModels) ||
-      (fallbackMode === "always-free" && !installedModels.some(isOpenCodeFreeModel));
+      !installedModels.some(isOpenCodeFreeModel);
 
     if (!needsRepair) {
       return combos;
     }
 
-    const models = buildNineRouterFallbackModels(fallbackMode, selectedNineRouterModel, liveModels);
+    const models = buildNineRouterFallbackModels(effectiveFallbackMode, selectedNineRouterModel, liveModels);
     if (models.length === 0) {
       return combos;
     }
@@ -1936,15 +1936,15 @@ function formatNineRouterUiError(model: string, providerMessage: string | undefi
   if (credentialMatch) {
     const providerName = formatNineRouterProviderName(credentialMatch[1]);
 
-    if (model === "free-combo") {
-      return `free-combo is falling through to ${providerName}, but ${providerName} is not connected.`;
+    if (model === "free-combo" || model === NINE_ROUTER_SMART_SAVER_MODEL || model === NINE_ROUTER_ALWAYS_FREE_MODEL) {
+      return `Free Auto routing is falling through to ${providerName}, but ${providerName} is not connected.`;
     }
 
     return `${providerName} is not connected for ${model}.`;
   }
 
-  if (status === 404 && model === "free-combo") {
-    return "free-combo is not available in the local subscription catalog.";
+  if (status === 404 && (model === "free-combo" || model === NINE_ROUTER_SMART_SAVER_MODEL || model === NINE_ROUTER_ALWAYS_FREE_MODEL)) {
+    return "Free Auto routing is not available in the local subscription catalog.";
   }
 
   return providerMessage || `Subscription request failed with HTTP ${status}.`;

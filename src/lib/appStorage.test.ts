@@ -519,7 +519,7 @@ describe("app storage", () => {
 
     expect(loadedSettings.subscriptionOptimization).toEqual({
       codexContextWindow: "extended",
-      fallbackMode: "smart-saver",
+      fallbackMode: "always-free",
       tokenSaverLevel: "max",
     });
   });

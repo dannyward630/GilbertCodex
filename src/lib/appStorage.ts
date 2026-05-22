@@ -2605,12 +2605,12 @@ function normalizeSubscriptionCodexContextWindow(value: unknown): SubscriptionCo
 }
 
 function normalizeSubscriptionFallbackMode(value: unknown): SubscriptionFallbackMode {
-  if (value === "smart-saver" || value === "always-free" || value === "off") {
-    return value;
+  if (value === "smart-saver" || value === "auto-free" || value === "free") {
+    return "always-free";
   }
 
-  if (value === "auto-free" || value === "free") {
-    return "always-free";
+  if (value === "always-free" || value === "off") {
+    return value;
   }
 
   return defaultProviderSettings.subscriptionOptimization.fallbackMode;
@@ -2712,8 +2712,12 @@ function normalizeAppCodeReviewBehavior(value: unknown): AppCodeReviewBehavior {
 }
 
 function normalizeAppTurnCompletionNotificationMode(value: unknown): AppTurnCompletionNotificationMode {
-  if (value === "always" || value === "off" || value === "unfocused") {
+  if (value === "off" || value === "unfocused") {
     return value;
+  }
+
+  if (value === "always") {
+    return "unfocused";
   }
 
   return defaultAppGeneralSettings.notifications.turnCompletion;

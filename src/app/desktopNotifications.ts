@@ -1,8 +1,7 @@
 import { isPermissionGranted, onAction, requestPermission, sendNotification, type Options as TauriNotificationOptions } from "@tauri-apps/plugin-notification";
-import type { PluginListener } from "@tauri-apps/api/core";
 import type { ChatMessage, ChatToolCall } from "../types/chat";
 import type { AppNotificationSettings } from "../types/settings";
-import { isTauriDesktopRuntime } from "./tauriClient";
+import { isTauriDesktopRuntime, listenForDesktopNotificationActivations, showNativeDesktopNotification } from "./tauriClient";
 
 interface AgentNotification {
   body: string;
@@ -30,13 +29,19 @@ interface NotifyAgentRunOptions {
 }
 
 let notificationPermissionPromise: Promise<boolean> | null = null;
-let notificationActionListenerPromise: Promise<PluginListener | null> | null = null;
+let notificationActionListenerPromise: Promise<NotificationActivationListener | null> | null = null;
 let notificationActivationHandler: ((activation: DesktopNotificationActivation) => void) | null = null;
+let appWindowFocused = true;
+let focusTrackingInstalled = false;
 let notificationSettings: AppNotificationSettings = {
   permissionNotifications: true,
   questionNotifications: true,
   turnCompletion: "unfocused",
 };
+
+interface NotificationActivationListener {
+  unregister: () => Promise<void> | void;
+}
 
 export function configureDesktopNotifications(settings: AppNotificationSettings) {
   notificationSettings = {
@@ -90,20 +95,41 @@ export function notifyAgentRunStatus({ chatId, context, message, notification }:
     return;
   }
 
-  void ensureNotificationPermission().then((permissionGranted) => {
+  void ensureNotificationPermission().then(async (permissionGranted) => {
     if (!permissionGranted || !shouldSendNotification(kind)) {
       return;
     }
 
     try {
       const id = createNotificationId();
-      sendNotification({
+      const payload = {
         autoCancel: true,
-        body: formatNotificationBody(resolvedNotification.body),
+        body: formatNotificationBody(resolvedNotification.body, { includeClickHint: true }),
         extra: createNotificationExtra(resolvedContext.chatId, kind),
         group: "agent-runs",
         id,
         title: resolvedNotification.title,
+      };
+
+      if (
+        await showNativeDesktopNotification({
+          body: payload.body,
+          chatId: resolvedContext.chatId,
+          id,
+          kind,
+          title: payload.title,
+        })
+      ) {
+        return;
+      }
+
+      sendNotification({
+        autoCancel: payload.autoCancel,
+        body: formatNotificationBody(resolvedNotification.body, { includeClickHint: false }),
+        extra: payload.extra,
+        group: payload.group,
+        id: payload.id,
+        title: payload.title,
       });
     } catch {
       return;
@@ -197,10 +223,6 @@ function shouldSendNotification(kind: NotificationKind) {
     return false;
   }
 
-  if (notificationSettings.turnCompletion === "always") {
-    return true;
-  }
-
   return !isAppForeground();
 }
 
@@ -241,7 +263,25 @@ function isAppForeground() {
     return true;
   }
 
-  return document.visibilityState === "visible" && document.hasFocus();
+  installFocusTracking();
+
+  return document.visibilityState === "visible" && (appWindowFocused || document.hasFocus());
+}
+
+function installFocusTracking() {
+  if (focusTrackingInstalled || typeof window === "undefined" || typeof window.addEventListener !== "function") {
+    return;
+  }
+
+  focusTrackingInstalled = true;
+  appWindowFocused = typeof document === "undefined" ? true : document.hasFocus();
+
+  window.addEventListener("focus", () => {
+    appWindowFocused = true;
+  });
+  window.addEventListener("blur", () => {
+    appWindowFocused = false;
+  });
 }
 
 function canUseDesktopNotifications() {
@@ -271,15 +311,50 @@ function ensureNotificationActionListener() {
 }
 
 async function registerNotificationActionListener() {
+  const listeners: NotificationActivationListener[] = [];
+  const handleActivation = (activation: DesktopNotificationActivation) => {
+    notificationActivationHandler?.(activation);
+  };
+
   try {
-    return await onAction((notification) => {
-      const activation = parseNotificationActivation(notification);
-      notificationActivationHandler?.(activation);
-    });
+    const unregisterNative = await listenForDesktopNotificationActivations(handleActivation);
+    listeners.push({ unregister: unregisterNative });
   } catch {
+    // Keep the plugin listener as a fallback for platforms that emit it.
+  }
+
+  try {
+    const pluginListener = await onAction((notification) => {
+      handleActivation(parseNotificationActivation(notification));
+    });
+    listeners.push(pluginListener);
+  } catch {
+    // Desktop click support is handled by the native bridge on Windows.
+  }
+
+  if (!listeners.length) {
     notificationActionListenerPromise = null;
     return null;
   }
+
+  return {
+    unregister: async () => {
+      await Promise.all(listeners.map((listener) => Promise.resolve(listener.unregister()).catch(() => undefined)));
+    },
+  };
+}
+
+export function resetDesktopNotificationTestState() {
+  notificationPermissionPromise = null;
+  notificationActionListenerPromise = null;
+  notificationActivationHandler = null;
+  appWindowFocused = true;
+  focusTrackingInstalled = false;
+  notificationSettings = {
+    permissionNotifications: true,
+    questionNotifications: true,
+    turnCompletion: "unfocused",
+  };
 }
 
 function createNotificationExtra(chatId: string | undefined, kind: NotificationKind) {
@@ -305,8 +380,8 @@ function isNotificationKind(value: unknown): value is NotificationKind {
   return value === "completion" || value === "permission" || value === "question";
 }
 
-function formatNotificationBody(body: string) {
-  const parts = [body, "Click to open this chat."];
+function formatNotificationBody(body: string, options: { includeClickHint: boolean }) {
+  const parts = options.includeClickHint ? [body, "Click to open this chat."] : [body];
   return parts.join("\n").slice(0, 220);
 }
 

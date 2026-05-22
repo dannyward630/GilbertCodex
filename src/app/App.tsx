@@ -8,8 +8,19 @@ import { getAuthState, logoutLocalAccount } from "./authClient";
 import { AppStartupScreen } from "./bootstrap/AppStartupScreen";
 import { useExternalLinkRouting } from "./bootstrap/useExternalLinkRouting";
 import { createDiscordBridgeAutoStartKey, ensureDiscordBridgeAutoStarted } from "./discordBridgeAutoStart";
-import { isTauriDesktopRuntime, stopDiscordBridge, stopNineRouterLocal } from "./tauriClient";
+import {
+  ensureNineRouterLocal,
+  getAppInfo,
+  getNineRouterLocalStatus,
+  installNineRouterLocal,
+  isTauriDesktopRuntime,
+  stopDiscordBridge,
+  stopNineRouterLocal,
+} from "./tauriClient";
 import { WorkspaceApp } from "./workspace/WorkspaceApp";
+
+const NINE_ROUTER_APP_BOOTSTRAP_VERSION_PREFIX = "gilbert-codex.nine-router.bootstrap-version.v1.";
+const NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS = 1_500;
 
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
@@ -18,6 +29,7 @@ export function App() {
   const [authHasAccounts, setAuthHasAccounts] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const discordAppAutoStartKeyRef = useRef<string | null>(null);
+  const nineRouterAppBootstrapKeyRef = useRef<string | null>(null);
 
   useExternalLinkRouting();
 
@@ -88,6 +100,26 @@ export function App() {
     }, 500);
   }, [authSession]);
 
+  useEffect(() => {
+    if (!authSession || !isTauriDesktopRuntime()) {
+      nineRouterAppBootstrapKeyRef.current = null;
+      return;
+    }
+
+    const bootstrapKey = authSession.user.id;
+    if (nineRouterAppBootstrapKeyRef.current === bootstrapKey) {
+      return;
+    }
+
+    nineRouterAppBootstrapKeyRef.current = bootstrapKey;
+
+    return scheduleIdleTask(() => {
+      void bootstrapNineRouterForAppStart(bootstrapKey).catch((error) => {
+        console.warn("Background subscription bootstrap failed", error);
+      });
+    }, NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS);
+  }, [authSession]);
+
   async function handleLogout() {
     if (isTauriDesktopRuntime()) {
       await stopNineRouterLocal().catch(() => undefined);
@@ -119,4 +151,50 @@ export function App() {
   }
 
   return <WorkspaceApp authSession={authSession} onLogout={handleLogout} />;
+}
+
+async function bootstrapNineRouterForAppStart(userId: string) {
+  let status = await getNineRouterLocalStatus();
+  const appInfo = await getAppInfo().catch(() => null);
+  const appVersion = appInfo?.version?.trim() || "unknown";
+  const bootstrapVersionKey = `${NINE_ROUTER_APP_BOOTSTRAP_VERSION_PREFIX}${userId}`;
+  const bootstrappedVersion = readLocalString(bootstrapVersionKey);
+  const appVersionChanged = bootstrappedVersion !== appVersion;
+  const shouldInstallOrRefresh = !status.installed || appVersionChanged;
+
+  if (shouldInstallOrRefresh) {
+    if (status.installed && status.running && appVersionChanged) {
+      status = await stopNineRouterLocal().catch(() => status);
+    }
+
+    try {
+      status = await installNineRouterLocal(() => undefined);
+      writeLocalString(bootstrapVersionKey, appVersion);
+    } catch (error) {
+      console.warn("Could not install or update subscription routing in the background", error);
+      if (!status.installed) {
+        return;
+      }
+    }
+  }
+
+  if (!status.running) {
+    await ensureNineRouterLocal();
+  }
+}
+
+function readLocalString(key: string) {
+  try {
+    return globalThis.localStorage?.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeLocalString(key: string, value: string) {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+  } catch {
+    // Startup should not fail just because browser storage is unavailable.
+  }
 }

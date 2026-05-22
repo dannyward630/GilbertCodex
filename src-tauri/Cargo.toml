@@ -1,6 +1,6 @@
 [package]
 name = "gilbert-codex"
-version = "0.5.5"
+version = "0.5.6"
 description = "GUI-first local agent workspace."
 authors = ["Gilbert Codex Contributors"]
 edition = "2021"
@@ -41,5 +41,6 @@ uuid = { version = "1", features = ["v4"] }
 whisper-rs = { version = "0.16", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.7.2"
 webview2-com = "0.38.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

@@ -1032,7 +1032,7 @@ fn uninstall_nine_router_blocking(
     }
 
     remove_app_data_path_if_exists(app, &nine_router_install_dir(app)?, "subscription runtime")?;
-    remove_app_data_path_if_exists(app, &nine_router_data_dir(app)?, "subscription data")?;
+    remove_app_data_path_if_exists(app, &nine_router_data_dir_path(app)?, "subscription data")?;
     remove_legacy_nine_router_data(app)?;
     remove_app_data_path_if_exists(
         app,
@@ -1079,7 +1079,7 @@ fn create_status(
     message: &str,
 ) -> NineRouterLocalStatus {
     let install_dir = nine_router_install_dir(app).ok();
-    let data_dir = nine_router_data_dir(app).ok().filter(|path| path.exists());
+    let data_dir = nine_router_status_data_dir(app);
     let installed = install_dir
         .as_ref()
         .map(|path| path.join("package.json").is_file())
@@ -1192,8 +1192,9 @@ fn should_attach_nine_router_cli_token(url: &reqwest::Url) -> bool {
 
 fn nine_router_cli_token(app: &AppHandle) -> Result<String, String> {
     let raw_machine_id = read_or_create_nine_router_machine_id(app)?;
-    let digest = Sha256::digest(format!("{raw_machine_id}{NINE_ROUTER_CLI_TOKEN_SALT}").as_bytes());
-    Ok(format!("{digest:x}").chars().take(16).collect())
+    let cli_secret = read_or_create_nine_router_cli_secret(app)?;
+
+    Ok(compute_nine_router_cli_token(&raw_machine_id, &cli_secret))
 }
 
 fn read_or_create_nine_router_machine_id(app: &AppHandle) -> Result<String, String> {
@@ -1213,6 +1214,37 @@ fn read_or_create_nine_router_machine_id(app: &AppHandle) -> Result<String, Stri
     fs::write(&machine_id_path, &generated)
         .map_err(|error| format!("Could not save 9Router machine id: {error}"))?;
     Ok(generated)
+}
+
+fn read_or_create_nine_router_cli_secret(app: &AppHandle) -> Result<String, String> {
+    let data_dir = nine_router_data_dir(app)?;
+    let auth_dir = data_dir.join("auth");
+    let cli_secret_path = auth_dir.join("cli-secret");
+
+    if let Ok(existing) = fs::read_to_string(&cli_secret_path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    fs::create_dir_all(&auth_dir)
+        .map_err(|error| format!("Could not prepare 9Router CLI auth folder: {error}"))?;
+    let generated = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    fs::write(&cli_secret_path, &generated)
+        .map_err(|error| format!("Could not save 9Router CLI auth secret: {error}"))?;
+    Ok(generated)
+}
+
+fn compute_nine_router_cli_token(raw_machine_id: &str, cli_secret: &str) -> String {
+    let digest = Sha256::digest(
+        format!("{raw_machine_id}{NINE_ROUTER_CLI_TOKEN_SALT}{cli_secret}").as_bytes(),
+    );
+    format!("{digest:x}").chars().take(16).collect()
 }
 
 fn parse_nine_router_http_method(method: &str) -> Result<reqwest::Method, String> {
@@ -1306,9 +1338,24 @@ fn nine_router_install_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn nine_router_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let data_dir = account_scoped_app_data_dir(app, "9router-data")?;
+    let data_dir = nine_router_data_dir_path(app)?;
     migrate_legacy_nine_router_data_dir(app, &data_dir)?;
     Ok(data_dir)
+}
+
+fn nine_router_data_dir_path(app: &AppHandle) -> Result<PathBuf, String> {
+    account_scoped_app_data_dir(app, "9router-data")
+}
+
+fn nine_router_status_data_dir(app: &AppHandle) -> Option<PathBuf> {
+    let scoped_data_dir = nine_router_data_dir_path(app).ok()?;
+    if directory_has_local_entries(&scoped_data_dir) {
+        return Some(scoped_data_dir);
+    }
+
+    legacy_nine_router_data_dir(app)
+        .ok()
+        .filter(|path| legacy_data_dir_has_migratable_entries(path))
 }
 
 fn nine_router_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1370,6 +1417,40 @@ fn migrate_legacy_nine_router_data_dir(app: &AppHandle, target: &Path) -> Result
         format!(
             "Could not migrate legacy subscription data into the signed-in account folder: {error}"
         )
+    })
+}
+
+fn directory_has_local_entries(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        entry
+            .file_type()
+            .map(|file_type| !file_type.is_symlink())
+            .unwrap_or(false)
+    })
+}
+
+fn legacy_data_dir_has_migratable_entries(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        let is_accounts_dir = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("accounts"));
+        if is_accounts_dir {
+            return false;
+        }
+
+        entry
+            .file_type()
+            .map(|file_type| !file_type.is_symlink())
+            .unwrap_or(false)
     })
 }
 
@@ -1899,4 +1980,59 @@ fn parse_launch_args(value: Option<String>) -> Vec<String> {
         .split_whitespace()
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_token_matches_current_nine_router_formula() {
+        let expected = Sha256::digest("machine-1239r-cli-authsecret-456".as_bytes());
+        let expected = format!("{expected:x}").chars().take(16).collect::<String>();
+
+        assert_eq!(
+            compute_nine_router_cli_token("machine-123", "secret-456"),
+            expected
+        );
+    }
+
+    #[test]
+    fn directory_footprint_ignores_missing_and_empty_dirs() {
+        let root = create_test_dir("empty-data-dir");
+        let missing = root.join("missing");
+        let empty = root.join("empty");
+
+        fs::create_dir_all(&empty).expect("create empty test data dir");
+        assert!(!directory_has_local_entries(&missing));
+        assert!(!directory_has_local_entries(&empty));
+
+        fs::write(empty.join("machine-id"), "machine-123").expect("write test data file");
+        assert!(directory_has_local_entries(&empty));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_footprint_ignores_accounts_only_root() {
+        let root = create_test_dir("legacy-accounts-only");
+
+        fs::create_dir_all(root.join("accounts").join("local").join("auth"))
+            .expect("create legacy accounts dir");
+        assert!(!legacy_data_dir_has_migratable_entries(&root));
+
+        fs::write(root.join("machine-id"), "machine-123").expect("write legacy data file");
+        assert!(legacy_data_dir_has_migratable_entries(&root));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn create_test_dir(label: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!(
+            "gilbert-codex-nine-router-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&path).expect("create test temp dir");
+        path
+    }
 }

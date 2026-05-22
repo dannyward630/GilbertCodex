@@ -7,7 +7,7 @@ import {
 } from "./nineRouterFallbackRouting";
 
 describe("9Router fallback routing", () => {
-  it("uses OpenCode Free as the no-auth Always Free default", () => {
+  it("uses OpenCode Free as the no-auth Free Auto default", () => {
     expect(buildNineRouterFallbackModels("always-free", "", [])).toEqual([...NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS]);
   });
 
@@ -23,16 +23,14 @@ describe("9Router fallback routing", () => {
     expect(models).not.toContain("deepseek/deepseek-v4-flash:free");
   });
 
-  it("keeps Smart Saver on connected routes before no-auth free routes", () => {
+  it("treats the legacy Auto mode as Free Auto", () => {
     expect(buildNineRouterFallbackModels("smart-saver", "cx/gpt-5.5", [
       "cx/gpt-5.5",
       "glm/glm-5.1",
-      "oc/gpt-5.4-mini",
+      "oc/deepseek-v4-flash-free",
+      "oc/qwen3.6-plus-free",
     ])).toEqual([
-      "cx/gpt-5.5",
-      "glm/glm-5.1",
-      "oc/gpt-5.4-mini",
-      ...NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS.filter((model) => model !== "oc/gpt-5.4-mini"),
+      ...NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS,
     ]);
   });
 
@@ -40,7 +38,10 @@ describe("9Router fallback routing", () => {
     expect(hasUnusableNineRouterFallbackModels(["openai/gpt-oss-120b:free"], [])).toBe(true);
     expect(hasUnusableNineRouterFallbackModels(["kr/claude-sonnet-4.5"], [])).toBe(true);
     expect(hasUnusableNineRouterFallbackModels(["kr/claude-sonnet-4.5"], ["kr/claude-sonnet-4.5"])).toBe(false);
-    expect(hasUnusableNineRouterFallbackModels(["oc/gpt-5.4-mini"], [])).toBe(false);
+    expect(hasUnusableNineRouterFallbackModels(["oc/gpt-5.4-mini"], [])).toBe(true);
+    expect(hasUnusableNineRouterFallbackModels(["oc/gpt-5.4-mini"], ["oc/gpt-5.4-mini"])).toBe(true);
+    expect(hasUnusableNineRouterFallbackModels(["oc/deepseek-v4-flash-free"], [])).toBe(false);
+    expect(hasUnusableNineRouterFallbackModels(["oc/qwen3.6-plus-free"], ["oc/qwen3.6-plus-free"])).toBe(true);
   });
 
   it("reports OpenCode defaults even when 9Router has not listed no-auth models yet", () => {

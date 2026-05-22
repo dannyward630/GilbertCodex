@@ -21,7 +21,7 @@ import {
   getDeviceDatabasePath,
   loadUsageHistory,
 } from "../../../lib/appStorage";
-import { getDefaultBaseUrlForProvider, getModelProvider, NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../../../lib/models";
+import { getDefaultBaseUrlForProvider, getModelProvider, NINE_ROUTER_ALWAYS_FREE_MODEL } from "../../../lib/models";
 import {
   chooseNineRouterModel,
   joinLocalUrl,
@@ -46,7 +46,6 @@ import {
   loadNineRouterCombos,
   NINE_ROUTER_ALWAYS_FREE_COMBO_NAME,
   NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS,
-  NINE_ROUTER_SMART_SAVER_COMBO_NAME,
   type NineRouterCombo,
   upsertNineRouterCombo,
 } from "../../../services/nineRouterFallbackRouting";
@@ -133,8 +132,7 @@ const PERIODS: Array<{ id: UsagePeriod; label: string }> = [
 
 const FALLBACK_MODE_OPTIONS: Array<{ detail: string; label: string; mode: SubscriptionFallbackMode }> = [
   { detail: "Choose models manually from the picker.", label: "Manual", mode: "off" },
-  { detail: "Use paid subscription routes first, then cheap routes, then free routes.", label: "Smart Saver", mode: "smart-saver" },
-  { detail: "Stay on free routes when the local catalog has them.", label: "Always Free", mode: "always-free" },
+  { detail: "Stay on docs-backed OpenCode Free routes when the local catalog has them.", label: "Free Auto", mode: "always-free" },
 ];
 const TOKEN_SAVER_LEVEL_OPTIONS: Array<{ detail: string; label: string; level: SubscriptionTokenSaverLevel }> = [
   { detail: "RTK helper off. Gilbert keeps the normal tool-result budget.", label: "Off", level: "off" },
@@ -222,6 +220,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   const livePeriod = toNineRouterPeriod(period);
   const subscriptionOptimization = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
   const fallbackMode = subscriptionOptimization.fallbackMode;
+  const effectiveFallbackMode: SubscriptionFallbackMode = fallbackMode === "smart-saver" ? "always-free" : fallbackMode;
   const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
   const codexContextWindow = subscriptionOptimization.codexContextWindow;
   const tokenSaverEnabled = tokenSaverLevel !== "off";
@@ -230,21 +229,17 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   const tokenSaverPill = tokenSaverBusy ? "Syncing" : tokenSaverEnabled ? "Saving" : "Manual";
   const savedSubscriptionModel = settings.providerModels[NINE_ROUTER_PROVIDER_ID]?.trim() || "";
   const selectedSubscriptionModel = useMemo(() => chooseNineRouterModel(savedSubscriptionModel, optimizerModels), [optimizerModels, savedSubscriptionModel]);
-  const smartSaverModels = useMemo(
-    () => buildNineRouterFallbackModels("smart-saver", selectedSubscriptionModel, optimizerModels),
-    [optimizerModels, selectedSubscriptionModel],
-  );
   const alwaysFreeModels = useMemo(
     () => buildNineRouterFallbackModels("always-free", selectedSubscriptionModel, optimizerModels),
     [optimizerModels, selectedSubscriptionModel],
   );
-  const activeFallbackModels = fallbackMode === "always-free" ? alwaysFreeModels : fallbackMode === "smart-saver" ? smartSaverModels : [];
-  const activeFallbackComboName = fallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : fallbackMode === "smart-saver" ? NINE_ROUTER_SMART_SAVER_COMBO_NAME : "";
+  const activeFallbackModels = effectiveFallbackMode === "always-free" ? alwaysFreeModels : [];
+  const activeFallbackComboName = effectiveFallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : "";
   const activeFallbackCombo = activeFallbackComboName ? findNineRouterCombo(optimizerCombos, activeFallbackComboName) : null;
   const activeInstalledFallbackModels = useMemo(() => getNineRouterComboModels(activeFallbackCombo), [activeFallbackCombo]);
   const displayedFallbackModels = activeInstalledFallbackModels.length > 0 ? activeInstalledFallbackModels : activeFallbackModels;
-  const activeFallbackModel = fallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_MODEL : fallbackMode === "smart-saver" ? NINE_ROUTER_SMART_SAVER_MODEL : "";
-  const activeFallbackLabel = fallbackMode === "always-free" ? "Always Free" : fallbackMode === "smart-saver" ? "Smart Saver" : "Manual";
+  const activeFallbackModel = effectiveFallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_MODEL : "";
+  const activeFallbackLabel = effectiveFallbackMode === "always-free" ? "Free Auto" : "Manual";
   const liveOpenCodeFreeModels = useMemo(() => optimizerModels.filter(isOpenCodeFreeModel), [optimizerModels]);
   const openCodeFreeModels = useMemo(() => getNineRouterOpenCodeFreeModels(optimizerModels), [optimizerModels]);
   const optimizerReady = optimizerCombos.length > 0 || optimizerModels.length > 0;
@@ -252,14 +247,14 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
     () =>
       summarizeUsageQuality({
         displayedFallbackModels,
-        fallbackMode,
+        fallbackMode: effectiveFallbackMode,
         liveProviderRows,
         liveStats: nineRouterStats,
         records: filteredRecords,
         summary,
         tokenSaverLevel,
       }),
-    [displayedFallbackModels, fallbackMode, filteredRecords, liveProviderRows, nineRouterStats, summary, tokenSaverLevel],
+    [displayedFallbackModels, effectiveFallbackMode, filteredRecords, liveProviderRows, nineRouterStats, summary, tokenSaverLevel],
   );
 
   useEffect(() => {
@@ -332,11 +327,11 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   }
 
   async function repairActiveFallbackRouteIfNeeded(combos: NineRouterCombo[], liveModels: string[], dashboardUrl: string) {
-    if (fallbackMode === "off") {
+    if (effectiveFallbackMode === "off") {
       return combos;
     }
 
-    const comboName = fallbackMode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : NINE_ROUTER_SMART_SAVER_COMBO_NAME;
+    const comboName = NINE_ROUTER_ALWAYS_FREE_COMBO_NAME;
     const combo = findNineRouterCombo(combos, comboName);
     const installedModels = getNineRouterComboModels(combo);
     const selectedModel = chooseNineRouterModel(savedSubscriptionModel, liveModels);
@@ -344,13 +339,13 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
       !combo ||
       installedModels.length === 0 ||
       hasUnusableNineRouterFallbackModels(installedModels, liveModels) ||
-      (fallbackMode === "always-free" && !installedModels.some(isOpenCodeFreeModel));
+      !installedModels.some(isOpenCodeFreeModel);
 
     if (!needsRepair) {
       return combos;
     }
 
-    const models = buildNineRouterFallbackModels(fallbackMode, selectedModel, liveModels);
+    const models = buildNineRouterFallbackModels(effectiveFallbackMode, selectedModel, liveModels);
     if (models.length === 0) {
       return combos;
     }
@@ -360,9 +355,10 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
   }
 
   async function activateFallbackMode(mode: SubscriptionFallbackMode) {
-    updateSubscriptionOptimization({ fallbackMode: mode });
+    const effectiveMode: SubscriptionFallbackMode = mode === "smart-saver" ? "always-free" : mode;
+    updateSubscriptionOptimization({ fallbackMode: effectiveMode });
 
-    if (mode === "off") {
+    if (effectiveMode === "off") {
       setOptimizerStatus({ kind: "success", text: "Savings routing is set to manual model selection." });
       return;
     }
@@ -373,7 +369,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
     try {
       const localStatus = await getNineRouterLocalStatus().catch(() => null);
       if (localStatus && !localStatus.installed) {
-        setOptimizerStatus({ kind: "warning", text: `${formatFallbackModeLabel(mode)} is queued. Open Subscriptions once to install account routing, then refresh Usage.` });
+        setOptimizerStatus({ kind: "warning", text: `${formatFallbackModeLabel(effectiveMode)} is queued. Open Subscriptions once to install account routing, then refresh Usage.` });
         return;
       }
 
@@ -386,18 +382,18 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
       const dashboardUrl = readyStatus.dashboardUrl || getNineRouterDashboardUrl(settings);
       const liveModels = await loadNineRouterModels(baseUrl);
       const selectedModel = chooseNineRouterModel(savedSubscriptionModel, liveModels);
-      const models = buildNineRouterFallbackModels(mode, selectedModel, liveModels);
+      const models = buildNineRouterFallbackModels(effectiveMode, selectedModel, liveModels);
       if (models.length === 0) {
-        throw new Error(mode === "always-free" ? "No free subscription routes were reported yet. Connect a free account route or refresh the live catalog." : "No subscription, cheap, or free routes were available to build a savings route.");
+        throw new Error("No OpenCode Free routes were reported yet. Refresh the live catalog and try again.");
       }
 
-      const comboName = mode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_COMBO_NAME : NINE_ROUTER_SMART_SAVER_COMBO_NAME;
+      const comboName = NINE_ROUTER_ALWAYS_FREE_COMBO_NAME;
       await upsertNineRouterCombo(dashboardUrl, comboName, models, "fallback");
       const combos = await loadNineRouterCombos(dashboardUrl);
       setOptimizerModels(liveModels);
       setOptimizerCombos(combos);
-      useSubscriptionProvider(mode === "always-free" ? NINE_ROUTER_ALWAYS_FREE_MODEL : NINE_ROUTER_SMART_SAVER_MODEL, mode);
-      setOptimizerStatus({ kind: "success", text: `${formatFallbackModeLabel(mode)} is active with ${models.length} fallback ${models.length === 1 ? "route" : "routes"}.` });
+      useSubscriptionProvider(NINE_ROUTER_ALWAYS_FREE_MODEL, effectiveMode);
+      setOptimizerStatus({ kind: "success", text: `${formatFallbackModeLabel(effectiveMode)} is active with ${models.length} fallback ${models.length === 1 ? "route" : "routes"}.` });
     } catch (error) {
       const message = formatSubscriptionHelperText(readErrorMessage(error, "Could not create savings route."));
       setOptimizerStatus({ kind: "error", text: message });
@@ -722,8 +718,8 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
                 <button
                   type="button"
                   key={option.mode}
-                  data-selected={fallbackMode === option.mode}
-                  aria-pressed={fallbackMode === option.mode}
+                  data-selected={effectiveFallbackMode === option.mode}
+                  aria-pressed={effectiveFallbackMode === option.mode}
                   disabled={optimizerBusy !== null}
                   title={option.detail}
                   onClick={() => void activateFallbackMode(option.mode)}
@@ -736,7 +732,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
               <div>
                 <span>Mode</span>
                 <strong>{activeFallbackLabel}</strong>
-                <em>{fallbackMode === "off" ? "Manual picker" : activeFallbackCombo ? "Ready" : "Queued"}</em>
+                <em>{effectiveFallbackMode === "off" ? "Manual picker" : activeFallbackCombo ? "Ready" : "Queued"}</em>
               </div>
               <div>
                 <span>Free routes</span>
@@ -745,7 +741,7 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
               </div>
               <div>
                 <span>Route set</span>
-                <strong>{activeFallbackCombo ? `${activeFallbackCombo.name ?? activeFallbackCombo.id} ready` : fallbackMode === "off" ? "None" : "Needs refresh"}</strong>
+                <strong>{activeFallbackCombo ? `${activeFallbackCombo.name ?? activeFallbackCombo.id} ready` : effectiveFallbackMode === "off" ? "None" : "Needs refresh"}</strong>
                 <em>{optimizerReady ? "Catalog loaded" : "Catalog waiting"}</em>
               </div>
             </div>
@@ -753,11 +749,11 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
           <div className="usage-route-strip" aria-label={`${activeFallbackLabel} route order`}>
             {displayedFallbackModels.length > 0 ? displayedFallbackModels.slice(0, 6).map((model, index) => (
               <span className="settings-route-chip" key={`${model}-${index}`}>{index + 1}. {model}</span>
-            )) : <span className="usage-route-empty">Pick Smart Saver or Always Free to build a route.</span>}
+            )) : <span className="usage-route-empty">Pick Free Auto to build a route.</span>}
           </div>
           <div className="usage-routing-actions">
-            {fallbackMode !== "off" && activeFallbackModel ? (
-              <button className="settings-primary-button" type="button" disabled={optimizerBusy !== null} onClick={() => void activateFallbackMode(fallbackMode)}>
+            {effectiveFallbackMode !== "off" && activeFallbackModel ? (
+              <button className="settings-primary-button" type="button" disabled={optimizerBusy !== null} onClick={() => void activateFallbackMode(effectiveFallbackMode)}>
                 <CheckCircle2 size={16} aria-hidden="true" />
                 {optimizerBusy === "fallback" ? "Building" : `Use ${activeFallbackLabel}`}
               </button>
@@ -1387,7 +1383,7 @@ function summarizeUsageQuality({
 
   if (fallbackMode === "off") {
     watchlist.push({
-      detail: "Manual mode leaves model choice to the user. Smart Saver or Always Free can reduce failed or expensive runs.",
+      detail: "Manual mode leaves model choice to the user. Free Auto keeps the route on docs-backed no-cost OpenCode models.",
       title: "Savings route is manual",
     });
   } else if (displayedFallbackModels.length === 0) {
@@ -1623,11 +1619,11 @@ function getNineRouterBaseUrl(settings: ProviderSettings) {
 
 function formatFallbackModeLabel(mode: SubscriptionFallbackMode) {
   if (mode === "always-free") {
-    return "Always Free";
+    return "Free Auto";
   }
 
   if (mode === "smart-saver") {
-    return "Smart Saver";
+    return "Free Auto";
   }
 
   return "Manual";

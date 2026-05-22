@@ -172,6 +172,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::nine_router::nine_router_oauth_callback_finish,
             commands::nine_router::nine_router_oauth_callback_start,
             commands::app_info::open_external_url,
+            commands::notifications::desktop_notification_show,
             commands::project_open::project_open_external_tool,
             commands::settings::settings_get_user_config,
             commands::settings::settings_open_user_config,

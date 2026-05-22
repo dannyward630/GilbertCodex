@@ -495,7 +495,7 @@ function createQuickModelSubtitle(provider: ModelProviderId, entries: ModelSelec
   }
 
   if (provider === "9router") {
-    return "Subscription defaults";
+    return "Free Auto and subscription routes";
   }
 
   if (isLocalRuntimeProvider(provider)) {
@@ -572,7 +572,7 @@ function matchesModelSearch(entry: ModelSelectorEntry, normalizedQuery: string) 
     entry.option.value,
     entry.option.detail,
     entry.option.useCase,
-    entry.provider.label,
+    getProviderLabel(entry.provider.id),
     formatModelEntrySourceLabel(entry),
     ...createModelSearchTags(entry),
     ...(entry.option.capabilities ?? []),
@@ -654,12 +654,16 @@ function isLocalRuntimeProvider(providerId: ModelProviderId) {
 }
 
 function getProviderLabel(providerId: ModelProviderId) {
+  if (providerId === "9router") {
+    return "Subscription routes";
+  }
+
   return MODEL_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? providerId;
 }
 
 function getModelSelectorGroupLabel(providerId: ModelProviderId) {
   if (providerId === "9router") {
-    return "Subscription models";
+    return "Subscription routes";
   }
 
   if (providerId === "lmstudio") {
@@ -679,7 +683,7 @@ function getModelSelectorGroupLabel(providerId: ModelProviderId) {
 
 function formatModelEntrySourceLabel(entry: ModelSelectorEntry) {
   if (entry.provider.id === "9router") {
-    return "Subscription";
+    return entry.option.value === "gilbert-always-free" ? "Free Auto" : "Subscription";
   }
 
   if (entry.provider.id !== "openrouter") {

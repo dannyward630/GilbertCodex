@@ -21,6 +21,8 @@ import type { SettingsSectionId } from "../../../pages/settings/types";
 import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
+import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../../../lib/models";
+import { NINE_ROUTER_PROVIDER_ID } from "../../../services/nineRouterClient";
 import { getBackgroundTerminalSessions } from "../../../lib/terminalSessions";
 
 export function handleNewChat(deps: WorkspaceRuntimeDeps, project: string) {
@@ -109,6 +111,7 @@ export function handleActiveChatModelChange(deps: WorkspaceRuntimeDeps, nextMode
           [settings.provider]: settings.model,
           [provider]: model,
         },
+        subscriptionOptimization: getSubscriptionOptimizationForSelectedModel(settings, provider, model),
       };
     });
 
@@ -170,6 +173,7 @@ export function handleProviderConnectionChoice(deps: WorkspaceRuntimeDeps, nextP
           [settings.provider]: settings.model,
           [provider]: model,
         },
+        subscriptionOptimization: getSubscriptionOptimizationForSelectedModel(settings, provider, model),
       };
     });
 
@@ -192,9 +196,24 @@ export function handleProviderConnectionChoice(deps: WorkspaceRuntimeDeps, nextP
         };
       });
 
-      return changed ? nextChats : currentChats;
+    return changed ? nextChats : currentChats;
     });
   }
+
+function getSubscriptionOptimizationForSelectedModel(settings: ProviderSettings, provider: ProviderSettings["provider"], model: string) {
+  if (provider !== NINE_ROUTER_PROVIDER_ID) {
+    return settings.subscriptionOptimization;
+  }
+
+  if (model === NINE_ROUTER_SMART_SAVER_MODEL || model === NINE_ROUTER_ALWAYS_FREE_MODEL) {
+    return {
+      ...settings.subscriptionOptimization,
+      fallbackMode: "always-free" as const,
+    };
+  }
+
+  return settings.subscriptionOptimization;
+}
 
 export function handleSelectProject(deps: WorkspaceRuntimeDeps, project: string) {
   const { bindActiveChatToProject } = deps;

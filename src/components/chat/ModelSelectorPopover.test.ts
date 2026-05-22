@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultProviderSettings } from "../../lib/appStorage";
-import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, NINE_ROUTER_SMART_SAVER_MODEL, OPENROUTER_FREE_AUTO_MODEL } from "../../lib/models";
+import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, OPENROUTER_FREE_AUTO_MODEL } from "../../lib/models";
 import type { ProviderSettings } from "../../types/settings";
 import { buildSelectorEntries, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
 
@@ -45,13 +45,12 @@ function getSubscriptionModelValues(
 
 describe("model selector subscription models", () => {
   const subscriptionDefaults = [
-    ...NINE_ROUTER_CODEX_MODEL_IDS,
-    NINE_ROUTER_SMART_SAVER_MODEL,
     NINE_ROUTER_ALWAYS_FREE_MODEL,
+    ...NINE_ROUTER_CODEX_MODEL_IDS,
     ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
   ];
 
-  it("hides subscription defaults while the live catalog is unavailable", () => {
+  it("keeps Free Auto and subscription routes selectable while the live catalog is unavailable", () => {
     const settings = createProviderSettings({
       model: "cx/gpt-5.5",
       provider: "9router",
@@ -62,7 +61,7 @@ describe("model selector subscription models", () => {
       ["error", undefined],
       [undefined, undefined],
     ] as const) {
-      expect(getSubscriptionModelValues(settings, status, liveModels)).toEqual([]);
+      expect(getSubscriptionModelValues(settings, status, liveModels)).toEqual(subscriptionDefaults);
     }
   });
 
@@ -85,12 +84,14 @@ describe("model selector subscription models", () => {
       { id: "cx/gpt-5.3-codex-high" },
       { id: "github/gpt-4o" },
       { id: "gh/gpt-5.4" },
+      { id: "oc/deepseek-v4-flash-free" },
     ]);
 
     expect(modelValues).toEqual(expect.arrayContaining(subscriptionDefaults));
     expect(modelValues).toContain("cx/gpt-5.3-codex-high");
     expect(modelValues).toContain("gh/gpt-4o");
     expect(modelValues).not.toContain("gh/gpt-5.4");
+    expect(modelValues).not.toContain("oc/deepseek-v4-flash-free");
   });
 
   it("hides OpenRouter models until an OpenRouter key is configured", () => {

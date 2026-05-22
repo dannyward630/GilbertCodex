@@ -1715,7 +1715,7 @@ function ChatComposerComponent({
       setVoiceState("transcribing");
 
       try {
-        const response = await stopNativeDictation();
+        const response = await stopNativeDictation({ dictionary: dictationDictionary });
 
         if (!mountedRef.current || voiceRequestRef.current !== requestId) {
           return;

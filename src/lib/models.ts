@@ -60,6 +60,11 @@ export const NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS = 262_144;
 export const NINE_ROUTER_CODEX_EXTENDED_CONTEXT_TOKENS = 1_000_000;
 export const NINE_ROUTER_SMART_SAVER_MODEL = "gilbert-smart-saver";
 export const NINE_ROUTER_ALWAYS_FREE_MODEL = "gilbert-always-free";
+export const NINE_ROUTER_OPEN_CODE_FREE_MODEL_IDS = [
+  "oc/big-pickle",
+  "oc/nemotron-3-super-free",
+  "oc/deepseek-v4-flash-free",
+] as const;
 export const NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS = [
   "gh/gpt-5-mini",
   "gh/gpt-4.1",
@@ -111,6 +116,11 @@ const NINE_ROUTER_GITHUB_COPILOT_MODEL_PREFIXES = [
   "github/",
   "github-copilot/",
   "github_copilot/",
+] as const;
+const NINE_ROUTER_MODEL_PRIORITY_ORDER = [
+  NINE_ROUTER_ALWAYS_FREE_MODEL,
+  ...NINE_ROUTER_CODEX_MODEL_IDS,
+  ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
 ] as const;
 
 type ModelProviderApiStyle = "anthropic-messages" | "openai-compatible";
@@ -616,17 +626,11 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
     useCase: "Use for harder coding turns where the Codex xHigh route is available through the subscription account.",
   }),
-  modelOption("9router", "9router-smart-saver", "Smart Saver", NINE_ROUTER_SMART_SAVER_MODEL, "Subscription route first, then low-cost hosted routes, then free subscription routes.", undefined, {
-    capabilities: ["Local gateway", "Fallback", "Low cost"],
-    category: "recommended",
-    pricing: routedPricing("Gilbert creates this local routing combo. Final cost depends on the first route that succeeds.", "9router"),
-    useCase: "Use when the app should keep paid subscription routes first but fall back to cheap and free routes when quotas or providers fail.",
-  }),
-  modelOption("9router", "9router-always-free", "Always Free", NINE_ROUTER_ALWAYS_FREE_MODEL, "Free-model fallback route for OpenCode Free and other no-cost subscription routes.", undefined, {
-    capabilities: ["Local gateway", "Free", "Fallback"],
+  modelOption("9router", "9router-always-free", "Free Auto", NINE_ROUTER_ALWAYS_FREE_MODEL, "Automatic free route for the current OpenCode Free routes.", undefined, {
+    capabilities: ["Local gateway", "Auto", "Free", "Fallback"],
     category: "free",
-    pricing: routedPricing("Gilbert creates this free local routing combo from available routes. External free-tier limits can still apply.", "9router"),
-    useCase: "Use when the user wants Gilbert to stay on free routes whenever the local Subscriptions helper has them available.",
+    pricing: routedPricing("Gilbert creates this free local route from OpenCode Free models. External free-tier limits can still apply.", "9router"),
+    useCase: "Use when Gilbert should stay on free OpenCode routes and rotate through the docs-backed free models automatically.",
   }),
   modelOption("9router", "9router-github-gpt-5-mini", "GitHub Copilot GPT-5 Mini", "gh/gpt-5-mini", "Subscription route for connected GitHub Copilot accounts.", undefined, {
     capabilities: ["Local gateway", "Subscription", "Coding"],
@@ -1056,6 +1060,10 @@ export function normalizeNineRouterDiscoveredModelId(model: string | undefined) 
     return undefined;
   }
 
+  if (isNineRouterOpenCodeRoute(normalizedModel)) {
+    return undefined;
+  }
+
   if (!isNineRouterGithubCopilotRoute(normalizedModel)) {
     return normalizedModel;
   }
@@ -1065,6 +1073,10 @@ export function normalizeNineRouterDiscoveredModelId(model: string | undefined) 
 
 function normalizeNineRouterModelId(model: string) {
   const normalizedModel = model.trim();
+
+  if (normalizedModel === NINE_ROUTER_SMART_SAVER_MODEL || isNineRouterOpenCodeRoute(normalizedModel)) {
+    return NINE_ROUTER_ALWAYS_FREE_MODEL;
+  }
 
   if (!isNineRouterGithubCopilotRoute(normalizedModel)) {
     return normalizedModel;
@@ -1099,6 +1111,10 @@ function isNineRouterGithubCopilotRoute(model: string) {
   const normalizedModel = model.trim().toLowerCase();
 
   return NINE_ROUTER_GITHUB_COPILOT_MODEL_PREFIXES.some((prefix) => normalizedModel.startsWith(prefix));
+}
+
+function isNineRouterOpenCodeRoute(model: string) {
+  return model.trim().toLowerCase().startsWith("oc/");
 }
 
 export function getModelProvider(provider: ModelProviderId) {
@@ -1248,7 +1264,7 @@ export function isModelProviderAvailableForSelection(
   catalogStatus: "error" | "idle" | "loading" | "ready" | undefined,
 ) {
   if (provider === "9router") {
-    return catalogStatus === "ready";
+    return true;
   }
 
   if (prefersLiveModelCatalog(provider)) {
@@ -1352,8 +1368,8 @@ function dedupeModelOptions(options: ChatModelOption[]) {
 function prioritizeProviderModelOptions(provider: ModelProviderId, options: ChatModelOption[]) {
   if (provider === "9router") {
     return [...options].sort((left, right) => {
-      const leftOrder = NINE_ROUTER_CODEX_MODEL_IDS.indexOf(left.value as (typeof NINE_ROUTER_CODEX_MODEL_IDS)[number]);
-      const rightOrder = NINE_ROUTER_CODEX_MODEL_IDS.indexOf(right.value as (typeof NINE_ROUTER_CODEX_MODEL_IDS)[number]);
+      const leftOrder = NINE_ROUTER_MODEL_PRIORITY_ORDER.indexOf(left.value as (typeof NINE_ROUTER_MODEL_PRIORITY_ORDER)[number]);
+      const rightOrder = NINE_ROUTER_MODEL_PRIORITY_ORDER.indexOf(right.value as (typeof NINE_ROUTER_MODEL_PRIORITY_ORDER)[number]);
       const normalizedLeftOrder = leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder;
       const normalizedRightOrder = rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder;
 

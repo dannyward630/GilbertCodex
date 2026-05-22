@@ -9,7 +9,7 @@ compile_error!(
 
 #[cfg(not(feature = "offline-dictation"))]
 mod stub {
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
 
     #[derive(Default)]
     pub struct DictationState;
@@ -39,6 +39,12 @@ mod stub {
         pub duration_ms: u64,
         pub status: DictationStatusResponse,
         pub transcript: String,
+    }
+
+    #[derive(Clone, Debug, Default, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DictationStopRequest {
+        pub dictionary: Option<String>,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -79,6 +85,7 @@ mod stub {
     pub async fn dictation_stop(
         _app: tauri::AppHandle,
         _state: tauri::State<'_, DictationState>,
+        _request: Option<DictationStopRequest>,
     ) -> Result<DictationStopResponse, String> {
         Ok(DictationStopResponse {
             duration_ms: 0,
@@ -137,8 +144,9 @@ mod native {
         traits::{DeviceTrait, HostTrait, StreamTrait},
         SampleFormat, Stream,
     };
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use std::{
+        env,
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
         time::{Duration, Instant},
@@ -150,6 +158,11 @@ mod native {
     const DICTATION_MODEL_FILE: &str = "ggml-base.en.bin";
     const DICTATION_MODEL_RESOURCE: &str = "models/whisper/ggml-base.en.bin";
     const DICTATION_TARGET_SAMPLE_RATE: u32 = 16_000;
+    const DICTATION_ACCELERATOR_ENV: &str = "GILBERT_CODEX_DICTATION_ACCELERATOR";
+    const DICTATION_BEAM_SIZE: i32 = 5;
+    const DICTATION_STOP_TAIL_CAPTURE_MS: u64 = 180;
+    const DICTATION_PROMPT_MAX_PHRASES: usize = 80;
+    const DICTATION_PROMPT_MAX_CHARS: usize = 900;
     const GPU_RETRY_INTERVAL: Duration = Duration::from_secs(20);
 
     #[derive(Default)]
@@ -241,6 +254,15 @@ mod native {
         Vulkan { device_id: i32, device_name: String },
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    enum DictationAccelerationPreference {
+        #[default]
+        Cpu,
+        AutoGpu,
+        Cuda,
+        Vulkan,
+    }
+
     struct LoadedWhisperContext {
         acceleration: DictationAcceleration,
         context: WhisperContext,
@@ -279,6 +301,12 @@ mod native {
         pub duration_ms: u64,
         pub status: DictationStatusResponse,
         pub transcript: String,
+    }
+
+    #[derive(Clone, Debug, Default, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DictationStopRequest {
+        pub dictionary: Option<String>,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -356,7 +384,13 @@ mod native {
     pub async fn dictation_stop(
         app: AppHandle,
         state: tauri::State<'_, DictationState>,
+        request: Option<DictationStopRequest>,
     ) -> Result<DictationStopResponse, String> {
+        let initial_prompt = build_dictation_initial_prompt(
+            request
+                .as_ref()
+                .and_then(|request| request.dictionary.as_deref()),
+        );
         let (context, session) = {
             let mut runtime = lock_runtime(&state)?;
             let Some(session) = runtime.recording.take() else {
@@ -372,6 +406,7 @@ mod native {
             (context, session)
         };
 
+        tokio::time::sleep(Duration::from_millis(DICTATION_STOP_TAIL_CAPTURE_MS)).await;
         drop(session.stream);
         let duration_ms = session.started_at.elapsed().as_millis() as u64;
         let captured_samples = {
@@ -439,8 +474,10 @@ mod native {
             }
         };
 
-        let transcript_result =
-            tauri::async_runtime::spawn_blocking(move || transcribe_samples(context, audio)).await;
+        let transcript_result = tauri::async_runtime::spawn_blocking(move || {
+            transcribe_samples(context, audio, initial_prompt)
+        })
+        .await;
         let transcript = match transcript_result {
             Ok(Ok(text)) => text,
             Ok(Err(error)) => {
@@ -666,28 +703,58 @@ mod native {
     }
 
     fn preferred_acceleration_target() -> DictationAccelerationTarget {
-        #[cfg(feature = "offline-dictation-vulkan")]
-        {
-            if let Some(device) = preferred_vulkan_device() {
-                return DictationAccelerationTarget::Vulkan {
-                    device_id: device.id,
-                    device_name: device.name,
-                };
+        match parse_acceleration_preference(env::var(DICTATION_ACCELERATOR_ENV).ok().as_deref()) {
+            DictationAccelerationPreference::Cpu => return DictationAccelerationTarget::Cpu,
+            DictationAccelerationPreference::Cuda => {
+                #[cfg(feature = "offline-dictation-cuda")]
+                {
+                    return DictationAccelerationTarget::Cuda {
+                        device_id: 0,
+                        device_name: "NVIDIA CUDA device 0".to_string(),
+                    };
+                }
+            }
+            DictationAccelerationPreference::Vulkan | DictationAccelerationPreference::AutoGpu => {
+                #[cfg(feature = "offline-dictation-vulkan")]
+                {
+                    if let Some(device) = preferred_vulkan_device() {
+                        return DictationAccelerationTarget::Vulkan {
+                            device_id: device.id,
+                            device_name: device.name,
+                        };
+                    }
+                }
+
+                #[cfg(all(
+                    feature = "offline-dictation-cuda",
+                    not(feature = "offline-dictation-vulkan")
+                ))]
+                {
+                    return DictationAccelerationTarget::Cuda {
+                        device_id: 0,
+                        device_name: "NVIDIA CUDA device 0".to_string(),
+                    };
+                }
             }
         }
 
-        #[cfg(all(
-            feature = "offline-dictation-cuda",
-            not(feature = "offline-dictation-vulkan")
-        ))]
-        {
-            return DictationAccelerationTarget::Cuda {
-                device_id: 0,
-                device_name: "NVIDIA CUDA device 0".to_string(),
-            };
-        }
-
         DictationAccelerationTarget::Cpu
+    }
+
+    fn parse_acceleration_preference(value: Option<&str>) -> DictationAccelerationPreference {
+        match value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("auto") | Some("gpu") => DictationAccelerationPreference::AutoGpu,
+            Some("cuda") | Some("nvidia") | Some("nvidia-cuda") => {
+                DictationAccelerationPreference::Cuda
+            }
+            Some("vulkan") | Some("vulkan-gpu") => DictationAccelerationPreference::Vulkan,
+            _ => DictationAccelerationPreference::Cpu,
+        }
     }
 
     #[cfg(feature = "offline-dictation-vulkan")]
@@ -772,19 +839,35 @@ mod native {
         }
     }
 
-    fn transcribe_samples(context: Arc<WhisperContext>, audio: Vec<f32>) -> Result<String, String> {
+    fn transcribe_samples(
+        context: Arc<WhisperContext>,
+        audio: Vec<f32>,
+        initial_prompt: Option<String>,
+    ) -> Result<String, String> {
         if audio.len() < (DICTATION_TARGET_SAMPLE_RATE as usize / 5) {
             return Ok(String::new());
         }
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+            beam_size: DICTATION_BEAM_SIZE,
+            patience: -1.0,
+        });
         params.set_language(Some("en"));
         params.set_translate(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_no_context(true);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.2);
+        params.set_entropy_thold(2.4);
+        params.set_no_speech_thold(0.6);
         params.set_n_threads(recommended_decode_threads());
+        if let Some(initial_prompt) = initial_prompt.as_deref() {
+            params.set_initial_prompt(initial_prompt);
+        }
 
         let mut whisper_state = context
             .create_state()
@@ -801,6 +884,56 @@ mod native {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" "))
+    }
+
+    fn build_dictation_initial_prompt(dictionary: Option<&str>) -> Option<String> {
+        let phrases = dictionary?
+            .lines()
+            .map(sanitize_dictation_prompt_phrase)
+            .filter(|phrase| !phrase.is_empty())
+            .take(DICTATION_PROMPT_MAX_PHRASES)
+            .collect::<Vec<_>>();
+
+        if phrases.is_empty() {
+            return None;
+        }
+
+        let mut prompt = format!("Vocabulary: {}.", phrases.join(", "));
+        if prompt.len() > DICTATION_PROMPT_MAX_CHARS {
+            truncate_string_at_char_boundary(&mut prompt, DICTATION_PROMPT_MAX_CHARS);
+            prompt = prompt
+                .trim_end_matches(|character: char| {
+                    character.is_whitespace() || character == ',' || character == '.'
+                })
+                .to_string();
+            prompt.push('.');
+        }
+
+        Some(prompt)
+    }
+
+    fn sanitize_dictation_prompt_phrase(phrase: &str) -> String {
+        phrase
+            .chars()
+            .filter(|character| *character != '\0')
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn truncate_string_at_char_boundary(text: &mut String, max_len: usize) {
+        if text.len() <= max_len {
+            return;
+        }
+
+        let boundary = text
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= max_len)
+            .last()
+            .unwrap_or(0);
+        text.truncate(boundary);
     }
 
     fn recommended_decode_threads() -> i32 {
@@ -1152,8 +1285,9 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::{
-            is_permission_like_error, push_mono_samples, recommended_decode_threads,
-            resample_linear, vulkan_device_name_priority,
+            build_dictation_initial_prompt, is_permission_like_error,
+            parse_acceleration_preference, push_mono_samples, recommended_decode_threads,
+            resample_linear, vulkan_device_name_priority, DictationAccelerationPreference,
         };
         use std::sync::{Arc, Mutex};
 
@@ -1200,6 +1334,52 @@ mod native {
             assert!(vulkan_device_name_priority("AMD Radeon RX 7900") > 2);
             assert!(vulkan_device_name_priority("Intel(R) Arc(TM) Graphics") > 2);
             assert_eq!(vulkan_device_name_priority("Intel(R) Graphics"), 2);
+        }
+
+        #[test]
+        fn dictation_acceleration_is_cpu_by_default() {
+            assert_eq!(
+                parse_acceleration_preference(None),
+                DictationAccelerationPreference::Cpu
+            );
+            assert_eq!(
+                parse_acceleration_preference(Some("")),
+                DictationAccelerationPreference::Cpu
+            );
+            assert_eq!(
+                parse_acceleration_preference(Some("vulkan")),
+                DictationAccelerationPreference::Vulkan
+            );
+            assert_eq!(
+                parse_acceleration_preference(Some("gpu")),
+                DictationAccelerationPreference::AutoGpu
+            );
+        }
+
+        #[test]
+        fn dictation_initial_prompt_uses_dictionary_phrases() {
+            assert_eq!(
+                build_dictation_initial_prompt(Some(" Codex \nGilbertCodex\n\nWe need to "))
+                    .as_deref(),
+                Some("Vocabulary: Codex, GilbertCodex, We need to.")
+            );
+            assert_eq!(build_dictation_initial_prompt(Some(" \n\t ")), None);
+        }
+
+        #[test]
+        fn dictation_initial_prompt_removes_nul_bytes() {
+            assert_eq!(
+                build_dictation_initial_prompt(Some("Gilbert\0Codex")).as_deref(),
+                Some("Vocabulary: GilbertCodex.")
+            );
+        }
+
+        #[test]
+        fn dictation_initial_prompt_truncates_on_character_boundary() {
+            let prompt =
+                build_dictation_initial_prompt(Some(&"\u{1f600}".repeat(1_000))).expect("prompt");
+            assert!(prompt.ends_with('.'));
+            assert!(prompt.len() <= super::DICTATION_PROMPT_MAX_CHARS + 1);
         }
     }
 }

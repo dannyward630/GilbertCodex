@@ -1,17 +1,9 @@
-import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../lib/models";
+import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_OPEN_CODE_FREE_MODEL_IDS, NINE_ROUTER_SMART_SAVER_MODEL } from "../lib/models";
 import type { SubscriptionFallbackMode } from "../types/settings";
 import { fetchNineRouterJson, joinLocalUrl, postNineRouterJson, putNineRouterJson } from "./nineRouterClient";
 
-export const NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS = [
-  "oc/claude-sonnet-4-6",
-  "oc/gpt-5.3-codex",
-  "oc/gpt-5.4-mini",
-  "oc/deepseek-v4-flash-free",
-  "oc/qwen3.6-plus-free",
-  "oc/nemotron-3-super-free",
-  "oc/minimax-m2.5-free",
-  "oc/glm-5.1",
-] as const;
+export const NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS = NINE_ROUTER_OPEN_CODE_FREE_MODEL_IDS;
+const NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODEL_SET = new Set<string>(NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS);
 
 export const NINE_ROUTER_SMART_SAVER_COMBO_NAME = NINE_ROUTER_SMART_SAVER_MODEL;
 export const NINE_ROUTER_ALWAYS_FREE_COMBO_NAME = NINE_ROUTER_ALWAYS_FREE_MODEL;
@@ -46,10 +38,11 @@ export function buildNineRouterFallbackModels(mode: SubscriptionFallbackMode, se
     return [];
   }
 
+  const effectiveMode = mode === "smart-saver" ? "always-free" : mode;
   const usableLiveModels = dedupeNineRouterFallbackModels(liveModels.flatMap((model) => normalizeNineRouterFallbackModel(model) ?? []));
   const liveSubscriptionModels = usableLiveModels.filter(isSubscriptionModel);
   const liveCheapModels = usableLiveModels.filter(isCheapModel);
-  const liveFreeModels = usableLiveModels.filter(isFreeModel);
+  const liveFreeModels = usableLiveModels.filter(isFreeModel).filter((model) => !isOpenCodeFreeModel(model) || isSupportedOpenCodeFreeModel(model));
   const selectedSubscriptionModel =
     selectedModel &&
     selectedModel !== NINE_ROUTER_SMART_SAVER_MODEL &&
@@ -59,12 +52,12 @@ export function buildNineRouterFallbackModels(mode: SubscriptionFallbackMode, se
       ? selectedModel
       : "";
   const freeModels = dedupeNineRouterFallbackModels([
-    ...prioritizeOpenCodeFreeModels(usableLiveModels),
     ...NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS,
+    ...prioritizeOpenCodeFreeModels(usableLiveModels),
     ...liveFreeModels,
   ]);
 
-  if (mode === "always-free") {
+  if (effectiveMode === "always-free") {
     return freeModels.slice(0, 10);
   }
 
@@ -78,8 +71,8 @@ export function buildNineRouterFallbackModels(mode: SubscriptionFallbackMode, se
 
 export function getNineRouterOpenCodeFreeModels(liveModels: string[]) {
   return dedupeNineRouterFallbackModels([
-    ...prioritizeOpenCodeFreeModels(liveModels),
     ...NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODELS,
+    ...prioritizeOpenCodeFreeModels(liveModels),
   ]);
 }
 
@@ -177,7 +170,7 @@ function normalizeNineRouterFallbackModel(model: string) {
 }
 
 function prioritizeOpenCodeFreeModels(models: readonly string[]) {
-  const openCodeModels = models.filter(isOpenCodeFreeModel);
+  const openCodeModels = models.filter(isSupportedOpenCodeFreeModel);
   const openCodeSet = new Set(openCodeModels);
 
   return dedupeNineRouterFallbackModels([
@@ -212,6 +205,10 @@ function isFreeModel(model: string) {
   return NINE_ROUTER_FREE_PREFIXES.some((prefix) => normalizedModel.startsWith(prefix)) || normalizedModel.includes("/free");
 }
 
+function isSupportedOpenCodeFreeModel(model: string) {
+  return NINE_ROUTER_OPEN_CODE_FREE_FALLBACK_MODEL_SET.has(model.trim().toLowerCase());
+}
+
 function isUsableNineRouterFallbackModel(model: string, liveModelSet: Set<string>) {
   const normalizedModel = normalizeNineRouterFallbackModel(model);
 
@@ -219,7 +216,11 @@ function isUsableNineRouterFallbackModel(model: string, liveModelSet: Set<string
     return false;
   }
 
-  return isOpenCodeFreeModel(normalizedModel) || liveModelSet.has(normalizedModel);
+  if (isOpenCodeFreeModel(normalizedModel)) {
+    return isSupportedOpenCodeFreeModel(normalizedModel);
+  }
+
+  return liveModelSet.has(normalizedModel);
 }
 
 function isBareOpenRouterFreeModel(model: string) {

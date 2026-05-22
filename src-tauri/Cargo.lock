@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "gilbert-codex"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "base64 0.22.1",
  "cpal",
@@ -1689,6 +1689,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "tauri-winrt-notification",
  "tokio",
  "uuid",
  "webview2-com",

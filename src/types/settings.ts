@@ -11,7 +11,7 @@ export type AppLanguageMode = "auto";
 export type AppInferenceSpeed = "standard" | "fast";
 export type AppFollowUpBehavior = "queue" | "steer";
 export type AppCodeReviewBehavior = "inline" | "detached";
-export type AppTurnCompletionNotificationMode = "always" | "off" | "unfocused";
+export type AppTurnCompletionNotificationMode = "off" | "unfocused";
 export type AppThemeVisualEffect =
   | "none"
   | "aurora"

@@ -18,6 +18,7 @@ import {
   NINE_ROUTER_CODEX_MODEL_IDS,
   NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS,
   NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+  NINE_ROUTER_OPEN_CODE_FREE_MODEL_IDS,
   NINE_ROUTER_SMART_SAVER_MODEL,
   OPENROUTER_AUTO_MODEL,
   OPENROUTER_CURATED_FREE_MODELS,
@@ -161,9 +162,8 @@ describe("model catalog", () => {
   it("keeps subscription defaults but allows live 9Router subscription routes", () => {
     const optionValues = buildProviderModelOptions("9router", undefined).map((option) => option.value);
     const subscriptionDefaults = [
-      ...NINE_ROUTER_CODEX_MODEL_IDS,
-      NINE_ROUTER_SMART_SAVER_MODEL,
       NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_CODEX_MODEL_IDS,
       ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
     ];
 
@@ -177,15 +177,35 @@ describe("model catalog", () => {
     expect(buildProviderModelOptions("9router", [
       { id: "custom-combo" },
       { id: "cx/gpt-5.3-codex-xhigh" },
+      { id: "oc/deepseek-v4-flash-free" },
     ]).map((option) => option.value)).toEqual([...subscriptionDefaults, "custom-combo"]);
     expect(normalizeProviderModelId("9router", " free-combo ")).toBe("free-combo");
+    expect(normalizeProviderModelId("9router", NINE_ROUTER_SMART_SAVER_MODEL)).toBe(NINE_ROUTER_ALWAYS_FREE_MODEL);
+    expect(normalizeProviderModelId("9router", "oc/deepseek-v4-flash-free")).toBe(NINE_ROUTER_ALWAYS_FREE_MODEL);
     expect(buildProviderModelOptions("9router", undefined, "free-combo").map((option) => option.value)).toEqual([
-      ...NINE_ROUTER_CODEX_MODEL_IDS,
-      "free-combo",
-      NINE_ROUTER_SMART_SAVER_MODEL,
       NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_CODEX_MODEL_IDS,
       ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+      "free-combo",
     ]);
+  });
+
+  it("keeps OpenCode Free defaults docs-backed and hidden behind Free Auto", () => {
+    expect(NINE_ROUTER_OPEN_CODE_FREE_MODEL_IDS).toEqual([
+      "oc/big-pickle",
+      "oc/nemotron-3-super-free",
+      "oc/deepseek-v4-flash-free",
+    ]);
+    expect(buildProviderModelOptions("9router", [
+      { id: "oc/big-pickle" },
+      { id: "oc/nemotron-3-super-free" },
+      { id: "oc/qwen3.6-plus-free" },
+    ]).map((option) => option.value)).not.toEqual(expect.arrayContaining([
+      "oc/big-pickle",
+      "oc/nemotron-3-super-free",
+      "oc/qwen3.6-plus-free",
+    ]));
+    expect(normalizeNineRouterDiscoveredModelId("oc/big-pickle")).toBeUndefined();
   });
 
   it("treats OpenAI and Codex subscription routes as native image-input models", () => {
@@ -193,7 +213,7 @@ describe("model catalog", () => {
     expect(supportsModelInputModality("openai", "gpt-4o", "image")).toBe(true);
     expect(supportsModelInputModality("9router", "cx/gpt-5.5", "image")).toBe(true);
     expect(supportsModelInputModality("9router", "cx/gpt-5.3-codex-xhigh", "image")).toBe(true);
-    expect(supportsModelInputModality("9router", NINE_ROUTER_SMART_SAVER_MODEL, "image")).toBe(false);
+    expect(supportsModelInputModality("9router", NINE_ROUTER_ALWAYS_FREE_MODEL, "image")).toBe(false);
     expect(supportsModelInputModality("openrouter", GPT_OSS_120B_FREE_MODEL, "image")).toBe(false);
   });
 
@@ -223,9 +243,8 @@ describe("model catalog", () => {
       { id: "gh/gpt-4.1" },
       { id: "gh/gemini-3.1-pro-preview" },
     ]).map((option) => option.value)).toEqual([
-      ...NINE_ROUTER_CODEX_MODEL_IDS,
-      NINE_ROUTER_SMART_SAVER_MODEL,
       NINE_ROUTER_ALWAYS_FREE_MODEL,
+      ...NINE_ROUTER_CODEX_MODEL_IDS,
       ...NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
     ]);
   });

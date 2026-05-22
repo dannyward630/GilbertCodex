@@ -126,20 +126,46 @@ if (-not $env:CARGO_TARGET_DIR) {
   $env:CARGO_TARGET_DIR = $shortTargetDir
 }
 
+if (-not $env:CMAKE_GENERATOR -and (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+  $env:CMAKE_GENERATOR = "Ninja"
+}
+
+if (-not $env:CARGO_BUILD_JOBS) {
+  $env:CARGO_BUILD_JOBS = "1"
+}
+
+function Set-DefaultProcessEnv([string]$Name, [string]$Value) {
+  if (-not [Environment]::GetEnvironmentVariable($Name, "Process")) {
+    [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+  }
+}
+
+$portableGgmlEnv = @(
+  @{ Name = "SOURCE_DATE_EPOCH"; Value = "1" },
+  @{ Name = "GGML_NATIVE"; Value = "OFF" },
+  @{ Name = "GGML_SSE42"; Value = "OFF" },
+  @{ Name = "GGML_AVX"; Value = "OFF" },
+  @{ Name = "GGML_AVX2"; Value = "OFF" },
+  @{ Name = "GGML_FMA"; Value = "OFF" },
+  @{ Name = "GGML_F16C"; Value = "OFF" },
+  @{ Name = "GGML_BMI2"; Value = "OFF" },
+  @{ Name = "GGML_AVX_VNNI"; Value = "OFF" },
+  @{ Name = "GGML_AVX512"; Value = "OFF" },
+  @{ Name = "GGML_AVX512_VBMI"; Value = "OFF" },
+  @{ Name = "GGML_AVX512_VNNI"; Value = "OFF" },
+  @{ Name = "GGML_AVX512_BF16"; Value = "OFF" }
+)
+
+foreach ($entry in $portableGgmlEnv) {
+  Set-DefaultProcessEnv $entry.Name $entry.Value
+}
+
 if ($joinedCommand -match "offline-dictation-(gpu|vulkan)") {
   $vulkanSdkPath = Find-VulkanSdkPath
   if (-not $vulkanSdkPath) {
     throw "Universal GPU dictation builds require the Vulkan SDK and VULKAN_SDK. Run npm run dictation:vulkan-sdk, install Vulkan SDK, or extract it under .tools\vulkan-sdk, then retry this command."
   }
   $env:VULKAN_SDK = $vulkanSdkPath
-
-  if (-not $env:CMAKE_GENERATOR) {
-    $env:CMAKE_GENERATOR = "Ninja"
-  }
-
-  if (-not $env:CARGO_BUILD_JOBS) {
-    $env:CARGO_BUILD_JOBS = "1"
-  }
 }
 
 $vcvarsPath = Find-VcVarsPath
@@ -160,6 +186,12 @@ if ($env:CMAKE_GENERATOR) {
 }
 if ($env:CARGO_BUILD_JOBS) {
   $batchCommand += 'set "CARGO_BUILD_JOBS=' + $env:CARGO_BUILD_JOBS + '" && '
+}
+foreach ($entry in $portableGgmlEnv) {
+  $value = [Environment]::GetEnvironmentVariable($entry.Name, "Process")
+  if ($value) {
+    $batchCommand += 'set "' + $entry.Name + '=' + $value + '" && '
+  }
 }
 $batchCommand += 'call "' + $vcvarsPath + '" >nul && ' + $commandLine
 

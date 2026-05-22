@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.5.md">v0.5.5 release notes</a>
+  <a href="docs/releases/v0.5.6.md">v0.5.6 release notes</a>
   |
-  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.5">Windows alpha download</a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.6">Windows alpha download</a>
   |
   <a href="docs/ROADMAP.md">Roadmap</a>
   |
@@ -19,16 +19,16 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.5.md"><img alt="Version 0.5.5" src="https://img.shields.io/badge/version-0.5.5-d8b36c"></a>
+  <a href="docs/releases/v0.5.6.md"><img alt="Version 0.5.6" src="https://img.shields.io/badge/version-0.5.6-d8b36c"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
   <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
-## v0.5.5 Public Alpha
+## v0.5.6 Hotfix
 
-Gilbert Codex v0.5.5 is a release-readiness update focused on making the app feel more complete without loosening its local-first boundaries. It adds stronger Apps and Plugins surfaces, Google/Gmail/Calendar setup through Settings, task automation, voice dictation, browser/terminal polish, deeper customization, and a cleaner runtime path for provider streaming, planning, approvals, and source-backed work.
+Gilbert Codex v0.5.6 is a hotfix for the Windows public alpha. It focuses on subscription routing startup and sign-in reliability, offline dictation release stability, and clickable completion notifications.
 
 This is still alpha software. Windows x64 is the verified packaged target. macOS support is in active development and should land soon; Linux remains source-first until native testing catches up. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
 
@@ -36,7 +36,7 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Highlights
 
-| Area | What changed in v0.5.5 |
+| Area | What changed in v0.5.6 |
 | --- | --- |
 | Customization | Appearance, motion, layout, model, dictation, notification, terminal, web search, and project-open controls are more visible and easier to tune from Settings. |
 | Apps and integrations | Gmail, Google Calendar, Google Tasks, GitHub, Discord, browser preview, plugins, and MCP-facing surfaces have stronger setup and management flows. |
@@ -82,13 +82,13 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The v0.5.5 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.5).
+The v0.5.6 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.6).
 
 Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS release artifacts are in development and should be out soon. Linux release artifacts are not official yet; source support exists, but native testing is still needed before the project promises a packaged Linux download.
 
-See [v0.5.5 release notes](docs/releases/v0.5.5.md) for release-prep notes, setup notes, known limitations, and validation commands.
+See [v0.5.6 release notes](docs/releases/v0.5.6.md) for hotfix notes, setup notes, known limitations, and validation commands.
 
 ## Product Shape
 
