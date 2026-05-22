@@ -2,9 +2,9 @@
 
 This file tracks the current product state for collaborators. It should describe what is live now, what is being hardened, and what remains open for the next alpha releases.
 
-## Current Phase: v0.5.0 Advanced Desktop Alpha
+## Current Phase: v0.5.7 Desktop Reliability Alpha
 
-Status: v0.5.0 moves Gilbert Codex from the earlier basic public alpha into a much more complete desktop AI workspace. The app now has local users, a modularized app runtime, stronger subscription account routing, image-generation artifacts, safer deletion/review flows, a support page, and release automation aligned around signed updater artifacts.
+Status: v0.5.7 keeps the public alpha focused on real desktop use. The current build tightens subscription setup, route labeling, workspace/full-computer behavior, file-tool reliability, automation summaries, coding review visibility, support links, and the packaged Windows installer path.
 
 Delivered:
 
@@ -24,10 +24,19 @@ Delivered:
 - GitHub OAuth device-flow setup, account state, repository actions, and release/workflow surfaces.
 - Voluntary support/funding page using public hosted links only, with secret-like values rejected before display.
 - Apps page with live Gmail account management and MCP server management, plus a clear coming-next state for Skills.
-- Documentation refreshed for the v0.5.0 public alpha story, updater release path, and contributor readiness.
+- Documentation refreshed for the current public alpha story, updater release path, and contributor readiness.
+- v0.5.7 subscription setup now separates install, sign-in, model selection, usage/quota, and fallback states so users can understand what is ready before they send.
+- Model and composer labels now show the route source, including subscription accounts, OpenRouter routes, direct provider APIs, and local model servers.
+- Full-computer workspace mode can lazily resolve host roots for precise absolute paths while normal selected-folder mode remains project-scoped.
+- Local computer tooling now includes guarded copy support, faster ordered batch writes, stale-edit retry guidance, and clearer binary-asset handling.
+- Context-window and research surfaces now replace embedded data URLs with short metadata placeholders instead of feeding large media blobs into text context.
+- Automations now generate cleaner task prompts/results, filter source cards to actual web-search runs, and avoid empty or protocol-style sections in inbox summaries.
+- Coding review now reports captured tool activity and tool coverage so users can see what the agent actually used during a run.
+- Support/funding docs and app defaults now expose the public Cash App funding path while keeping payment handling outside the desktop app.
 
 Known alpha limits:
 
+- ChatGPT GPT-5.3 Spark is a known read-only route for now: file reads work, but write/edit tool calls do not complete reliably. Other Codex/ChatGPT, OpenRouter, and local routes remain the recommended paths for workspace edits.
 - Tool reliability still varies by provider and model, especially around malformed or incomplete tool calls.
 - Approval UX and activity grouping need more polish before the bridge feels final.
 - Image generation is first-class for the Codex / ChatGPT subscription path, while broader provider image routes still need more field testing.
@@ -35,6 +44,7 @@ Known alpha limits:
 - macOS and Linux source support exists, but official releases need native verification.
 - The Windows installer remains unsigned unless a release is built with a valid code-signing configuration.
 - Some advanced workflow automation and multimodal surfaces are still roadmap work, not promised release behavior.
+- v0.5.7 passed a local Windows installer build on May 22, 2026; published checksum and updater artifacts should still be filled only from the final release build.
 
 ## Next Hardening Work
 

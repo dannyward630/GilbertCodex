@@ -4,7 +4,11 @@ import {
   createAutomationSimulationSummary,
   createAutomationTaskFromDraft,
   createAutomationToolScope,
+  createAutomationRunPrompt,
+  createAutomationUserMessageContent,
   computeAutomationSchedulerDelayMs,
+  filterAutomationWebSources,
+  formatAutomationInboxResult,
   formatAutomationNotificationSummary,
   isAutomationTaskDue,
   normalizeAutomationState,
@@ -103,6 +107,26 @@ describe("automationScheduler", () => {
     expect(createAutomationRuntimeToolOverrides(task).webSearch).toBe(true);
   });
 
+  it("formats a short user-facing task call separately from the internal run prompt", () => {
+    const task = createAutomationTaskFromDraft({
+      capabilityScope: {
+        autonomyLevel: "scoped",
+        capabilities: ["gmail.read"],
+      },
+      prompt: "Give me last 2 recent emails",
+      title: "Email",
+    });
+
+    const visibleMessage = createAutomationUserMessageContent(task);
+    const runPrompt = createAutomationRunPrompt(task, { reason: "manual" });
+
+    expect(visibleMessage).toBe("Task call: Email\n\nGive me last 2 recent emails");
+    expect(visibleMessage).not.toContain("Enabled capabilities");
+    expect(visibleMessage).not.toContain("Max tool calls");
+    expect(runPrompt).toContain("LOCAL SCHEDULED TASK RUN");
+    expect(runPrompt).toContain("Write only the user-facing result");
+  });
+
   it("formats private notifications without leaking the summary", () => {
     const task = createAutomationTaskFromDraft({
       notificationPolicy: {
@@ -123,6 +147,51 @@ describe("automationScheduler", () => {
     };
 
     expect(formatAutomationNotificationSummary(task, run)).toBe("Private inbox: run ready in Tasks.");
+  });
+
+  it("removes empty automation result scaffolding before saving inbox results", () => {
+    const result = formatAutomationInboxResult([
+      "Tasks inbox result: Checked GitHub issues and completed issue activity for UrbanWafflezz/GilbertCodex.",
+      "",
+      "Action needed:",
+      "",
+      "No open issues are currently assigned to UrbanWafflezz.",
+      "No open pull requests were found.",
+      "Completed issues watched:",
+      "",
+      "18 completed issues found.",
+      "Most recent completed issue: #26 [Bug]: Subscription request failed with HTTP 401.",
+      "Closed as completed: 2026-05-22T04:58:44Z",
+      "Author: oleteacher",
+      "https://github.com/UrbanWafflezz/GilbertCodex/issues/26",
+      "Evidence:",
+      "",
+      "GitHub is connected as UrbanWafflezz.",
+      "Repository checked: UrbanWafflezz/GilbertCodex.",
+      "Blocked approvals:",
+      "",
+      "None.",
+      "Sources",
+      "1",
+      "1",
+      "github.com",
+      "Details",
+    ].join("\n"));
+
+    expect(result).toContain("Checked GitHub issues");
+    expect(result).toContain("No open pull requests were found.");
+    expect(result).toContain("Repository checked: UrbanWafflezz/GilbertCodex.");
+    expect(result).not.toContain("Tasks inbox result");
+    expect(result).not.toContain("Action needed");
+    expect(result).not.toContain("Blocked approvals");
+    expect(result).not.toContain("Sources");
+  });
+
+  it("only keeps task sources when a real web search tool ran", () => {
+    const sources = [{ title: "GitHub", url: "https://github.com/UrbanWafflezz/GilbertCodex" }];
+
+    expect(filterAutomationWebSources(sources, [{ id: "tool-1", label: "Get issue", status: "complete", toolId: "github_get_issue" }])).toBeUndefined();
+    expect(filterAutomationWebSources(sources, [{ id: "tool-2", label: "Search web", status: "complete", toolId: "web_search" }])).toEqual(sources);
   });
 
   it("simulates without claiming tools ran", () => {

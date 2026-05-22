@@ -97,6 +97,28 @@ describe("provider context surface", () => {
     expect(surface).not.toContain("Automatically compacting context");
   });
 
+  it("does not replay embedded screenshot artifact data URLs as text context", () => {
+    const leakedMarker = "TOKENLEAK".repeat(1000);
+    const surface = createMessageContextSurface({
+      artifacts: [
+        {
+          kind: "image",
+          mimeType: "image/png",
+          sizeBytes: 24_000,
+          title: "Browser screenshot",
+          url: `data:image/png;base64,${leakedMarker}`,
+        },
+      ],
+      content: "",
+    });
+
+    expect(surface).toContain("Browser screenshot (image)");
+    expect(surface).toContain("binary data omitted from text context");
+    expect(surface).toContain("image/png");
+    expect(surface).not.toContain(leakedMarker);
+    expect(surface.length).toBeLessThan(600);
+  });
+
   it("scales persisted tool replay with the active model context window", () => {
     const hugeOutput = "x".repeat(300_000);
     const smallSurface = createMessageContextSurface(

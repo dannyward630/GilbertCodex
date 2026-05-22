@@ -33,6 +33,8 @@ export interface RawSupportConfig {
 }
 
 interface SupportLinkDefinition {
+  defaultProviderLabel?: string;
+  defaultUrl?: string;
   description: string;
   disabledLabel: string;
   envKey: keyof RawSupportConfig;
@@ -44,8 +46,8 @@ interface SupportLinkDefinition {
 }
 
 export const SUPPORT_GITHUB_URL = "https://github.com/UrbanWafflezz/GilbertCodex";
-export const SUPPORT_CASH_TAG = "Cash App";
-export const DEFAULT_CASH_APP_URL = "";
+export const SUPPORT_CASH_TAG = "$kobeelijahh";
+export const DEFAULT_CASH_APP_URL = "https://cash.app/$kobeelijahh";
 
 const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
   {
@@ -79,7 +81,9 @@ const SUPPORT_LINK_DEFINITIONS: SupportLinkDefinition[] = [
     tone: "gold",
   },
   {
-    description: "A Cash App hosted funding link can sit here once it is ready.",
+    defaultProviderLabel: SUPPORT_CASH_TAG,
+    defaultUrl: DEFAULT_CASH_APP_URL,
+    description: "A public Cash App funding link for voluntary project donations.",
     disabledLabel: "Add a Cash App hosted funding link to enable this option.",
     envKey: "VITE_SUPPORT_CASHAPP_URL",
     id: "cashApp",
@@ -121,7 +125,8 @@ export function normalizeSupportUrl(value: unknown): string {
 export function normalizeSupportConfig(rawConfig: RawSupportConfig = {}): SupportConfig {
   const links = SUPPORT_LINK_DEFINITIONS.map((definition) => {
     const rawValue = rawConfig[definition.envKey];
-    const url = normalizeSupportUrl(isBlankSupportValue(rawValue) ? "" : rawValue);
+    const usesDefaultUrl = isBlankSupportValue(rawValue) && Boolean(definition.defaultUrl);
+    const url = normalizeSupportUrl(usesDefaultUrl ? definition.defaultUrl ?? "" : rawValue);
 
     return {
       description: definition.description,
@@ -130,7 +135,7 @@ export function normalizeSupportConfig(rawConfig: RawSupportConfig = {}): Suppor
       id: definition.id,
       label: definition.label,
       placement: definition.placement,
-      providerLabel: definition.providerLabel,
+      providerLabel: usesDefaultUrl && definition.defaultProviderLabel ? definition.defaultProviderLabel : definition.providerLabel,
       tone: definition.tone,
       url,
     };

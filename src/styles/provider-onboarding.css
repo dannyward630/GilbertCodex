@@ -183,6 +183,142 @@
   min-height: 0;
 }
 
+.provider-subscription-setup-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 34%, transparent), transparent 68%),
+    color-mix(in srgb, var(--surface-panel) 88%, var(--surface-raised) 12%);
+}
+
+.provider-subscription-setup-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.provider-subscription-setup-heading h4 {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 820;
+  overflow-wrap: anywhere;
+}
+
+.provider-subscription-setup-heading span {
+  display: block;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.42;
+}
+
+.provider-subscription-setup-heading em {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.provider-subscription-step-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.provider-subscription-step {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--field-bg) 82%, transparent);
+}
+
+.provider-subscription-step[data-state="active"] {
+  border-color: color-mix(in srgb, var(--blue) 40%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 42%, var(--field-bg));
+}
+
+.provider-subscription-step[data-state="done"] {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line));
+  background: color-mix(in srgb, var(--green) 10%, var(--field-bg));
+}
+
+.provider-subscription-step[data-state="locked"] {
+  opacity: 0.72;
+}
+
+.provider-subscription-step strong,
+.provider-subscription-step span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.provider-subscription-step strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 810;
+}
+
+.provider-subscription-step span {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.provider-subscription-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.provider-subscription-setup-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-bg);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.provider-subscription-setup-actions button:hover:not(:disabled),
+.provider-subscription-setup-actions button:focus-visible:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.provider-subscription-setup-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
 .provider-account-panel-heading {
   position: sticky;
   top: 0;
@@ -398,6 +534,11 @@
   }
 
   .provider-account-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-subscription-setup-heading,
+  .provider-subscription-step-grid {
     grid-template-columns: 1fr;
   }
 

@@ -13,6 +13,7 @@ import type {
   ComputerGitStatus,
   ComputerGitWorktreeResult,
   ComputerDeleteFileResult,
+  ComputerCopyPathResult,
   ComputerMovePathResult,
   ComputerReadFileResult,
   ComputerReadFileRangeResult,
@@ -728,6 +729,32 @@ export async function moveComputerPath(
   });
 }
 
+/** Copies a file or folder through the desktop backend. */
+export async function copyComputerPath(
+  fromPath: string,
+  toPath: string,
+  roots: string[],
+  options: { createParentDirs?: boolean; overwrite?: boolean } = {},
+) {
+  if (isBrowserWorkspacePath(fromPath) || isBrowserWorkspacePath(toPath)) {
+    throw new Error("Copy operations are available in the desktop app for real folders.");
+  }
+
+  if (!isTauriDesktopRuntime()) {
+    throw new Error("Use the desktop app before copying files and folders.");
+  }
+
+  return await invoke<ComputerCopyPathResult>("computer_copy_path", {
+    request: {
+      createParentDirs: options.createParentDirs ?? true,
+      fromPath,
+      overwrite: options.overwrite ?? false,
+      roots,
+      toPath,
+    },
+  });
+}
+
 /** Resolves saved workspace settings to concrete roots used by host context. */
 export async function resolveLocalWorkspaceRoots(settings: LocalWorkspaceSettings) {
   if (!settings.enabled) {
@@ -1309,7 +1336,7 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
   const permissionRules = {
     "auto-review": "Diagnostic tools and future low-risk in-workspace actions may run after policy validation; destructive and external actions still require approval.",
     default: "Diagnostic and read-only bridge tools may run; mutating, terminal, external, network, destructive, publish, and credential-adjacent tools require approval.",
-    "full-access": "Future in-scope actions may run without routine prompts, but hard circuit breakers still block unsafe destructive, credential, Git, and outside-scope writes.",
+    "full-access": "In-scope file, terminal, and network actions may run without routine prompts; destructive, credential, publish, and connected-app write actions still use circuit breakers.",
   } satisfies Record<LocalPermissionMode, string>;
 
   return [
@@ -1323,6 +1350,9 @@ function createWorkspaceHeader(settings: LocalWorkspaceSettings, roots: string[]
     `Roots: ${roots.length > 0 ? roots.join(" | ") : "none"}`,
     `Index: ${summary ? `${summary.entryCount} entries, ${summary.scannedDirectories} folders scanned, ${summary.skippedEntries} skipped, ${summary.ignoredEntries ?? 0} ignored by ignore/secret rules${summary.truncated ? ", stopped at an explicit index limit" : ""}` : "not preloaded for this request"}`,
     `Permission rule: ${permissionRules[settings.permissionMode]}`,
+    settings.scope === "full-computer"
+      ? "Full computer scope: bridge tools can use precise absolute paths under host drive roots. Automatic context stays lazy, so list/search/read sibling projects, assets, downloads, or clone targets with tools before claiming they are unavailable."
+      : "",
     issue ? `Tool note: ${issue}` : "",
   ]
     .filter(Boolean)

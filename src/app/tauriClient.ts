@@ -929,7 +929,7 @@ function summarizeWeatherPayload(payload: unknown) {
 export async function createTerminalSession(request: TerminalCreateSessionRequest): Promise<TerminalCreateSessionResponse> {
   return withNativeCommandTimeout(
     invoke<TerminalCreateSessionResponse>("terminal_create_session", { request }),
-    5_000,
+    20_000,
     "Terminal session startup",
   );
 }

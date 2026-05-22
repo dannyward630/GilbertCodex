@@ -55,6 +55,20 @@ export function samePathSet(left: string[], right: string[]) {
   return normalizedLeft.every((value, index) => value === normalizedRight[index]);
 }
 
+export function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorkspaceSettings {
+  return {
+    enabled: Boolean(current?.enabled && current.scope === "full-computer"),
+    indexReason: undefined,
+    indexSummary: undefined,
+    indexStatus: "idle",
+    indexUpdatedAt: undefined,
+    lastError: undefined,
+    permissionMode: current?.permissionMode ?? "default",
+    roots: [],
+    scope: current?.enabled && current.scope === "full-computer" ? "full-computer" : "selected-folder",
+  };
+}
+
 function normalizePathKey(path: string) {
   return path.trim().replace(/[\\/]+$/, "").toLowerCase();
 }

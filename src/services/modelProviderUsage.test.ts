@@ -88,6 +88,37 @@ describe("provider payload usage guardrail", () => {
     expect(usage.payloadBreakdown?.find((item) => item.id === "toolOutput")?.tokens).toBeGreaterThan(4_000);
   });
 
+  it("does not estimate image attachment data URLs as text tokens", () => {
+    const usage = estimateModelProviderPayloadUsage({
+      contextWindowTokens: 128_000,
+      messages: [
+        message("browser screenshot evidence", {
+          attachments: [
+            {
+              createdAt: "2026-05-14T00:00:00.000Z",
+              dataUrl: `data:image/png;base64,${"A".repeat(400_000)}`,
+              height: 720,
+              id: "screenshot",
+              kind: "image",
+              mimeType: "image/png",
+              name: "Browser screenshot",
+              size: 300_000,
+              width: 1280,
+            },
+          ],
+        }),
+      ],
+      settings,
+      source: "estimate",
+    });
+
+    const attachmentTokens = usage.payloadBreakdown?.find((item) => item.id === "attachments")?.tokens ?? 0;
+
+    expect(attachmentTokens).toBeGreaterThanOrEqual(1200);
+    expect(attachmentTokens).toBeLessThan(2_000);
+    expect(usage.inputTokens).toBeLessThan(8_000);
+  });
+
   it("uses the exact request body after provider preflight clamps output", () => {
     const usage = estimateModelProviderPayloadUsage({
       contextWindowTokens: 6_000,

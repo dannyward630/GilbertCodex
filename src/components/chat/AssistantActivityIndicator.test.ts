@@ -432,6 +432,73 @@ describe("assistant activity indicator", () => {
     expect(snapshot?.live).toBe(true);
   });
 
+  it("estimates direct line-column span edits as partial file edits", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      content: "",
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: JSON.stringify({
+            content: "x",
+            endColumn: 8,
+            path: "src/App.tsx",
+            startColumn: 7,
+            startLine: 14,
+          }),
+          label: "Replace file text span",
+          status: "active",
+          toolId: "files_replace_span",
+        },
+      ],
+    }));
+
+    expect(snapshot?.label).toBe("Editing 1 file");
+    expect(snapshot?.fileItems[0]).toMatchObject({
+      additions: 1,
+      deletions: 1,
+      estimated: true,
+      kind: "update",
+      path: "src/App.tsx",
+    });
+  });
+
+  it("does not estimate replace_span batch edits as whole line ranges", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      content: "",
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: JSON.stringify({
+            edits: [
+              {
+                content: "x",
+                endColumn: 8,
+                operation: "replace_span",
+                path: "src/App.tsx",
+                startColumn: 7,
+                startLine: 14,
+              },
+            ],
+          }),
+          label: "Edit many workspace files",
+          status: "active",
+          toolId: "files_edit_many",
+        },
+      ],
+    }));
+
+    expect(snapshot?.label).toBe("Batch editing 1 file");
+    expect(snapshot?.fileItems[0]).toMatchObject({
+      additions: 1,
+      deletions: 1,
+      estimated: true,
+      kind: "update",
+      path: "src/App.tsx",
+    });
+  });
+
   it("does not render empty streamed tool input or preparing placeholders as details", () => {
     const snapshot = createAssistantActivitySnapshot(assistantMessage({
       content: "",

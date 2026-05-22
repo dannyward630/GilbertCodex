@@ -5,7 +5,7 @@ import {
   openExternalUrl,
   startNineRouterOAuthCallback,
 } from "../app/tauriClient";
-import { getDefaultModelForProvider, normalizeNineRouterDiscoveredModelId } from "../lib/models";
+import { getDefaultModelForProvider, getModelRouteSourceInfo, isNineRouterCodexModelId, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, normalizeNineRouterDiscoveredModelId } from "../lib/models";
 import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "./nativeHttp";
 
 export const NINE_ROUTER_PROVIDER_ID = "9router" as const;
@@ -159,94 +159,94 @@ export interface NineRouterConnectOptions {
 
 export const NINE_ROUTER_ACCOUNT_PROVIDERS: NineRouterAccountProvider[] = [
   {
-    description: "ChatGPT/Codex subscription routes for GPT-5.5, GPT-5.4, and Codex 5.3.",
+    description: "Codex subscription routes for GPT-5.5, GPT-5.4, and Codex 5.3.",
     flow: "codex",
     id: "codex",
-    name: "Codex / ChatGPT",
-    usageNote: "Shows the 5-hour and weekly ChatGPT/Codex quota windows when available.",
+    name: "Codex subscription",
+    usageNote: "Shows Codex quota windows when available.",
   },
   {
-    description: "Claude Code OAuth for Anthropic subscription-backed coding models.",
+    description: "Claude Code subscription routes for coding models.",
     flow: "authorization_code",
     id: "claude",
-    name: "Claude Code",
+    name: "Claude Code subscription",
     usageNote: "Shows Claude session and weekly usage windows.",
   },
   {
-    description: "Google Gemini CLI and Cloud Code Assist account quota.",
+    description: "Gemini subscription routes from Gemini CLI or Cloud Code.",
     flow: "authorization_code",
     id: "gemini-cli",
-    name: "Gemini CLI / Cloud Code",
+    name: "Gemini subscription",
     usageNote: "Shows Cloud Code Assist quota and reset windows.",
   },
   {
-    description: "Google Antigravity subscription quota.",
+    description: "Antigravity subscription routes.",
     flow: "authorization_code",
     id: "antigravity",
-    name: "Antigravity",
+    name: "Antigravity subscription",
     usageNote: "Shows subscription quota when available from Google.",
   },
   {
-    description: "GitHub Copilot account for IDE-backed model routing.",
+    description: "GitHub Copilot subscription routes for coding models.",
     flow: "device_code",
     id: "github",
-    name: "GitHub Copilot",
+    name: "GitHub Copilot subscription",
     usageNote: "Shows Copilot quota snapshots when GitHub reports them.",
   },
   {
-    description: "Kiro device login for AWS/Kiro agentic request quota.",
+    description: "Kiro subscription routes.",
     flow: "device_code",
     id: "kiro",
-    name: "Kiro",
+    name: "Kiro subscription",
     usageNote: "Shows Kiro request usage and reset information.",
   },
   {
-    description: "Kilo Code OAuth device login for Kilo-backed routes.",
+    description: "Kilo Code subscription routes.",
     flow: "device_code",
     id: "kilocode",
-    name: "Kilo Code",
+    name: "Kilo Code subscription",
     usageNote: "Shows Kilo account status; quota appears when available.",
   },
   {
-    description: "Cline OAuth for Cline-backed coding routes.",
+    description: "Cline subscription routes.",
     flow: "authorization_code",
     id: "cline",
-    name: "Cline",
+    name: "Cline subscription",
     usageNote: "Shows account status; quota appears when available.",
   },
   {
-    description: "Qwen Code device login for Qwen-backed routes.",
+    description: "Qwen Code subscription routes.",
     flow: "device_code",
     id: "qwen",
-    name: "Qwen Code",
+    name: "Qwen Code subscription",
     usageNote: "Shows account status and quota messages when available.",
   },
   {
-    description: "iFlow account for iFlow-backed coding routes.",
+    description: "iFlow subscription routes.",
     flow: "authorization_code",
     id: "iflow",
-    name: "iFlow",
+    name: "iFlow subscription",
     usageNote: "Shows account status and usage messages when available.",
   },
   {
-    description: "Qoder account for Qoder-backed coding routes.",
+    description: "Qoder subscription routes.",
     flow: "authorization_code",
     id: "qoder",
-    name: "Qoder",
+    name: "Qoder subscription",
     usageNote: "Shows account status and usage messages when available.",
   },
   {
-    description: "Kimi Coding device login for Kimi-backed routes.",
+    description: "Kimi Coding subscription routes.",
     flow: "device_code",
     id: "kimi-coding",
-    name: "Kimi Coding",
+    name: "Kimi Coding subscription",
     usageNote: "Shows account status and quota messages when available.",
   },
   {
-    description: "CodeBuddy device login for CodeBuddy-backed routes.",
+    description: "CodeBuddy subscription routes.",
     flow: "device_code",
     id: "codebuddy",
-    name: "CodeBuddy",
+    name: "CodeBuddy subscription",
     usageNote: "Shows account status and quota messages when available.",
   },
 ];
@@ -313,6 +313,87 @@ export function chooseNineRouterModel(savedModel: string, models: string[]) {
   }
 
   return normalizedSavedModel || getDefaultModelForProvider(NINE_ROUTER_PROVIDER_ID);
+}
+
+const NINE_ROUTER_ACCOUNT_ROUTE_GROUPS: Record<string, string> = {
+  antigravity: "9router-antigravity",
+  claude: "9router-claude-code",
+  cline: "9router-cline",
+  codebuddy: "9router-codebuddy",
+  codex: "9router-codex",
+  "gemini-cli": "9router-gemini-cli",
+  github: "9router-github-copilot",
+  iflow: "9router-iflow",
+  "kimi-coding": "9router-kimi-coding",
+  kilocode: "9router-kilo-code",
+  kiro: "9router-kiro",
+  qoder: "9router-qoder",
+  qwen: "9router-qwen-code",
+};
+
+const NINE_ROUTER_ACCOUNT_MODEL_PRIORITIES: Record<string, readonly string[]> = {
+  codex: NINE_ROUTER_CODEX_MODEL_IDS,
+  github: NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS,
+};
+
+export function chooseNineRouterModelForAccount(providerId: string, savedModel: string, models: string[]) {
+  const normalizedSavedModel = savedModel.trim();
+  const priorityModels = NINE_ROUTER_ACCOUNT_MODEL_PRIORITIES[providerId] ?? [];
+
+  if (normalizedSavedModel && modelBelongsToNineRouterAccount(providerId, normalizedSavedModel) && (models.length === 0 || models.includes(normalizedSavedModel))) {
+    return normalizedSavedModel;
+  }
+
+  const priorityModel = priorityModels.find((model) => models.includes(model));
+  if (priorityModel) {
+    return priorityModel;
+  }
+
+  const liveProviderModel = models.find((model) => modelBelongsToNineRouterAccount(providerId, model));
+  if (liveProviderModel) {
+    return liveProviderModel;
+  }
+
+  return priorityModels[0] ?? chooseNineRouterModel(savedModel, models);
+}
+
+export function chooseNineRouterConnectedAccountProvider(connections: NineRouterConnection[], excludedProviderId?: string) {
+  return NINE_ROUTER_ACCOUNT_PROVIDERS.find((provider) => {
+    if (provider.id === excludedProviderId) {
+      return false;
+    }
+
+    return hasNineRouterAccountConnection(connections, provider.id);
+  }) ?? null;
+}
+
+export function chooseNineRouterModelForConnectedAccounts(savedModel: string, models: string[], connections: NineRouterConnection[]) {
+  const savedRouteProviderId = getNineRouterAccountProviderForModel(savedModel);
+  if (savedRouteProviderId && hasNineRouterAccountConnection(connections, savedRouteProviderId)) {
+    return chooseNineRouterModelForAccount(savedRouteProviderId, savedModel, models);
+  }
+
+  const connectedProvider = chooseNineRouterConnectedAccountProvider(connections);
+  return connectedProvider ? chooseNineRouterModelForAccount(connectedProvider.id, savedModel, models) : "";
+}
+
+export function getNineRouterAccountProviderForModel(model: string) {
+  const groupId = getModelRouteSourceInfo(NINE_ROUTER_PROVIDER_ID, model).groupId;
+  return Object.entries(NINE_ROUTER_ACCOUNT_ROUTE_GROUPS).find(([, routeGroupId]) => routeGroupId === groupId)?.[0] ?? null;
+}
+
+export function hasNineRouterAccountConnection(connections: NineRouterConnection[], providerId: string) {
+  return Boolean(choosePreferredConnection(connections.filter((connection) => connection.provider === providerId)));
+}
+
+export function shouldShowNineRouterCodexContextSettings(connections: NineRouterConnection[], selectedModel: string) {
+  return hasNineRouterAccountConnection(connections, "codex") && isNineRouterCodexModelId(selectedModel);
+}
+
+function modelBelongsToNineRouterAccount(providerId: string, model: string) {
+  const groupId = NINE_ROUTER_ACCOUNT_ROUTE_GROUPS[providerId];
+
+  return Boolean(groupId && getModelRouteSourceInfo(NINE_ROUTER_PROVIDER_ID, model).groupId === groupId);
 }
 
 export function choosePreferredConnection(connections: NineRouterConnection[]) {

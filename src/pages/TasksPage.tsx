@@ -39,6 +39,7 @@ import {
   type ChatModelOption,
   type ModelProviderCatalogItem,
 } from "../lib/models";
+import { formatDeviceTaskDateTime } from "../lib/localDateTime";
 import type {
   AutomationCapabilityId,
   AutomationNotificationPolicy,
@@ -1025,18 +1026,7 @@ function formatTrigger(trigger: AutomationTrigger) {
 }
 
 function formatDate(value: string) {
-  const date = new Date(value);
-
-  if (!Number.isFinite(date.getTime())) {
-    return "Unknown";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
+  return formatDeviceTaskDateTime(value);
 }
 
 function formatRunStatus(status: AutomationRun["status"]) {

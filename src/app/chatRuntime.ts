@@ -220,12 +220,18 @@ export function looksLikeUnappliedFileEditAnswer(content: string, toolCalls: Cha
   const hasUpdatedFileHeader =
     /(?:^|\n)\s*(?:#{1,4}\s*)?(?:updated|new|final|complete)\s+(?:version\s+of\s+)?`?[\w./\\ -]+\.(?:css|jsx?|tsx?|html|json|md)`?\b/i.test(trimmed) ||
     /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\u66f4\u65b0\u540e\u7684|\u4fee\u6539\u540e\u7684|\u65b0\u7684|\u6700\u7ec8\u7684)\s*`?[\w./\\ -]+\.(?:css|jsx?|tsx?|html|json|md)`?\b/iu.test(trimmed);
+  const hasReplacementInstructionHeader =
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:replace|overwrite|put\s+this\s+in|use\s+this\s+for|change)\s+`?[\w./\\ -]+\.(?:css|jsx?|tsx?|html|json|md)`?\s+(?:with|to|as)\s+(?:this|the\s+following)\b/i.test(trimmed) ||
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:what\s+to\s+change|exact\s+replacement|ready[-\s]?to[-\s]?paste|copy\s+this|paste\s+this)\b/i.test(trimmed);
   const hasCodeDump =
     /```(?:[a-z0-9_-]+)?\s*[\s\S]{80,}?```/i.test(trimmed) ||
     /\bimport\s+[\s\S]{0,800}\b(?:function|const)\s+[A-Z]\w*[\s\S]{0,2000}\bexport\s+default\b/.test(trimmed) ||
     /(?:^|\n)\s*[.#][\w-]+\s*\{[\s\S]{80,}?\}/.test(trimmed);
 
-  return claimsFileChange && namesEditableFile && (hasUpdatedFileHeader || hasCodeDump);
+  return namesEditableFile && (
+    claimsFileChange && (hasUpdatedFileHeader || hasCodeDump) ||
+    hasReplacementInstructionHeader && hasCodeDump
+  );
 }
 
 /** Detects routine local execution requests that were turned into unnecessary confirmation questions. */
@@ -249,7 +255,7 @@ export function looksLikeUnnecessaryLocalActionConfirmation(content: string, too
 }
 
 const APP_TOOL_NAME_PATTERN =
-  /\b(?:files[._](?:append|apply_patch|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|gmail_[\w.-]+|calendar_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
+  /\b(?:files[._](?:append|apply_patch|copy|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|replace_span|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|gmail_[\w.-]+|calendar_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
 const FILE_LINE_EDIT_FRAME_PATTERN =
   /\b(?:current\s+)?`?[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)`?\s+lines?\s+\d+(?:\s*-\s*\d+)?\b/i;
 const EDITABLE_FILE_MENTION_PATTERN =
@@ -305,7 +311,7 @@ function hasSuccessfulMutatingFileToolCall(toolCalls: ChatToolCall[]) {
 
     const toolId = toolCall.toolId ?? "";
     return (
-      /^files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|write|write_many)\b/i.test(toolId) ||
+      /^files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|replace_span|write|write_many)\b/i.test(toolId) ||
       (toolCall.fileChanges?.length ?? 0) > 0 ||
       toolCall.batchSummary?.operation === "edit" ||
       toolCall.batchSummary?.operation === "write"
@@ -751,6 +757,41 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
     /\b(?:component|css|design|layout|page|screen|theme|ui|visual|website|src[\\/]|hello\s*world|helloworld)\b/i.test(trimmed);
 
   return asksForGitChangeReview || asksForTerminalExecution || asksForBrowserEvidence || ((asksForEdit || asksForAppBehaviorChange || asksForInspection || asksToContinueWork) && referencesLocalTarget);
+}
+
+/** Detects local requests where a read-only answer or pasted replacement code is not enough. */
+export function requiresWorkspaceMutationForPrompt(prompt: string, hasWorkspaceRoots: boolean) {
+  if (!hasWorkspaceRoots) {
+    return false;
+  }
+
+  const trimmed = prompt.trim();
+
+  if (!trimmed || trimmed.length > 4_000 || CONVERSATION_ONLY_PROMPT_PATTERN.test(trimmed)) {
+    return false;
+  }
+
+  if (/\b(?:analysis\s+only|do\s+not\s+(?:change|edit|modify|write)|don't\s+(?:change|edit|modify|write)|no\s+(?:code\s+)?changes?|plan\s+only|read[-\s]?only)\b/i.test(trimmed)) {
+    return false;
+  }
+
+  if (/\b(?:show|give|provide|write)\s+me\b[\s\S]{0,120}\b(?:example|snippet|template|sample)\b/i.test(trimmed) && !/\b(?:in|inside|to|for)\s+(?:this|the|our|selected)\s+(?:app|codebase|project|repo|repository|workspace)\b/i.test(trimmed)) {
+    return false;
+  }
+
+  const asksToContinueWork = /\b(?:do\s+(?:it|the\s+job|this)|continue|finish(?:\s+it)?|go\s+ahead|make\s+it\s+happen|apply\s+(?:it|that|the\s+change)|fix\s+(?:it|this|that)|implement\s+(?:it|this|that))\b/i.test(trimmed);
+  const asksForMutation =
+    /\b(?:add|append|apply|change|create|delete|edit|fix|implement|improve|insert|make\s+(?:it|this|that)?\s*(?:look\s+|feel\s+|more\s+)?(?:better|cleaner|clearer|polished|readable)|modi(?:fy|fy|y)|patch|polish|re\s*design|redesign|refactor|remove|replace|restyle|revamp|style|tweak|update|upgrade|write)\b/i.test(trimmed);
+  const asksForAppBehaviorChange =
+    /\b(?:when|if|after|on)\b[\s\S]{0,220}\b(?:should|shouldn['â€™]?t|should\s+not|needs?\s+to|must|has\s+to|have\s+to)\b[\s\S]{0,220}\b(?:go\s+to|navigate|route|open|show|display|render|switch|send|land|take|work|create|start)\b|\b(?:should|shouldn['â€™]?t|should\s+not|needs?\s+to|must|has\s+to|have\s+to)\b[\s\S]{0,220}\b(?:go\s+to|navigate|route|open|show|display|render|switch|send|land|take|work|create|start)\b/i.test(trimmed) &&
+    /\b(?:app|chat|component|flow|home|ide|layout|navigation|page|route|screen|ui|user|website|workspace|workplace)\b/i.test(trimmed);
+  const referencesLocalTarget =
+    LOCAL_WORKSPACE_REFERENCE_PATTERN.test(trimmed) ||
+    LOCAL_CODE_ENTITY_PATTERN.test(trimmed) ||
+    /(?:^|\n|`|\s)[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)\b/i.test(trimmed) ||
+    /\b(?:app|component|css|design|layout|page|screen|theme|ui|visual|website|src[\\/]|local-code conversation context|selected workspace)\b/i.test(trimmed);
+
+  return referencesLocalTarget && (asksForMutation || asksForAppBehaviorChange || asksToContinueWork);
 }
 
 export function createFreshLocalToolEvidenceInstruction(prompt: string, unsupportedAnswer: string, options: { blockedReasons?: string[]; canUseProviderTools?: boolean } = {}) {

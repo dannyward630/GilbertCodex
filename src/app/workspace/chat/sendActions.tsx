@@ -222,6 +222,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
   const { activeChat, CONTEXT_COMPACTION_PROGRESS_ID, createActiveGeneration, createAgentRunForMessage, createChatToolSelectionPrompt, createDiscordResponseStreamer, createDiscordRuntimeContextMessages, createEmptyChat, createFallbackChatTitle, createId, createMessage, createMessagesForProvider, createPlanningExecutionApproval, createPlanningInputRequest, createPlanningProgress, createPlanResearchFollowupInstruction, createPlanResearchInstruction, createPromptAwareProviderSettings, createToolAwareProviderSettings, DEFAULT_PROJECT, finishActiveGeneration, formatResearchPayload, formatTokenCount, getEnabledWorkspaceRoots, getRuntimeWebSearchSettings, isAbortError, isChatSending, isRequestInactive, isResearchDeepEnough, localWorkspaceRef, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, notifyPlanningInputNeeded, notifyRunComplete, notifyRunNeedsAttention, pendingChatsRef, PLAN_RESEARCH_BUDGET, preserveVisibleResponseThinking, recordPlanningProviderRequest, recordPlanningProviderUsage, resolveChatResearchReferences, resolveWorkspaceForChatProject, runAppOwnedCodingAgent, runPlanningMode, scheduleGeneratedChatTitle, sendDiscordReply, setActiveChatId, setActiveGenerationTarget, setActiveRoute, setAgentRunCompleted, setAgentRunFailed, setAgentRunWaiting, setChats, setNoticeDialog, shouldStartAppAgentRun, sortChatsByUpdatedAt, stopStaleStreamingMessages, streamAssistantWithLocalTools, summarizeResearchEvidence, toolSettings, touchProject, updateAgentRun, updateGeneratedMessage, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withWebSearchProgress } = deps;
 
     const content = input.content.trim();
+    const providerPrompt = (options.providerPrompt ?? content).trim() || content;
     const attachments = input.attachments;
     const sourceChat = options.sourceChat ?? (queuedSend ? pendingChatsRef.current.find((chat) => chat.id === queuedSend.chatId && !chat.archived) : activeChat);
     const currentChat = sourceChat ?? createEmptyChat(DEFAULT_PROJECT);
@@ -242,7 +243,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
 
     const isPlanningMode = toolSettings.planning && input.mode === "plan";
     const workspaceSettings = resolveWorkspaceForChatProject(currentChat.project, input.localWorkspace ?? localWorkspaceRef.current);
-    const effectiveProviderSettings = createPromptAwareProviderSettings(content, options.providerSettingsOverrides ?? {}, currentChat);
+    const effectiveProviderSettings = createPromptAwareProviderSettings(providerPrompt, options.providerSettingsOverrides ?? {}, currentChat);
     const runtimeWebSearchSettings = getRuntimeWebSearchSettings(effectiveProviderSettings, input.webSearch);
     const webSearchToolAvailable = Boolean(toolSettings.webSearch && runtimeWebSearchSettings.enabled);
     const discordStreamer = options.discordReply ? createDiscordResponseStreamer(options.discordReply) : undefined;
@@ -276,8 +277,16 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
     const automationRuntimeTimer = automationRuntimeTimeoutMs > 0
       ? setTimeout(() => controller.abort(), automationRuntimeTimeoutMs)
       : undefined;
+
+    let userMessage!: ChatMessage;
+    let assistantMessage!: ChatMessage;
+    let agentRun!: AgentRun;
+    let titleGenerationScheduled = false;
+    let scheduleTitleGenerationAfterPrimaryStream = () => {};
+
+    try {
     const now = new Date().toISOString();
-    const userMessage =
+    userMessage =
       queuedSend && queuedMessage
         ? {
             ...queuedMessage,
@@ -295,7 +304,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           };
     const effectiveThinkingSettings = effectiveProviderSettings.thinking;
     const discordContextMessages = options.discordReply ? createDiscordRuntimeContextMessages(workspaceSettings, webSearchToolAvailable, runtimeWebSearchSettings.provider) : [];
-    const assistantMessage: ChatMessage = {
+    assistantMessage = {
       ...createMessage("assistant", ""),
       isStreaming: true,
       mode: isPlanningMode ? "plan" : "chat",
@@ -314,12 +323,13 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           }
         : undefined,
     };
-    const agentRun = createAgentRunForMessage({
+    agentRun = createAgentRunForMessage({
       chatId: currentChat.id,
       localWorkspace: workspaceSettings,
       messageId: assistantMessage.id,
       mode: isPlanningMode ? "plan" : "chat",
-      prompt: content,
+      prompt: providerPrompt,
+      title: fallbackChatTitle,
     });
     assistantMessage.agentRunId = agentRun.id;
     assistantMessage.agentRunStatus = agentRun.status;
@@ -362,8 +372,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
     stopStaleStreamingMessages(currentChat.id, assistantMessage.id);
     touchProject(currentChat.project);
 
-    let titleGenerationScheduled = false;
-    const scheduleTitleGenerationAfterPrimaryStream = () => {
+    scheduleTitleGenerationAfterPrimaryStream = () => {
       if (!shouldGenerateChatTitle || titleGenerationScheduled || controller.signal.aborted) {
         return;
       }
@@ -379,8 +388,8 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
       });
     };
 
-    try {
-      const messagesForProvider = await createMessagesForProvider(messagesBeforeUser, userMessage, currentChat.project, workspaceSettings, content, discordContextMessages, effectiveProviderSettings, (notice) => {
+      const providerUserMessage = providerPrompt === content ? userMessage : { ...userMessage, content: providerPrompt };
+      const messagesForProvider = await createMessagesForProvider(messagesBeforeUser, providerUserMessage, currentChat.project, workspaceSettings, providerPrompt, discordContextMessages, effectiveProviderSettings, (notice) => {
         const compactionProgress = {
           detail: `${notice.compactedMessageCount} older messages compacted. Active request is now ${formatTokenCount(notice.afterTokens)} / ${formatTokenCount(notice.contextWindowTokens)}.`,
           id: CONTEXT_COMPACTION_PROGRESS_ID,
@@ -467,12 +476,12 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           fileBrowser: true,
           fileSearch: true,
         };
-        const researchInstruction = createPlanResearchInstruction(content, {
+        const researchInstruction = createPlanResearchInstruction(providerPrompt, {
           workspaceRoots: getEnabledWorkspaceRoots(workspaceSettings),
         });
         const planResearchToolSelectionPrompt = [
           "Plan mode codebase research. Search workspace directories, grep source files, and read relevant files before drafting. If the request mentions runtime behavior, browser UI, localhost, preview, screenshots, or console errors, also use terminal diagnostics plus browser preview, screenshot, and console tools before drafting.",
-          content,
+          providerPrompt,
         ].join("\n");
         setChats((currentChats) =>
           currentChats.map((chat) =>
@@ -499,7 +508,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           messageId: assistantMessage.id,
           memoryToolsEnabled: false,
           messagesForProvider: researchMessages,
-          prompt: content,
+          prompt: providerPrompt,
           requestId,
           runId: agentRun.id,
           runtimeToolOverrides: planResearchToolOverrides,
@@ -577,7 +586,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
             messageId: assistantMessage.id,
             memoryToolsEnabled: false,
             messagesForProvider: researchMessages,
-            prompt: content,
+            prompt: providerPrompt,
             requestId,
             runId: agentRun.id,
             runtimeToolOverrides: planResearchToolOverrides,
@@ -669,7 +678,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           return;
         }
 
-        const planApproval = createPlanningExecutionApproval(agentRun.id, assistantMessage.id, assistantResponse.content, content);
+        const planApproval = createPlanningExecutionApproval(agentRun.id, assistantMessage.id, assistantResponse.content, providerPrompt);
 
         setChats((currentChats) =>
           sortChatsByUpdatedAt(
@@ -721,7 +730,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
       } else {
         const useAppAgentRuntime = !options.automationScope && shouldStartAppAgentRun({
           mode: "chat",
-          prompt: content,
+          prompt: providerPrompt,
           toolSettings,
           workspace: workspaceSettings,
         });
@@ -750,7 +759,7 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
               messageId: assistantMessage.id,
               messagesForProvider,
               onExternalUpdate: discordStreamer?.update,
-              prompt: content,
+              prompt: providerPrompt,
               requestId,
               runId: agentRun.id,
               webSearchSettingsOverride: runtimeWebSearchSettings,
@@ -763,12 +772,12 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
               messageId: assistantMessage.id,
               messagesForProvider,
               onExternalUpdate: discordStreamer?.update,
-              prompt: content,
+              prompt: providerPrompt,
               providerSettingsOverrides: options.providerSettingsOverrides,
               requestId,
               runId: agentRun.id,
               runtimeToolOverrides: options.runtimeToolOverrides,
-              toolSelectionPrompt: options.toolSelectionPrompt ?? createChatToolSelectionPrompt(content, messagesBeforeUser, workspaceSettings),
+              toolSelectionPrompt: options.toolSelectionPrompt ?? createChatToolSelectionPrompt(providerPrompt, messagesBeforeUser, workspaceSettings),
               webSearchSettingsOverride: runtimeWebSearchSettings,
               workspaceSettings,
             });
@@ -884,6 +893,46 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
       }
 
       const errorContent = error instanceof Error ? error.message : "The provider request failed.";
+
+      if (!assistantMessage || !agentRun) {
+        const failedUserMessage = userMessage ?? {
+          ...createMessage("user", content, undefined, undefined, attachments),
+          researchReferences: researchReferences.length > 0 ? researchReferences : undefined,
+          source: options.userMessageSource,
+        };
+        const failedAssistantMessage: ChatMessage = {
+          ...createMessage("assistant", errorContent),
+          agentRunStatus: "failed",
+          content: errorContent,
+          isStreaming: false,
+          mode: isPlanningMode ? "plan" : "chat",
+          status: "error",
+        };
+
+        setChats((currentChats) => {
+          const hasCurrentChat = currentChats.some((chat) => chat.id === currentChat.id);
+          const existingChat = currentChats.find((chat) => chat.id === currentChat.id) ?? currentChat;
+          const updatedChat: ChatSummary = {
+            ...existingChat,
+            composerDraft: undefined,
+            isDraft: undefined,
+            messages: [...messagesBeforeUser, failedUserMessage, failedAssistantMessage, ...messagesAfterUser],
+            title: shouldGenerateChatTitle ? fallbackChatTitle : existingChat.title,
+            updatedAt: new Date().toISOString(),
+          };
+          const nextChats = sortChatsByUpdatedAt(hasCurrentChat ? currentChats.map((chat) => (chat.id === currentChat.id ? updatedChat : chat)) : [updatedChat, ...currentChats]);
+          pendingChatsRef.current = nextChats;
+          return nextChats;
+        });
+        notifyRunNeedsAttention(errorContent, currentChat.id);
+        touchProject(currentChat.project);
+        if (discordStreamer) {
+          await discordStreamer.fail(`Gilbert hit an error while handling the Discord request: ${errorContent}`);
+        } else {
+          await sendDiscordReply(options.discordReply, `Gilbert hit an error while handling the Discord request: ${errorContent}`);
+        }
+        return;
+      }
 
       setChats((currentChats) =>
         sortChatsByUpdatedAt(

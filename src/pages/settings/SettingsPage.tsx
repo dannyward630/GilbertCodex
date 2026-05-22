@@ -152,6 +152,7 @@ function SettingsPageComponent({
   generalSettings,
   localWorkspace,
   onActiveSectionChange,
+  onActivateProvider,
   onAppearanceModeChange,
   onAppearanceSettingsChange,
   onDiscordBridgeChange,
@@ -916,7 +917,7 @@ function SettingsPageComponent({
     }
 
     if (displaySection === "nineRouter") {
-      return <NineRouterSettingsPage settings={settings} onSettingsChange={onSettingsChange} onSubscriptionSandboxUninstalled={onSubscriptionSandboxUninstalled} />;
+      return <NineRouterSettingsPage settings={settings} onActivateProvider={onActivateProvider} onSettingsChange={onSettingsChange} onSubscriptionSandboxUninstalled={onSubscriptionSandboxUninstalled} />;
     }
 
     if (displaySection === "usage") {
@@ -1037,6 +1038,7 @@ function areSettingsPagePropsEqual(previous: SettingsPageProps, next: SettingsPa
     previous.discordBridge === next.discordBridge &&
     previous.generalSettings === next.generalSettings &&
     previous.localWorkspace === next.localWorkspace &&
+    Boolean(previous.onActivateProvider) === Boolean(next.onActivateProvider) &&
     previous.personalization === next.personalization &&
     previous.projects === next.projects &&
     previous.settings === next.settings

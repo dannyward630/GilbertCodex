@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createChatToolSelectionPrompt } from "./messageContext";
+import { createActiveProjectBoundaryMessage, createChatToolSelectionPrompt, resolveEnabledWorkspaceRoots } from "./messageContext";
 import type { ChatMessage } from "../../../types/chat";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 
@@ -55,5 +55,51 @@ describe("createChatToolSelectionPrompt", () => {
     );
 
     expect(prompt).toBe("thanks");
+  });
+});
+
+describe("full computer workspace roots", () => {
+  it("resolves host roots for tool execution instead of only returning the focused project root", async () => {
+    const workspace: LocalWorkspaceSettings = {
+      enabled: true,
+      permissionMode: "full-access",
+      roots: ["C:\\Users\\Kobe Work\\Documents\\GilbertCodexWebsite"],
+      scope: "full-computer",
+    };
+    const roots = await resolveEnabledWorkspaceRoots(
+      {
+        resolveLocalWorkspaceRoots: async () => [
+          "C:\\Users\\Kobe Work\\Documents\\GilbertCodexWebsite",
+          "C:\\",
+        ],
+      } as any,
+      workspace,
+    );
+
+    expect(roots).toEqual([
+      "C:\\Users\\Kobe Work\\Documents\\GilbertCodexWebsite",
+      "C:\\",
+    ]);
+  });
+
+  it("does not tell full-computer chats to refuse sibling local projects", () => {
+    const workspace: LocalWorkspaceSettings = {
+      enabled: true,
+      permissionMode: "full-access",
+      roots: ["C:\\Users\\Kobe Work\\Documents\\GilbertCodexWebsite"],
+      scope: "full-computer",
+    };
+    const boundary = createActiveProjectBoundaryMessage(
+      {
+        createMessage: (role: ChatMessage["role"], content: string) => message(role, content),
+        normalizeProjectName: (name: string) => name,
+      } as any,
+      "GilbertCodexWebsite",
+      workspace,
+    );
+
+    expect(boundary.content).toContain("Full computer mode is enabled");
+    expect(boundary.content).toContain("sibling projects");
+    expect(boundary.content).not.toContain("Use only this active chat, these workspace roots");
   });
 });

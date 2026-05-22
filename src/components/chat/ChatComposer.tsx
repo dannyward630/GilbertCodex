@@ -54,7 +54,7 @@ import {
   type ModelContextWindowMap,
 } from "../../lib/contextWindow";
 import { formatGitChangedFiles, formatGitChangeStripLabel, getGitStatusIssue } from "../../lib/gitStatusUi";
-import { MODEL_PROVIDERS, buildProviderModelOptions, getProviderApiKeyForProvider, prefersLiveModelCatalog, supportsModelInputModality, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
+import { MODEL_PROVIDERS, buildProviderModelOptions, getModelRouteSourceInfo, getProviderApiKeyForProvider, prefersLiveModelCatalog, supportsModelInputModality, usesLiveModelCatalog, type ChatModelOption, type ProviderModelMetadata } from "../../lib/models";
 import { fetchProviderModels } from "../../services/modelProviderClient";
 import { formatWebSearchProviderLabel } from "../../services/webSearchClient";
 import { estimateModelProviderContextWindowUsage, projectDraftOntoProviderUsage } from "../../services/modelProviderUsage";
@@ -272,6 +272,19 @@ function formatComposerModelLabel(label: string) {
   return label.replace(/^Codex\s+/i, "").trim() || label;
 }
 
+function formatComposerRouteLabel(option: ChatModelOption) {
+  const sourceLabel = getModelRouteSourceInfo(option.provider, option.value).chipLabel;
+  const modelLabel = formatComposerModelLabel(option.label);
+
+  return sourceLabel ? `${sourceLabel} - ${modelLabel}` : modelLabel;
+}
+
+function formatComposerRouteTitle(option: ChatModelOption) {
+  const source = getModelRouteSourceInfo(option.provider, option.value);
+
+  return `${source.sourceLabel}: ${option.value}`;
+}
+
 function shouldRequireSubmitChord(content: string) {
   return content.includes("\n") || content.length >= 240;
 }
@@ -308,6 +321,12 @@ export function shouldShowMediaFallbackNotice(attachments: ChatAttachment[], pro
 
     return !supportsModelInputModality(provider, model, isVideoAttachment(attachment) ? "video" : "image");
   });
+}
+
+export function shouldShowComposerWorkspaceControl(projectName: string | undefined, workspace: Pick<LocalWorkspaceSettings, "enabled" | "roots" | "scope">) {
+  void workspace;
+
+  return !isNoProjectName(projectName);
 }
 
 function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
@@ -499,10 +518,20 @@ function ChatComposerComponent({
   const activeRoot = localWorkspace.roots[0] ?? "";
   const activeProjectName = normalizeProjectName(chat.project);
   const activeProject = projects.find((project) => project.name.toLowerCase() === activeProjectName.toLowerCase());
-  const projectLabel = isNoProjectName(activeProjectName) ? DEFAULT_PROJECT : activeProject?.name || activeProjectName;
+  const isProjectChat = !isNoProjectName(activeProjectName);
+  const showWorkspaceControl = shouldShowComposerWorkspaceControl(activeProjectName, localWorkspace);
+  const projectLabel = isProjectChat
+    ? activeProject?.name || activeProjectName
+    : localWorkspace.scope === "full-computer"
+      ? "Computer access"
+      : activeRoot
+        ? `${getPathBasename(activeRoot)} workspace`
+        : DEFAULT_PROJECT;
+  const WorkspaceControlIcon = isProjectChat || activeRoot ? FolderGit2 : ShieldCheck;
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
   const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
-  const composerModelLabel = formatComposerModelLabel(selectedModel.label);
+  const composerModelLabel = formatComposerRouteLabel(selectedModel);
+  const composerModelTitle = formatComposerRouteTitle(selectedModel);
   const workspaceMetaLabel = gitStatus?.available
     ? hasGitChangeSummary
       ? `${gitBranchLabel} · ${gitStatus.changedFiles}`
@@ -510,7 +539,7 @@ function ChatComposerComponent({
     : localWorkspace.enabled
       ? localPermissionModeLabel(localWorkspace.permissionMode)
       : "Local off";
-  const workspaceButtonLabel = `Workspace: ${projectLabel}. ${workspaceMetaLabel}.`;
+  const workspaceButtonLabel = `${isProjectChat || activeRoot ? "Workspace" : "Computer access"}: ${projectLabel}. ${workspaceMetaLabel}.`;
   const activeModeCount = (webSearch.enabled ? 1 : 0) + (imageGenerationEnabled ? 1 : 0) + (planMode.enabled ? 1 : 0);
   const heldQueuedMessageIdSet = useMemo(() => new Set(heldQueuedMessageIds), [heldQueuedMessageIds]);
   const researchChatOptions = useMemo(() => sortChatsByUpdatedAt(chats.filter((candidate) => isPlainResearchChat(candidate, chat.id))), [chat.id, chats]);
@@ -2145,7 +2174,7 @@ function ChatComposerComponent({
                 {voiceElapsedLabel}
               </time>
             </div>
-          ) : (
+          ) : showWorkspaceControl ? (
             <div className="composer-menu-anchor composer-workspace-root">
               <button
                 className="workspace-toggle"
@@ -2157,7 +2186,7 @@ function ChatComposerComponent({
                 data-permission={localWorkspace.permissionMode}
                 onClick={() => toggleMenu("workspace")}
               >
-                <FolderGit2 size={14} aria-hidden="true" />
+                <WorkspaceControlIcon size={14} aria-hidden="true" />
                 <span>
                   <strong>{projectLabel}</strong>
                   <small>{workspaceMetaLabel}</small>
@@ -2196,10 +2225,11 @@ function ChatComposerComponent({
                   setProjectSearch={setProjectSearch}
                   status={gitStatus}
                   workspace={localWorkspace}
+                  workspaceKind={isProjectChat || activeRoot ? "project" : "computer"}
                 />
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
         <div className="composer-actions-right">
           <div className="composer-menu-anchor composer-context-root">
@@ -2226,6 +2256,7 @@ function ChatComposerComponent({
               aria-haspopup="menu"
               aria-expanded={openMenu === "model"}
               data-active={openMenu === "model"}
+              title={composerModelTitle}
               onClick={handleModelMenuClick}
               onPointerDown={handleModelMenuPointerDown}
             >
@@ -2362,6 +2393,7 @@ function WorkspacePopover({
   setProjectSearch,
   status,
   workspace,
+  workspaceKind,
 }: {
   actionNotice: { kind: "error" | "success"; message: string } | null;
   actionRunning: string | null;
@@ -2390,15 +2422,18 @@ function WorkspacePopover({
   setProjectSearch: (value: string) => void;
   status: ComputerGitStatus | null;
   workspace: LocalWorkspaceSettings;
+  workspaceKind: "computer" | "project";
 }) {
   const rootLabel = root ? formatCompactPath(root) : "No local folder";
   const gitSummary = loading ? "Checking Git" : status?.available ? status.branch || "Git repository" : "Git not ready";
+  const showGitSection = workspaceKind === "project";
+  const HeaderIcon = workspaceKind === "computer" ? ShieldCheck : FolderGit2;
 
   return (
     <div className="composer-popover composer-popover-workspace" role="dialog" aria-label="Workspace">
       <div className="workspace-popover-head">
         <span className="workspace-popover-icon" aria-hidden="true">
-          <FolderGit2 size={18} />
+          <HeaderIcon size={18} />
         </span>
         <span>
           <strong>{projectLabel}</strong>
@@ -2430,33 +2465,35 @@ function WorkspacePopover({
         <LocalWorkspacePopover compact settings={workspace} onChange={onLocalWorkspaceChange} />
       </section>
 
-      <section className="workspace-popover-section" aria-label="Git status">
-        <div className="workspace-popover-section-head">
-          <span>Git</span>
-          <small>{gitSummary}</small>
-        </div>
-        <GitStatusPopover
-          actionNotice={actionNotice}
-          actionRunning={actionRunning}
-          branchName={branchName}
-          compact
-          commitMessage={commitMessage}
-          initNotice={initNotice}
-          initializing={initializing}
-          loading={loading}
-          onBranchNameChange={onBranchNameChange}
-          onCommit={onCommit}
-          onCommitMessageChange={onCommitMessageChange}
-          onCreateBranch={onCreateBranch}
-          onInitialize={onInitialize}
-          onPull={onPull}
-          onPush={onPush}
-          onReviewChanges={onReviewChanges}
-          onStageAll={onStageAll}
-          root={root}
-          status={status}
-        />
-      </section>
+      {showGitSection ? (
+        <section className="workspace-popover-section" aria-label="Git status">
+          <div className="workspace-popover-section-head">
+            <span>Git</span>
+            <small>{gitSummary}</small>
+          </div>
+          <GitStatusPopover
+            actionNotice={actionNotice}
+            actionRunning={actionRunning}
+            branchName={branchName}
+            compact
+            commitMessage={commitMessage}
+            initNotice={initNotice}
+            initializing={initializing}
+            loading={loading}
+            onBranchNameChange={onBranchNameChange}
+            onCommit={onCommit}
+            onCommitMessageChange={onCommitMessageChange}
+            onCreateBranch={onCreateBranch}
+            onInitialize={onInitialize}
+            onPull={onPull}
+            onPush={onPush}
+            onReviewChanges={onReviewChanges}
+            onStageAll={onStageAll}
+            root={root}
+            status={status}
+          />
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -3330,6 +3367,13 @@ function formatCompactPath(path: string) {
   }
 
   return `...\\${parts.slice(-3).join("\\")}`;
+}
+
+function getPathBasename(path: string) {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+
+  return parts[parts.length - 1] || normalized || "Workspace";
 }
 
 function createUnavailableGitStatus(error?: string): ComputerGitStatus {

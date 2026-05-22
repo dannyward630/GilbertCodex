@@ -250,6 +250,7 @@
 }
 
 .coding-file-list,
+.coding-tool-activity-grid,
 .coding-verification-list {
   display: grid;
   gap: 8px;
@@ -280,6 +281,45 @@
   align-items: center;
   gap: 10px;
   padding: 10px;
+}
+
+.coding-tool-activity-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.coding-tool-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+
+.coding-tool-activity-row[data-wide="true"] {
+  grid-column: 1 / -1;
+}
+
+.coding-tool-activity-row span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coding-tool-activity-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .coding-file-row > div {

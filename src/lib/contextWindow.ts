@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatMessage } from "../types/chat";
+import type { ChatArtifact, ChatAttachment, ChatMessage } from "../types/chat";
 import { getChatModelOption } from "./models";
 import type { ModelProviderId } from "../types/settings";
 
@@ -542,7 +542,7 @@ export function createMessageContextSurface(message: Pick<ChatMessage, "content"
     sections.push(
       [
         "ARTIFACTS",
-        ...message.artifacts.map((artifact, index) => `${index + 1}. ${artifact.title}${artifact.kind ? ` (${artifact.kind})` : ""}${artifact.url ? ` - ${artifact.url}` : ""}${artifact.detail ? `\n   ${artifact.detail}` : ""}`),
+        ...message.artifacts.map(formatArtifactContextLine),
       ].join("\n"),
     );
   }
@@ -592,6 +592,51 @@ function getContextToolOutput(output: string | undefined) {
 
 function getProviderVisibleProgressItems(message: Pick<ChatMessage, "content"> & Partial<ChatMessage>) {
   return (message.progress ?? []).filter((item) => item.id !== "context-compaction");
+}
+
+function formatArtifactContextLine(artifact: ChatArtifact, index: number) {
+  return `${index + 1}. ${artifact.title}${artifact.kind ? ` (${artifact.kind})` : ""}${formatArtifactContextUrl(artifact)}${artifact.detail ? `\n   ${artifact.detail}` : ""}`;
+}
+
+function formatArtifactContextUrl(artifact: ChatArtifact) {
+  const url = artifact.url?.trim();
+
+  if (!url) {
+    return "";
+  }
+
+  if (isDataUrl(url)) {
+    const mimeType = artifact.mimeType || readDataUrlMimeType(url) || artifact.kind || "artifact";
+    const size = typeof artifact.sizeBytes === "number" ? `, ${formatByteCount(artifact.sizeBytes)}` : "";
+
+    return ` - [embedded ${mimeType}${size}; binary data omitted from text context]`;
+  }
+
+  return ` - ${limitContextSurfaceValue(url, 320, "Artifact URL")}`;
+}
+
+function isDataUrl(value: string) {
+  return /^data:/i.test(value);
+}
+
+function readDataUrlMimeType(dataUrl: string) {
+  return dataUrl.match(/^data:([^;,]+)[;,]/i)?.[1];
+}
+
+function formatByteCount(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 bytes";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${Math.round(sizeBytes)} bytes`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${Math.ceil(sizeBytes / 1024)} KB`;
+  }
+
+  return `${(sizeBytes / 1024 / 1024).toFixed(sizeBytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
 export function getContextSurfaceBudget(contextWindowTokens = DEFAULT_CONTEXT_WINDOW_TOKENS) {

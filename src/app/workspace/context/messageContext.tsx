@@ -22,6 +22,8 @@ import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
+const WORKSPACE_ROOT_RESOLUTION_TIMEOUT_MS = 1_500;
+
 export async function steerActiveResponse(deps: WorkspaceRuntimeDeps, {
     activeGeneration,
     assistantMessageIndex,
@@ -397,6 +399,7 @@ export function createActiveProjectBoundaryMessage(deps: WorkspaceRuntimeDeps, p
 
     const normalizedProjectName = normalizeProjectName(projectName);
     const roots = workspaceSettings.enabled && workspaceSettings.roots.length > 0 ? workspaceSettings.roots.join(" | ") : "none";
+    const fullComputer = workspaceSettings.enabled && workspaceSettings.scope === "full-computer";
 
     return createMessage(
       "user",
@@ -404,10 +407,14 @@ export function createActiveProjectBoundaryMessage(deps: WorkspaceRuntimeDeps, p
         "ACTIVE PROJECT BOUNDARY",
         `Project: ${normalizedProjectName}`,
         `Workspace roots for this request: ${roots}`,
-        workspaceSettings.enabled && workspaceSettings.roots.length > 0
+        fullComputer
+          ? "Full computer mode is enabled. The roots above are focused starting points, not the whole allowed filesystem boundary; app-exposed file and terminal tools may resolve host drive roots lazily for precise absolute paths, sibling projects, assets, downloads, and clone targets."
+          : workspaceSettings.enabled && workspaceSettings.roots.length > 0
           ? "The workspace roots above are the authoritative selected folder context for this request."
           : "No local folder is selected for this request; do not describe any other project as a substitute. PDF export requests may still return downloadable chat artifacts directly in this conversation.",
-        "Use only this active chat, these workspace roots, and this request's tool/web evidence when describing or changing a project.",
+        fullComputer
+          ? "Use this active chat plus current tool/web evidence when describing or changing a project. If the user names another local folder or asks to compare/copy from another codebase, use precise tool calls against that path instead of refusing because it is outside the focused root."
+          : "Use only this active chat, these workspace roots, and this request's tool/web evidence when describing or changing a project.",
         "Treat prior file listings, terminal output, sources, or project descriptions from any other project as stale unless the user explicitly asks to compare projects.",
       ].join("\n"),
     );
@@ -541,6 +548,38 @@ export function createToolMemoryScope(deps: WorkspaceRuntimeDeps, projectName: s
 export function getEnabledWorkspaceRoots(deps: WorkspaceRuntimeDeps, workspaceSettings: LocalWorkspaceSettings) {
 
     return workspaceSettings.enabled ? workspaceSettings.roots : [];
+  }
+
+export async function resolveEnabledWorkspaceRoots(deps: WorkspaceRuntimeDeps, workspaceSettings: LocalWorkspaceSettings) {
+  const fallbackRoots = getEnabledWorkspaceRoots(deps, workspaceSettings);
+
+    if (!workspaceSettings.enabled) {
+      return [];
+    }
+
+    if (typeof deps.resolveLocalWorkspaceRoots !== "function") {
+      return fallbackRoots;
+    }
+
+    try {
+      const roots = await withWorkspaceRootResolutionTimeout(deps.resolveLocalWorkspaceRoots(workspaceSettings), fallbackRoots);
+      const resolvedRoots = Array.isArray(roots)
+        ? roots.filter((root): root is string => typeof root === "string" && root.trim().length > 0)
+        : [];
+
+      return resolvedRoots.length > 0 ? resolvedRoots : fallbackRoots;
+    } catch {
+      return fallbackRoots;
+    }
+  }
+
+function withWorkspaceRootResolutionTimeout(promise: Promise<string[]>, fallbackRoots: string[]) {
+    return Promise.race([
+      promise,
+      new Promise<string[]>((resolve) => {
+        globalThis.setTimeout(() => resolve(fallbackRoots), WORKSPACE_ROOT_RESOLUTION_TIMEOUT_MS);
+      }),
+    ]);
   }
 
 export function rememberProjectToolMemoryFromBridgeRun(deps: WorkspaceRuntimeDeps, chatId: string, workspaceSettings: LocalWorkspaceSettings, prompt: string, run: ToolBridgeExecutionBatch) {

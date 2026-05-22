@@ -144,7 +144,7 @@ function formatArtifacts(artifacts: ChatArtifact[]) {
       const lines = [`- ${artifact.title}${artifact.kind ? ` (${artifact.kind})` : ""}`];
 
       if (artifact.url) {
-        lines.push(`  URL: ${artifact.url}`);
+        lines.push(`  URL: ${formatArtifactResearchUrl(artifact)}`);
       }
 
       if (artifact.detail) {
@@ -266,6 +266,39 @@ function formatPlanning(message: ChatMessage) {
 
 function indentBlock(value: string, prefix: string) {
   return value.split(/\r?\n/).map((line) => `${prefix}${line}`).join("\n");
+}
+
+function formatArtifactResearchUrl(artifact: ChatArtifact) {
+  const url = artifact.url?.trim() ?? "";
+
+  if (!url) {
+    return "";
+  }
+
+  if (/^data:/i.test(url)) {
+    const mimeType = artifact.mimeType || url.match(/^data:([^;,]+)[;,]/i)?.[1] || artifact.kind || "artifact";
+    const size = typeof artifact.sizeBytes === "number" ? `, ${formatByteCount(artifact.sizeBytes)}` : "";
+
+    return `[embedded ${mimeType}${size}; binary data omitted from research text context]`;
+  }
+
+  return url.length <= 320 ? url : `${url.slice(0, 320)}...`;
+}
+
+function formatByteCount(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 bytes";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${Math.round(sizeBytes)} bytes`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${Math.ceil(sizeBytes / 1024)} KB`;
+  }
+
+  return `${(sizeBytes / 1024 / 1024).toFixed(sizeBytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
 function escapeRegExp(value: string) {

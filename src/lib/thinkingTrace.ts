@@ -139,12 +139,71 @@ function summarizeChangedFiles(toolCalls: ChatToolCall[]) {
   const failedChanges = changes.length - okChanges.length;
   const additions = okChanges.reduce((sum, change) => sum + Math.max(0, change.additions), 0);
   const deletions = okChanges.reduce((sum, change) => sum + Math.max(0, change.deletions), 0);
-  const pathList = okChanges.map((change) => formatPath(change.path)).filter(Boolean).slice(0, 2);
-  const pathText = pathList.length > 0 ? ` in ${pathList.join(", ")}${okChanges.length > pathList.length ? ` and ${okChanges.length - pathList.length} more` : ""}` : "";
+  const activitySummary = summarizeToolActivity(toolCalls, okChanges.length || changes.length);
   const diffText = additions || deletions ? ` (+${additions} -${deletions})` : "";
   const failureText = failedChanges > 0 ? `; ${failedChanges} did not complete cleanly` : "";
+  const changedCount = okChanges.length || changes.length;
 
-  return `${okChanges.length || changes.length} file${(okChanges.length || changes.length) === 1 ? "" : "s"} changed${pathText}${diffText}${failureText}.`;
+  if (activitySummary) {
+    return `${activitySummary}${diffText}${failureText}.`;
+  }
+
+  return `Applied file changes to ${changedCount} file${changedCount === 1 ? "" : "s"}${diffText}${failureText}.`;
+}
+
+function summarizeToolActivity(toolCalls: ChatToolCall[], changedFileCount: number) {
+  const counts = countToolIntents(toolCalls);
+  const visibleIntents = (Object.entries(counts) as Array<[ToolIntent, number]>).filter(([, count]) => count > 0);
+
+  if (toolCalls.length <= 1 || visibleIntents.length <= 1) {
+    return "";
+  }
+
+  const parts = [
+    counts.search > 0 ? counts.search === 1 ? "searched workspace" : `${counts.search} workspace searches` : "",
+    counts.read > 0 ? counts.read === 1 ? "read workspace evidence" : `${counts.read} workspace reads` : "",
+    counts.edit > 0 ? `edited ${changedFileCount} file${changedFileCount === 1 ? "" : "s"}` : "",
+    counts.terminal > 0 ? counts.terminal === 1 ? "ran 1 command" : `ran ${counts.terminal} commands` : "",
+    counts.git > 0 ? counts.git === 1 ? "checked Git" : `${counts.git} Git checks` : "",
+    counts.browser > 0 ? counts.browser === 1 ? "checked browser" : `${counts.browser} browser checks` : "",
+    counts.web > 0 ? counts.web === 1 ? "searched web" : `${counts.web} web searches` : "",
+    counts.memory > 0 ? counts.memory === 1 ? "checked memory" : `${counts.memory} memory checks` : "",
+    counts.approval > 0 ? counts.approval === 1 ? "handled approval" : `${counts.approval} approval steps` : "",
+    counts.other > 0 ? counts.other === 1 ? "used another tool" : `used ${counts.other} other tools` : "",
+  ].filter(Boolean);
+
+  if (parts.length <= 1) {
+    return "";
+  }
+
+  return `Used ${toolCalls.length} tools: ${joinReadableList(parts)}`;
+}
+
+function countToolIntents(toolCalls: ChatToolCall[]) {
+  return toolCalls.reduce<Record<ToolIntent, number>>((counts, toolCall) => {
+    const intent = getToolIntent(toolCall);
+    counts[intent] += 1;
+    return counts;
+  }, {
+    approval: 0,
+    browser: 0,
+    edit: 0,
+    git: 0,
+    memory: 0,
+    other: 0,
+    read: 0,
+    search: 0,
+    terminal: 0,
+    web: 0,
+  });
+}
+
+function joinReadableList(parts: string[]) {
+  if (parts.length <= 2) {
+    return parts.join(" and ");
+  }
+
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }
 
 function summarizeToolOutput(toolCalls: ChatToolCall[]) {
@@ -255,7 +314,7 @@ function getToolIntent(toolCall: ChatToolCall): ToolIntent {
     return "browser";
   }
 
-  if (/\b(files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|write|write_many)|write|edit|patch|replace|insert|append|move)\b/.test(key)) {
+  if (/\b(files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|replace_span|write|write_many)|write|edit|patch|replace|insert|append|move)\b/.test(key)) {
     return "edit";
   }
 

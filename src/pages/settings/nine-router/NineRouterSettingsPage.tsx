@@ -13,7 +13,7 @@ import {
   type NineRouterInstallEvent,
   type NineRouterLocalStatus,
 } from "../../../app/tauriClient";
-import { getDefaultBaseUrlForProvider, getDefaultModelForProvider, NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../../../lib/models";
+import { formatModelCapabilitySummary, getChatModelOption, getDefaultBaseUrlForProvider, getDefaultModelForProvider, getModelRouteSourceInfo, NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_SMART_SAVER_MODEL } from "../../../lib/models";
 import { scheduleIdleTask } from "../../../lib/idleTask";
 import { headersToRecord, normalizeNativeRequestBody, normalizeNativeRequestMethod } from "../../../services/nativeHttp";
 import {
@@ -23,6 +23,11 @@ import {
   isOpenCodeFreeModel,
 } from "../../../services/nineRouterFallbackRouting";
 import {
+  chooseNineRouterConnectedAccountProvider,
+  chooseNineRouterModelForAccount,
+  chooseNineRouterModelForConnectedAccounts,
+  getNineRouterAccountProviderForModel,
+  hasNineRouterAccountConnection,
   choosePreferredConnection,
   formatConnectionExpiry,
   formatConnectionIdentity,
@@ -35,6 +40,7 @@ import {
   NINE_ROUTER_DASHBOARD_FALLBACK,
   NINE_ROUTER_DEVICE_POLL_MAX_ATTEMPTS,
   NINE_ROUTER_PROVIDER_ID,
+  shouldShowNineRouterCodexContextSettings,
   type NineRouterAccountProvider,
   type NineRouterAuthorizeResponse,
   type NineRouterCodexPollResponse,
@@ -50,6 +56,7 @@ import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
 
 interface NineRouterSettingsPageProps {
+  onActivateProvider?: (provider: ProviderSettings["provider"], model: string) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
   onSubscriptionSandboxUninstalled?: (settings: ProviderSettings) => void;
   settings: ProviderSettings;
@@ -139,7 +146,7 @@ const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
   status: "idle",
 };
 const NINE_ROUTER_ALWAYS_FREE_COMBO_NAME = NINE_ROUTER_ALWAYS_FREE_MODEL;
-export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandboxUninstalled, settings }: NineRouterSettingsPageProps) {
+export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, onSubscriptionSandboxUninstalled, settings }: NineRouterSettingsPageProps) {
   const [busy, setBusy] = useState<NineRouterBusyState>(null);
   const accountConnectRunRef = useRef(0);
   const uninstallInFlightRef = useRef(false);
@@ -182,30 +189,44 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     }),
     [connectionCatalog.connections, usageByConnectionId],
   );
+  const connectedAccountCount = useMemo(
+    () => accountRows.filter((row) => Boolean(row.connection)).length,
+    [accountRows],
+  );
   const savedNineRouterModel = settings.providerModels[NINE_ROUTER_PROVIDER_ID]?.trim() || "";
   const selectedNineRouterModel = useMemo(
-    () => chooseNineRouterModel(savedNineRouterModel, modelCatalog),
-    [modelCatalog, savedNineRouterModel],
+    () => chooseNineRouterModelForConnectedAccounts(savedNineRouterModel, modelCatalog.models, connectionCatalog.connections) || chooseNineRouterModel(savedNineRouterModel, modelCatalog),
+    [connectionCatalog.connections, modelCatalog, savedNineRouterModel],
   );
+  const selectedRouteProviderId = getNineRouterAccountProviderForModel(selectedNineRouterModel);
+  const selectedRouteHasConnectedAccount = selectedRouteProviderId ? hasNineRouterAccountConnection(connectionCatalog.connections, selectedRouteProviderId) : false;
+  const showModelRoutingCard = connectedAccountCount > 0 && selectedRouteHasConnectedAccount;
   const subscriptionOptimization = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
   const tokenSaverLevel = subscriptionOptimization.tokenSaverLevel;
   const fallbackMode = subscriptionOptimization.fallbackMode;
   const effectiveFallbackMode = fallbackMode === "smart-saver" ? "always-free" : fallbackMode;
   const codexContextWindow = subscriptionOptimization.codexContextWindow;
+  const showCodexContextSettings = shouldShowNineRouterCodexContextSettings(connectionCatalog.connections, selectedNineRouterModel);
   const savedModelMissingFromCatalog =
     modelCatalog.status === "ready" &&
     modelCatalog.models.length > 0 &&
     Boolean(savedNineRouterModel) &&
     !modelCatalog.models.includes(savedNineRouterModel);
+  const desktopRuntime = isTauriDesktopRuntime();
   const helperReady = Boolean(status?.running && status.installed);
-  const helperStatusLabel = !status ? "Checking" : status.running && status.installed ? "Ready" : status.installed ? "Starting automatically" : "Not installed";
-  const helperActionLabel = status?.installed ? "Start subscriptions" : "Install subscriptions";
-  const helperActionBusyLabel = status?.installed ? "Starting" : "Installing";
-  const hasSandboxFootprint = Boolean(status?.installed || status?.dataDir || status?.installDir);
+  const helperInstalled = Boolean(status?.installed);
+  const helperInstalling = busy === "install" || installProgress.status === "running";
+  const helperStarting = busy === "start";
+  const helperStatusLabel = getSubscriptionSetupStatusLabel(status, busy, installProgress, desktopRuntime);
+  const helperStatusPill = getSubscriptionSetupStatusPill(status, busy, installProgress, desktopRuntime);
+  const helperActionLabel = helperInstalled ? "Start subscriptions" : "Install subscriptions";
+  const helperActionBusyLabel = helperStarting ? "Starting subscriptions" : "Installing subscriptions";
+  const hasRecoverableSubscriptionFootprint = !helperInstalled && Boolean(status?.dataDir || status?.installDir);
+  const showInstalledRuntimeRemoval = helperInstalled && !helperInstalling && !helperStarting;
   const showInstallProgress = busy === "install" || installProgress.status === "running" || installProgress.status === "error";
   const showUninstallProgress = busy === "uninstall" || uninstallProgress?.status === "running" || uninstallProgress?.status === "error";
   const installBlocked = useMemo(() => {
-    if (!status) {
+    if (!status || !desktopRuntime) {
       return "";
     }
 
@@ -216,8 +237,8 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     ].filter(Boolean);
 
     return missing.length > 0 ? `${missing.join(", ")} required` : "";
-  }, [status]);
-  const helperInstallBlocked = !status?.installed && installBlocked;
+  }, [desktopRuntime, status]);
+  const helperInstallBlocked = !status?.installed && (desktopRuntime ? installBlocked : "Open the desktop app to install subscriptions");
   const displayStatusMessage = statusMessage
     ? {
         ...statusMessage,
@@ -362,10 +383,10 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     accountConnectRunRef.current += 1;
     setUninstallConfirmOpen(false);
     setBusy("uninstall");
-    setStatusMessage({ kind: "warning", text: "Uninstalling sandbox subscriptions. Stopping the local runtime and removing saved subscription data." });
+    setStatusMessage({ kind: "warning", text: "Uninstalling subscriptions. Stopping the local runtime and removing saved subscription data." });
     setUninstallProgress({
       detail: "Stopping the local routing process.",
-      label: "Uninstalling sandbox subscriptions",
+      label: "Uninstalling subscriptions",
       percent: 20,
       status: "running",
     });
@@ -407,7 +428,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       setUsageByConnectionId({});
 
       const openRouterModel = settings.providerModels.openrouter?.trim() || getDefaultModelForProvider("openrouter");
-      const nextSettings = createSubscriptionSandboxUninstalledSettings(settings, openRouterModel);
+      const nextSettings = createOpenRouterFallbackSettings(settings, openRouterModel);
       if (onSubscriptionSandboxUninstalled) {
         onSubscriptionSandboxUninstalled(nextSettings);
       } else {
@@ -417,10 +438,10 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       setUninstallConfirmOpen(false);
       setStatusMessage({
         kind: nextStatus.running ? "warning" : "success",
-        text: nextStatus.running ? nextStatus.message : "Sandbox subscriptions were uninstalled. You can install them again whenever you need subscription routing.",
+        text: nextStatus.running ? nextStatus.message : "Subscriptions were uninstalled. You can install them again whenever you need subscription routing.",
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not uninstall sandbox subscriptions.";
+      const message = error instanceof Error ? error.message : "Could not uninstall subscriptions.";
       setUninstallProgress((current) => ({
         detail: message,
         label: "Uninstall could not finish",
@@ -723,11 +744,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       ]);
       void refreshAccountUsage(connections);
       const connectedCodex = choosePreferredConnection(connections.filter((connection) => connection.provider === "codex"));
-      const nextModel = chooseNineRouterModel(savedNineRouterModel, {
-        message: "",
-        models,
-        status: models.length > 0 ? "ready" : "idle",
-      });
+      const nextModel = chooseNineRouterModelForAccount("codex", savedNineRouterModel, models);
       useNineRouterProvider(nextModel);
       setStatusMessage({
         kind: "success",
@@ -823,16 +840,22 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
         return;
       }
 
-      const [connections] = await Promise.all([
+      const [connections, models] = await Promise.all([
         refreshProviderConnections({ quiet: true, refreshUsage: false }),
         refreshModelCatalog({ quiet: true }),
       ]);
       void refreshAccountUsage(connections);
+      const nextProvider = chooseNineRouterConnectedAccountProvider(connections, target.provider.id);
+      if (nextProvider) {
+        const nextModel = chooseNineRouterModelForAccount(nextProvider.id, savedNineRouterModel, models);
+        useNineRouterProvider(nextModel, undefined, {
+          statusText: `${target.provider.name} signed out. Gilbert is using ${nextProvider.name}.`,
+        });
+      } else {
+        const openRouterModel = settings.providerModels.openrouter?.trim() || getDefaultModelForProvider("openrouter");
+        useOpenRouterProvider(openRouterModel, `${target.provider.name} signed out. Gilbert is using OpenRouter.`);
+      }
       setDisconnectTarget(null);
-      setStatusMessage({
-        kind: "success",
-        text: `${target.provider.name} signed out from subscriptions.`,
-      });
     } catch (error) {
       if (accountConnectRunRef.current === runId) {
         setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : `Could not sign out from ${target.provider.name}.` });
@@ -865,9 +888,14 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       return;
     }
 
-    const connections = await refreshProviderConnections({ quiet: true, refreshUsage: false });
+    const [connections, models] = await Promise.all([
+      refreshProviderConnections({ quiet: true, refreshUsage: false }),
+      refreshModelCatalog({ quiet: true }),
+    ]);
     void refreshAccountUsage(connections);
-    setStatusMessage({ kind: "success", text: `${provider.name} is connected.` });
+    const nextModel = chooseNineRouterModelForAccount(provider.id, savedNineRouterModel, models);
+    useNineRouterProvider(nextModel);
+    setStatusMessage({ kind: "success", text: `${provider.name} is connected. Gilbert is using ${nextModel} through your subscriptions.` });
   }
 
   async function connectAuthorizationCodeProvider(provider: NineRouterAccountProvider, runId: number) {
@@ -911,9 +939,14 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       throw new Error(exchange.errorDescription || exchange.error || `${provider.name} sign-in did not complete.`);
     }
 
-    const connections = await refreshProviderConnections({ quiet: true, refreshUsage: false });
+    const [connections, models] = await Promise.all([
+      refreshProviderConnections({ quiet: true, refreshUsage: false }),
+      refreshModelCatalog({ quiet: true }),
+    ]);
     void refreshAccountUsage(connections);
-    setStatusMessage({ kind: "success", text: `${provider.name} is connected.` });
+    const nextModel = chooseNineRouterModelForAccount(provider.id, savedNineRouterModel, models);
+    useNineRouterProvider(nextModel);
+    setStatusMessage({ kind: "success", text: `${provider.name} is connected. Gilbert is using ${nextModel} through your subscriptions.` });
   }
 
   async function waitForDeviceCodeConnection(provider: NineRouterAccountProvider, deviceData: NineRouterDeviceCodeResponse, runId: number) {
@@ -1027,9 +1060,13 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
     }
   }
 
-  function useNineRouterProvider(modelOverride = selectedNineRouterModel, optimizationOverride?: Partial<ProviderSettings["subscriptionOptimization"]>) {
+  function useNineRouterProvider(
+    modelOverride = selectedNineRouterModel,
+    optimizationOverride?: Partial<ProviderSettings["subscriptionOptimization"]>,
+    options: { statusText?: string } = {},
+  ) {
     const currentOptimization: ProviderSettings["subscriptionOptimization"] = settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT;
-    onSettingsChange({
+    const nextSettings = {
       ...settings,
       baseUrls: {
         ...settings.baseUrls,
@@ -1046,8 +1083,18 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
         ...currentOptimization,
         ...optimizationOverride,
       },
-    });
-    setStatusMessage({ kind: "success", text: "Subscription routing is now active." });
+    };
+    onSettingsChange(nextSettings);
+    onActivateProvider?.(NINE_ROUTER_PROVIDER_ID, modelOverride);
+    setStatusMessage({ kind: "success", text: options.statusText ?? "Subscription routing is now active." });
+  }
+
+  function useOpenRouterProvider(modelOverride: string, statusText: string) {
+    const nextSettings = createOpenRouterFallbackSettings(settings, modelOverride);
+
+    onSettingsChange(nextSettings);
+    onActivateProvider?.("openrouter", modelOverride);
+    setStatusMessage({ kind: "success", text: statusText });
   }
 
   function updateCodexContextWindow(mode: SubscriptionCodexContextWindow) {
@@ -1071,30 +1118,51 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
       <div className="settings-section-grid">
         {!helperReady ? (
           <>
-            <article className="settings-card settings-card-wide">
+            <article className="settings-card settings-card-wide" aria-busy={helperInstalling || helperStarting || !status}>
             <div className="settings-card-heading">
               <Download size={19} aria-hidden="true" />
               <div>
                 <h2>Set up subscriptions</h2>
-                <p>Install the local subscription runtime once. Gilbert starts it automatically for subscription routing.</p>
+                <p>{getSubscriptionSetupDescription(status, busy, installProgress, desktopRuntime)}</p>
+              </div>
+            </div>
+            <div className="nine-router-setup-steps" aria-label="Subscription setup steps">
+              <div className="nine-router-setup-step" data-state={helperInstalled ? "done" : helperInstalling || !status ? "active" : "next"}>
+                <strong>1. Install</strong>
+                <span>Add the local subscription runtime.</span>
+              </div>
+              <div className="nine-router-setup-step" data-state={helperInstalled ? "next" : "locked"}>
+                <strong>2. Sign in</strong>
+                <span>Connect Codex, Copilot, Claude, Gemini, or another paid account.</span>
+              </div>
+              <div className="nine-router-setup-step" data-state="locked">
+                <strong>3. Pick model</strong>
+                <span>Model picker labels the provider source.</span>
               </div>
             </div>
             <div className="settings-row-list">
               <div className="settings-row">
                 <span>Status</span>
                 <strong>{helperStatusLabel}</strong>
-                <span className="settings-row-static-pill">{status?.installed ? "Installed" : "Needed"}</span>
+                <span className="settings-row-static-pill">{helperStatusPill}</span>
               </div>
               <div className="settings-row">
                 <span>Launch</span>
                 <strong>Starts automatically when Subscriptions opens or when a route needs it</strong>
                 <span className="settings-row-static-pill">Automatic</span>
               </div>
+              {hasRecoverableSubscriptionFootprint ? (
+                <div className="settings-row">
+                  <span>Existing files</span>
+                  <strong>Setup can reuse or repair local subscription files.</strong>
+                  <span className="settings-row-static-pill">Recoverable</span>
+                </div>
+              ) : null}
               {helperInstallBlocked ? (
                 <div className="settings-row">
-                  <span>Missing</span>
+                  <span>{desktopRuntime ? "Missing" : "Runtime"}</span>
                   <strong>{helperInstallBlocked}</strong>
-                  <span className="settings-row-static-pill">Required</span>
+                  <span className="settings-row-static-pill">{desktopRuntime ? "Required" : "Desktop"}</span>
                 </div>
               ) : null}
             </div>
@@ -1106,7 +1174,7 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                 onClick={status?.installed ? () => startNineRouter() : installAndStartNineRouter}
               >
                 {status?.installed ? <Play size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-                {busy === "install" || busy === "start" ? helperActionBusyLabel : helperActionLabel}
+                {helperInstalling || helperStarting ? helperActionBusyLabel : helperActionLabel}
               </button>
               <button className="settings-ghost-button" type="button" disabled={busy !== null} onClick={() => refreshStatus()}>
                 <RefreshCcw size={16} aria-hidden="true" />
@@ -1193,34 +1261,36 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
               </button>
             </article>
 
-            <article className="settings-card">
+            {showModelRoutingCard ? (
+              <article className="settings-card nine-router-routing-card">
               <div className="settings-card-heading">
                 <ServerCog size={19} aria-hidden="true" />
                 <div>
                   <h2>Model routing</h2>
-                  <p>{isNineRouterActive ? "Subscription routing is active." : "Use connected accounts from the model picker."}</p>
+                  <p>{isNineRouterActive ? "Active subscription route." : "Use connected accounts from the model picker."}</p>
                 </div>
               </div>
-              <div className="settings-row-list">
-                <div className="settings-row">
-                  <span>Routing</span>
-                  <strong>{isNineRouterActive ? "Subscriptions" : "Not selected"}</strong>
+
+              <div className="nine-router-routing-summary" aria-label="Subscription routing summary">
+                <div className="nine-router-routing-main">
+                  <span>{isNineRouterActive ? "Subscriptions active" : "Subscriptions ready"}</span>
+                  <strong title={formatSubscriptionRouteSummary(selectedNineRouterModel)}>{formatSubscriptionRouteSummary(selectedNineRouterModel)}</strong>
+                  <small>{formatSubscriptionRouteCapabilities(selectedNineRouterModel)}</small>
+                </div>
+                <div className="nine-router-routing-badges">
                   <span className="settings-row-static-pill">{isNineRouterActive ? "Active" : "Ready"}</span>
+                  <span className="settings-row-static-pill">{modelCatalog.status === "ready" ? `${modelCatalog.models.length} routes` : modelCatalog.status === "error" ? "Check catalog" : "Local catalog"}</span>
                 </div>
-                <div className="settings-row">
-                  <span>Live catalog</span>
-                  <strong>{formatSubscriptionHelperText(formatModelCatalog(modelCatalog))}</strong>
-                  <span className="settings-row-static-pill">{modelCatalog.status === "ready" ? "Live" : modelCatalog.status === "error" ? "Check" : "Local"}</span>
-                </div>
-                <div className="settings-row">
-                  <span>Selected route</span>
-                  <strong>{selectedNineRouterModel}</strong>
-                </div>
-                <div className="settings-row">
-                  <span>Codex context</span>
-                  <strong>{codexContextWindow === "extended" ? "1M" : "262k"}</strong>
-                  <span className="settings-row-static-pill">{codexContextWindow === "extended" ? "Higher cost" : "Default"}</span>
-                </div>
+              </div>
+
+              <div className="settings-row-list nine-router-routing-details">
+                {showCodexContextSettings ? (
+                  <div className="settings-row">
+                    <span>Codex context</span>
+                    <strong>{codexContextWindow === "extended" ? "1M" : "262k"}</strong>
+                    <span className="settings-row-static-pill">{codexContextWindow === "extended" ? "Higher cost" : "Default"}</span>
+                  </div>
+                ) : null}
                 <div className="settings-row">
                   <span>Image generation</span>
                   <strong>{settings.tools.imageGeneration ? "Available in chat" : "Disabled"}</strong>
@@ -1244,35 +1314,31 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                   </button>
                 </div>
               </div>
-              <div className="settings-stack">
-                <strong>Codex subscription context</strong>
-                <span className="settings-subtle-text">262k is the default cost-saving context limit. 1M is available for long-context Codex work at higher cost.</span>
-                <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Codex subscription context window">
-                  {CODEX_CONTEXT_WINDOW_OPTIONS.map((option) => (
-                    <button
-                      aria-pressed={codexContextWindow === option.mode}
-                      data-selected={codexContextWindow === option.mode}
-                      key={option.mode}
-                      title={option.detail}
-                      type="button"
-                      onClick={() => updateCodexContextWindow(option.mode)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
+
+              {showCodexContextSettings ? (
+                <div className="settings-stack">
+                  <strong>Codex subscription context</strong>
+                  <span className="settings-subtle-text">262k is the default cost-saving context limit. 1M is available for long-context Codex work at higher cost.</span>
+                  <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Codex subscription context window">
+                    {CODEX_CONTEXT_WINDOW_OPTIONS.map((option) => (
+                      <button
+                        aria-pressed={codexContextWindow === option.mode}
+                        data-selected={codexContextWindow === option.mode}
+                        key={option.mode}
+                        title={option.detail}
+                        type="button"
+                        onClick={() => updateCodexContextWindow(option.mode)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : null}
               {savedModelMissingFromCatalog ? (
                 <span className="settings-status" data-kind="warning">
                   Saved model {savedNineRouterModel} is not in the live catalog. Gilbert will use {selectedNineRouterModel} when you switch.
                 </span>
-              ) : null}
-              {modelCatalog.models.length > 0 ? (
-                <div className="settings-model-chip-list" aria-label="Live subscription models">
-                  {modelCatalog.models.slice(0, 6).map((model) => (
-                    <span className="settings-mini-chip" key={model}>{model}</span>
-                  ))}
-                </div>
               ) : null}
               <button className="settings-ghost-button settings-full-width-button" type="button" onClick={() => useNineRouterProvider()}>
                 <CheckCircle2 size={16} aria-hidden="true" />
@@ -1282,24 +1348,25 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                 <CheckCircle2 size={16} aria-hidden="true" />
                 {modelTestBusy ? "Testing" : "Test selected model"}
               </button>
-            </article>
+              </article>
+            ) : null}
 
           </>
         )}
 
-        {hasSandboxFootprint ? (
+        {showInstalledRuntimeRemoval ? (
           <article className="settings-card settings-card-wide settings-danger-card" aria-busy={busy === "uninstall"}>
             <div className="settings-card-heading">
               <Trash2 size={19} aria-hidden="true" />
               <div>
-                <h2>Local sandbox environment</h2>
+                <h2>Installed subscriptions</h2>
                 <p>Remove the local subscription runtime, saved subscription sign-ins, and cached routing data from this device.</p>
               </div>
             </div>
             <div className="settings-row-list">
               <div className="settings-row">
-                <span>Sandbox subscriptions</span>
-                <strong>{status?.running ? "Running" : status?.installed ? "Installed" : "Stored data found"}</strong>
+                <span>Subscriptions</span>
+                <strong>{status?.running ? "Running" : "Installed"}</strong>
                 <span className="settings-row-static-pill">{status?.running ? "Active" : "Local"}</span>
               </div>
               <div className="settings-row">
@@ -1307,9 +1374,9 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
                 <strong>After uninstall, use Set up subscriptions to install a fresh copy.</strong>
               </div>
             </div>
-            <button className="settings-danger-button settings-full-width-button" type="button" disabled={busy !== null || !hasSandboxFootprint} onClick={() => setUninstallConfirmOpen(true)}>
+            <button className="settings-danger-button settings-full-width-button" type="button" disabled={busy !== null || !showInstalledRuntimeRemoval} onClick={() => setUninstallConfirmOpen(true)}>
               <Trash2 size={16} aria-hidden="true" />
-              {busy === "uninstall" ? "Uninstalling sandbox subscriptions" : "Uninstall sandbox subscriptions"}
+              {busy === "uninstall" ? "Uninstalling subscriptions" : "Uninstall subscriptions"}
             </button>
             {showUninstallProgress && uninstallProgress ? <InstallProgressMeter progress={uninstallProgress} /> : null}
           </article>
@@ -1332,8 +1399,8 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
         tone="danger"
       />
       <ConfirmDialog
-        confirmLabel="Uninstall sandbox subscriptions"
-        description="This removes the local sandbox environment from this device, including saved subscription sign-ins and local routing data. You can reinstall it from Subscriptions."
+        confirmLabel="Uninstall subscriptions"
+        description="This removes the local subscription runtime from this device, including saved subscription sign-ins and local routing data. You can reinstall it from Subscriptions."
         onClose={() => {
           if (busy !== "uninstall") {
             setUninstallConfirmOpen(false);
@@ -1341,11 +1408,114 @@ export function NineRouterSettingsPage({ onSettingsChange, onSubscriptionSandbox
         }}
         onConfirm={uninstallSandboxSubscriptions}
         open={uninstallConfirmOpen}
-        title="Uninstall sandbox subscriptions?"
+        title="Uninstall subscriptions?"
         tone="danger"
       />
     </>
   );
+}
+
+function getSubscriptionSetupStatusLabel(
+  status: NineRouterLocalStatus | null,
+  busy: NineRouterBusyState,
+  installProgress: NineRouterInstallProgressState,
+  desktopRuntime: boolean,
+) {
+  if (busy === "install" || installProgress.status === "running") {
+    return installProgress.label || "Installing subscriptions";
+  }
+
+  if (busy === "start") {
+    return "Starting subscriptions";
+  }
+
+  if (!status) {
+    return "Checking setup";
+  }
+
+  if (status.running && status.installed) {
+    return "Ready";
+  }
+
+  if (status.installed) {
+    return "Installed, not running";
+  }
+
+  if (!desktopRuntime) {
+    return "Desktop app required";
+  }
+
+  if (installProgress.status === "error") {
+    return "Install needs attention";
+  }
+
+  return "Not installed";
+}
+
+function getSubscriptionSetupStatusPill(
+  status: NineRouterLocalStatus | null,
+  busy: NineRouterBusyState,
+  installProgress: NineRouterInstallProgressState,
+  desktopRuntime: boolean,
+) {
+  if (busy === "install" || busy === "start" || installProgress.status === "running") {
+    return "In progress";
+  }
+
+  if (!status) {
+    return "Checking";
+  }
+
+  if (status.running && status.installed) {
+    return "Ready";
+  }
+
+  if (status.installed) {
+    return "Installed";
+  }
+
+  if (!desktopRuntime) {
+    return "Desktop";
+  }
+
+  if (installProgress.status === "error") {
+    return "Retry";
+  }
+
+  return "Needed";
+}
+
+function getSubscriptionSetupDescription(
+  status: NineRouterLocalStatus | null,
+  busy: NineRouterBusyState,
+  installProgress: NineRouterInstallProgressState,
+  desktopRuntime: boolean,
+) {
+  if (busy === "install" || installProgress.status === "running") {
+    return "Installing the local subscription runtime. Progress updates appear below.";
+  }
+
+  if (busy === "start") {
+    return "Starting the local subscription runtime. This usually takes a moment.";
+  }
+
+  if (!status) {
+    return "Checking whether subscriptions are already installed on this device.";
+  }
+
+  if (!desktopRuntime) {
+    return "Subscription setup runs in the desktop app. API-key and OpenRouter routes are still available in previews.";
+  }
+
+  if (status.installed && !status.running) {
+    return "Subscriptions are installed but not running yet. Start them to connect account subscriptions.";
+  }
+
+  if (installProgress.status === "error") {
+    return "Setup did not finish. Review the status below and try again when ready.";
+  }
+
+  return "Install the local subscription runtime once. Gilbert starts it automatically for subscription routing.";
 }
 
 function normalizeNineRouterCombosPayload(payload: unknown) {
@@ -1446,7 +1616,7 @@ function UsageQuotaList({ provider, usageState }: { provider: NineRouterAccountP
   );
 }
 
-function createSubscriptionSandboxUninstalledSettings(settings: ProviderSettings, openRouterModel: string): ProviderSettings {
+function createOpenRouterFallbackSettings(settings: ProviderSettings, openRouterModel: string): ProviderSettings {
   const fallbackModel = openRouterModel.trim() || getDefaultModelForProvider("openrouter");
   const providerModels = {
     ...settings.providerModels,
@@ -1558,20 +1728,16 @@ function chooseNineRouterModel(savedModel: string, catalog: NineRouterModelCatal
   return normalizedSavedModel || getDefaultModelForProvider(NINE_ROUTER_PROVIDER_ID);
 }
 
-function formatModelCatalog(catalog: NineRouterModelCatalogState) {
-  if (catalog.status === "ready") {
-    return catalog.message;
-  }
+function formatSubscriptionRouteSummary(model: string) {
+  const routeSource = getModelRouteSourceInfo(NINE_ROUTER_PROVIDER_ID, model);
+  const option = getChatModelOption(model, NINE_ROUTER_PROVIDER_ID);
+  const label = option?.label || model;
 
-  if (catalog.status === "loading") {
-    return "Checking models";
-  }
+  return `${routeSource.sourceLabel} - ${label}`;
+}
 
-  if (catalog.status === "error") {
-    return catalog.message;
-  }
-
-  return "Not checked";
+function formatSubscriptionRouteCapabilities(model: string) {
+  return formatModelCapabilitySummary(getChatModelOption(model, NINE_ROUTER_PROVIDER_ID));
 }
 
 function formatConnectionStatus(connection: NineRouterConnection | null | undefined, catalog: NineRouterConnectionCatalogState) {

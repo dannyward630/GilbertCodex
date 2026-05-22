@@ -81,10 +81,11 @@ export function handleSelectChat(deps: WorkspaceRuntimeDeps, chatId: string) {
   }
 
 export function handleActiveChatModelChange(deps: WorkspaceRuntimeDeps, nextModel: string, nextProvider: ProviderSettings["provider"]) {
-  const { activeChat, activeChatProviderSettings, isModelProviderId, setChats, setProviderSettings } = deps;
+  const { activeChatIdRef, activeChatProviderSettings, isModelProviderId, setChats, setProviderSettings } = deps;
 
     const model = nextModel.trim();
     const provider = isModelProviderId(nextProvider) ? nextProvider : activeChatProviderSettings.provider;
+    const activeChatId = activeChatIdRef.current;
 
     if (!model) {
       return;
@@ -118,7 +119,7 @@ export function handleActiveChatModelChange(deps: WorkspaceRuntimeDeps, nextMode
     setChats((currentChats) => {
       let changed = false;
       const nextChats = currentChats.map((chat) => {
-        if (chat.id !== activeChat.id) {
+        if (chat.id !== activeChatId) {
           return chat;
         }
 
@@ -136,13 +137,14 @@ export function handleActiveChatModelChange(deps: WorkspaceRuntimeDeps, nextMode
 
       return changed ? nextChats : currentChats;
     });
-  }
+}
 
 export function handleProviderConnectionChoice(deps: WorkspaceRuntimeDeps, nextProvider: ProviderSettings["provider"], nextModel: string) {
-  const { activeChat, getDefaultBaseUrlForProvider, isModelProviderId, providerSettings, setChats, setProviderSettings } = deps;
+  const { activeChatIdRef, getDefaultBaseUrlForProvider, isModelProviderId, providerSettings, setChats, setProviderSettings } = deps;
 
     const model = nextModel.trim();
     const provider = isModelProviderId(nextProvider) ? nextProvider : providerSettings.provider;
+    const activeChatId = activeChatIdRef.current;
 
     if (!model) {
       return;
@@ -180,7 +182,7 @@ export function handleProviderConnectionChoice(deps: WorkspaceRuntimeDeps, nextP
     setChats((currentChats) => {
       let changed = false;
       const nextChats = currentChats.map((chat) => {
-        if (chat.id !== activeChat.id) {
+        if (chat.id !== activeChatId) {
           return chat;
         }
 

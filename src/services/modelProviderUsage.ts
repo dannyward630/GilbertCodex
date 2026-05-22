@@ -176,15 +176,19 @@ function estimateProviderUsageFromMessages({
   const body = createProviderUsageRequestBody(settings, messages, model, stream, toolBridge, contextWindowTokens);
   const requestBody = body as Record<string, unknown> & { messages?: unknown };
   const promptParts = getProviderPromptParts(requestBody, chatMessageCount, draftCount);
+  const chatMessages = messages.slice(0, chatMessageCount);
+  const draftMessages = draftCount > 0 ? messages.slice(chatMessageCount, chatMessageCount + draftCount) : [];
+  const messageAttachmentTokens = estimateAttachmentPayloadTokens(chatMessages);
+  const draftAttachmentTokens = estimateAttachmentPayloadTokens(draftMessages);
   const systemTokens = estimateSerializedPartsTokens(promptParts.system);
-  const messageTokens = estimateSerializedPartsTokens(promptParts.messages);
-  const draftTokens = estimateSerializedPartsTokens(promptParts.draft);
+  const messageTokens = estimateSerializedPartsTokens(promptParts.messages) + messageAttachmentTokens;
+  const draftTokens = estimateSerializedPartsTokens(promptParts.draft) + draftAttachmentTokens;
   const boundedContextWindow = Math.max(contextWindowTokens || DEFAULT_CONTEXT_WINDOW_TOKENS, 1);
   const boundedMaxOutput = getProviderRequestMaxOutputTokens(requestBody, settings.maxTokens);
   const reasoningReserveTokens = estimateProviderRequestReasoningReserveTokens(settings, requestBody);
   const additionalReasoningReserveTokens = isReasoningReserveIncludedInMaxOutput(settings, requestBody) ? 0 : reasoningReserveTokens;
   const safetyMarginTokens = getContextWindowSafetyMarginTokens(boundedContextWindow);
-  const serializedBodyTokens = estimateSerializedTokens(body);
+  const serializedBodyTokens = estimateSerializedTokens(body) + messageAttachmentTokens + draftAttachmentTokens;
   const requestOverheadTokens = Math.max(serializedBodyTokens - systemTokens - messageTokens - draftTokens, estimateProviderControlTokens(body));
   const inputTokens = systemTokens + messageTokens + draftTokens + requestOverheadTokens;
   const totalTokens = inputTokens + boundedMaxOutput + additionalReasoningReserveTokens + safetyMarginTokens;
@@ -458,11 +462,14 @@ function createProviderPayloadBreakdown({
   toolBridge?: ProviderToolBridgeOptions;
 }): ContextWindowPayloadBreakdownItem[] {
   const attachmentTokens = estimateAttachmentPayloadTokens(messages);
+  const draftMessages = draftCount > 0 ? messages.slice(Math.max(messages.length - draftCount, 0)) : [];
+  const draftAttachmentTokens = estimateAttachmentPayloadTokens(draftMessages);
+  const chatAttachmentTokens = Math.max(attachmentTokens - draftAttachmentTokens, 0);
   const persistedToolOutputTokens = estimatePersistedToolOutputTokens(messages, contextWindowTokens);
   const bridgeToolOutputTokens = estimateBridgeToolResultTokenParts(toolBridge);
   const toolSchemaTokens = estimateToolSchemaTokens(toolBridge);
   const toolOutputTokens = persistedToolOutputTokens + bridgeToolOutputTokens.other;
-  const chatHistoryTokens = Math.max(messageTokens - attachmentTokens - persistedToolOutputTokens - draftTokens, 0);
+  const chatHistoryTokens = Math.max(messageTokens - chatAttachmentTokens - persistedToolOutputTokens, 0);
   const providerEnvelopeTokens = Math.max(requestOverheadTokens - bridgeToolOutputTokens.total - toolSchemaTokens, 0);
   const toolOutputCount = countToolOutputs(messages, toolBridge);
   const attachmentCount = countAttachments(messages);
@@ -567,7 +574,8 @@ function mergeProjectedPayloadBreakdown(
 }
 
 function estimateSerializedTokens(value: unknown): number {
-  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  const sanitizedValue = sanitizeEmbeddedDataUrlsForTokenEstimate(value);
+  const serialized = typeof sanitizedValue === "string" ? sanitizedValue : JSON.stringify(sanitizedValue);
   return estimateTextTokens(serialized || "");
 }
 
@@ -576,7 +584,24 @@ function estimateSerializedPartsTokens(parts: unknown[]): number {
 }
 
 function estimateAttachmentPayloadTokens(messages: ChatMessage[]) {
-  return estimateTextTokens(safeSerialize(messages.flatMap((message) => message.attachments ?? [])));
+  return messages.reduce(
+    (total, message) => total + (message.attachments ?? []).reduce((attachmentTotal, attachment) => attachmentTotal + estimateAttachmentPayloadToken(attachment), 0),
+    0,
+  );
+}
+
+function estimateAttachmentPayloadToken(attachment: ChatAttachment) {
+  const metadataTokens = estimateTextTokens(`${attachment.kind} ${attachment.name} ${attachment.mimeType} ${attachment.size} bytes`);
+
+  if (attachment.kind === "image") {
+    return metadataTokens + 1200;
+  }
+
+  if (attachment.kind === "video") {
+    return metadataTokens + Math.max(2400, Math.ceil(attachment.size / 32));
+  }
+
+  return Math.max(80, metadataTokens + estimateTextTokens(attachment.text ?? ""));
 }
 
 function estimatePersistedToolOutputTokens(messages: ChatMessage[], contextWindowTokens: number) {
@@ -648,12 +673,56 @@ function countAttachments(messages: ChatMessage[]) {
   return messages.reduce((count, message) => count + (message.attachments?.length ?? 0), 0);
 }
 
-function safeSerialize(value: unknown) {
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "";
+function sanitizeEmbeddedDataUrlsForTokenEstimate(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeEmbeddedDataUrlStringForTokenEstimate(value);
   }
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeEmbeddedDataUrlsForTokenEstimate);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, sanitizeEmbeddedDataUrlsForTokenEstimate(item)]),
+  );
+}
+
+function sanitizeEmbeddedDataUrlStringForTokenEstimate(value: string) {
+  if (/^data:/i.test(value)) {
+    return formatEmbeddedDataUrlTokenPlaceholder(value);
+  }
+
+  return value.replace(/data:([^;,]+);base64,[A-Za-z0-9+/=]+/g, (dataUrl) => formatEmbeddedDataUrlTokenPlaceholder(dataUrl));
+}
+
+function formatEmbeddedDataUrlTokenPlaceholder(dataUrl: string) {
+  const mimeType = dataUrl.match(/^data:([^;,]+)[;,]/i)?.[1] ?? "media";
+  return `[embedded ${mimeType}, ${formatByteCount(estimateDataUrlBytes(dataUrl))}; data URL omitted from token estimate]`;
+}
+
+function estimateDataUrlBytes(dataUrl: string) {
+  const base64 = dataUrl.includes(",") ? dataUrl.split(",").pop() ?? "" : dataUrl;
+  return Math.max(0, Math.floor((base64.length * 3) / 4));
+}
+
+function formatByteCount(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 bytes";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${Math.round(sizeBytes)} bytes`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${Math.ceil(sizeBytes / 1024)} KB`;
+  }
+
+  return `${(sizeBytes / 1024 / 1024).toFixed(sizeBytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
 function formatTokenDelta(tokens: number) {

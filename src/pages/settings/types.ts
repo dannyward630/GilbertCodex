@@ -45,6 +45,7 @@ export interface SettingsPageProps {
   onGeneralSettingsChange: (settings: AppGeneralSettings) => void;
   onLocalWorkspaceChange: (settings: LocalWorkspaceSettings) => void;
   onPersonalizationChange: (settings: AppPersonalizationSettings) => void;
+  onActivateProvider?: (provider: ProviderSettings["provider"], model: string) => void;
   onSettingsChange: (settings: ProviderSettings) => void;
   onSubscriptionSandboxUninstalled?: (settings: ProviderSettings) => void;
   personalization: AppPersonalizationSettings;

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ExternalLink, KeyRound, Route } from "lucide-react";
+import { ArrowRight, ExternalLink, KeyRound, RefreshCcw, Route } from "lucide-react";
 import { ensureNineRouterLocal, getNineRouterLocalStatus, isTauriDesktopRuntime, type NineRouterLocalStatus } from "../../app/tauriClient";
 import {
   chooseNineRouterModel,
+  chooseNineRouterModelForAccount,
   choosePreferredConnection,
   connectNineRouterAccount,
   formatConnectionExpiry,
@@ -179,7 +180,7 @@ export function ProviderConnectionDialog({
         loadNineRouterModels(settings.baseUrls[NINE_ROUTER_PROVIDER_ID]?.trim() || nextStatus.baseUrl || getDefaultBaseUrlForProvider(NINE_ROUTER_PROVIDER_ID)),
       ]);
       const preferredConnection = choosePreferredConnection(nextConnections.filter((connection) => connection.provider === provider.id));
-      const nextModel = chooseNineRouterModel(savedNineRouterModel, nextModels);
+      const nextModel = chooseNineRouterModelForAccount(provider.id, savedNineRouterModel, nextModels);
 
       if (!mountedRef.current || accountConnectRunRef.current !== runId) {
         return;
@@ -269,10 +270,17 @@ export function ProviderConnectionDialog({
 
   const runtimeReady = Boolean(runtimeStatus?.running);
   const runtimeInstalled = Boolean(runtimeStatus?.installed);
+  const desktopRuntime = isTauriDesktopRuntime();
+  const runtimeChecking = desktopRuntime && !runtimeStatus;
   const subscriptionSetupNeeded = isTauriDesktopRuntime() && Boolean(runtimeStatus) && !runtimeInstalled;
+  const showAccountPanel = runtimeReady || connectedAccountCount > 0;
   const useSubscriptionsAsPrimaryAction = runtimeReady && (activeConnectionCount > 0 || models.length > 0);
   const primaryActionLabel = subscriptionSetupNeeded ? "Set up subscriptions" : useSubscriptionsAsPrimaryAction ? "Use subscriptions" : openRouterHasKey ? "Use OpenRouter Auto" : "Use Free Fallback";
-  const primaryBusyLabel = busy === "activate-subscriptions" ? "Using subscriptions" : busy === "fallback" ? "Switching" : primaryActionLabel;
+  const primaryBusyLabel = busy === "activate-subscriptions" ? "Using subscriptions" : busy === "fallback" ? "Switching" : busy === "refresh" ? "Checking" : primaryActionLabel;
+  const dialogTitle = subscriptionSetupNeeded ? "Choose how Gilbert connects" : "Connect an AI provider";
+  const dialogDescription = subscriptionSetupNeeded
+    ? "Subscriptions need one local setup step before account sign-in. You can install them now, use provider keys, or keep going with OpenRouter."
+    : "Use subscriptions first, fall back cleanly. Sign in with the provider accounts you already pay for; Gilbert keeps OpenRouter ready when nothing is connected.";
   const displayStatusMessage = statusMessage
     ? {
         ...statusMessage,
@@ -296,11 +304,11 @@ export function ProviderConnectionDialog({
 
   return (
     <DialogShell
-      description="Use subscriptions first, fall back cleanly. Sign in with the provider accounts you already pay for; Gilbert keeps OpenRouter ready when nothing is connected."
+      description={dialogDescription}
       icon={Route}
       onClose={onClose}
       open={open}
-      title="Connect an AI provider"
+      title={dialogTitle}
       actions={
         <>
           <button className="dialog-button provider-connection-secondary-action" type="button" onClick={onOpenNineRouterSettings}>
@@ -331,61 +339,156 @@ export function ProviderConnectionDialog({
           </div>
         ) : null}
 
-        <section className="provider-account-panel" aria-label="Subscription account providers">
-          <div className="provider-account-panel-heading" aria-label="Subscription account summary">
-            <div>
-              <h4>Subscription accounts</h4>
-              <span>{runtimeReady ? "Ready for provider sign-in." : isTauriDesktopRuntime() ? runtimeInstalled ? "Starting subscriptions automatically." : "Install subscriptions once, then sign in." : "Open the desktop app to connect subscription accounts."}</span>
+        {showAccountPanel ? (
+          <section className="provider-account-panel" aria-label="Subscription account providers">
+            <div className="provider-account-panel-heading" aria-label="Subscription account summary">
+              <div>
+                <h4>Subscription accounts</h4>
+                <span>{runtimeReady ? "Ready for provider sign-in." : desktopRuntime ? runtimeInstalled ? "Starting subscriptions automatically." : "Install subscriptions once, then sign in." : "Open the desktop app to connect subscription accounts."}</span>
+              </div>
+              <div className="provider-account-counts" aria-label="Saved subscription accounts">
+                <strong>{activeConnectionCount}/{NINE_ROUTER_ACCOUNT_PROVIDERS.length}</strong>
+                <span>{connectedAccountCount > 0 ? `${connectedAccountCount} saved` : "none saved"}</span>
+              </div>
             </div>
-            <div className="provider-account-counts" aria-label="Saved subscription accounts">
-              <strong>{activeConnectionCount}/{NINE_ROUTER_ACCOUNT_PROVIDERS.length}</strong>
-              <span>{connectedAccountCount > 0 ? `${connectedAccountCount} saved` : "none saved"}</span>
-            </div>
-          </div>
 
-          <div className="provider-account-grid">
-            {accountRows.map(({ connection, connections: providerConnections, provider }) => {
-              const providerBusy = busy === `account:${provider.id}`;
-              const connected = Boolean(connection);
+            <div className="provider-account-grid">
+              {accountRows.map(({ connection, connections: providerConnections, provider }) => {
+                const providerBusy = busy === `account:${provider.id}`;
+                const connected = Boolean(connection);
 
-              return (
-                <section className="provider-account-card" data-connected={connected} key={provider.id}>
-                  <div className="provider-account-card-heading">
-                    <div>
-                      <strong>{provider.name}</strong>
-                      <span>{provider.description}</span>
-                    </div>
-                    <em>{connected ? "Connected" : provider.flow === "device_code" ? "Device" : "OAuth"}</em>
-                  </div>
-                  <dl>
-                    <div>
-                      <dt>Account</dt>
-                      <dd>{formatConnectionIdentity(connection) || "Not connected"}</dd>
-                    </div>
-                    <div>
-                      <dt>Token</dt>
-                      <dd>{formatConnectionExpiry(connection)}</dd>
-                    </div>
-                    {providerConnections.length > 1 ? (
+                return (
+                  <section className="provider-account-card" data-connected={connected} key={provider.id}>
+                    <div className="provider-account-card-heading">
                       <div>
-                        <dt>Saved</dt>
-                        <dd>{providerConnections.length}</dd>
+                        <strong>{provider.name}</strong>
+                        <span>{provider.description}</span>
                       </div>
-                    ) : null}
-                  </dl>
-                  {connection?.lastError ? <p className="provider-account-error">{connection.lastError}</p> : null}
-                  <button type="button" disabled={busy !== null || !runtimeReady} onClick={() => connectAccount(provider)}>
-                    {provider.flow === "device_code" ? <ExternalLink size={15} aria-hidden="true" /> : <KeyRound size={15} aria-hidden="true" />}
-                    {providerBusy ? "Waiting" : connected ? "Reconnect" : "Sign in"}
-                  </button>
-                </section>
-              );
-            })}
-          </div>
-        </section>
+                      <em>{connected ? "Connected" : provider.flow === "device_code" ? "Device" : "OAuth"}</em>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>Account</dt>
+                        <dd>{formatConnectionIdentity(connection) || "Not connected"}</dd>
+                      </div>
+                      <div>
+                        <dt>Token</dt>
+                        <dd>{formatConnectionExpiry(connection)}</dd>
+                      </div>
+                      {providerConnections.length > 1 ? (
+                        <div>
+                          <dt>Saved</dt>
+                          <dd>{providerConnections.length}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {connection?.lastError ? <p className="provider-account-error">{connection.lastError}</p> : null}
+                    <button type="button" disabled={busy !== null || !runtimeReady} onClick={() => connectAccount(provider)}>
+                      {provider.flow === "device_code" ? <ExternalLink size={15} aria-hidden="true" /> : <KeyRound size={15} aria-hidden="true" />}
+                      {providerBusy ? "Waiting" : connected ? "Reconnect" : "Sign in"}
+                    </button>
+                  </section>
+                );
+              })}
+            </div>
+          </section>
+        ) : (
+          <SubscriptionSetupPanel
+            busy={busy}
+            connectedAccountCount={connectedAccountCount}
+            onCheckAgain={() => refreshNineRouterState({ start: true })}
+            onOpenNineRouterSettings={onOpenNineRouterSettings}
+            onUseFallback={useOpenRouterFallback}
+            openRouterFallbackLabel={openRouterHasKey ? "Use OpenRouter Auto" : "Use Free Fallback"}
+            runtimeChecking={runtimeChecking}
+            runtimeInstalled={runtimeInstalled}
+            subscriptionSetupNeeded={subscriptionSetupNeeded}
+          />
+        )}
 
       </div>
     </DialogShell>
+  );
+}
+
+function SubscriptionSetupPanel({
+  busy,
+  connectedAccountCount,
+  onCheckAgain,
+  onOpenNineRouterSettings,
+  onUseFallback,
+  openRouterFallbackLabel,
+  runtimeChecking,
+  runtimeInstalled,
+  subscriptionSetupNeeded,
+}: {
+  busy: ProviderConnectionBusy;
+  connectedAccountCount: number;
+  onCheckAgain: () => void;
+  onOpenNineRouterSettings: () => void;
+  onUseFallback: () => void;
+  openRouterFallbackLabel: string;
+  runtimeChecking: boolean;
+  runtimeInstalled: boolean;
+  subscriptionSetupNeeded: boolean;
+}) {
+  const headline = runtimeChecking
+    ? "Checking subscription setup"
+    : subscriptionSetupNeeded
+      ? "Install subscriptions before account sign-in"
+      : runtimeInstalled
+        ? "Subscriptions are starting"
+        : "Subscriptions need the desktop app";
+  const detail = runtimeChecking
+    ? "Gilbert is checking this device before showing subscription sign-in options."
+    : subscriptionSetupNeeded
+      ? "After setup, this dialog will show Codex, Copilot, Claude, Gemini, and other subscription accounts you can connect."
+      : runtimeInstalled
+        ? "The local subscription runtime is installed and should be ready in a moment."
+        : "Subscription account sign-in is available after local setup. API-key and OpenRouter routes are still available.";
+  const installStepState = runtimeInstalled ? "done" : runtimeChecking ? "active" : "next";
+  const signInStepState = runtimeInstalled ? "next" : "locked";
+
+  return (
+    <section className="provider-subscription-setup-panel" aria-label="Subscription setup">
+      <div className="provider-subscription-setup-heading">
+        <div>
+          <h4>{headline}</h4>
+          <span>{detail}</span>
+        </div>
+        <em>{runtimeChecking ? "Checking" : runtimeInstalled ? "Installed" : connectedAccountCount > 0 ? `${connectedAccountCount} saved` : "Not installed"}</em>
+      </div>
+
+      <div className="provider-subscription-step-grid" aria-label="Subscription setup steps">
+        <div className="provider-subscription-step" data-state={installStepState}>
+          <strong>1. Install</strong>
+          <span>Add the local subscription runtime once.</span>
+        </div>
+        <div className="provider-subscription-step" data-state={signInStepState}>
+          <strong>2. Sign in</strong>
+          <span>Connect the paid accounts you use.</span>
+        </div>
+        <div className="provider-subscription-step" data-state="locked">
+          <strong>3. Pick model</strong>
+          <span>The model picker labels the source.</span>
+        </div>
+      </div>
+
+      <div className="provider-subscription-setup-actions">
+        <button type="button" disabled={busy !== null} onClick={onOpenNineRouterSettings}>
+          <Route size={15} aria-hidden="true" />
+          Set up subscriptions
+        </button>
+        <button type="button" disabled={busy !== null} onClick={onUseFallback}>
+          <ArrowRight size={15} aria-hidden="true" />
+          {openRouterFallbackLabel}
+        </button>
+        <button type="button" disabled={busy !== null} onClick={onCheckAgain}>
+          <RefreshCcw size={15} aria-hidden="true" />
+          {busy === "refresh" ? "Checking" : "Check again"}
+        </button>
+      </div>
+    </section>
   );
 }
 

@@ -153,6 +153,14 @@ export interface ModelProviderDefinition {
   requiresApiKey: boolean;
 }
 
+export interface ModelRouteSourceInfo {
+  chipLabel: string;
+  groupId: string;
+  groupLabel: string;
+  searchTags: string[];
+  sourceLabel: string;
+}
+
 export type ModelCatalogCategoryId =
   | "recommended"
   | "free"
@@ -602,28 +610,28 @@ function getModelProviderLabel(provider: ModelProviderId) {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "Subscription route for connected Codex / ChatGPT accounts.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
+  modelOption("9router", "9router-codex-gpt-55", "Codex GPT-5.5", "cx/gpt-5.5", "Codex subscription route.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
     capabilities: ["Local gateway", "Subscription", "Reasoning", "Multimodal"],
     category: "reasoning",
-    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
-    useCase: "Use when the user has connected Codex or ChatGPT and wants Gilbert to use that subscription route.",
+    pricing: routedPricing("Usage comes from the user's connected Codex subscription and plan limits.", "9router"),
+    useCase: "Use when the user wants Gilbert to use their Codex subscription route.",
   }),
   modelOption("9router", "9router-codex-gpt-54", "Codex GPT-5.4", "cx/gpt-5.4", "Balanced subscription-backed coding and chat route.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
     capabilities: ["Local gateway", "Subscription", "Coding", "Multimodal"],
     category: "coding",
-    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
+    pricing: routedPricing("Usage comes from the user's connected Codex subscription and plan limits.", "9router"),
     useCase: "Use as the balanced Codex route when the user wants strong coding without jumping to GPT-5.5.",
   }),
   modelOption("9router", "9router-codex-gpt-53-codex", "Codex GPT-5.3 Codex", "cx/gpt-5.3-codex", "Codex-tuned coding route for connected subscription accounts.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
     capabilities: ["Local gateway", "Subscription", "Coding", "Multimodal"],
     category: "coding",
-    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
+    pricing: routedPricing("Usage comes from the user's connected Codex subscription and plan limits.", "9router"),
     useCase: "Use when the user wants the Codex-tuned model through their connected Codex account.",
   }),
   modelOption("9router", "9router-codex-gpt-53-codex-xhigh", "Codex GPT-5.3 Codex xHigh", "cx/gpt-5.3-codex-xhigh", "Codex coding route with xHigh reasoning through the connected account.", NINE_ROUTER_CODEX_STANDARD_CONTEXT_TOKENS, {
     capabilities: ["Local gateway", "Subscription", "Coding", "High reasoning", "Multimodal"],
     category: "reasoning",
-    pricing: routedPricing("Usage comes from the user's connected Codex / ChatGPT account and plan limits.", "9router"),
+    pricing: routedPricing("Usage comes from the user's connected Codex subscription and plan limits.", "9router"),
     useCase: "Use for harder coding turns where the Codex xHigh route is available through the subscription account.",
   }),
   modelOption("9router", "9router-always-free", "Free Auto", NINE_ROUTER_ALWAYS_FREE_MODEL, "Automatic free route for the current OpenCode Free routes.", undefined, {
@@ -1121,6 +1129,274 @@ export function getModelProvider(provider: ModelProviderId) {
   return MODEL_PROVIDERS.find((item) => item.id === provider) ?? MODEL_PROVIDERS.find((item) => item.id === DEFAULT_PROVIDER_ID)!;
 }
 
+export function getModelRouteSourceInfo(provider: ModelProviderId, model: string): ModelRouteSourceInfo {
+  if (provider === "9router") {
+    return getNineRouterRouteSourceInfo(model);
+  }
+
+  if (provider === "openrouter") {
+    return getOpenRouterRouteSourceInfo(model);
+  }
+
+  if (provider === "lmstudio" || provider === "ollama" || provider === "vllm") {
+    const label = getModelProvider(provider).label;
+    return {
+      chipLabel: label,
+      groupId: `${provider}-local`,
+      groupLabel: `${label} local`,
+      searchTags: [label, "Local", "Local model"],
+      sourceLabel: `${label} local`,
+    };
+  }
+
+  const providerLabel = getModelProvider(provider).label;
+  const directLabel = getDirectProviderRouteLabel(provider, providerLabel);
+
+  return {
+    chipLabel: directLabel.chipLabel,
+    groupId: `${provider}-api`,
+    groupLabel: directLabel.groupLabel,
+    searchTags: [providerLabel, directLabel.sourceLabel, "Direct API", "API key"],
+    sourceLabel: directLabel.sourceLabel,
+  };
+}
+
+function getDirectProviderRouteLabel(provider: ModelProviderId, providerLabel: string) {
+  const directLabels: Partial<Record<ModelProviderId, { chipLabel: string; groupLabel: string; sourceLabel: string }>> = {
+    anthropic: {
+      chipLabel: "Anthropic API",
+      groupLabel: "Anthropic API",
+      sourceLabel: "Anthropic API",
+    },
+    deepseek: {
+      chipLabel: "DeepSeek API",
+      groupLabel: "DeepSeek API",
+      sourceLabel: "DeepSeek API",
+    },
+    google: {
+      chipLabel: "Gemini API",
+      groupLabel: "Google Gemini API",
+      sourceLabel: "Google Gemini API",
+    },
+    groq: {
+      chipLabel: "Groq API",
+      groupLabel: "Groq API",
+      sourceLabel: "Groq API",
+    },
+    mistral: {
+      chipLabel: "Mistral API",
+      groupLabel: "Mistral API",
+      sourceLabel: "Mistral API",
+    },
+    openai: {
+      chipLabel: "OpenAI API",
+      groupLabel: "OpenAI API",
+      sourceLabel: "OpenAI API",
+    },
+    xai: {
+      chipLabel: "xAI API",
+      groupLabel: "xAI API",
+      sourceLabel: "xAI API",
+    },
+  };
+
+  return directLabels[provider] ?? {
+    chipLabel: providerLabel,
+    groupLabel: providerLabel,
+    sourceLabel: providerLabel,
+  };
+}
+
+function getNineRouterRouteSourceInfo(model: string): ModelRouteSourceInfo {
+  const normalizedModel = model.trim().toLowerCase();
+
+  if (normalizedModel === NINE_ROUTER_ALWAYS_FREE_MODEL || normalizedModel === NINE_ROUTER_SMART_SAVER_MODEL || normalizedModel.startsWith("oc/")) {
+    return {
+      chipLabel: "Free Auto",
+      groupId: "9router-free-auto",
+      groupLabel: "Free Auto",
+      searchTags: ["Subscriptions", "Free Auto", "OpenCode Free", "Free"],
+      sourceLabel: "Free Auto",
+    };
+  }
+
+  const routeSources: Array<{
+    chipLabel: string;
+    groupId: string;
+    groupLabel: string;
+    prefixes: readonly string[];
+    searchTags: string[];
+    sourceLabel: string;
+  }> = [
+    {
+      chipLabel: "Codex subscription",
+      groupId: "9router-codex",
+      groupLabel: "Codex subscription",
+      prefixes: ["cx/", "codex/", "chatgpt/", "openai/"],
+      searchTags: ["Subscriptions", "Codex", "ChatGPT", "OpenAI subscription"],
+      sourceLabel: "Codex subscription",
+    },
+    {
+      chipLabel: "Claude Code subscription",
+      groupId: "9router-claude-code",
+      groupLabel: "Claude Code subscription",
+      prefixes: ["cc/", "claude/", "claude-code/", "anthropic/"],
+      searchTags: ["Subscriptions", "Claude Code", "Anthropic subscription"],
+      sourceLabel: "Claude Code subscription",
+    },
+    {
+      chipLabel: "Gemini subscription",
+      groupId: "9router-gemini-cli",
+      groupLabel: "Gemini subscription",
+      prefixes: ["gemini-cli/", "gemini/", "google/", "cloud-code/"],
+      searchTags: ["Subscriptions", "Gemini CLI", "Cloud Code", "Google subscription"],
+      sourceLabel: "Gemini subscription",
+    },
+    {
+      chipLabel: "Antigravity subscription",
+      groupId: "9router-antigravity",
+      groupLabel: "Antigravity subscription",
+      prefixes: ["antigravity/", "ag/"],
+      searchTags: ["Subscriptions", "Antigravity", "Google subscription"],
+      sourceLabel: "Antigravity subscription",
+    },
+    {
+      chipLabel: "GitHub Copilot subscription",
+      groupId: "9router-github-copilot",
+      groupLabel: "GitHub Copilot subscription",
+      prefixes: ["gh/", "github/", "github-copilot/", "github_copilot/", "copilot/"],
+      searchTags: ["Subscriptions", "GitHub Copilot", "Copilot"],
+      sourceLabel: "GitHub Copilot subscription",
+    },
+    {
+      chipLabel: "Kiro subscription",
+      groupId: "9router-kiro",
+      groupLabel: "Kiro subscription",
+      prefixes: ["kiro/"],
+      searchTags: ["Subscriptions", "Kiro"],
+      sourceLabel: "Kiro subscription",
+    },
+    {
+      chipLabel: "Kilo Code subscription",
+      groupId: "9router-kilo-code",
+      groupLabel: "Kilo Code subscription",
+      prefixes: ["kilocode/", "kilo-code/", "kilo/"],
+      searchTags: ["Subscriptions", "Kilo Code"],
+      sourceLabel: "Kilo Code subscription",
+    },
+    {
+      chipLabel: "Cline subscription",
+      groupId: "9router-cline",
+      groupLabel: "Cline subscription",
+      prefixes: ["cline/"],
+      searchTags: ["Subscriptions", "Cline"],
+      sourceLabel: "Cline subscription",
+    },
+    {
+      chipLabel: "Qwen Code subscription",
+      groupId: "9router-qwen-code",
+      groupLabel: "Qwen Code subscription",
+      prefixes: ["qwen/", "qwen-code/"],
+      searchTags: ["Subscriptions", "Qwen Code"],
+      sourceLabel: "Qwen Code subscription",
+    },
+    {
+      chipLabel: "iFlow subscription",
+      groupId: "9router-iflow",
+      groupLabel: "iFlow subscription",
+      prefixes: ["iflow/"],
+      searchTags: ["Subscriptions", "iFlow"],
+      sourceLabel: "iFlow subscription",
+    },
+    {
+      chipLabel: "Qoder subscription",
+      groupId: "9router-qoder",
+      groupLabel: "Qoder subscription",
+      prefixes: ["qoder/"],
+      searchTags: ["Subscriptions", "Qoder"],
+      sourceLabel: "Qoder subscription",
+    },
+    {
+      chipLabel: "Kimi Coding subscription",
+      groupId: "9router-kimi-coding",
+      groupLabel: "Kimi Coding subscription",
+      prefixes: ["kimi/", "kimi-coding/"],
+      searchTags: ["Subscriptions", "Kimi Coding"],
+      sourceLabel: "Kimi Coding subscription",
+    },
+    {
+      chipLabel: "CodeBuddy subscription",
+      groupId: "9router-codebuddy",
+      groupLabel: "CodeBuddy subscription",
+      prefixes: ["codebuddy/"],
+      searchTags: ["Subscriptions", "CodeBuddy"],
+      sourceLabel: "CodeBuddy subscription",
+    },
+  ];
+  const matchedRoute = routeSources.find((route) => route.prefixes.some((prefix) => normalizedModel.startsWith(prefix)));
+
+  if (matchedRoute) {
+    return {
+      chipLabel: matchedRoute.chipLabel,
+      groupId: matchedRoute.groupId,
+      groupLabel: matchedRoute.groupLabel,
+      searchTags: matchedRoute.searchTags,
+      sourceLabel: matchedRoute.sourceLabel,
+    };
+  }
+
+  return {
+    chipLabel: "Subscription",
+    groupId: "9router-other",
+    groupLabel: "Other subscription routes",
+    searchTags: ["Subscriptions", "Connected account"],
+    sourceLabel: "Subscription route",
+  };
+}
+
+function getOpenRouterRouteSourceInfo(model: string): ModelRouteSourceInfo {
+  const sourceLabel = getOpenRouterSourceLabel(model);
+  const detailedSourceLabel = sourceLabel === "OpenRouter" ? "OpenRouter route" : `OpenRouter: ${sourceLabel}`;
+
+  return {
+    chipLabel: "OpenRouter",
+    groupId: "openrouter",
+    groupLabel: "OpenRouter",
+    searchTags: ["OpenRouter", detailedSourceLabel, sourceLabel],
+    sourceLabel: detailedSourceLabel,
+  };
+}
+
+function getOpenRouterSourceLabel(model: string) {
+  const normalizedModel = model.trim();
+
+  if (normalizedModel === OPENROUTER_FREE_AUTO_MODEL) {
+    return "Free router";
+  }
+
+  if (normalizedModel === OPENROUTER_AUTO_MODEL) {
+    return "Auto router";
+  }
+
+  const owner = normalizedModel.replace(/^~/, "").split("/")[0]?.toLowerCase() ?? "";
+  const sourceLabels: Record<string, string> = {
+    "arcee-ai": "Arcee AI",
+    anthropic: "Anthropic",
+    deepseek: "DeepSeek",
+    google: "Google Gemini",
+    inclusionai: "inclusionAI",
+    minimax: "MiniMax",
+    nvidia: "NVIDIA",
+    openai: "OpenAI",
+    openrouter: "OpenRouter",
+    poolside: "Poolside",
+    "x-ai": "xAI",
+    "z-ai": "Z.ai",
+  };
+
+  return sourceLabels[owner] ?? (owner || "OpenRouter");
+}
+
 export function prefersLiveModelCatalog(provider: ModelProviderId) {
   return provider === "lmstudio" || provider === "ollama" || provider === "vllm";
 }
@@ -1185,6 +1461,41 @@ export function getChatModelOption(model: string, provider?: ModelProviderId) {
     CHAT_MODEL_OPTIONS.find((option) => option.value === normalizedModel && (!provider || option.provider === provider)) ??
     CHAT_MODEL_OPTIONS.find((option) => option.value === normalizedModel)
   );
+}
+
+export function formatModelCapabilitySummary(option: Pick<ChatModelOption, "capabilities" | "category"> | undefined, maxItems = 3) {
+  const seen = new Set<string>();
+  const ignoredCapabilities = new Set(["local gateway", "provider-managed", "subscription"]);
+  const labels = (option?.capabilities ?? []).flatMap((capability) => {
+    const normalized = capability.trim();
+    const key = normalized.toLowerCase();
+
+    if (!normalized || ignoredCapabilities.has(key) || seen.has(key)) {
+      return [];
+    }
+
+    seen.add(key);
+    return [normalized];
+  });
+
+  if (labels.length > 0) {
+    return labels.slice(0, maxItems).join(", ");
+  }
+
+  const fallbackLabels: Partial<Record<ModelCatalogCategoryId, string>> = {
+    coding: "Coding",
+    fast: "Fast",
+    free: "Free",
+    general: "General chat",
+    "long-context": "Long context",
+    local: "Local",
+    multimodal: "Multimodal",
+    reasoning: "Reasoning",
+    recommended: "Recommended",
+    "structured-output": "Structured",
+  };
+
+  return fallbackLabels[option?.category ?? "general"] ?? "General chat";
 }
 
 export type ModelInputModality = "image" | "video";

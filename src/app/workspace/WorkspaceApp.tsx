@@ -85,6 +85,9 @@ import {
   createAutomationTaskFromDraft,
   createAutomationToolScope,
   createAutomationToolSelectionPrompt,
+  createAutomationUserMessageContent,
+  filterAutomationWebSources,
+  formatAutomationInboxResult,
   formatAutomationNotificationSummary,
   isAutomationTaskDue,
   normalizeAutomationState,
@@ -193,6 +196,7 @@ import {
   looksLikeUnappliedFileEditAnswer,
   looksLikeUnexecutedToolActionPromise,
   needsFreshLocalToolEvidence,
+  requiresWorkspaceMutationForPrompt,
   requiresWorkspaceToolCallForPrompt,
   shouldSynthesizeEmptyFinalFromToolResults,
   shouldHoldStreamingContentForToolCalls,
@@ -203,7 +207,7 @@ import {
   withLocalComputerProgress,
   withWebSearchProgress,
 } from "../chatRuntime";
-import { mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortProjectsByUpdatedAt } from "../projectState";
+import { createNoProjectWorkspace, mergeProjectsWithChats, sameLocalWorkspaceSettings, samePathSet, sortProjectsByUpdatedAt } from "../projectState";
 import { refreshWorkspaceContext } from "../../localWorkspace/workspaceContext";
 import { formatWebSearchProviderLabel, MAX_WEB_SEARCH_RESULTS } from "../../services/webSearchClient";
 import { NINE_ROUTER_PROVIDER_ID } from "../../services/nineRouterClient";
@@ -302,7 +306,7 @@ import { resolveWorkspaceForChatProject as resolveWorkspaceForChatProjectImpl, i
 import { persistAgentRun as persistAgentRunImpl, createAgentRunForMessage as createAgentRunForMessageImpl, updateAgentRun as updateAgentRunImpl, setAgentRunWaiting as setAgentRunWaitingImpl, setAgentRunCompleted as setAgentRunCompletedImpl, setAgentRunFailed as setAgentRunFailedImpl, setAgentRunCancelled as setAgentRunCancelledImpl, setAgentRunContinuing as setAgentRunContinuingImpl, createPlanningExecutionApproval as createPlanningExecutionApprovalImpl } from "./state/agentRuns";
 import { handleNewChat as handleNewChatImpl, handleSelectChat as handleSelectChatImpl, handleActiveChatModelChange as handleActiveChatModelChangeImpl, handleProviderConnectionChoice as handleProviderConnectionChoiceImpl, handleSelectProject as handleSelectProjectImpl, openCreateProjectDialog as openCreateProjectDialogImpl, createProjectFromFolder as createProjectFromFolderImpl, handleLocalWorkspaceChange as handleLocalWorkspaceChangeImpl, bindActiveChatToProject as bindActiveChatToProjectImpl, handleToggleTerminal as handleToggleTerminalImpl, attachLiveTerminalSession as attachLiveTerminalSessionImpl, handleTogglePin as handleTogglePinImpl, handleOpenRenameChat as handleOpenRenameChatImpl, confirmRenameChat as confirmRenameChatImpl, handleArchiveActiveChat as handleArchiveActiveChatImpl, handleCopyWorkingDirectory as handleCopyWorkingDirectoryImpl, handleCopySessionId as handleCopySessionIdImpl, handleCopyChatDeeplink as handleCopyChatDeeplinkImpl, handleCopyChatMarkdown as handleCopyChatMarkdownImpl, handleForkActiveChatLocal as handleForkActiveChatLocalImpl, handleForkChatFromMessage as handleForkChatFromMessageImpl, handleForkActiveChatWorktree as handleForkActiveChatWorktreeImpl, handleMessageFeedback as handleMessageFeedbackImpl, handleAddAutomation as handleAddAutomationImpl, handleOpenActiveChatInNewWindow as handleOpenActiveChatInNewWindowImpl, getActiveWorkingDirectory as getActiveWorkingDirectoryImpl, copyLabeledTextToClipboard as copyLabeledTextToClipboardImpl, activateForkedChat as activateForkedChatImpl, notifyPlanningInputNeeded as notifyPlanningInputNeededImpl, notifyRunNeedsAttention as notifyRunNeedsAttentionImpl, notifyRunComplete as notifyRunCompleteImpl, touchProject as touchProjectImpl, restoreProjectLocalWorkspace as restoreProjectLocalWorkspaceImpl, saveWorkspaceForProject as saveWorkspaceForProjectImpl, handleDeleteChat as handleDeleteChatImpl, handleDeleteProject as handleDeleteProjectImpl, handleOpenBulkDeleteChats as handleOpenBulkDeleteChatsImpl, handleToggleBulkDeleteChat as handleToggleBulkDeleteChatImpl, handleSelectAllBulkDeleteChats as handleSelectAllBulkDeleteChatsImpl, handleClearBulkDeleteChats as handleClearBulkDeleteChatsImpl, confirmDeleteChat as confirmDeleteChatImpl, confirmDeleteProject as confirmDeleteProjectImpl, confirmBulkDeleteChats as confirmBulkDeleteChatsImpl } from "./state/projectActions";
 import { isChatSending as isChatSendingImpl, isAnyChatSending as isAnyChatSendingImpl, getSendingChatIds as getSendingChatIdsImpl, setChatSending as setChatSendingImpl, getActiveGenerationByRequest as getActiveGenerationByRequestImpl, getActiveGenerationByMessage as getActiveGenerationByMessageImpl, createActiveGeneration as createActiveGenerationImpl, setActiveGenerationTarget as setActiveGenerationTargetImpl, isRequestInactive as isRequestInactiveImpl, finishActiveGeneration as finishActiveGenerationImpl, handleStopGeneration as handleStopGenerationImpl, stopActiveGeneration as stopActiveGenerationImpl, stopStreamingMessage as stopStreamingMessageImpl, stopStaleStreamingMessages as stopStaleStreamingMessagesImpl, stopStreamingAssistantMessage as stopStreamingAssistantMessageImpl, completeActiveProgress as completeActiveProgressImpl, preserveQueuedMessagesForSnapshot as preserveQueuedMessagesForSnapshotImpl, restoreChatSnapshot as restoreChatSnapshotImpl, updateQueuedChatSends as updateQueuedChatSendsImpl, scheduleGeneratedChatTitle as scheduleGeneratedChatTitleImpl, applyGeneratedChatTitle as applyGeneratedChatTitleImpl, shouldPreserveExistingTitleAfterUserEdit as shouldPreserveExistingTitleAfterUserEditImpl, enqueueChatSend as enqueueChatSendImpl, handleDeleteQueuedMessage as handleDeleteQueuedMessageImpl, handleHoldQueuedMessage as handleHoldQueuedMessageImpl, handleUpdateQueuedMessage as handleUpdateQueuedMessageImpl, handleEditUserMessageAndRegenerate as handleEditUserMessageAndRegenerateImpl, handleSteerQueuedMessage as handleSteerQueuedMessageImpl } from "./chat/generationQueue";
-import { steerActiveResponse as steerActiveResponseImpl, createMessagesForProvider as createMessagesForProviderImpl, createChatToolSelectionPrompt as createChatToolSelectionPromptImpl, referencesSelectedWorkspaceForToolSelection as referencesSelectedWorkspaceForToolSelectionImpl, resolveChatResearchReferences as resolveChatResearchReferencesImpl, getChatResearchCandidates as getChatResearchCandidatesImpl, createChatResearchContextMessages as createChatResearchContextMessagesImpl, createActiveProjectBoundaryMessage as createActiveProjectBoundaryMessageImpl, createMemorySearchForRequest as createMemorySearchForRequestImpl, clampMemoryToolInteger as clampMemoryToolIntegerImpl, limitMemoryToolContent as limitMemoryToolContentImpl, rememberProjectMapSnapshot as rememberProjectMapSnapshotImpl, loadToolMemoryForProject as loadToolMemoryForProjectImpl, saveToolMemoryForProject as saveToolMemoryForProjectImpl, createToolMemoryScope as createToolMemoryScopeImpl, getEnabledWorkspaceRoots as getEnabledWorkspaceRootsImpl, rememberProjectToolMemoryFromBridgeRun as rememberProjectToolMemoryFromBridgeRunImpl, rememberProjectToolMemoryFromChatToolCalls as rememberProjectToolMemoryFromChatToolCallsImpl, getToolMemoryProjectName as getToolMemoryProjectNameImpl, createSourceControlContextMessages as createSourceControlContextMessagesImpl, shouldSkipLocalContextForGithub as shouldSkipLocalContextForGithubImpl, createLocalWorkspaceContextMessages as createLocalWorkspaceContextMessagesImpl, hasAnyLocalWorkspaceToolEnabled as hasAnyLocalWorkspaceToolEnabledImpl, getAutomaticWorkspaceContextCharBudget as getAutomaticWorkspaceContextCharBudgetImpl, syncLocalWorkspaceIndexSummary as syncLocalWorkspaceIndexSummaryImpl } from "./context/messageContext";
+import { steerActiveResponse as steerActiveResponseImpl, createMessagesForProvider as createMessagesForProviderImpl, createChatToolSelectionPrompt as createChatToolSelectionPromptImpl, referencesSelectedWorkspaceForToolSelection as referencesSelectedWorkspaceForToolSelectionImpl, resolveChatResearchReferences as resolveChatResearchReferencesImpl, getChatResearchCandidates as getChatResearchCandidatesImpl, createChatResearchContextMessages as createChatResearchContextMessagesImpl, createActiveProjectBoundaryMessage as createActiveProjectBoundaryMessageImpl, createMemorySearchForRequest as createMemorySearchForRequestImpl, clampMemoryToolInteger as clampMemoryToolIntegerImpl, limitMemoryToolContent as limitMemoryToolContentImpl, rememberProjectMapSnapshot as rememberProjectMapSnapshotImpl, loadToolMemoryForProject as loadToolMemoryForProjectImpl, saveToolMemoryForProject as saveToolMemoryForProjectImpl, createToolMemoryScope as createToolMemoryScopeImpl, getEnabledWorkspaceRoots as getEnabledWorkspaceRootsImpl, resolveEnabledWorkspaceRoots as resolveEnabledWorkspaceRootsImpl, rememberProjectToolMemoryFromBridgeRun as rememberProjectToolMemoryFromBridgeRunImpl, rememberProjectToolMemoryFromChatToolCalls as rememberProjectToolMemoryFromChatToolCallsImpl, getToolMemoryProjectName as getToolMemoryProjectNameImpl, createSourceControlContextMessages as createSourceControlContextMessagesImpl, shouldSkipLocalContextForGithub as shouldSkipLocalContextForGithubImpl, createLocalWorkspaceContextMessages as createLocalWorkspaceContextMessagesImpl, hasAnyLocalWorkspaceToolEnabled as hasAnyLocalWorkspaceToolEnabledImpl, getAutomaticWorkspaceContextCharBudget as getAutomaticWorkspaceContextCharBudgetImpl, syncLocalWorkspaceIndexSummary as syncLocalWorkspaceIndexSummaryImpl } from "./context/messageContext";
 import { compactProviderMessages as compactProviderMessagesImpl, resolveContextWindowForModel as resolveContextWindowForModelImpl, getManualModelBudgetOverride as getManualModelBudgetOverrideImpl, getConfiguredContextWindow as getConfiguredContextWindowImpl, createContextBoundLocalToolExecutionPolicy as createContextBoundLocalToolExecutionPolicyImpl, getModelVisibleToolResultCharBudget as getModelVisibleToolResultCharBudgetImpl, minNullableCharCap as minNullableCharCapImpl, getProviderCompactionBaseline as getProviderCompactionBaselineImpl, recordContextCompaction as recordContextCompactionImpl, createContextCompactionProgress as createContextCompactionProgressImpl, withContextCompactionProgress as withContextCompactionProgressImpl, withContextCompactionMarker as withContextCompactionMarkerImpl, createChatContextCompaction as createChatContextCompactionImpl, getContextCompactionMarkerKey as getContextCompactionMarkerKeyImpl, recordProviderContextUsage as recordProviderContextUsageImpl, recordProviderActualUsage as recordProviderActualUsageImpl, estimateProviderContextUsageForDisplay as estimateProviderContextUsageForDisplayImpl, createProviderPayloadGuardrailProgress as createProviderPayloadGuardrailProgressImpl, withProviderPayloadGuardrailProgress as withProviderPayloadGuardrailProgressImpl, recordPlanningProviderRequest as recordPlanningProviderRequestImpl, recordPlanningProviderUsage as recordPlanningProviderUsageImpl, createToolAwareProviderSettings as createToolAwareProviderSettingsImpl, createPromptAwareProviderSettings as createPromptAwareProviderSettingsImpl, hasRequestScopedWorkspaceToolsEnabled as hasRequestScopedWorkspaceToolsEnabledImpl, createPromptAwareThinkingSettings as createPromptAwareThinkingSettingsImpl, shouldUseLighterThinkingForPrompt as shouldUseLighterThinkingForPromptImpl, createFinalOnlyProviderSettings as createFinalOnlyProviderSettingsImpl, rememberSessionApprovalDecision as rememberSessionApprovalDecisionImpl, createRuntimeApprovalDecisions as createRuntimeApprovalDecisionsImpl, getRuntimeWebSearchMaxResults as getRuntimeWebSearchMaxResultsImpl, getRuntimeWebSearchSettings as getRuntimeWebSearchSettingsImpl, supportsProviderParallelToolCalls as supportsProviderParallelToolCallsImpl, createLocationAwareWebSearchSettings as createLocationAwareWebSearchSettingsImpl } from "./context/contextWindow";
 import { createAppAgentToolCall as createAppAgentToolCallImpl, appendAgentRuntimeStep as appendAgentRuntimeStepImpl, completeLatestAgentRuntimeStep as completeLatestAgentRuntimeStepImpl, mapAgentDecisionToStepType as mapAgentDecisionToStepTypeImpl, runAppOwnedCodingAgent as runAppOwnedCodingAgentImpl } from "./agentRuntime/appAgentRunner";
 import { streamAssistantWithLocalTools as streamAssistantWithLocalToolsImpl } from "./tools/localToolStreaming";
@@ -384,6 +388,7 @@ export interface StartSendMessageOptions {
   }) => void;
   preserveExistingTitle?: boolean;
   preserveChatModelSelection?: boolean;
+  providerPrompt?: string;
   providerSettingsOverrides?: Partial<ProviderSettings>;
   runtimeToolOverrides?: Partial<ProviderSettings["tools"]>;
   sourceChat?: ChatSummary;
@@ -618,24 +623,6 @@ function sameComposerDraft(left?: ChatComposerDraft | null, right?: ChatComposer
   }
 
   return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
-}
-
-function createNoProjectWorkspace(current?: LocalWorkspaceSettings): LocalWorkspaceSettings {
-  if (current?.enabled && current.scope === "full-computer") {
-    return current;
-  }
-
-  return {
-    enabled: false,
-    indexReason: undefined,
-    indexSummary: undefined,
-    indexStatus: "idle",
-    indexUpdatedAt: undefined,
-    lastError: undefined,
-    permissionMode: current?.permissionMode ?? "default",
-    roots: [],
-    scope: "selected-folder",
-  };
 }
 
 function createApprovalWorkspaceSessionKey(settings: LocalWorkspaceSettings) {
@@ -2069,6 +2056,10 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     return (getEnabledWorkspaceRootsImpl as any)(runtime, workspaceSettings);
   }
 
+  function resolveEnabledWorkspaceRoots(workspaceSettings: LocalWorkspaceSettings) {
+    return (resolveEnabledWorkspaceRootsImpl as any)(runtime, workspaceSettings);
+  }
+
   function rememberProjectToolMemoryFromBridgeRun(chatId: string, workspaceSettings: LocalWorkspaceSettings, prompt: string, run: ToolBridgeExecutionBatch) {
     return (rememberProjectToolMemoryFromBridgeRunImpl as any)(runtime, chatId, workspaceSettings, prompt, run);
   }
@@ -2818,12 +2809,13 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     try {
       const sourceChat = resolveAutomationSourceChat(task);
       const prompt = createAutomationRunPrompt(task, { reason });
+      const displayPrompt = createAutomationUserMessageContent(task, { dryRun: options.dryRun });
       const webSearchEnabled = task.capabilityScope.capabilities.includes("web.search");
       const providerSettingsOverrides = createAutomationProviderSettingsOverrides(task);
 
       await startSendMessage({
         attachments: [],
-        content: prompt,
+        content: displayPrompt,
         localWorkspace: localWorkspaceRef.current,
         mode: "chat",
         webSearch: {
@@ -2881,6 +2873,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         },
         preserveExistingTitle: true,
         preserveChatModelSelection: true,
+        providerPrompt: prompt,
         providerSettingsOverrides,
         runtimeToolOverrides: createAutomationRuntimeToolOverrides(task),
         sourceChat,
@@ -2959,13 +2952,14 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     },
   ) {
     const completedAt = new Date().toISOString();
+    const summary = formatAutomationInboxResult(details.content.trim() || details.error || "Task run finished.");
+    const displaySources = filterAutomationWebSources(details.sources, details.toolCalls);
     const nextState = updateAutomationState((state) => {
       const task = state.tasks.find((candidate) => candidate.id === taskId);
       if (!task) {
         return state;
       }
 
-      const summary = details.content.trim() || details.error || "Task run finished.";
       const nextTask: AutomationTask = {
         ...task,
         lastResult: summary,
@@ -2998,7 +2992,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
               ok: true,
             },
           ],
-          sources: details.sources,
+          sources: displaySources,
           status: details.status,
           provider: details.provider ?? run.provider,
           toolCallCount: details.toolCalls?.length ?? run.toolCallCount ?? 0,
@@ -3016,6 +3010,14 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         updatedAt: completedAt,
       };
     });
+
+    if (details.chatId && details.messageId && details.status !== "waiting_for_approval") {
+      updateGeneratedMessage(details.chatId, details.messageId, (message) => ({
+        ...message,
+        content: summary,
+        sources: displaySources,
+      }));
+    }
 
     const notificationTask = nextState.tasks.find((task) => task.id === taskId);
     const notificationRun = nextState.runs.find((run) => run.id === runId);
@@ -3737,6 +3739,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     getDefaultBaseUrlForProvider,
     getEffectiveMaxOutputTokens,
     getEnabledWorkspaceRoots,
+    resolveEnabledWorkspaceRoots,
     getFallbackContextWindowTokens,
     getLastPathSegment,
     getLatestUserPrompt,
@@ -3932,6 +3935,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     removeSteeringProgress,
     renameChatId,
     renameChatTitle,
+    requiresWorkspaceMutationForPrompt,
     requiresWorkspaceToolCallForPrompt,
     resolveChatResearchReferences,
     resolveContextWindowForModel,

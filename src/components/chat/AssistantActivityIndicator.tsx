@@ -1234,6 +1234,10 @@ function estimateFileItemsFromToolInput(toolCall: ChatToolCall): AssistantActivi
     return [createEstimatedFileItem(path, countTextLines(stringValue(input.content)), 0, "update", toolCall.status)];
   }
 
+  if (label.includes("replace file text span") || toolCall.toolId === "files_replace_span") {
+    return [createEstimatedFileItem(path, countTextLines(stringValue(input.content)), estimateSpanDeletionCount(input), "update", toolCall.status)];
+  }
+
   if (label.includes("replace file line range")) {
     const additions = countTextLines(stringValue(input.content));
     const startLine = numberValue(input.startLine);
@@ -1307,7 +1311,10 @@ function estimateBatchEditFileItems(input: Record<string, unknown>, status: Chat
     const current = byPath.get(path) ?? { additions: 0, deletions: 0, path };
     const operation = stringValue(edit.operation ?? edit.type).toLowerCase();
 
-    if (operation === "replace_range" || edit.startLine !== undefined || edit.start_line !== undefined) {
+    if (isReplaceSpanEdit(edit, operation)) {
+      current.additions += countTextLines(stringValue(edit.content));
+      current.deletions += estimateSpanDeletionCount(edit);
+    } else if (operation === "replace_range" || edit.startLine !== undefined || edit.start_line !== undefined) {
       const startLine = numberValue(edit.startLine ?? edit.start_line);
       const endLine = numberValue(edit.endLine ?? edit.end_line);
       current.additions += countTextLines(stringValue(edit.content));
@@ -1327,6 +1334,35 @@ function estimateBatchEditFileItems(input: Record<string, unknown>, status: Chat
   return [...byPath.values()].map((item) =>
     createEstimatedFileItem(item.path, item.additions, item.deletions, "update", status),
   );
+}
+
+function isReplaceSpanEdit(edit: Record<string, unknown>, operation: string) {
+  return operation === "replace_span" || operation === "span_replace" || operation === "line_column_span" || operation === "column_range" || operation === "char_range" || operation === "replace_chars"
+    || edit.startColumn !== undefined
+    || edit.start_column !== undefined
+    || edit.startChar !== undefined
+    || edit.start_char !== undefined
+    || edit.endColumn !== undefined
+    || edit.end_column !== undefined
+    || edit.endChar !== undefined
+    || edit.end_char !== undefined;
+}
+
+function estimateSpanDeletionCount(input: Record<string, unknown>) {
+  const startLine = numberValue(input.startLine ?? input.start_line);
+  const endLine = numberValue(input.endLine ?? input.end_line) ?? startLine;
+  const startColumn = numberValue(input.startColumn ?? input.start_column ?? input.startChar ?? input.start_char);
+  const endColumn = numberValue(input.endColumn ?? input.end_column ?? input.endChar ?? input.end_char);
+
+  if (startLine && endLine && endLine > startLine) {
+    return endLine - startLine + 1;
+  }
+
+  if (startLine && endLine === startLine && startColumn && endColumn && endColumn > startColumn) {
+    return 1;
+  }
+
+  return 0;
 }
 
 function createEstimatedFileItem(
@@ -1523,12 +1559,16 @@ function getToolCallAction(toolCall: ChatToolCall) {
     return "Writing";
   }
 
-  if (isBatchEditTool(toolCall) || /\b(files_apply_patch|files_exact_replace|files_replace_range|files_insert_at_line|files_append)\b/.test(key) || /\b(apply workspace patch|edit file|replace file|insert text|append to workspace file)\b/.test(key)) {
+  if (isBatchEditTool(toolCall) || /\b(files_apply_patch|files_exact_replace|files_replace_range|files_replace_span|files_insert_at_line|files_append)\b/.test(key) || /\b(apply workspace patch|edit file|replace file|insert text|append to workspace file)\b/.test(key)) {
     return "Editing";
   }
 
   if (/\b(files_move|move workspace path)\b/.test(key)) {
     return "Moving";
+  }
+
+  if (/\b(files_copy|copy workspace path)\b/.test(key)) {
+    return "Copying";
   }
 
   if (/\b(files_read|read workspace file|read file)\b/.test(key)) {

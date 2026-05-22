@@ -38,7 +38,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? "Use memory_search as the selective path to saved local chat/project memory and tool lessons. Do not assume memory was preloaded into the prompt; query it when prior decisions, earlier chats, project continuity, or previous tool failures could matter."
       : "",
     hasTool("terminal_run")
-      ? "Terminal commands are available only through the approval-gated terminal_run tool, which runs inside the selected workspace with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. For dev servers/watchers, call terminal_run only once per matching command/cwd/preview target; if startup output is quiet, poll terminal_read_session instead of starting another copy. Match the active shell dialect: on Windows/PowerShell, do not use Unix-only commands such as `mkdir -p`, `ls -la`, or `wc -l`; use files_create_directory/files_list/files_count_lines when attached, or PowerShell-native commands."
+      ? "Terminal commands are available only through the terminal_run tool, which runs inside the active workspace/full-computer roots with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. Use terminal_run for clone/download/package-install/build/test workflows and for binary asset copies when text-file tools are not the right fit. The app permission UI handles any required approval. For dev servers/watchers, call terminal_run only once per matching command/cwd/preview target; if startup output is quiet, poll terminal_read_session instead of starting another copy. Match the active shell dialect: on Windows/PowerShell, do not use Unix-only commands such as `mkdir -p`, `ls -la`, or `wc -l`; use files_create_directory/files_list/files_count_lines when attached, or PowerShell-native commands."
       : "",
     hasTool("terminal_list_sessions") || hasTool("terminal_read_session") || hasTool("terminal_dev_server_status")
       ? "Run diagnostics are attached for this request. Before starting a dev server or watcher, call terminal_list_sessions and terminal_dev_server_status to reuse only app-owned sessions or reachable localhost servers that match the requested command/cwd/preview target. Do not open or reuse unrelated common localhost ports returned as diagnostics. Use terminal_read_session to inspect app-owned session output after startup and during verification. External Windows Terminal, PowerShell, cmd, or other non-Gilbert terminal scrollback is not readable; if full logs are needed, say that honestly and offer to restart or run the command inside Gilbert's integrated terminal."
@@ -71,6 +71,9 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
         : "If live web evidence is unavailable, say what could not be verified instead of pretending a search ran.",
     hasLocalComputerContext || hasAnyToolFamily("files", "editing", "git", "terminal", "browser")
       ? "Local workspace context may be attached as bounded metadata. It is not proof that any file was read, edited, tested, committed, or executed during this turn."
+      : "",
+    hasAnyToolFamily("files")
+      ? formatFileDiscoveryGuidance(attachedToolIds)
       : "",
     formatBatchToolGuidance(attachedToolIds),
     hasAnyToolFamily("editing")
@@ -345,27 +348,68 @@ function formatBatchToolGuidance(attachedToolIds: Set<string>) {
   return `When the task needs several reads, writes, or edits, prefer batch tools by default when attached: ${batchTools.join("; ")}.${editManyGuidance}`;
 }
 
+function formatFileDiscoveryGuidance(attachedToolIds: Set<string>) {
+  const discoveryTools = [
+    attachedToolIds.has("files_search") ? "files_search as grep-style discovery for symbols, text, filenames, and paths" : "",
+    attachedToolIds.has("files_tree_summary") ? "files_tree_summary for a quick project or folder map" : "",
+    attachedToolIds.has("files_list") ? "files_list for directory contents" : "",
+  ].filter(Boolean);
+  const readTools = [
+    attachedToolIds.has("files_read_range") ? "files_read_range for the smallest current slice around matched lines" : "",
+    attachedToolIds.has("files_read_many") ? "files_read_many for several confirmed files" : "",
+    attachedToolIds.has("files_read") ? "files_read for one confirmed small file" : "",
+  ].filter(Boolean);
+
+  if (discoveryTools.length === 0 && readTools.length === 0) {
+    return "";
+  }
+
+  return [
+    discoveryTools.length > 0
+      ? `For local codebase work, discover before reading guessed files: ${discoveryTools.join("; ")}.`
+      : "",
+    readTools.length > 0
+      ? `After discovery, read only what is needed: ${readTools.join("; ")}.`
+      : "",
+    attachedToolIds.has("files_search")
+      ? "If a read path is missing or uncertain, call files_search before saying the file does not exist."
+      : "",
+  ].filter(Boolean).join(" ");
+}
+
 function formatEditToolGuidance(attachedToolIds: Set<string>) {
   const batchEditTool = attachedToolIds.has("files_edit_many")
-    ? "Use files_edit_many as the default for existing-file edits; it applies same-file edits in order and writes each file once."
+    ? "Use files_edit_many as the default for existing-file edits that touch more than one place or file; it applies same-file edits in order and writes each file once."
     : "";
   const preciseTools = [
-    attachedToolIds.has("files_apply_patch") ? "files_apply_patch for hunks" : "",
-    attachedToolIds.has("files_exact_replace") ? "files_exact_replace only for a single tiny exact-text follow-up" : "",
-    attachedToolIds.has("files_replace_range") ? "files_replace_range only for a single tiny line-range follow-up" : "",
+    attachedToolIds.has("files_exact_replace") ? "files_exact_replace for one current exact-text replacement" : "",
+    attachedToolIds.has("files_replace_range") ? "files_replace_range for one fresh line-range replacement" : "",
+    attachedToolIds.has("files_replace_span") ? "files_replace_span for one current line/column span, including a single-character edit" : "",
+    attachedToolIds.has("files_insert_at_line") ? "files_insert_at_line for one insertion at a known line" : "",
+    attachedToolIds.has("files_append") ? "files_append for adding text to the end of an existing file" : "",
+    attachedToolIds.has("files_apply_patch") ? "files_apply_patch for unified-diff hunks" : "",
   ].filter(Boolean);
   const fullRewriteTool = attachedToolIds.has("files_write_many")
-    ? " Use files_write_many only for new files or deliberate full-file rewrites. For brand-new files, set overwrite:false so creates can use the fastest create-only batch path."
+    ? " Use files_write_many only for new files or deliberate full-file rewrites, not ordinary existing-file edits. For brand-new files, set overwrite:false so creates can use the fastest create-only batch path. For existing full-file rewrites, set allowWholeFileReplacement:true only when the user clearly wants that."
+    : "";
+  const copyTool = attachedToolIds.has("files_copy")
+    ? " Use files_copy for copying local assets or folders, especially binary files such as images, from one project path into another."
     : "";
   const lineRangeGuidance = attachedToolIds.has("files_edit_many") || attachedToolIds.has("files_replace_range")
     ? " Use replace_range only with line numbers from a fresh read of the current file; if a range fails as stale or out of bounds, re-read and retry with exact_replace or files_apply_patch anchored to current text."
     : "";
+  const spanGuidance = attachedToolIds.has("files_edit_many") || attachedToolIds.has("files_replace_span")
+    ? " For a single character, word, expression, or partial-line edit, use files_edit_many replace_span or files_replace_span with 1-based line/column coordinates from a fresh read; endColumn is exclusive."
+    : "";
+  const staleGuidance = attachedToolIds.has("files_append") || attachedToolIds.has("files_exact_replace") || attachedToolIds.has("files_edit_many")
+    ? " If a tool says the file changed since it was last read, do not stop: re-read the current slice and retry the edit; append and exact_replace can usually be retried against the latest content without a stale expectedSha256."
+    : "";
 
-  if (!batchEditTool && preciseTools.length === 0 && !fullRewriteTool) {
+  if (!batchEditTool && preciseTools.length === 0 && !fullRewriteTool && !copyTool) {
     return "";
   }
 
-  return [`For existing-file edits, inspect the target first.`, batchEditTool, preciseTools.length > 0 ? `Other attached precise tools: ${preciseTools.join("; ")}.` : "", fullRewriteTool.trim(), lineRangeGuidance.trim()]
+  return [`For existing-file edits, inspect the target first.`, batchEditTool, preciseTools.length > 0 ? `Other attached precise tools: ${preciseTools.join("; ")}.` : "", fullRewriteTool.trim(), copyTool.trim(), lineRangeGuidance.trim(), spanGuidance.trim(), staleGuidance.trim()]
     .filter(Boolean)
     .join(" ");
 }

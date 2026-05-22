@@ -16,6 +16,12 @@ The script regenerates the NSIS bitmap artwork, builds the React frontend, compi
 src-tauri\target\release\bundle\nsis\
 ```
 
+On Windows, the native helper may shorten Cargo's target directory to avoid long path issues. In that case, the local test installer is written under:
+
+```text
+C:\gcn\release\bundle\nsis\
+```
+
 Use `npm.cmd run app:build` when you only need the normal Tauri bundle without regenerating installer artwork.
 
 ## Build An Auto-Update Release
@@ -51,7 +57,7 @@ plugins/
 
 `src/toolBridge/index.ts` is required for release builds. `plugins/` and `.agents/plugins/` are optional, but if they exist in the private overlay they are copied into the build workspace before the installer is compiled. These files remain absent from the public GitHub tree.
 
-The release workflow does not require GitHub OAuth, Google OAuth, support-link, provider-key, or other app-user credentials. GitHub and Google OAuth setup is entered by each user in Settings, provider keys stay in local app storage, and optional funding links are local build configuration only. Do not add app-user OAuth client secrets, tokens, downloaded Google credential JSON, provider keys, or private account data to release variables.
+The release workflow does not require GitHub OAuth, Google OAuth, support-link, provider-key, or other app-user credentials. GitHub and Google OAuth setup is entered by each user in Settings, provider keys stay in local app storage, and the public Cash App funding link is source-level public metadata. Other optional funding-link overrides remain local build configuration only. Do not add app-user OAuth client secrets, tokens, downloaded Google credential JSON, provider keys, or private account data to release variables.
 
 Offline dictation is prepared during release builds. The workflow downloads and verifies the Whisper `ggml-base.en.bin` model, prepares pinned LLVM/libclang and Vulkan SDK assets under `.tools`, and builds with the `offline-dictation-gpu` feature so the packaged Windows app can use bundled offline voice input without committing the large model or SDK to the public repository.
 

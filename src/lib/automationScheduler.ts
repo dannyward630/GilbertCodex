@@ -11,6 +11,7 @@ import type {
   AutomationTaskDraft,
   AutomationTrigger,
 } from "../types/automation";
+import type { ChatSource, ChatToolCall } from "../types/chat";
 import type { ToolAutomationScope } from "../toolBridge/types";
 
 export const DEFAULT_AUTOMATION_RUN_LIMITS: AutomationRunLimits = {
@@ -435,8 +436,17 @@ export function createAutomationRunPrompt(task: AutomationTask, options: { dryRu
     `- Max runtime seconds: ${task.runLimits.maxRuntimeSeconds}`,
     `- Max model loops: ${task.runLimits.maxModelLoops}`,
     "",
-    "Produce a concise final summary with action taken, evidence, blocked approvals, and next scheduled run when relevant.",
+    "Final answer:",
+    "Write only the user-facing result for the task goal. Do not restate this run prompt, limits, model, capabilities, tool policy, or hidden process. Do not include a Sources section because the app renders sources separately. Do not include empty sections such as blocked approvals when nothing was blocked. Include concise evidence only when it helps the user trust the result.",
   ].filter(Boolean).join("\n");
+}
+
+export function createAutomationUserMessageContent(task: AutomationTask, options: { dryRun?: boolean } = {}) {
+  const label = options.dryRun ? "Task simulation" : "Task call";
+  return [
+    `${label}: ${task.title}`,
+    task.prompt,
+  ].filter((part) => part.trim().length > 0).join("\n\n");
 }
 
 export function createAutomationToolSelectionPrompt(task: AutomationTask) {
@@ -497,6 +507,61 @@ export function formatAutomationNotificationSummary(task: AutomationTask, run: A
   return prefix.length > maxChars ? `${prefix.slice(0, maxChars - 3).trim()}...` : prefix;
 }
 
+export function filterAutomationWebSources(sources: ChatSource[] | undefined, toolCalls: ChatToolCall[] | undefined) {
+  const hasWebSearch = toolCalls?.some((toolCall) => toolCall.toolId === "web_search") === true;
+  return hasWebSearch && sources && sources.length > 0 ? sources : undefined;
+}
+
+export function formatAutomationInboxResult(content: string, fallback = "Task run finished.") {
+  const normalized = content.replace(/\r\n?/g, "\n").trim();
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  const lines = normalized.split("\n");
+  const cleaned: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trimEnd();
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      pushCleanLine(cleaned, "");
+      continue;
+    }
+
+    const leadingInboxResult = trimmed.match(/^tasks?\s+inbox\s+result\s*:\s*(.*)$/i);
+    if (leadingInboxResult) {
+      if (leadingInboxResult[1]?.trim()) {
+        pushCleanLine(cleaned, leadingInboxResult[1].trim());
+      }
+      continue;
+    }
+
+    if (/^sources?\s*:?\s*$/i.test(trimmed) && isPlainSourceList(lines.slice(index + 1))) {
+      break;
+    }
+
+    if (/^blocked approvals?\s*:?\s*$/i.test(trimmed) && isEmptySection(lines.slice(index + 1))) {
+      break;
+    }
+
+    if (/^blocked approvals?\s*:\s*(?:none|no(?:ne)?\.?|nothing|not applicable|n\/a)\s*\.?$/i.test(trimmed)) {
+      continue;
+    }
+
+    if (/^(?:action needed|evidence|details|summary|result)\s*:?\s*$/i.test(trimmed)) {
+      continue;
+    }
+
+    pushCleanLine(cleaned, line);
+  }
+
+  const result = cleaned.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return result || fallback;
+}
+
 export function createAutomationSimulationSummary(task: AutomationTask) {
   const capabilities = task.capabilityScope.capabilities
     .map((capabilityId) => CAPABILITY_MAP.get(capabilityId)?.label ?? capabilityId)
@@ -515,6 +580,47 @@ export function createAutomationSimulationSummary(task: AutomationTask) {
 
 export function getAutomationCapabilityDefinition(id: AutomationCapabilityId) {
   return CAPABILITY_MAP.get(id);
+}
+
+function pushCleanLine(lines: string[], line: string) {
+  if (!line.trim() && (lines.length === 0 || !lines[lines.length - 1]?.trim())) {
+    return;
+  }
+
+  lines.push(line);
+}
+
+function isEmptySection(lines: string[]) {
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      continue;
+    }
+
+    if (/^(?:sources?|action needed|evidence|details|summary|result)\s*:?\s*$/i.test(trimmed)) {
+      return true;
+    }
+
+    return /^(?:none|no(?:ne)?\.?|nothing|not applicable|n\/a)\s*\.?$/i.test(trimmed);
+  }
+
+  return true;
+}
+
+function isPlainSourceList(lines: string[]) {
+  const entries = lines.map((line) => line.trim()).filter(Boolean);
+
+  if (entries.length === 0) {
+    return true;
+  }
+
+  return entries.every((entry) =>
+    /^\d+$/.test(entry) ||
+    /^details$/i.test(entry) ||
+    /^https?:\/\/\S+$/i.test(entry) ||
+    /^(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/i.test(entry),
+  );
 }
 
 function normalizeAutomationTrigger(value: unknown): AutomationTrigger {

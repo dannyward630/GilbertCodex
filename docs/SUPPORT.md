@@ -4,7 +4,9 @@ Gilbert Codex can show voluntary project-funding options inside the app without 
 
 ## Current Setup
 
-Funding links are disabled by default unless a local build is configured with public hosted links. Stripe and Cash App stay hidden until real hosted links are configured. PayPal stays visible as `Coming soon` until the real PayPal link is added.
+Cash App is the public default funding option for GitHub visitors and downloaded builds: <https://cash.app/$kobeelijahh>. The repository also includes `.github/FUNDING.yml` so GitHub can render its sponsor button with the same Cash App link.
+
+Stripe links stay hidden unless a local build is configured with real public hosted links. PayPal stays visible as `Coming soon` until the real PayPal link is added.
 
 ## Optional Stripe Setup
 
@@ -29,12 +31,12 @@ Add only public hosted funding URLs to `.env` before building:
 VITE_SUPPORT_STRIPE_ONE_TIME_URL=https://buy.stripe.com/...
 VITE_SUPPORT_STRIPE_MONTHLY_URL=https://buy.stripe.com/...
 VITE_SUPPORT_PAYPAL_URL=
-VITE_SUPPORT_CASHAPP_URL=
+VITE_SUPPORT_CASHAPP_URL=https://cash.app/$kobeelijahh
 ```
 
-Empty Stripe and Cash App values are hidden until configured. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
+Empty Stripe values are hidden until configured. Empty Cash App uses the public project default above, and an explicit Cash App URL can override it for custom builds. Empty PayPal stays visible as `Coming soon`. Gilbert Codex should never invent placeholder payment links.
 
-The public GitHub release workflow does not require `VITE_SUPPORT_*` variables. If a maintainer makes a custom local build with support links, those values are baked into the packaged frontend and can be inspected by app users, so use only public hosted URLs; never use private account secrets, access tokens, webhook secrets, or raw API keys.
+The public GitHub release workflow does not require `VITE_SUPPORT_*` variables for Cash App to show. If a maintainer makes a custom local build with support-link overrides, those values are baked into the packaged frontend and can be inspected by app users, so use only public hosted URLs; never use private account secrets, access tokens, webhook secrets, or raw API keys.
 
 ## Safety Rules
 
@@ -49,5 +51,5 @@ The public GitHub release workflow does not require `VITE_SUPPORT_*` variables. 
 2. Put the public hosted links in `.env`.
 3. Run `npm.cmd run typecheck`.
 4. Run `npm.cmd run build`.
-5. Open the funding page and confirm configured hosted links open externally.
+5. Open the funding page and confirm Cash App opens externally.
 6. Confirm PayPal is the only visible `Coming soon` provider while it has no URL.

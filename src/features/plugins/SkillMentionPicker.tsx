@@ -12,13 +12,14 @@ interface SkillMentionPickerProps {
 
 export function SkillMentionPicker({ activeIndex, onActiveIndexChange, onSelect, query, trigger }: SkillMentionPickerProps) {
   const matches = getSkillMentionMatches(query);
+  const hasCallableSkills = getSkillMentionMatches("").length > 0;
 
   return (
     <div className="skill-mention-picker" role="listbox" aria-label="Skill suggestions">
       <div className="skill-mention-heading">
         <Sparkles size={15} aria-hidden="true" />
         <span>Skills</span>
-        {query ? <small>{trigger}{query}</small> : <small>$ skill trigger</small>}
+        {!hasCallableSkills ? <small>Coming soon</small> : query ? <small>{trigger}{query}</small> : <small>$ skill trigger</small>}
       </div>
       <div className="skill-mention-list">
         {matches.length > 0 ? (
@@ -53,7 +54,14 @@ export function SkillMentionPicker({ activeIndex, onActiveIndexChange, onSelect,
         ) : (
           <div className="skill-mention-empty">
             <Puzzle size={16} aria-hidden="true" />
-            <span>No matching skills</span>
+            {hasCallableSkills ? (
+              <span>No matching skills</span>
+            ) : (
+              <span>
+                <strong>Skills coming soon</strong>
+                <small>No installed skills yet</small>
+              </span>
+            )}
           </div>
         )}
       </div>

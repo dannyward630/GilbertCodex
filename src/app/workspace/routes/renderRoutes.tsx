@@ -26,7 +26,7 @@ const EMPTY_CHAT_MESSAGES: ChatMessage[] = [];
 const EMPTY_STRING_ARRAY: string[] = [];
 
 export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
-  const { activeRoute, activeSettingsSection, appearanceMode, appearanceSettings, appInfo, AppsPage, automationDraft, automationState, discordBridgeSettings, generalSettings, handleAcknowledgeAutomationRun, handleCreateAutomationTask, handleDeleteAutomationTask, handleDuplicateAutomationTask, handleLocalWorkspaceChange, handleOpenAutomationRunChat, handlePauseAllAutomationTasks, handlePauseAutomationTask, handleRouteChange, handleRunAutomationTask, handleSimulateAutomationTask, handleSnoozeAutomationRun, handleSubscriptionSandboxUninstalled, handleUpdateAutomationTask, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setAppearanceSettings, setAutomationDraft, setDiscordBridgeSettings, setGeneralSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, TasksPage, WeatherRadarPage } = deps;
+  const { activeRoute, activeSettingsSection, appearanceMode, appearanceSettings, appInfo, AppsPage, automationDraft, automationState, discordBridgeSettings, generalSettings, handleAcknowledgeAutomationRun, handleCreateAutomationTask, handleDeleteAutomationTask, handleDuplicateAutomationTask, handleLocalWorkspaceChange, handleOpenAutomationRunChat, handlePauseAllAutomationTasks, handlePauseAutomationTask, handleProviderConnectionChoice, handleRouteChange, handleRunAutomationTask, handleSimulateAutomationTask, handleSnoozeAutomationRun, handleSubscriptionSandboxUninstalled, handleUpdateAutomationTask, localWorkspace, locationServicesEnabled, personalizationSettings, projects, providerSettings, setActiveRoute, setActiveSettingsSection, setAppearanceMode, setAppearanceSettings, setAutomationDraft, setDiscordBridgeSettings, setGeneralSettings, setPersonalizationSettings, setProviderSettings, SettingsPage, SupportPage, TasksPage, WeatherRadarPage } = deps;
 
     if (activeRoute === "apps") {
       return (
@@ -117,6 +117,7 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
           onGeneralSettingsChange={setGeneralSettings}
           onLocalWorkspaceChange={handleLocalWorkspaceChange}
           onPersonalizationChange={setPersonalizationSettings}
+          onActivateProvider={handleProviderConnectionChoice}
           onSettingsChange={setProviderSettings}
           onSubscriptionSandboxUninstalled={handleSubscriptionSandboxUninstalled}
         />

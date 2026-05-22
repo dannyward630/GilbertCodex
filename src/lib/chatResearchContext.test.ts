@@ -93,4 +93,37 @@ describe("createChatResearchContextContent", () => {
     expect(context).toContain("tool output body");
     expect(context).toContain("example research");
   });
+
+  it("omits embedded artifact data URLs from research text context", () => {
+    const leakedMarker = "TOKENLEAK".repeat(1000);
+    const chat: ChatSummary = {
+      id: "chat-research",
+      messages: [
+        {
+          artifacts: [
+            {
+              kind: "image",
+              mimeType: "image/png",
+              sizeBytes: 24_000,
+              title: "Browser screenshot",
+              url: `data:image/png;base64,${leakedMarker}`,
+            },
+          ],
+          content: "visual evidence",
+          createdAt: "2026-05-15T12:00:00.000Z",
+          id: "message-assistant",
+          role: "assistant",
+        },
+      ],
+      project: DEFAULT_PROJECT,
+      title: "Screenshot Chat",
+      updatedAt: "2026-05-15T12:02:00.000Z",
+    };
+
+    const context = createChatResearchContextContent([chat]);
+
+    expect(context).toContain("Browser screenshot (image)");
+    expect(context).toContain("binary data omitted from research text context");
+    expect(context).not.toContain(leakedMarker);
+  });
 });

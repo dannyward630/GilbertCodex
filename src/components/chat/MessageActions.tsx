@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Pencil, RotateCcw, SquareArrowUpRight, ThumbsDown, ThumbsUp } from "lucide-react";
 import { copyTextToClipboard } from "../../lib/clipboard";
+import { formatDeviceMessageDateTime, formatDeviceMessageTime } from "../../lib/localDateTime";
 import { normalizeMarkdownForDisplay } from "../../lib/markdown";
 import { stripVisibleToolProtocol } from "../../lib/visibleToolProtocol";
 import type { ChatMessage } from "../../types/chat";
@@ -13,35 +14,9 @@ interface MessageActionsProps {
   onRegenerateResponse?: (messageId: string) => void | Promise<void>;
 }
 
-function formatMessageTime(createdAt: string) {
-  const timestamp = Date.parse(createdAt);
-
-  if (Number.isNaN(timestamp)) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
-}
-
-function formatMessageDateTime(createdAt: string) {
-  const timestamp = Date.parse(createdAt);
-
-  if (Number.isNaN(timestamp)) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
-}
-
 function formatStreamTimingTitle(message: ChatMessage) {
   const timing = message.streamTiming;
-  const timestamp = formatMessageDateTime(message.createdAt);
+  const timestamp = formatDeviceMessageDateTime(message.createdAt);
 
   if (!timing || message.role !== "assistant") {
     return timestamp;
@@ -75,7 +50,7 @@ function formatDurationMs(value: number) {
 export function MessageActions({ message, onEditMessage, onForkFromMessage, onMessageFeedback, onRegenerateResponse }: MessageActionsProps) {
   const copiedTimerRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
-  const timeLabel = useMemo(() => formatMessageTime(message.createdAt), [message.createdAt]);
+  const timeLabel = useMemo(() => formatDeviceMessageTime(message.createdAt), [message.createdAt]);
   const fullTimeLabel = useMemo(() => formatStreamTimingTitle(message), [message]);
   const copyContent = useMemo(
     () => message.role === "assistant"

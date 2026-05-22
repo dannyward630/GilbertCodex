@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { defaultProviderSettings } from "../../lib/appStorage";
-import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, OPENROUTER_FREE_AUTO_MODEL } from "../../lib/models";
+import { NINE_ROUTER_ALWAYS_FREE_MODEL, NINE_ROUTER_CODEX_MODEL_IDS, NINE_ROUTER_GITHUB_COPILOT_MODEL_IDS, OPENROUTER_FREE_AUTO_MODEL, getModelRouteSourceInfo } from "../../lib/models";
 import type { ProviderSettings } from "../../types/settings";
-import { buildSelectorEntries, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
+import { buildSelectorEntries, createModelSelectorGroups, type LiveModelCatalogStatus } from "./ModelSelectorPopover";
 
 function createProviderSettings(overrides: Partial<ProviderSettings> = {}): ProviderSettings {
   return {
@@ -109,5 +109,44 @@ describe("model selector subscription models", () => {
 
     expect(buildSelectorEntries(withoutKey, withoutKey.model, {}, {}, {}).some((entry) => entry.provider.id === "openrouter")).toBe(false);
     expect(buildSelectorEntries(withKey, withKey.model, {}, {}, {}).map((entry) => entry.option.value)).toContain(OPENROUTER_FREE_AUTO_MODEL);
+  });
+
+  it("labels direct API, OpenRouter, and subscription routes without mixing them together", () => {
+    expect(getModelRouteSourceInfo("openai", "gpt-5.5").sourceLabel).toBe("OpenAI API");
+    expect(getModelRouteSourceInfo("openrouter", "~openai/gpt-latest").sourceLabel).toBe("OpenRouter: OpenAI");
+    expect(getModelRouteSourceInfo("9router", "cx/gpt-5.5").sourceLabel).toBe("Codex subscription");
+    expect(getModelRouteSourceInfo("9router", "gh/gpt-5-mini").sourceLabel).toBe("GitHub Copilot subscription");
+  });
+
+  it("splits subscription selector groups by the connected account route family", () => {
+    const settings = createProviderSettings({
+      model: "cx/gpt-5.5",
+      provider: "9router",
+    });
+    const entries = buildSelectorEntries(
+      settings,
+      settings.model,
+      {
+        "9router": [
+          { id: "claude/sonnet-4.5" },
+          { id: "gemini-cli/gemini-2.5-pro" },
+        ],
+      },
+      { "9router": "ready" },
+      {},
+    );
+    const subscriptionGroupLabels = createModelSelectorGroups(entries)
+      .filter((group) => group.id.startsWith("9router-"))
+      .map((group) => group.label);
+
+    expect(subscriptionGroupLabels).toEqual(
+      expect.arrayContaining([
+        "Free Auto",
+        "Codex subscription",
+        "GitHub Copilot subscription",
+        "Claude Code subscription",
+        "Gemini subscription",
+      ]),
+    );
   });
 });

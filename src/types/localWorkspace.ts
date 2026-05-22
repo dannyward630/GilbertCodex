@@ -254,3 +254,11 @@ export interface ComputerMovePathResult {
   moved: boolean;
   toPath: string;
 }
+
+export interface ComputerCopyPathResult {
+  bytesCopied: number;
+  copied: boolean;
+  fromPath: string;
+  kind: ComputerFileKind;
+  toPath: string;
+}

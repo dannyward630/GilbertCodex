@@ -9,15 +9,54 @@ import {
   nativeDictationVoiceState,
   normalizeDictationWaveLevel,
   pushDictationWaveLevel,
+  shouldShowComposerWorkspaceControl,
   shouldLoadLiveModelCatalogProvider,
   shouldShowMediaFallbackNotice,
   voiceUnsupportedStatusMessage,
 } from "./ChatComposer";
 import type { ChatAttachment } from "../../types/chat";
+import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
+
+const workspaceOff: LocalWorkspaceSettings = {
+  enabled: false,
+  permissionMode: "default",
+  roots: [],
+  scope: "selected-folder",
+};
 
 describe("chat composer live model catalogs", () => {
   it("loads subscription models even when another provider is active", () => {
     expect(shouldLoadLiveModelCatalogProvider("9router", "openrouter")).toBe(true);
+  });
+});
+
+describe("chat composer workspace control", () => {
+  it("hides the project control for plain no-project chats with local access off", () => {
+    expect(shouldShowComposerWorkspaceControl("No project", workspaceOff)).toBe(false);
+  });
+
+  it("keeps real project chats visible", () => {
+    expect(shouldShowComposerWorkspaceControl("GilbertCodex", workspaceOff)).toBe(true);
+  });
+
+  it("hides full-computer access in regular chats", () => {
+    expect(
+      shouldShowComposerWorkspaceControl("No project", {
+        enabled: true,
+        roots: [],
+        scope: "full-computer",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not show stale selected-folder roots after returning to a no-project chat", () => {
+    expect(
+      shouldShowComposerWorkspaceControl("No project", {
+        enabled: true,
+        roots: [String.raw`C:\Users\Kobe Work\Documents\GilbertCodex`],
+        scope: "selected-folder",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -1,31 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CASH_APP_URL, normalizeSupportConfig, normalizeSupportUrl } from "./supportConfig";
+import { DEFAULT_CASH_APP_URL, SUPPORT_CASH_TAG, normalizeSupportConfig, normalizeSupportUrl } from "./supportConfig";
 
 describe("support config", () => {
-  it("hides unconfigured funding links except PayPal", () => {
+  it("shows the public Cash App funding link by default", () => {
     const config = normalizeSupportConfig({});
 
-    expect(config.configuredCount).toBe(0);
+    expect(config.configuredCount).toBe(1);
     expect(config.links).toHaveLength(4);
     expect(config.primaryLinks).toHaveLength(1);
     expect(config.primaryLinks[0]).toMatchObject({
-      enabled: false,
+      enabled: true,
       id: "cashApp",
-      providerLabel: "Cash App",
+      providerLabel: SUPPORT_CASH_TAG,
       url: DEFAULT_CASH_APP_URL,
     });
-    expect(config.visiblePrimaryLinks.map((link) => link.id)).toEqual([]);
+    expect(config.visiblePrimaryLinks.map((link) => link.id)).toEqual(["cashApp"]);
     expect(config.visibleSecondaryLinks.map((link) => link.id)).toEqual(["paypal"]);
   });
 
-  it("keeps Cash App disabled when the env value is blank", () => {
+  it("keeps Cash App visible when the env value is blank", () => {
     const config = normalizeSupportConfig({
       VITE_SUPPORT_CASHAPP_URL: "  ",
     });
 
     expect(config.primaryLinks[0]).toMatchObject({
-      enabled: false,
+      enabled: true,
       id: "cashApp",
+      providerLabel: SUPPORT_CASH_TAG,
       url: DEFAULT_CASH_APP_URL,
     });
   });
@@ -40,6 +41,7 @@ describe("support config", () => {
 
     expect(config.configuredCount).toBe(4);
     expect(config.primaryLinks.map((link) => link.enabled)).toEqual([true]);
+    expect(config.primaryLinks[0].providerLabel).toBe("Cash App");
     expect(config.secondaryLinks.map((link) => link.enabled)).toEqual([true, true, true]);
     expect(config.visibleSecondaryLinks.map((link) => link.id)).toEqual(["stripeOneTime", "stripeMonthly", "paypal"]);
     expect(config.links.map((link) => link.url)).toContain("https://buy.stripe.com/once_123");

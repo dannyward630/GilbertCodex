@@ -38,6 +38,7 @@ const MAX_TEXT_SEARCH_MAX_MATCHES: usize = 500;
 const DEFAULT_TEXT_SEARCH_MAX_MATCHES_PER_FILE: usize = 20;
 const MAX_TEXT_SEARCH_MAX_MATCHES_PER_FILE: usize = 100;
 const MAX_TEXT_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_BATCH_WRITE_WORKERS: usize = 8;
 const DEFAULT_TEXT_SEARCH_EXTENSIONS: &[&str] = &[
     "astro", "bat", "c", "cmd", "cpp", "cs", "css", "csv", "dart", "go", "graphql", "h", "html",
     "java", "js", "json", "jsx", "kt", "kts", "lua", "md", "mdx", "php", "ps1", "py", "rb", "rs",
@@ -503,6 +504,16 @@ pub struct ComputerMovePathRequest {
     pub to_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerCopyPathRequest {
+    pub create_parent_dirs: Option<bool>,
+    pub from_path: String,
+    pub overwrite: Option<bool>,
+    pub roots: Vec<String>,
+    pub to_path: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerReadFileResult {
@@ -629,6 +640,16 @@ pub struct ComputerMovePathResult {
     pub from_path: String,
     pub kind: ComputerFileKind,
     pub moved: bool,
+    pub to_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerCopyPathResult {
+    pub bytes_copied: u64,
+    pub copied: bool,
+    pub from_path: String,
+    pub kind: ComputerFileKind,
     pub to_path: String,
 }
 
@@ -2418,37 +2439,119 @@ fn computer_write_text_files_blocking(
     request: ComputerWriteFilesRequest,
 ) -> Result<ComputerWriteFilesResult, String> {
     let roots = request.roots;
-    let mut files = Vec::with_capacity(request.files.len());
+    let item_count = request.files.len();
 
-    for item in request.files {
-        let requested_path = item.path.clone();
-        let result = computer_write_text_file(ComputerWriteFileRequest {
-            content: item.content,
-            create_parent_dirs: item.create_parent_dirs,
-            expected_sha256: item.expected_sha256,
-            force_eol: item.force_eol,
-            overwrite: item.overwrite,
-            path: item.path,
-            roots: roots.clone(),
-        });
+    if item_count <= 1 {
+        let files = request
+            .files
+            .into_iter()
+            .map(|item| write_text_files_item(item, &roots))
+            .collect();
+        return Ok(ComputerWriteFilesResult { files });
+    }
 
-        match result {
-            Ok(result) => files.push(ComputerWriteFilesItemResult {
-                error: None,
-                ok: true,
-                requested_path,
-                result: Some(result),
-            }),
-            Err(error) => files.push(ComputerWriteFilesItemResult {
-                error: Some(error),
-                ok: false,
-                requested_path,
-                result: None,
-            }),
+    let requested_paths = request
+        .files
+        .iter()
+        .map(|item| item.path.clone())
+        .collect::<Vec<_>>();
+    let worker_count = MAX_BATCH_WRITE_WORKERS.min(item_count).max(1);
+    let queue = Arc::new(Mutex::new(
+        request
+            .files
+            .into_iter()
+            .enumerate()
+            .collect::<VecDeque<_>>(),
+    ));
+    let roots = Arc::new(roots);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut handles = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let queue = Arc::clone(&queue);
+        let roots = Arc::clone(&roots);
+        let sender = sender.clone();
+
+        handles.push(thread::spawn(move || loop {
+            let next_item = {
+                let mut queue = queue.lock().expect("batch write queue poisoned");
+                queue.pop_front()
+            };
+
+            let Some((index, item)) = next_item else {
+                break;
+            };
+
+            let result = write_text_files_item(item, &roots);
+            if sender.send((index, result)).is_err() {
+                break;
+            }
+        }));
+    }
+
+    drop(sender);
+
+    let mut ordered_files: Vec<Option<ComputerWriteFilesItemResult>> =
+        (0..item_count).map(|_| None).collect();
+    for (index, result) in receiver {
+        if let Some(slot) = ordered_files.get_mut(index) {
+            *slot = Some(result);
         }
     }
 
+    for handle in handles {
+        if handle.join().is_err() {
+            return Err("The batch file write worker stopped unexpectedly.".to_string());
+        }
+    }
+
+    let files = ordered_files
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            result.unwrap_or_else(|| ComputerWriteFilesItemResult {
+                error: Some(
+                    "The batch file write worker stopped before reporting this file.".to_string(),
+                ),
+                ok: false,
+                requested_path: requested_paths.get(index).cloned().unwrap_or_default(),
+                result: None,
+            })
+        })
+        .collect();
+
     Ok(ComputerWriteFilesResult { files })
+}
+
+fn write_text_files_item(
+    item: ComputerWriteFilesItemRequest,
+    roots: &[String],
+) -> ComputerWriteFilesItemResult {
+    let requested_path = item.path.clone();
+    let result = computer_write_text_file(ComputerWriteFileRequest {
+        content: item.content,
+        create_parent_dirs: item.create_parent_dirs,
+        expected_sha256: item.expected_sha256,
+        force_eol: item.force_eol,
+        overwrite: item.overwrite,
+        path: item.path,
+        roots: roots.to_vec(),
+    });
+
+    match result {
+        Ok(result) => ComputerWriteFilesItemResult {
+            error: None,
+            ok: true,
+            requested_path,
+            result: Some(result),
+        },
+        Err(error) => ComputerWriteFilesItemResult {
+            error: Some(error),
+            ok: false,
+            requested_path,
+            result: None,
+        },
+    }
 }
 
 /// Creates a directory after checking it stays inside enabled roots.
@@ -2624,6 +2727,152 @@ pub fn computer_move_path(
         moved: true,
         to_path: path_to_string(&to_path),
     })
+}
+
+/// Copies a file or folder after checking both paths stay inside enabled roots.
+#[tauri::command]
+pub fn computer_copy_path(
+    request: ComputerCopyPathRequest,
+) -> Result<ComputerCopyPathResult, String> {
+    let roots = normalize_roots(request.roots);
+
+    if roots.is_empty() {
+        return Err("Choose a folder workspace before copying paths.".to_string());
+    }
+
+    let from_path = normalize_workspace_path(&request.from_path, &roots)?;
+    let to_path = normalize_workspace_path(&request.to_path, &roots)?;
+
+    if !path_is_inside_roots(&from_path, &roots) || !path_is_inside_roots(&to_path, &roots) {
+        return Err(
+            "Copies are only allowed inside the selected, current, or full-computer workspace roots."
+                .to_string(),
+        );
+    }
+
+    if from_path == to_path {
+        return Err("The source and destination paths are the same.".to_string());
+    }
+
+    let metadata = fs::symlink_metadata(&from_path).map_err(|error| {
+        format!(
+            "Could not inspect {}: {}",
+            path_to_string(&from_path),
+            error
+        )
+    })?;
+    let kind = file_kind_from_metadata(&metadata);
+    let overwrite = request.overwrite.unwrap_or(false);
+
+    if metadata.is_dir() {
+        let source_compare = fs::canonicalize(&from_path).unwrap_or_else(|_| from_path.clone());
+        let destination_compare = existing_path_for_compare(&to_path);
+        if destination_compare.starts_with(source_compare) {
+            return Err("Refusing to copy a folder into itself.".to_string());
+        }
+    }
+
+    if to_path.exists() {
+        if !overwrite {
+            return Err(format!(
+                "The destination already exists: {}",
+                path_to_string(&to_path)
+            ));
+        }
+
+        let destination_metadata = fs::symlink_metadata(&to_path).map_err(|error| {
+            format!(
+                "Could not inspect destination {}: {}",
+                path_to_string(&to_path),
+                error
+            )
+        })?;
+
+        if destination_metadata.is_dir() {
+            fs::remove_dir_all(&to_path).map_err(|error| {
+                format!(
+                    "Could not remove existing destination {}: {}",
+                    path_to_string(&to_path),
+                    error
+                )
+            })?;
+        } else {
+            fs::remove_file(&to_path).map_err(|error| {
+                format!(
+                    "Could not remove existing destination {}: {}",
+                    path_to_string(&to_path),
+                    error
+                )
+            })?;
+        }
+    }
+
+    if let Some(parent) = to_path.parent() {
+        if !parent.exists() {
+            if request.create_parent_dirs.unwrap_or(true) {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!("Could not create {}: {}", path_to_string(parent), error)
+                })?;
+            } else {
+                return Err(format!(
+                    "Destination parent folder does not exist: {}",
+                    path_to_string(parent)
+                ));
+            }
+        }
+    }
+
+    let bytes_copied = copy_path_recursive(&from_path, &to_path)?;
+
+    Ok(ComputerCopyPathResult {
+        bytes_copied,
+        copied: true,
+        from_path: path_to_string(&from_path),
+        kind,
+        to_path: path_to_string(&to_path),
+    })
+}
+
+fn copy_path_recursive(from_path: &Path, to_path: &Path) -> Result<u64, String> {
+    let metadata = fs::symlink_metadata(from_path)
+        .map_err(|error| format!("Could not inspect {}: {}", path_to_string(from_path), error))?;
+
+    if metadata.file_type().is_symlink() {
+        return Err("Copying symlinks is not supported by this tool.".to_string());
+    }
+
+    if metadata.is_file() {
+        return fs::copy(from_path, to_path).map_err(|error| {
+            format!(
+                "Could not copy {} to {}: {}",
+                path_to_string(from_path),
+                path_to_string(to_path),
+                error
+            )
+        });
+    }
+
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Unsupported path type for copy: {}",
+            path_to_string(from_path)
+        ));
+    }
+
+    fs::create_dir_all(to_path)
+        .map_err(|error| format!("Could not create {}: {}", path_to_string(to_path), error))?;
+
+    let mut bytes_copied = 0_u64;
+    for entry in fs::read_dir(from_path)
+        .map_err(|error| format!("Could not read {}: {}", path_to_string(from_path), error))?
+    {
+        let entry = entry.map_err(|error| format!("Could not read directory entry: {}", error))?;
+        let child_from = entry.path();
+        let child_to = to_path.join(entry.file_name());
+        bytes_copied += copy_path_recursive(&child_from, &child_to)?;
+    }
+
+    Ok(bytes_copied)
 }
 
 impl ComputerFileIndex {

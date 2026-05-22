@@ -5,6 +5,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 const APP_USER_AGENT: &str = "GilbertCodex/0.1";
+const BROWSER_SCREENSHOT_CAPTURE_TIMEOUT_SECS: u64 = 18;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -387,7 +388,7 @@ fn capture_webview_with_devtools(
         })
         .map_err(|error| format!("Could not access browser webview: {error}"))?;
 
-    rx.recv_timeout(Duration::from_secs(12))
+    rx.recv_timeout(Duration::from_secs(BROWSER_SCREENSHOT_CAPTURE_TIMEOUT_SECS))
         .map_err(|_| "Timed out while capturing browser screenshot.".to_string())?
 }
 
@@ -428,7 +429,7 @@ fn capture_windows_platform_webview(
     )
     .map_err(|error| format!("Could not capture browser screenshot: {error}"))?;
 
-    rx.recv_timeout(Duration::from_secs(12))
+    rx.recv_timeout(Duration::from_secs(BROWSER_SCREENSHOT_CAPTURE_TIMEOUT_SECS))
         .map_err(|_| "Timed out while reading browser screenshot.".to_string())?
 }
 

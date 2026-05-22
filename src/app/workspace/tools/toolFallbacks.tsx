@@ -141,6 +141,7 @@ export function createRecoverableBridgeToolRetryInstruction(deps: WorkspaceRunti
       return extractSuggestedFileReadCandidates(rawOutput).length > 0 ||
         extractNearbyPathCandidates(rawOutput).length > 0 ||
         isRecoverableBridgeArgumentError(rawOutput) ||
+        /\bchanged since it was last read\b/i.test(rawOutput) ||
         isMissingFileReadToolCall(toolCall, rawOutput);
     });
 
@@ -156,12 +157,28 @@ export function createRecoverableBridgeToolRetryInstruction(deps: WorkspaceRunti
     const missingReadPath = extractMissingReadPath(rawOutput) || extractToolInputPath(latestRecoverableToolCall.input);
     const missingReadQuery = extractSuggestedFileSearchQuery(rawOutput) ||
       (missingReadPath ? createMissingReadSearchQuery(missingReadPath) : "");
+    const staleEditPath = /\bchanged since it was last read\b/i.test(rawOutput)
+      ? extractToolInputPath(latestRecoverableToolCall.input)
+      : "";
+
+    const missingPathRead =
+      /\barguments\.paths?\s+is\s+required\b/i.test(rawOutput) &&
+      (latestRecoverableToolCall.toolId === "files_read" ||
+        latestRecoverableToolCall.toolId === "files_read_many" ||
+        latestRecoverableToolCall.toolId === "files_read_range" ||
+        /read.*(?:workspace\s+)?files?/i.test(latestRecoverableToolCall.label));
 
     return [
       "RECOVERABLE TOOL ERROR",
       `Original user request: ${originalPrompt}`,
       `The previous ${latestRecoverableToolCall.label} call failed in a way that can be corrected.`,
-      suggestedPaths.length > 0
+      staleEditPath
+        ? [
+            "The target file changed after the prior read, so the old expectedSha256 is stale.",
+            `Re-read the current target now with files_read_range or files_read for ${staleEditPath}.`,
+            "Then retry the same edit against the latest content. For append or exact_replace, omit expectedSha256 on retry; for line or column edits, use fresh coordinates from the new read.",
+          ].join("\n")
+        : suggestedPaths.length > 0
         ? [
             "Retry the same intent now by calling files_read or files_read_range with the closest matching suggested path.",
             `Suggested paths: ${suggestedPaths.join("; ")}`,
@@ -171,6 +188,12 @@ export function createRecoverableBridgeToolRetryInstruction(deps: WorkspaceRunti
               "The requested file path was not found. Search the workspace by file name before giving up.",
               `Call files_search now with query "${missingReadQuery}", includePath true, includeContent false, and maxMatches 20.`,
               "If that search finds a likely file, read it next. If it finds no matches, answer that the file is not present.",
+            ].join("\n")
+          : missingPathRead
+          ? [
+              "The read call had no file path.",
+              "Call files_tree_summary or files_list with path \".\" if you need to discover the project structure.",
+              "If you need a specific file, call files_search with a focused filename, symbol, or phrase from the user request, then read the matched path.",
             ].join("\n")
           : "Retry the same intent now with valid JSON argument types and only schema-supported keys.",
       "Do not write a final answer until the corrected tool call has either succeeded or there is no safe correction.",
@@ -222,8 +245,9 @@ export function isMissingFileReadToolCall(deps: WorkspaceRuntimeDeps, toolCall: 
   const { isMissingFileReadError } = deps;
 
     const isReadTool = toolCall.toolId === "files_read" ||
+      toolCall.toolId === "files_read_many" ||
       toolCall.toolId === "files_read_range" ||
-      /read.*(?:workspace\s+)?file/i.test(toolCall.label);
+      /read.*(?:workspace\s+)?files?/i.test(toolCall.label);
 
     return isReadTool && isMissingFileReadError(output);
   }
@@ -254,8 +278,35 @@ export function extractToolInputPath(deps: WorkspaceRuntimeDeps, input: string |
     try {
       const parsed = JSON.parse(input) as unknown;
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const path = (parsed as Record<string, unknown>).path;
-        return typeof path === "string" ? path : "";
+        const record = parsed as Record<string, unknown>;
+        const path = record.path;
+        if (typeof path === "string") {
+          return path;
+        }
+
+        const paths = record.paths;
+        if (Array.isArray(paths)) {
+          const firstPath = paths.find((item): item is string => typeof item === "string" && item.trim().length > 0);
+          if (firstPath) {
+            return firstPath;
+          }
+        }
+
+        const edits = record.edits;
+        if (Array.isArray(edits)) {
+          const editPath = edits.find((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).path === "string");
+          if (editPath && typeof (editPath as Record<string, unknown>).path === "string") {
+            return String((editPath as Record<string, unknown>).path);
+          }
+        }
+
+        const files = record.files;
+        if (Array.isArray(files)) {
+          const filePath = files.find((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).path === "string");
+          if (filePath && typeof (filePath as Record<string, unknown>).path === "string") {
+            return String((filePath as Record<string, unknown>).path);
+          }
+        }
       }
     } catch {
       return "";

@@ -153,6 +153,7 @@ const MAX_RUN_TIMEOUT_MS: u64 = 600_000;
 const MAX_RUN_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const COMMAND_KILL_WAIT_MS: u64 = 1_500;
 const COMMAND_READER_DRAIN_WAIT_MS: u64 = 750;
+const INTERACTIVE_TERMINAL_START_TIMEOUT_MS: u64 = 12_000;
 const SESSION_KILL_WAIT_MS: u64 = 750;
 
 #[derive(Default)]
@@ -337,8 +338,11 @@ pub fn terminal_create_session(
     let mut active_stdin = None;
 
     if mode == TerminalSessionMode::Interactive {
-        let (child, pty, stdin) =
-            spawn_interactive_terminal(&shell, &working_directory, Arc::clone(&output))?;
+        let (child, pty, stdin) = spawn_interactive_terminal_with_timeout(
+            &shell,
+            &working_directory,
+            Arc::clone(&output),
+        )?;
         active_child = Some(child);
         active_pty = Some(pty);
         active_stdin = Some(stdin);
@@ -921,6 +925,33 @@ fn spawn_interactive_terminal(
     read_terminal_stream(reader, TerminalOutputStream::Stdout, output, false);
 
     Ok((child, pair.master, writer))
+}
+
+fn spawn_interactive_terminal_with_timeout(
+    shell: &TerminalShell,
+    working_directory: &Path,
+    output: Arc<Mutex<VecDeque<TerminalOutputChunk>>>,
+) -> Result<InteractiveTerminalParts, String> {
+    let shell_for_thread = shell.clone();
+    let shell_label_for_error = shell_label(shell);
+    let working_directory_for_thread = working_directory.to_path_buf();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result =
+            spawn_interactive_terminal(&shell_for_thread, &working_directory_for_thread, output);
+        let _ = sender.send(result);
+    });
+
+    receiver
+        .recv_timeout(Duration::from_millis(INTERACTIVE_TERMINAL_START_TIMEOUT_MS))
+        .map_err(|_| {
+            format!(
+                "{} terminal did not start within {} seconds.",
+                shell_label_for_error,
+                INTERACTIVE_TERMINAL_START_TIMEOUT_MS / 1000
+            )
+        })?
 }
 
 fn create_interactive_shell_command(

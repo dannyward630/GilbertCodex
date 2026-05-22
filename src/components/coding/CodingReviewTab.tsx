@@ -1,8 +1,9 @@
-import { GitBranch, LoaderCircle, RefreshCw, ShieldAlert, TestTube2, Wand2 } from "lucide-react";
+import { Activity, GitBranch, LoaderCircle, RefreshCw, ShieldAlert, TestTube2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatGitChangedFileStatus, formatGitChangedFiles, getGitStatusIssue } from "../../lib/gitStatusUi";
 import { getComputerGitStatus } from "../../localWorkspace/files";
 import type { AgentRun } from "../../types/agentRun";
+import type { ChatToolCall } from "../../types/chat";
 import type { RiskReviewFileSummary, RiskReviewSummary, VerificationPlan } from "../../types/coding";
 import type { ComputerGitStatus } from "../../types/localWorkspace";
 import { createRiskReviewSummary, inferFilePurpose, inferRiskTags } from "../../coding/riskReview";
@@ -20,6 +21,7 @@ export function CodingReviewTab({ activeRun, root, onSubmitPrompt }: CodingRevie
   const [loading, setLoading] = useState(false);
   const review = useMemo(() => createReview(activeRun, status), [activeRun, status]);
   const verification = useMemo(() => createVerification(activeRun, review), [activeRun, review]);
+  const toolActivity = useMemo(() => createToolActivity(activeRun), [activeRun]);
   const issue = !status?.available ? getGitStatusIssue(status, root) : null;
 
   useEffect(() => {
@@ -98,6 +100,38 @@ export function CodingReviewTab({ activeRun, root, onSubmitPrompt }: CodingRevie
           <span>Ask Gilbert to verify</span>
         </button>
       </div>
+
+      {toolActivity.totalCalls > 0 || toolActivity.coverage ? (
+        <section className="coding-review-section" data-section="tool-activity">
+          <div className="coding-section-heading">
+            <span>
+              <strong>Tool activity</strong>
+              <small>{toolActivity.totalCalls > 0 ? `${formatCount(toolActivity.totalCalls)} calls captured` : "Provider selection captured"}</small>
+            </span>
+            <Activity size={16} aria-hidden="true" />
+          </div>
+          <div className="coding-tool-activity-grid">
+            {toolActivity.buckets.map((bucket) => (
+              <article className="coding-tool-activity-row" key={bucket.id}>
+                <span>{bucket.label}</span>
+                <strong>{formatCount(bucket.count)}</strong>
+              </article>
+            ))}
+            {toolActivity.coverage ? (
+              <article className="coding-tool-activity-row" data-wide="true">
+                <span>Tool coverage</span>
+                <strong>{toolActivity.coverage}</strong>
+              </article>
+            ) : null}
+            {toolActivity.missing ? (
+              <article className="coding-tool-activity-row" data-wide="true">
+                <span>Missing or hidden</span>
+                <strong>{toolActivity.missing}</strong>
+              </article>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       <section className="coding-review-section" data-section="changed-files">
         <div className="coding-section-heading">
@@ -192,6 +226,87 @@ function createReview(activeRun: AgentRun | undefined, status: ComputerGitStatus
 
 function createVerification(activeRun: AgentRun | undefined, review: RiskReviewSummary): VerificationPlan {
   return isUsableVerification(activeRun?.coding?.verification) ? activeRun.coding.verification : createVerificationPlan({ review, toolCalls: activeRun?.toolCalls ?? [] });
+}
+
+function createToolActivity(activeRun: AgentRun | undefined) {
+  const toolCalls = activeRun?.toolCalls ?? [];
+  const latestHealth = activeRun?.coding?.toolHealth?.slice(-1)[0];
+  const counts = toolCalls.reduce((current, toolCall) => {
+    current.total += 1;
+    current[classifyToolCall(toolCall)] += 1;
+    return current;
+  }, {
+    browser: 0,
+    edit: 0,
+    git: 0,
+    other: 0,
+    read: 0,
+    search: 0,
+    terminal: 0,
+    total: 0,
+    web: 0,
+  });
+  const buckets = [
+    { count: counts.search, id: "search", label: "Search" },
+    { count: counts.read, id: "read", label: "Read" },
+    { count: counts.edit, id: "edit", label: "Edit" },
+    { count: counts.terminal, id: "terminal", label: "Terminal" },
+    { count: counts.browser, id: "browser", label: "Browser" },
+    { count: counts.web, id: "web", label: "Web" },
+    { count: counts.git, id: "git", label: "Git" },
+    { count: counts.other, id: "other", label: "Other" },
+  ].filter((bucket) => bucket.count > 0);
+  const coverage = latestHealth
+    ? [
+        `${formatCount(latestHealth.selectedTools.length)} selected`,
+        `${formatCount(latestHealth.availableToolCount)} available`,
+        `${formatCount(latestHealth.registryToolCount)} registered`,
+      ].join(" / ")
+    : "";
+  const missing = latestHealth?.capabilityPlan?.blockedReasons[0]
+    ?? latestHealth?.hiddenTools.find((tool) => tool.reason)?.reason
+    ?? "";
+
+  return {
+    buckets,
+    coverage,
+    missing,
+    totalCalls: counts.total,
+  };
+}
+
+function classifyToolCall(toolCall: ChatToolCall): "browser" | "edit" | "git" | "other" | "read" | "search" | "terminal" | "web" {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label} ${toolCall.detail ?? ""}`.toLowerCase();
+
+  if (toolCall.terminal || /\b(command|terminal|shell|powershell|cmd|bash|zsh|npm|node|cargo|test|build)\b/.test(key)) {
+    return "terminal";
+  }
+
+  if (/\b(files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|replace_span|write|write_many)|write|edit|patch|replace|insert|append|move)\b/.test(key) || toolCall.batchSummary?.operation || (toolCall.fileChanges?.length ?? 0) > 0) {
+    return "edit";
+  }
+
+  if (/\b(files_(?:search|grep)|search workspace|grep|rg|find)\b/.test(key)) {
+    return "search";
+  }
+
+  if (/\b(files_(?:read|tree|list|stat)|read workspace|list workspace|tree summary|open file)\b/.test(key)) {
+    return "read";
+  }
+
+  if (/\b(browser|playwright|screenshot|preview|navigate|click|console)\b/.test(key)) {
+    return "browser";
+  }
+
+  if (/\b(git|diff|status|commit|branch|push|pull)\b/.test(key)) {
+    return "git";
+  }
+
+  if (/\b(web|duckduckgo|brave|google|http|source|url)\b/.test(key)) {
+    return "web";
+  }
+
+  return "other";
 }
 
 function mergeGitStatusIntoReview(review: RiskReviewSummary, status: ComputerGitStatus | null): RiskReviewSummary {

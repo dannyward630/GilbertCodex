@@ -1,6 +1,6 @@
 # Gilbert Codex Roadmap
 
-This roadmap shows the public direction for Gilbert Codex after the v0.5.5 alpha. It is product-facing by design: contributors should be able to see what is upcoming, why it matters, and where their work can help.
+This roadmap shows the public direction for Gilbert Codex after the v0.5.7 alpha. It is product-facing by design: contributors should be able to see what is upcoming, why it matters, and where their work can help.
 
 Roadmap items are not release promises or fixed dates. They are the current areas the project is moving toward.
 
@@ -8,7 +8,7 @@ Roadmap items are not release promises or fixed dates. They are the current area
 
 ### Apps, Plugins, And Skills
 
-v0.5.5 makes the main chat workspace feel far more complete. Gmail, Google Calendar, plugins, tasks, voice, and MCP-facing surfaces now have stronger app-owned management paths; the remaining work is turning the rest of the catalog into a polished hub.
+v0.5.7 makes the main chat workspace and subscription setup feel more dependable. Gmail, Google Calendar, plugins, tasks, voice, model routes, workspace tools, and MCP-facing surfaces now have stronger app-owned management paths; the remaining work is turning the rest of the catalog into a polished hub.
 
 - Build the Skills catalog and broader plugin marketplace on top of the live Apps-page foundation.
 - Show installed, available, and coming-soon capabilities with clear permission language.
@@ -18,7 +18,7 @@ v0.5.5 makes the main chat workspace feel far more complete. Gmail, Google Calen
 
 ### Runtime Reliability
 
-The main v0.5.5 foundation is making app-owned runtime behavior boringly reliable across providers, subscription routes, permission modes, and real repositories.
+The main v0.5.7 foundation is making app-owned runtime behavior boringly reliable across providers, subscription routes, permission modes, full-computer workspace access, and real repositories.
 
 - Expand provider compatibility tests for OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, local servers, and OpenRouter-routed models.
 - Improve malformed-call recovery so invalid arguments become clear retryable errors instead of silent wrong behavior.

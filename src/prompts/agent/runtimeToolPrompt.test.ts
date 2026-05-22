@@ -102,9 +102,17 @@ describe("createRuntimeToolPrompt", () => {
       toolBridge: {
         tools: [
           attachedTool("memory_search", "memory"),
+          attachedTool("files_search", "files"),
+          attachedTool("files_tree_summary", "files"),
+          attachedTool("files_read_range", "files"),
           attachedTool("files_read_many", "files"),
           attachedTool("files_write_many", "editing"),
           attachedTool("files_edit_many", "editing"),
+          attachedTool("files_exact_replace", "editing"),
+          attachedTool("files_insert_at_line", "editing"),
+          attachedTool("files_replace_range", "editing"),
+          attachedTool("files_replace_span", "editing"),
+          attachedTool("files_append", "editing"),
           attachedTool("files_apply_patch", "editing"),
         ],
       },
@@ -113,18 +121,27 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("prefer batch tools by default");
     expect(prompt).toContain("memory_search");
     expect(prompt).toContain("Do not assume memory was preloaded");
+    expect(prompt).toContain("files_search as grep-style discovery");
+    expect(prompt).toContain("discover before reading guessed files");
+    expect(prompt).toContain("files_read_range");
     expect(prompt).toContain("files_read_many");
     expect(prompt).toContain("files_write_many");
     expect(prompt).toContain("files_edit_many");
     expect(prompt).toContain("files_apply_patch");
+    expect(prompt).toContain("files_exact_replace");
+    expect(prompt).toContain("files_insert_at_line");
+    expect(prompt).toContain("files_replace_range");
+    expect(prompt).toContain("files_replace_span");
+    expect(prompt).toContain("single-character edit");
+    expect(prompt).toContain("files_append");
     expect(prompt).toContain("Do not say you have no tools when the manifest lists callable tools");
     expect(prompt).toContain("use the closest attached tool in the same family");
     expect(prompt).toContain("including several changes in a single file");
     expect(prompt).toContain("Use files_edit_many as the default");
     expect(prompt).toContain("Use replace_range only with line numbers from a fresh read");
+    expect(prompt).toContain("endColumn is exclusive");
+    expect(prompt).toContain("do not stop: re-read the current slice");
     expect(prompt).toContain("deliberate full-file rewrites");
-    expect(prompt).not.toContain("files_exact_replace");
-    expect(prompt).not.toContain("files_replace_range");
     expect(prompt).not.toContain("create_files");
     expect(prompt).not.toContain("edit_files");
   });

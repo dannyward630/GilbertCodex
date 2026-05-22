@@ -1066,7 +1066,7 @@ button.message-research-chip:focus-visible {
   min-width: 0;
   max-width: 176px;
   min-height: 24px;
-  padding: 2px 7px 2px 4px;
+  padding: 2px 7px;
   color: var(--text-muted);
   border: 1px solid transparent;
   border-radius: 7px;
@@ -3606,6 +3606,7 @@ button.message-research-chip:focus-visible {
 
 .message-meta time {
   margin-left: 3px;
+  white-space: nowrap;
 }
 
 .message-state {

@@ -15,9 +15,11 @@ import {
   TRINITY_LARGE_THINKING_FREE_MODEL,
   buildProviderModelOptions,
   filterEnabledProviderModelOptions,
+  formatModelCapabilitySummary,
   formatModelPricingSummary,
   formatModelPricingTitle,
   getEffectiveProviderModelContextWindowTokens,
+  getModelRouteSourceInfo,
   isModelProviderAvailableForSelection,
   type ChatModelOption,
   type ProviderModelMetadata,
@@ -41,14 +43,14 @@ interface ModelSelectorPopoverProps {
   thinking: ThinkingSettings;
 }
 
-interface ModelSelectorEntry {
+export interface ModelSelectorEntry {
   contextWindow: ModelContextWindow;
   option: ChatModelOption;
   provider: (typeof MODEL_PROVIDERS)[number];
   selected: boolean;
 }
 
-interface ModelSelectorEntryGroup {
+export interface ModelSelectorEntryGroup {
   entries: ModelSelectorEntry[];
   id: string;
   label: string;
@@ -495,7 +497,7 @@ function createQuickModelSubtitle(provider: ModelProviderId, entries: ModelSelec
   }
 
   if (provider === "9router") {
-    return "Free Auto and subscription routes";
+    return "Subscription routes by account";
   }
 
   if (isLocalRuntimeProvider(provider)) {
@@ -506,7 +508,7 @@ function createQuickModelSubtitle(provider: ModelProviderId, entries: ModelSelec
 }
 
 function createQuickModelDescription(entry: ModelSelectorEntry) {
-  return formatModelEntryDescription(entry);
+  return `${formatModelEntrySourceLabel(entry)} - ${formatModelEntryDescription(entry)}`;
 }
 
 function formatDisplayModelLabel(label: string) {
@@ -531,20 +533,21 @@ function dedupeEntries(entries: ModelSelectorEntry[]) {
   return dedupedEntries;
 }
 
-function createModelSelectorGroups(entries: ModelSelectorEntry[]): ModelSelectorEntryGroup[] {
+export function createModelSelectorGroups(entries: ModelSelectorEntry[]): ModelSelectorEntryGroup[] {
   const groups: ModelSelectorEntryGroup[] = [];
-  const groupByProvider = new Map<ModelProviderId, ModelSelectorEntryGroup>();
+  const groupByRoute = new Map<string, ModelSelectorEntryGroup>();
 
   for (const entry of entries) {
-    let group = groupByProvider.get(entry.provider.id);
+    const routeSource = getModelRouteSourceInfo(entry.option.provider, entry.option.value);
+    let group = groupByRoute.get(routeSource.groupId);
 
     if (!group) {
       group = {
         entries: [],
-        id: entry.provider.id,
-        label: getModelSelectorGroupLabel(entry.provider.id),
+        id: routeSource.groupId,
+        label: routeSource.groupLabel,
       };
-      groupByProvider.set(entry.provider.id, group);
+      groupByRoute.set(routeSource.groupId, group);
       groups.push(group);
     }
 
@@ -587,8 +590,12 @@ function createModelSearchTags(entry: ModelSelectorEntry) {
   const free = isFreeModel(entry.option, text);
   const local = isLocalRuntimeProvider(entry.provider.id);
   const gateway = entry.provider.id === "9router";
+  const routeSource = getModelRouteSourceInfo(entry.option.provider, entry.option.value);
   const tags = [
     gateway ? "Subscription" : local ? "Local" : "Provider",
+    routeSource.sourceLabel,
+    routeSource.groupLabel,
+    ...routeSource.searchTags,
     free ? "Free" : formatModelPricingSummary(entry.option.pricing),
     formatModelContextWindow(entry.contextWindow),
   ];
@@ -661,65 +668,12 @@ function getProviderLabel(providerId: ModelProviderId) {
   return MODEL_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? providerId;
 }
 
-function getModelSelectorGroupLabel(providerId: ModelProviderId) {
-  if (providerId === "9router") {
-    return "Subscription routes";
-  }
-
-  if (providerId === "lmstudio") {
-    return "LM Studio loaded models";
-  }
-
-  if (providerId === "ollama") {
-    return "Ollama loaded models";
-  }
-
-  if (providerId === "vllm") {
-    return "vLLM served models";
-  }
-
-  return getProviderLabel(providerId);
-}
-
 function formatModelEntrySourceLabel(entry: ModelSelectorEntry) {
-  if (entry.provider.id === "9router") {
-    return entry.option.value === "gilbert-always-free" ? "Free Auto" : "Subscription";
-  }
-
-  if (entry.provider.id !== "openrouter") {
-    return entry.provider.label;
-  }
-
-  const sourceId = entry.option.value.split("/")[0];
-  const sourceLabels: Record<string, string> = {
-    "arcee-ai": "Arcee AI",
-    deepseek: "DeepSeek",
-    minimax: "MiniMax",
-    nvidia: "NVIDIA",
-    openai: "OpenAI",
-    openrouter: "OpenRouter",
-    poolside: "Poolside",
-    "z-ai": "Z.ai",
-  };
-
-  return sourceLabels[sourceId] ?? sourceId;
+  return getModelRouteSourceInfo(entry.option.provider, entry.option.value).sourceLabel;
 }
 
 function formatModelEntryDescription(entry: ModelSelectorEntry) {
-  const description = entry.option.useCase || entry.option.detail || `${formatModelEntrySourceLabel(entry)} model`;
-
-  if (entry.provider.id !== "9router") {
-    return description;
-  }
-
-  return description
-    .replace(/\bCodex-backed 9Router route\b/g, "Subscription-backed route")
-    .replace(/\b9Router Codex subscription route\b/g, "Subscription route")
-    .replace(/\b9Router Codex coding route\b/g, "Subscription coding route")
-    .replace(/\b9Router Codex route\b/g, "Subscription route")
-    .replace(/\bin 9Router\b/g, "through your subscription")
-    .replace(/\bthrough 9Router\b/g, "through your subscription")
-    .replace(/\b9Router\b/g, "subscription");
+  return formatModelCapabilitySummary(entry.option);
 }
 
 function clamp(value: number, min: number, max: number) {

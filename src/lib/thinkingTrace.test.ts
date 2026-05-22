@@ -20,7 +20,7 @@ describe("thinking trace summaries", () => {
     expect(note).not.toContain("I’m using that");
   });
 
-  it("summarizes completed file changes as found evidence", () => {
+  it("summarizes completed file changes without turning paths into the headline", () => {
     const toolCall: ChatToolCall = {
       batchFileResults: [
         { additions: 12, deletions: 4, kind: "update", path: "C:/repo/src/components/chat/AssistantActivityIndicator.tsx", status: "ok" },
@@ -34,11 +34,56 @@ describe("thinking trace summaries", () => {
 
     const note = createVisibleToolResultThinking([toolCall]);
 
-    expect(note).toContain("2 files changed");
-    expect(note).toContain("`src/components/chat/AssistantActivityIndicator.tsx`");
+    expect(note).toContain("Applied file changes to 2 files");
     expect(note).toContain("+18 -5");
+    expect(note).not.toContain("`src/components/chat/AssistantActivityIndicator.tsx`");
+    expect(note).not.toContain("and 1 more");
     expect(note).not.toContain("**Found:**");
     expect(note).not.toContain("**Next:**");
+  });
+
+  it("summarizes mixed coding runs as tool activity before file changes", () => {
+    const toolCalls: ChatToolCall[] = [
+      {
+        id: "search",
+        input: JSON.stringify({ query: "AssistantActivityIndicator" }),
+        label: "Search workspace files",
+        status: "complete",
+        toolId: "files_search",
+      },
+      {
+        id: "read",
+        input: JSON.stringify({ path: "src/components/chat/AssistantActivityIndicator.tsx" }),
+        label: "Read workspace file",
+        status: "complete",
+        toolId: "files_read",
+      },
+      {
+        batchFileResults: [
+          { additions: 8, deletions: 2, kind: "update", path: "C:/repo/src/components/chat/AssistantActivityIndicator.tsx", status: "ok" },
+          { additions: 4, deletions: 1, kind: "update", path: "C:/repo/src/lib/thinkingTrace.ts", status: "ok" },
+          { additions: 2, deletions: 0, kind: "update", path: "C:/repo/src/styles/chat.css", status: "ok" },
+          { additions: 3, deletions: 1, kind: "update", path: "C:/repo/src/components/chat/AssistantActivityIndicator.test.ts", status: "ok" },
+        ],
+        id: "edit",
+        label: "Edit many workspace files",
+        status: "complete",
+        toolId: "files_edit_many",
+      },
+      {
+        id: "test",
+        label: "Run terminal command",
+        status: "complete",
+        terminal: { command: "npm test", exitCode: 0, shell: "powershell" },
+        toolId: "terminal_run",
+      },
+    ];
+
+    const note = createVisibleToolResultThinking(toolCalls);
+
+    expect(note).toBe("Used 4 tools: searched workspace, read workspace evidence, edited 4 files, and ran 1 command (+17 -4).");
+    expect(note).not.toContain("4 files changed in");
+    expect(note).not.toContain("and 2 more");
   });
 
   it("keeps connected-app summaries clean and avoids raw OAuth scope noise", () => {

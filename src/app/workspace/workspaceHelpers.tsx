@@ -389,7 +389,7 @@ export function hasSuccessfulFileMutationToolCall(toolCalls: ChatToolCall[]) {
 
     const toolId = toolCall.toolId ?? "";
     return (
-      /^files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|write|write_many)\b/i.test(toolId) ||
+      /^files_(?:append|apply_patch|create_directory|edit_many|exact_replace|insert_at_line|move|replace_range|replace_span|write|write_many)\b/i.test(toolId) ||
       (toolCall.fileChanges?.length ?? 0) > 0 ||
       toolCall.batchSummary?.operation === "edit" ||
       toolCall.batchSummary?.operation === "write" ||

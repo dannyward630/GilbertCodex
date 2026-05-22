@@ -126,4 +126,85 @@ describe("CodingSidecarPanel", () => {
     expect(html).not.toContain("Changed</strong>");
     expect(html).not.toContain("src/components/coding/CodingSidecarPanel.tsx");
   });
+
+  it("shows tool activity and hidden-tool coverage in the review tab", () => {
+    const html = renderToStaticMarkup(createElement(CodingSidecarPanel, {
+      ...baseProps,
+      agentRuns: [{
+        approvals: [],
+        artifacts: [],
+        chatId: "chat-1",
+        coding: {
+          events: [],
+          request: {
+            chatId: "chat-1",
+            prompt: "inspect tools",
+            workspaceRoots: ["C:/repo"],
+          },
+          startedAt: "2026-05-19T12:00:00.000Z",
+          toolHealth: [{
+            advertisedTools: [],
+            availableToolCount: 5,
+            createdAt: "2026-05-19T12:00:00.000Z",
+            hiddenTools: [{
+              id: "browser_console_read",
+              reason: "Tool setting or request context hid this tool before prompt selection.",
+              title: "Read browser console",
+            }],
+            id: "tool-health-pass-1",
+            model: "gpt-test",
+            passIndex: 1,
+            permissionMode: "default",
+            prompt: "inspect tools",
+            provider: "openai",
+            registryToolCount: 12,
+            selectedTools: [
+              { id: "files_search", title: "Search workspace files" },
+              { id: "files_read", title: "Read workspace file" },
+            ],
+            workspaceRoots: ["C:/repo"],
+          }],
+          version: 1,
+        },
+        createdAt: "2026-05-19T12:00:00.000Z",
+        events: [],
+        id: "run-1",
+        mode: "chat",
+        prompt: "inspect tools",
+        sources: [],
+        status: "completed",
+        steps: [],
+        title: "Tool display run",
+        toolCalls: [
+          { id: "tool-search", label: "Search workspace files", status: "complete", toolId: "files_search" },
+          { id: "tool-read", label: "Read workspace file", status: "complete", toolId: "files_read" },
+          {
+            batchFileResults: [{ additions: 2, deletions: 1, kind: "update", path: "src/lib/thinkingTrace.ts", status: "ok" }],
+            id: "tool-edit",
+            label: "Edit many workspace files",
+            status: "complete",
+            toolId: "files_edit_many",
+          },
+          { id: "tool-test", label: "Run terminal command", status: "complete", terminal: { command: "npm test", exitCode: 0, shell: "powershell" }, toolId: "terminal_run" },
+        ],
+        updatedAt: "2026-05-19T12:00:00.000Z",
+      }],
+      initialTab: "review",
+      localWorkspace: {
+        ...workspace,
+        enabled: true,
+        roots: ["C:/repo"],
+      },
+      root: "C:/repo",
+    }));
+
+    expect(html).toContain("Tool activity");
+    expect(html).toContain("4 calls captured");
+    expect(html).toContain("Search");
+    expect(html).toContain("Read");
+    expect(html).toContain("Edit");
+    expect(html).toContain("Terminal");
+    expect(html).toContain("2 selected / 5 available / 12 registered");
+    expect(html).toContain("Tool setting or request context hid this tool");
+  });
 });

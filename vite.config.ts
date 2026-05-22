@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
@@ -41,6 +41,15 @@ export default defineConfig({
     host: "localhost",
     strictPort: true,
     port: 1420,
+  },
+  test: {
+    exclude: [
+      ...configDefaults.exclude,
+      "**/.gilbert/**",
+      "**/.codex-logs/**",
+      "**/.codex-output/**",
+      "**/.codex-run-logs/**",
+    ],
   },
   envPrefix: ["VITE_", "TAURI_"],
 });

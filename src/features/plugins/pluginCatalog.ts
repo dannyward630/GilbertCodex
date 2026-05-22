@@ -509,7 +509,11 @@ export const PLUGIN_LISTINGS: PluginListing[] = [
   }),
 ];
 
-export const PLUGIN_SKILL_OPTIONS: PluginSkillOption[] = PLUGIN_LISTINGS.flatMap((plugin) => plugin.skills);
+export const CATALOG_PLUGIN_SKILL_OPTIONS: PluginSkillOption[] = PLUGIN_LISTINGS.flatMap((plugin) => plugin.skills);
+
+// The composer can only mention skills that are actually installed and callable.
+// Keep the marketplace catalog separate so future skill ideas do not appear as live actions.
+export const PLUGIN_SKILL_OPTIONS: PluginSkillOption[] = [];
 
 export function getPluginById(pluginId: string) {
   return PLUGIN_LISTINGS.find((plugin) => plugin.id === pluginId);

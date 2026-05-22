@@ -689,12 +689,10 @@ function MessageSourcesRow({ sources }: { sources: ChatSource[] }) {
         <span className="message-sources-title" aria-label={`${visibleSources.length} sources`}>
           <Globe2 size={13} aria-hidden="true" />
           <span>Sources</span>
-          <strong>{visibleSources.length}</strong>
         </span>
         <div className="message-sources-preview">
-          {inlineSources.map((source, index) => (
+          {inlineSources.map((source) => (
             <a className="message-source-chip" href={source.url} key={source.id ?? source.url} rel="noreferrer" target="_blank" title={cleanSourceTitle(source.title, source.url)}>
-              <span className="message-source-index" aria-hidden="true">{index + 1}</span>
               <span>{formatMessageSourceHost(source.url)}</span>
             </a>
           ))}

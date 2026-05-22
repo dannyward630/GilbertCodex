@@ -19,6 +19,7 @@ import {
   looksLikeUnexecutedToolActionPromise,
   looksLikeCapabilityInventoryQuestion,
   needsFreshLocalToolEvidence,
+  requiresWorkspaceMutationForPrompt,
   requiresWorkspaceToolCallForPrompt,
   createWebSearchProgress,
   shouldSynthesizeEmptyFinalFromToolResults,
@@ -378,6 +379,57 @@ describe("tool protocol leak guards", () => {
         toolId: "files_edit_many",
       },
     ])).toBe(false);
+  });
+
+  it("rejects pasteable replacement files after read-only tool evidence", () => {
+    const content = [
+      "Replace src/App.tsx with this:",
+      "",
+      "```tsx",
+      "import { useState } from \"react\";",
+      "import \"./index.css\";",
+      "",
+      "export default function App() {",
+      "  const [input, setInput] = useState(\"\");",
+      "  return <main className=\"app-shell\"><textarea value={input} onChange={(event) => setInput(event.target.value)} /></main>;",
+      "}",
+      "```",
+      "",
+      "Replace src/index.css with this:",
+      "",
+      "```css",
+      ".app-shell { min-height: 100vh; display: grid; place-items: center; background: #080d16; }",
+      "textarea { width: min(720px, 90vw); min-height: 160px; }",
+      "```",
+    ].join("\n");
+
+    expect(looksLikeUnappliedFileEditAnswer(content, [
+      {
+        id: "read-root",
+        label: "List workspace directory",
+        status: "complete",
+        toolId: "files_list",
+      },
+      {
+        id: "read-many",
+        label: "Read many workspace files",
+        status: "error",
+        toolId: "files_read_many",
+      },
+    ])).toBe(true);
+  });
+
+  it("requires a real workspace mutation for terse do-it follow-ups with local code context", () => {
+    const prompt = [
+      "do it",
+      "",
+      "Local-code conversation context for tool selection only:",
+      "user: re design the website make it like chat gpt codex website",
+      "assistant: I can implement it directly by replacing src/App.tsx and src/index.css.",
+      "If the user is asking about the selected workspace, gather fresh workspace evidence before the final answer.",
+    ].join("\n");
+
+    expect(requiresWorkspaceMutationForPrompt(prompt, true)).toBe(true);
   });
 
   it("does not classify a completed edit summary as in-flight tool planning", () => {

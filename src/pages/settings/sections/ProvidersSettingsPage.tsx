@@ -38,22 +38,28 @@ export function ProvidersSettingsPage({
   testStatus,
 }: ProvidersSettingsPageProps) {
   const isSubscriptionsProvider = settings.provider === "9router";
-  const providerDetail = isSubscriptionsProvider ? "Connected account routes and live subscription model catalogs." : activeProvider.detail;
+  const providerDetail = isSubscriptionsProvider
+    ? "Subscription account routes. No API key is used for these models."
+    : activeProvider.requiresApiKey
+      ? `${activeProvider.label} API key route.`
+      : activeProvider.optionalApiKey
+        ? `${activeProvider.label} local route. API key optional.`
+        : activeProvider.detail;
 
   return (
     <>
-      {showHeading ? <SettingsSectionHeading detail="Keep provider keys, subscription routes, base URLs, and live catalogs in one place." icon={KeyRound} title="Providers" /> : null}
+      {showHeading ? <SettingsSectionHeading detail="Choose the default provider and keep API-key routes separate from subscriptions." icon={KeyRound} title="Providers" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide">
           <div className="settings-card-heading">
             <KeyRound size={19} aria-hidden="true" />
             <div>
-              <h2>Model provider</h2>
+              <h2>Default provider</h2>
               <p>{providerDetail}</p>
             </div>
           </div>
 
-          <div className="provider-picker-grid" role="radiogroup" aria-label="Model provider">
+          <div className="provider-picker-grid" role="radiogroup" aria-label="Default model provider">
             {MODEL_PROVIDERS.map((provider) => (
               <button
                 key={provider.id}
@@ -126,11 +132,11 @@ export function ProvidersSettingsPage({
 
 function formatProviderCredentialHint(provider: ModelProviderCatalogItem) {
   if (provider.id === "9router") {
-    return "Account routes";
+    return "Subscription accounts";
   }
 
   if (provider.requiresApiKey) {
-    return "API key";
+    return "API key route";
   }
 
   return provider.optionalApiKey ? "Optional key" : "Local";

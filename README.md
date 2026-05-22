@@ -9,41 +9,45 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.6.md">v0.5.6 release notes</a>
+  <a href="docs/releases/v0.5.7.md">v0.5.7 release notes</a>
   |
-  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.6">Windows alpha download</a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.7">Windows alpha download</a>
   |
   <a href="docs/ROADMAP.md">Roadmap</a>
   |
   <a href="CONTRIBUTING.md">Contributing</a>
+  |
+  <a href="docs/SUPPORT.md">Support</a>
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.6.md"><img alt="Version 0.5.6" src="https://img.shields.io/badge/version-0.5.6-d8b36c"></a>
+  <a href="docs/releases/v0.5.7.md"><img alt="Version 0.5.7" src="https://img.shields.io/badge/version-0.5.7-d8b36c"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
   <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
-## v0.5.6 Hotfix
+## v0.5.7 Desktop Reliability Update
 
-Gilbert Codex v0.5.6 is a hotfix for the Windows public alpha. It focuses on subscription routing startup and sign-in reliability, offline dictation release stability, and clickable completion notifications.
+Gilbert Codex v0.5.7 is a desktop reliability update for the Windows public alpha. It focuses on subscription setup clarity, route/source labels, full-computer workspace handling, safer local file tooling, automation cleanup, review activity visibility, and support/funding polish.
 
 This is still alpha software. Windows x64 is the verified packaged target. macOS support is in active development and should land soon; Linux remains source-first until native testing catches up. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+
+Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace work. It can inspect files, but write/edit tool calls are not completing reliably on that route yet. Use the other available Codex/ChatGPT, OpenRouter, or local routes for file changes until this is fixed.
 
 The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
 
 ## Highlights
 
-| Area | What changed in v0.5.6 |
+| Area | What changed in v0.5.7 |
 | --- | --- |
-| Customization | Appearance, motion, layout, model, dictation, notification, terminal, web search, and project-open controls are more visible and easier to tune from Settings. |
-| Apps and integrations | Gmail, Google Calendar, Google Tasks, GitHub, Discord, browser preview, plugins, and MCP-facing surfaces have stronger setup and management flows. |
-| Voice | Offline Whisper dictation is wired into the composer, with browser fallback avoided when the desktop offline path is expected. Release builds prepare the verified model and Vulkan SDK. |
-| Agent workspace | Queued sends, steering, planning/research, approval revisions, live tool progress, browser capture, project tasks, and terminal behavior are tighter across the main workspace. |
-| Source context | DuckDuckGo/Brave-backed source cards, thinking/planning support, browser preview capture, and clearer fallback messaging are improved. |
-| Repository hygiene | Private tool bridge and plugin bundles stay out of public Git, then the release workflow restores them from a private overlay before packaging. |
+| Subscription setup | The provider dialog and Settings now explain install, sign-in, route selection, usage/quota, and fallback states with clearer labels and fewer confusing sandbox terms. |
+| Model picker | Subscription, API-key, local, and OpenRouter routes now carry source-aware labels so users can see whether a model is coming from Codex, Copilot, Claude, Gemini, OpenRouter, or a direct API path. |
+| Workspace tools | Full-computer mode resolves host roots lazily, the composer hides project-only Git controls when no project is selected, file-copy tooling was added, and batch writes are faster. |
+| Agent reliability | Tool prompts now push better discovery/read/edit behavior, stale-edit retry guidance, binary asset copying, and less protocol leakage in final answers. |
+| Context and automation | Embedded media data URLs are omitted from text context/token estimates, automation inbox summaries are cleaner, and web sources are shown only when a web-search tool actually ran. |
+| Review and support | Coding review shows tool activity/coverage, the local support page has a public Cash App default, and release docs now describe the v0.5.7 test build. |
 
 ## Screenshots
 
@@ -82,13 +86,17 @@ The repository is kept open-source ready by default: dependencies, build output,
 
 ## Download
 
-The v0.5.6 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.6).
+The v0.5.7 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.7) after local installer validation.
 
 Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
 macOS release artifacts are in development and should be out soon. Linux release artifacts are not official yet; source support exists, but native testing is still needed before the project promises a packaged Linux download.
 
-See [v0.5.6 release notes](docs/releases/v0.5.6.md) for hotfix notes, setup notes, known limitations, and validation commands.
+See [v0.5.7 release notes](docs/releases/v0.5.7.md) for update notes, setup notes, known limitations, and validation commands.
+
+## Support
+
+Gilbert Codex stays open source and usable without payment. Optional project funding is available through the app's Fund project page, GitHub's Sponsor button, and [Cash App $kobeelijahh](https://cash.app/$kobeelijahh). See [Funding Gilbert Codex](docs/SUPPORT.md) for the safety rules and hosted-link setup notes.
 
 ## Product Shape
 

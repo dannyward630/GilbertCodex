@@ -2,7 +2,7 @@ import { BadgeDollarSign, Check, Eye, EyeOff, ServerCog, SlidersHorizontal } fro
 import { ThinkingModeControls } from "../../../components/thinking/ThinkingModeControls";
 import { DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS, getAutomaticHostedMaxOutputTokens, isLocalModelProvider } from "../../../lib/generationSettings";
 import { formatTokenCount } from "../../../lib/contextWindow";
-import { MODEL_PROVIDERS, formatModelPricingSummary, formatModelPricingTitle, getEffectiveProviderModelContextWindowTokens, isNineRouterCodexModelId, type ChatModelOption, type ModelProviderCatalogItem } from "../../../lib/models";
+import { MODEL_PROVIDERS, formatModelCapabilitySummary, formatModelPricingSummary, formatModelPricingTitle, getEffectiveProviderModelContextWindowTokens, getModelRouteSourceInfo, isNineRouterCodexModelId, type ChatModelOption, type ModelProviderCatalogItem } from "../../../lib/models";
 import type { ModelProviderId, ProviderSettings, SubscriptionCodexContextWindow } from "../../../types/settings";
 import type { LiveModelCatalogStatus } from "../types";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
@@ -50,7 +50,8 @@ export function ModelSettingsPage({
   const enabledModelCount = activeProviderAllModels.filter((option) => !disabledModelSet.has(option.value)).length;
   const localContextWindowTokens = settings.contextWindowTokens?.[settings.provider] ?? DEFAULT_LOCAL_CONTEXT_WINDOW_TOKENS;
   const activeModelBudgetOverride = settings.modelBudgetOverrides?.[settings.provider]?.[settings.model] ?? {};
-  const activeProviderPresetLabel = settings.provider === "9router" ? "Subscription model" : `${activeProvider.label} preset`;
+  const activeRouteSource = getModelRouteSourceInfo(settings.provider, settings.model);
+  const activeProviderPresetLabel = "Default model";
   const activeCodexSubscriptionModel = settings.provider === "9router" && isNineRouterCodexModelId(settings.model);
   const codexContextWindowMode = settings.subscriptionOptimization?.codexContextWindow ?? "standard";
 
@@ -102,14 +103,14 @@ export function ModelSettingsPage({
           <div className="settings-card-heading">
             <ServerCog size={19} aria-hidden="true" />
             <div>
-              <h2>Model</h2>
-              <p>{activeProvider.label} - {enabledModelCount} of {activeProviderAllModels.length} enabled</p>
+              <h2>Default model</h2>
+              <p>{activeRouteSource.sourceLabel} - {enabledModelCount} of {activeProviderAllModels.length} enabled</p>
             </div>
           </div>
           <div className="settings-model-summary">
             <div>
               <strong>{activeModelOption?.label ?? (settings.model || "Choose model")}</strong>
-              <span>{settings.model || "No model selected"}</span>
+              <span>{settings.model ? `${activeRouteSource.sourceLabel} - ${settings.model}` : "No model selected"}</span>
             </div>
             <div className="settings-model-summary-metrics">
               <span title={formatPricingTitle(activeModelOption?.pricing)}>
@@ -121,7 +122,7 @@ export function ModelSettingsPage({
           </div>
           <div className="settings-model-control-grid">
             <label className="settings-field">
-              <span>Provider</span>
+              <span>Default provider</span>
               <select value={settings.provider} onChange={(event) => onSelectProvider(event.target.value as ModelProviderId)}>
                 {MODEL_PROVIDERS.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -140,7 +141,7 @@ export function ModelSettingsPage({
                 ) : null}
                 {activeProviderModels.map((option) => (
                   <option key={option.id} value={option.value}>
-                    {option.label} - {formatPricingSummary(option.pricing)} - {formatModelContextTokens(getSettingsAwareModelContextTokens(settings, option))}
+                    {option.label} - {getModelRouteSourceInfo(option.provider, option.value).sourceLabel} - {formatModelCapabilitySummary(option)}
                   </option>
                 ))}
               </select>
@@ -180,7 +181,7 @@ export function ModelSettingsPage({
                         {option.label}
                         {selected ? <Check size={14} aria-hidden="true" /> : null}
                       </strong>
-                      <small>{option.useCase || option.detail}</small>
+                      <small>{getModelRouteSourceInfo(option.provider, option.value).sourceLabel} - {formatModelCapabilitySummary(option)}</small>
                       <code>{option.value}</code>
                     </div>
                     <div className="settings-model-row-metrics">
