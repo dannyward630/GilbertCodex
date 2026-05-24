@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     convert::TryInto,
-    env,
+    env, fs,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -1201,6 +1201,14 @@ fn resolve_ngrok_executable(app: &AppHandle, ngrok_path: Option<&str>) -> String
 }
 
 fn resolve_ngrok_executable_with_roots(ngrok_path: Option<&str>, roots: &[PathBuf]) -> String {
+    resolve_ngrok_executable_with_context(ngrok_path, roots, &ngrok_search_path_dirs())
+}
+
+fn resolve_ngrok_executable_with_context(
+    ngrok_path: Option<&str>,
+    roots: &[PathBuf],
+    path_dirs: &[PathBuf],
+) -> String {
     let configured_path = ngrok_path
         .map(trim_ngrok_path_value)
         .filter(|value| !value.is_empty())
@@ -1220,12 +1228,26 @@ fn resolve_ngrok_executable_with_roots(ngrok_path: Option<&str>, roots: &[PathBu
                     return executable.to_string_lossy().to_string();
                 }
             }
+
+            if is_bare_command_path(&configured_candidate) {
+                for executable in ngrok_command_path_candidates(path_dirs, configured_path) {
+                    if executable.is_file() {
+                        return executable.to_string_lossy().to_string();
+                    }
+                }
+            }
         }
 
         return configured_path.to_string();
     }
 
     for candidate in ngrok_path_candidates(roots) {
+        if candidate.is_file() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    for candidate in ngrok_command_path_candidates(path_dirs, configured_path) {
         if candidate.is_file() {
             return candidate.to_string_lossy().to_string();
         }
@@ -1240,6 +1262,22 @@ fn ngrok_path_candidates(roots: &[PathBuf]) -> Vec<PathBuf> {
     for root in roots {
         push_ngrok_candidates(&mut candidates, root.join(".tools").join("ngrok"));
         push_ngrok_candidates(&mut candidates, root.join("tools").join("ngrok"));
+    }
+
+    candidates
+}
+
+fn ngrok_command_path_candidates(path_dirs: &[PathBuf], command_name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    for directory in path_dirs {
+        for executable_name in ngrok_executable_names(command_name) {
+            let candidate = directory.join(executable_name);
+
+            if !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
+        }
     }
 
     candidates
@@ -1276,8 +1314,81 @@ fn ngrok_search_roots(app: &AppHandle) -> Vec<PathBuf> {
     roots
 }
 
+fn ngrok_search_path_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(path_value) = env::var_os("PATH") {
+        for path_dir in env::split_paths(&path_value) {
+            push_ngrok_root(&mut dirs, path_dir);
+        }
+    }
+
+    push_common_ngrok_dirs(&mut dirs);
+
+    dirs
+}
+
+#[cfg(windows)]
+fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        push_ngrok_root(
+            dirs,
+            local_app_data
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+        );
+        push_ngrok_root(dirs, local_app_data.join("Programs").join("ngrok"));
+        push_ngrok_root(dirs, local_app_data.join("ngrok"));
+
+        let winget_packages = local_app_data
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Packages");
+
+        if let Ok(entries) = fs::read_dir(winget_packages) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy().to_ascii_lowercase();
+
+                if file_name.contains("ngrok") {
+                    push_ngrok_root(dirs, entry.path());
+                }
+            }
+        }
+    }
+
+    if let Some(app_data) = env::var_os("APPDATA").map(PathBuf::from) {
+        push_ngrok_root(dirs, app_data.join("npm"));
+    }
+
+    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
+        push_ngrok_root(dirs, user_profile.join("scoop").join("shims"));
+    }
+
+    if let Some(program_files) = env::var_os("ProgramFiles").map(PathBuf::from) {
+        push_ngrok_root(dirs, program_files.join("ngrok"));
+    }
+
+    if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)").map(PathBuf::from) {
+        push_ngrok_root(dirs, program_files_x86.join("ngrok"));
+    }
+
+    push_ngrok_root(
+        dirs,
+        PathBuf::from(r"C:\ProgramData")
+            .join("chocolatey")
+            .join("bin"),
+    );
+}
+
+#[cfg(not(windows))]
+fn push_common_ngrok_dirs(_dirs: &mut Vec<PathBuf>) {}
+
 fn push_ngrok_candidates(candidates: &mut Vec<PathBuf>, directory: PathBuf) {
-    candidates.push(directory.join(ngrok_executable_name()));
+    for executable_name in ngrok_executable_names("ngrok") {
+        candidates.push(directory.join(executable_name));
+    }
 }
 
 fn resolve_ngrok_candidate(path: &Path) -> Option<PathBuf> {
@@ -1286,14 +1397,20 @@ fn resolve_ngrok_candidate(path: &Path) -> Option<PathBuf> {
     }
 
     if path.is_dir() {
-        let executable = path.join(ngrok_executable_name());
+        for executable_name in ngrok_executable_names("ngrok") {
+            let executable = path.join(executable_name);
 
-        if executable.is_file() {
-            return Some(executable);
+            if executable.is_file() {
+                return Some(executable);
+            }
         }
     }
 
     None
+}
+
+fn is_bare_command_path(path: &Path) -> bool {
+    path.components().count() == 1
 }
 
 fn push_ngrok_root_and_ancestors(roots: &mut Vec<PathBuf>, path: PathBuf) {
@@ -1323,12 +1440,36 @@ fn trim_ngrok_path_value(value: &str) -> &str {
         .trim()
 }
 
+#[cfg(test)]
 fn ngrok_executable_name() -> &'static str {
     if cfg!(windows) {
         "ngrok.exe"
     } else {
         "ngrok"
     }
+}
+
+fn ngrok_executable_names(command_name: &str) -> Vec<String> {
+    let trimmed = command_name.trim();
+
+    if cfg!(windows) {
+        let has_extension = Path::new(trimmed)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| !extension.is_empty())
+            .unwrap_or(false);
+
+        if has_extension {
+            return vec![trimmed.to_string()];
+        }
+
+        return ["exe", "cmd", "bat", "com"]
+            .into_iter()
+            .map(|extension| format!("{trimmed}.{extension}"))
+            .collect();
+    }
+
+    vec![trimmed.to_string()]
 }
 
 fn wait_for_ngrok_public_url(port: u16, child: &mut Child) -> Result<String, String> {
@@ -1600,10 +1741,40 @@ mod tests {
     }
 
     #[test]
+    fn resolves_default_ngrok_from_path_directory() {
+        let root = temp_ngrok_root("path-default");
+        let path_dir = root.join("path-bin");
+        let executable = create_ngrok_executable(&path_dir);
+
+        let resolved =
+            resolve_ngrok_executable_with_context(None, &[], std::slice::from_ref(&path_dir));
+
+        assert_eq!(PathBuf::from(resolved), executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_configured_bare_ngrok_name_from_path_directory() {
+        let root = temp_ngrok_root("path-configured");
+        let path_dir = root.join("path-bin");
+        let executable = create_ngrok_executable(&path_dir);
+
+        let resolved = resolve_ngrok_executable_with_context(
+            Some(ngrok_executable_name()),
+            &[],
+            std::slice::from_ref(&path_dir),
+        );
+
+        assert_eq!(PathBuf::from(resolved), executable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn leaves_ngrok_on_path_when_no_local_executable_exists() {
         let root = temp_ngrok_root("missing");
 
-        let resolved = resolve_ngrok_executable_with_roots(None, std::slice::from_ref(&root));
+        let resolved =
+            resolve_ngrok_executable_with_context(None, std::slice::from_ref(&root), &[]);
 
         assert_eq!(resolved, "ngrok");
         let _ = fs::remove_dir_all(root);

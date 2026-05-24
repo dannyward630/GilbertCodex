@@ -2,9 +2,9 @@
 
 This file tracks the current product state for collaborators. It should describe what is live now, what is being hardened, and what remains open for the next alpha releases.
 
-## Current Phase: v0.5.7 Desktop Reliability Alpha
+## Current Phase: v0.8.1 Platform Hotfix Alpha
 
-Status: v0.5.7 keeps the public alpha focused on real desktop use. The current build tightens subscription setup, route labeling, workspace/full-computer behavior, file-tool reliability, automation summaries, coding review visibility, support links, and the packaged Windows installer path.
+Status: v0.8.1 keeps the major v0.8.0 platform release moving with a hotfix build for real tester friction. The current build ships MCP server management, app-managed Skills, a working plugin directory foundation, stronger thinking/tool visibility, safer local tool behavior, stateful MCP stdio sessions, 9Router LAN access metadata, Discord ngrok path recovery, and Windows, macOS, and Linux release artifacts.
 
 Delivered:
 
@@ -16,6 +16,10 @@ Delivered:
 - Image generation through attached media tooling, with composer controls, model-facing prompt guidance, progress cards, generated image grids, lightbox preview, and downloads.
 - Host-managed local action runtime with schema adapters for OpenAI-compatible chat, OpenAI Responses, and Anthropic Messages requests.
 - Local capability families for diagnostics, file reads/search/listing, editing, terminal execution, browser preview, local Git, GitHub API surfaces, web search, and MCP server discovery/tool calls where settings and permissions allow them.
+- Apps > MCP with HTTP, localhost, and stdio server setup; secure bearer/env storage; 20 featured presets; registry search; streaming setup tests; cached tool schemas; and chat-callable MCP list/call tools.
+- v0.8.1 keeps stdio MCP subprocesses alive per configured server while the app is open, which preserves server-owned state for deploy jobs and other multi-step workflows.
+- Apps > Skills with premade workflows, custom skill creation, `SKILL.md` folder import, enable/disable controls, trigger copying, composer mention support, and prompt-aware skill matching.
+- Plugin directory foundation with Discover, Installed, Create, and Marketplace views; 27 curated listings; component/permission metadata; manifest preview; installed-state tracking; and OpenAI/Codex marketplace skill-import routes.
 - Permission filtering that keeps read-only work smoother while gating terminal, destructive, credential, publish, and outside-scope actions.
 - Tool result finalization that prevents raw tool output from leaking into final assistant answers and pushes the model toward a synthesized response when needed.
 - Host-managed DuckDuckGo/Brave web search with source cards and a six-source cap.
@@ -23,9 +27,9 @@ Delivered:
 - Discord slash-command bridge setup/runtime for forwarding requests into Gilbert chat.
 - GitHub OAuth device-flow setup, account state, repository actions, and release/workflow surfaces.
 - Voluntary support/funding page using public hosted links only, with secret-like values rejected before display.
-- Apps page with live Gmail account management and MCP server management, plus a clear coming-next state for Skills.
+- Apps page with live Gmail, Google Calendar, GitHub, MCP, plugin, and Skills management surfaces.
 - Documentation refreshed for the current public alpha story, updater release path, and contributor readiness.
-- v0.5.7 subscription setup now separates install, sign-in, model selection, usage/quota, and fallback states so users can understand what is ready before they send.
+- v0.8.x subscription setup keeps install, sign-in, model selection, usage/quota, and fallback states separated so users can understand what is ready before they send.
 - Model and composer labels now show the route source, including subscription accounts, OpenRouter routes, direct provider APIs, and local model servers.
 - Full-computer workspace mode can lazily resolve host roots for precise absolute paths while normal selected-folder mode remains project-scoped.
 - Local computer tooling now includes guarded copy support, faster ordered batch writes, stale-edit retry guidance, and clearer binary-asset handling.
@@ -33,6 +37,7 @@ Delivered:
 - Automations now generate cleaner task prompts/results, filter source cards to actual web-search runs, and avoid empty or protocol-style sections in inbox summaries.
 - Coding review now reports captured tool activity and tool coverage so users can see what the agent actually used during a run.
 - Support/funding docs and app defaults now expose the public Cash App funding path while keeping payment handling outside the desktop app.
+- v0.8.1 improves Firebase MCP fallback guidance, local MCP result synthesis, 9Router private-LAN URL surfacing, Discord ngrok executable discovery, and CI/release runner pinning for steadier all-platform builds.
 
 Known alpha limits:
 
@@ -40,11 +45,11 @@ Known alpha limits:
 - Tool reliability still varies by provider and model, especially around malformed or incomplete tool calls.
 - Approval UX and activity grouping need more polish before the bridge feels final.
 - Image generation is first-class for the Codex / ChatGPT subscription path, while broader provider image routes still need more field testing.
-- The Apps page still needs the Skills catalog and broader plugin marketplace polish.
-- macOS and Linux source support exists, but official releases need native verification.
+- The plugin marketplace foundation is live, but deeper install/update flows beyond native connectors, MCP presets/search, and skill import still need polish.
+- macOS and Linux artifacts are published, but official platform confidence still needs real-device launch smoke testing.
 - The Windows installer remains unsigned unless a release is built with a valid code-signing configuration.
 - Some advanced workflow automation and multimodal surfaces are still roadmap work, not promised release behavior.
-- v0.5.7 passed a local Windows installer build on May 22, 2026; published checksum and updater artifacts should still be filled only from the final release build.
+- v0.8.1 uses the GitHub release workflow for Windows x64, macOS Apple Silicon, macOS Intel, and Linux x64, with updater signatures, checksums, and `latest.json` expected from the tag build.
 
 ## Next Hardening Work
 
@@ -53,8 +58,8 @@ Known alpha limits:
 - Improve activity and inspector presentation so tools, files, approvals, sources, artifacts, and retries scan cleanly.
 - Keep provider-visible request accounting aligned with the exact serialized request body each provider receives.
 - Continue GitHub/source-control UI polish with diff review, PR handoff, release workflows, and CI visibility.
-- Finish the Skills catalog and plugin marketplace polish now that Gmail and MCP have live Apps-page surfaces.
-- Finish macOS and Linux native verification, packaging, and platform-specific fixes.
+- Polish the Apps, Skills, and Plugins hub now that Gmail, Google Calendar, GitHub, MCP, Skills, and plugin surfaces are live.
+- Finish macOS and Linux real-device verification, signing/notarization decisions, packaging diagnostics, and platform-specific fixes.
 - Add public alpha validation notes after each packaged release is built and installed on a real machine.
 
 ## Open Questions

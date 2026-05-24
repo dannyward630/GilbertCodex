@@ -33,6 +33,14 @@ import {
 const CAPABILITY_INVENTORY_PROMPT_PATTERN =
   /\b(?:what|which|list|show|tell(?:\s+me)?|explain|describe)\b[\s\S]{0,180}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b[\s\S]{0,180}\b(?:available|enabled|installed|connected|do\s+you\s+have|can\s+you\s+(?:access|call|use|do))\b/i;
 
+function hasMcpToolEvidence(toolCalls: ChatToolCall[] = []) {
+  return toolCalls.some((toolCall) =>
+    typeof toolCall.toolId === "string" &&
+    toolCall.toolId.startsWith("mcp_") &&
+    (toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped")
+  );
+}
+
 function markFirstVisibleStreamToken(timing: ChatStreamTiming | undefined, visibleContent: string): ChatStreamTiming | undefined {
   if (!timing || timing.firstVisibleTokenAt || !visibleContent.trim()) {
     return timing;
@@ -2284,6 +2292,17 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             }
 
             if (workspaceMutationIncomplete) {
+              const synthesizedMcpResponse = hasMcpToolEvidence(allToolCalls)
+                ? await synthesizeAnswerFromSavedToolResults(
+                    [...messages, createMessage("assistant", assistantResponse.content)],
+                    "The saved tool results include MCP/server-backed actions. Do not reduce this to a missing file edit/write result. Summarize the MCP outcome, successful MCP calls, failed MCP calls, and the next concrete blocker if one remains.",
+                  )
+                : null;
+
+              if (synthesizedMcpResponse) {
+                return synthesizedMcpResponse;
+              }
+
               return {
                 artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
                 content: "I could not complete the requested workspace edit cleanly. No successful file edit/write tool result was recorded, so no file changes were applied.",

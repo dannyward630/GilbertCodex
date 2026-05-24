@@ -253,6 +253,52 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("instead of asking the user to attach a diff");
   });
 
+  it("tells the model to inspect MCP setup and preserve stateful service workflows", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "deploy my Firebase app and track status",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("mcp_list_servers", "mcp"),
+          attachedTool("mcp_list_tools", "mcp"),
+          attachedTool("mcp_call_tool", "mcp"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("mcp_list_servers");
+    expect(prompt).toContain("setup state");
+    expect(prompt).toContain("If mcp_list_servers shows no enabled configured server");
+    expect(prompt).toContain("same serverId and returned job/deploy id");
+    expect(prompt).toContain("instead of switching servers or assuming a file edit/write is required");
+  });
+
+  it("tells the model to recover blank Firebase MCP deploy failures with terminal CLI evidence", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "deploy my Firebase app and track status",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("mcp_list_servers", "mcp"),
+          attachedTool("mcp_list_tools", "mcp"),
+          attachedTool("mcp_call_tool", "mcp"),
+          attachedTool("terminal_run", "terminal"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("Firebase deploy status comes back failed with empty logs");
+    expect(prompt).toContain("structured error");
+    expect(prompt).toContain("project-directory error");
+    expect(prompt).toContain("npx.cmd -y firebase-tools@latest deploy --only hosting --debug --json");
+  });
+
   it("does not name unavailable tool ids when the exact bridge has no tools", () => {
     const prompt = createRuntimeToolPrompt({
       hasLocalComputerContext: false,

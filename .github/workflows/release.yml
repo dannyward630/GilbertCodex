@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag to publish, for example v0.8.0.
+        description: Release tag to publish, for example v0.8.1.
         required: true
         type: string
   push:
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   windows:
     name: windows-updater-release
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -89,7 +89,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Set up Rust
@@ -288,7 +288,7 @@ jobs:
 
   macos:
     name: macos-${{ matrix.asset_arch }}-updater-release
-    runs-on: macos-latest
+    runs-on: macos-15
     needs: windows
     strategy:
       fail-fast: false
@@ -363,7 +363,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Set up Rust
@@ -562,7 +562,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Set up Rust

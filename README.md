@@ -5,13 +5,15 @@
 <h1 align="center">Gilbert Codex</h1>
 
 <p align="center">
-  <strong>A local-first desktop AI agent workspace for coding, review, tools, research, image creation, and release work.</strong>
+  <strong>A local-first desktop AI agent workspace with MCP servers, Skills, plugins, connected apps, workspace tools, image creation, research, review, and release work.</strong>
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.8.0.md">v0.8.0 release notes</a>
+  <a href="docs/releases/v0.8.1.md">v0.8.1 release notes</a>
   |
-  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.0">Desktop alpha download</a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.1">Download v0.8.1</a>
+  |
+  <a href="docs/mcp/README.md">MCP setup</a>
   |
   <a href="docs/ROADMAP.md">Roadmap</a>
   |
@@ -21,31 +23,53 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.8.0.md"><img alt="Version 0.8.0" src="https://img.shields.io/badge/version-0.8.0-d8b36c"></a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.1"><img alt="Version 0.8.1" src="https://img.shields.io/badge/version-0.8.1-d8b36c"></a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/actions/workflows/release.yml"><img alt="Release workflow for Windows, macOS, and Linux" src="https://img.shields.io/badge/release-Windows%20%7C%20macOS%20%7C%20Linux-2ea043"></a>
+  <a href="https://modelcontextprotocol.io/"><img alt="MCP ready" src="https://img.shields.io/badge/MCP-ready-7c3aed"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
-  <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
-## v0.8.0 Cross-Platform Release Prep
+## v0.8.1 Is The Platform Hotfix Build
 
-Gilbert Codex v0.8.0 prepares the desktop alpha for Windows, macOS, and Linux release builds through GitHub Actions. It keeps the recent reliability work while adding a guarded multi-platform packaging path for Windows NSIS, macOS app/DMG, and Linux deb/AppImage artifacts.
+Gilbert Codex v0.8.1 is the first hotfix on top of the major v0.8.0 platform release. It keeps the new MCP, Skills, plugin, connected-app, thinking, tool, and cross-platform release foundation, then tightens the pieces that showed friction during real use: stateful MCP stdio workflows, Firebase MCP recovery, Discord ngrok startup, 9Router LAN access, and release-runner stability.
 
-This is still alpha software. Windows x64 is the locally verified packaged target; macOS and Linux now have release workflow jobs, but the generated packages should still be launched and smoke-tested on real machines before the project calls those platforms fully verified. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+This is still alpha software, but the v0.8.x line is a major line in the sand: Gilbert now has the pieces for connected tools, reusable workflows, plugin-powered capability growth, and cross-platform desktop distribution. v0.8.1 is the build new testers should start from.
+
+High-impact local actions, destructive operations, credential access, publishing, terminal commands, and outside-scope paths are still guarded by explicit review/permission flows. Provider keys, local accounts, OAuth credentials, logs, databases, private tool overlays, generated build output, and release signing secrets stay out of public Git.
 
 Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace work. It can inspect files, but write/edit tool calls are not completing reliably on that route yet. Use the other available Codex/ChatGPT, OpenRouter, or local routes for file changes until this is fixed.
 
-The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
+## What Shipped
 
-## Highlights
-
-| Area | What changed in v0.8.0 |
+| Area | v0.8.x upgrade |
 | --- | --- |
-| Platform release | The Release workflow now builds Windows x64, macOS Apple Silicon/Intel, and Linux x64 artifacts with updater signatures and SHA-256 checksum files. |
-| Packaging safety | Release jobs still require the private tool-bridge overlay and Tauri updater signing key before publishing, so the public shim is not shipped as the desktop app. |
-| Desktop reliability | The recent subscription setup, model route labeling, full-computer workspace, file tooling, automation cleanup, and review activity improvements remain part of this build. |
-| Port readiness | macOS uses Keychain-backed secure storage and app/DMG packaging; Linux uses Secret Service-backed secure storage plus deb/AppImage packaging. |
+| v0.8.1 hotfixes | MCP stdio servers now stay alive per configured server while the app is open, Firebase deploy recovery has clearer CLI fallbacks, Discord can find ngrok from local tools/PATH/common Windows installs, 9Router exposes private-LAN URLs, and CI/release runners are pinned for a steadier all-platform build. |
+| MCP servers | Apps > MCP now supports remote HTTP, localhost HTTP, and command-line stdio servers, with secure bearer tokens/env vars, live setup testing, registry search, cached tool schemas, and chat-callable MCP tools. |
+| Skills | Skills are now app-managed reusable instruction bundles. Gilbert ships premade workflows, imports `SKILL.md` folders, supports custom skills, enables/disables skills, and can activate them by `$trigger` or prompt match. |
+| Plugins | The plugin directory is a working product surface with Discover, Installed, Create, and Marketplace views, 27 curated plugin listings, component/permission metadata, manifest previews, and supported routes into native apps, MCP presets, or skill imports. |
+| OpenAI/Codex plugin bridge | Gilbert can read the OpenAI Codex plugin marketplace metadata, map supported plugins to native connectors or MCP presets, and import bundled plugin skills into the local skill registry. |
+| Thinking and work visibility | Thinking mode has clearer controls and the chat now shows safer "Working" / "Worked" traces for progress, tools, approvals, file batches, web/search activity, and retries without leaking raw provider reasoning. |
+| Tool reliability | Local computer tools gained stronger file-change evidence, batch write/edit summaries, stale-edit protection, binary handling, approval recovery, tool-output finalization, and retry guidance for malformed tool calls. |
+| Connected apps | Gmail, Google Calendar, GitHub, Discord, web search, browser preview, terminal, files, local Git, and MCP-backed services now fit into the same app-owned permission and progress model. |
+| Cross-platform release | The GitHub Release workflow publishes Windows x64, macOS Apple Silicon, macOS Intel, and Linux x64 artifacts with updater signatures, checksums, and `latest.json` update-feed entries. |
+
+## Download
+
+The v0.8.1 desktop alpha is the current build on [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.1).
+
+| Platform | Release artifacts |
+| --- | --- |
+| Windows x64 | `Gilbert-Codex-0.8.1-x64-setup.exe`, `.sig`, `.sha256` |
+| macOS Apple Silicon | `Gilbert-Codex-0.8.1-macos-aarch64.dmg`, updater archive, `.sig`, `.sha256` |
+| macOS Intel | `Gilbert-Codex-0.8.1-macos-x64.dmg`, updater archive, `.sig`, `.sha256` |
+| Linux x64 | `Gilbert-Codex-0.8.1-linux-x64.deb`, `Gilbert-Codex-0.8.1-linux-x64.AppImage`, `.sig`, `.sha256` |
+| Updater feed | `latest.json` with Windows, macOS, and Linux entries |
+
+The release workflow builds Windows, macOS arm64, macOS x64, and Linux x64 on GitHub-hosted native runners.
+
+macOS and Linux packages are built on GitHub-hosted native runners and are now published, but they still need real-device launch smoke tests before those platforms should be called fully verified. macOS artifacts are not notarized unless Apple Developer signing and notarization credentials are added to the release path, so Gatekeeper may require extra confirmation on first launch.
 
 ## Screenshots
 
@@ -82,69 +106,104 @@ The repository is kept open-source ready by default: dependencies, build output,
   </tr>
 </table>
 
-## Download
+## MCP, Skills, And Plugins
 
-The v0.8.0 desktop alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.0) after review and release workflow validation.
+### MCP Servers
 
-Download the artifact for your platform, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. Windows uses Tauri's NSIS setup executable with branded installer artwork and a WebView2 runtime check. macOS publishes app/DMG artifacts. Linux publishes deb/AppImage artifacts.
+Gilbert Codex now treats MCP as a first-class app feature instead of a hidden config file.
 
-The macOS and Linux artifacts are produced by GitHub-hosted runners, but they still need real-device launch smoke tests before being described as fully verified. macOS builds are not notarized unless Apple signing and notarization credentials are added to the release path.
+- Add remote HTTP endpoints, localhost development endpoints, or stdio command servers from Apps > MCP.
+- Store bearer tokens and stdio environment values through OS-backed secure storage.
+- Search the MCP Registry and install normalized server definitions into the same save/test/chat path.
+- Start from 20 curated presets: Firebase, Figma, Supabase, AWS, GitLab, GitHub MCP, Linear, Stripe, Atlassian, Vercel, Notion, Cloudflare, Context7, Redis, MongoDB, Sentry, Kubernetes, and more.
+- Run Test all to refresh cached tool schemas and surface per-server failures.
+- Let chat list configured servers, list tool schemas, and call MCP tools when MCP is enabled in tool settings.
+- Keep OAuth callback codes, state values, bearer tokens, and env values out of visible chat/tool output.
 
-See [v0.8.0 release notes](docs/releases/v0.8.0.md) for update notes, setup notes, known limitations, and validation commands.
+See [MCP Support](docs/mcp/README.md) for setup details, transport notes, Firebase auth guidance, and protocol behavior.
+
+### Skills
+
+Skills are reusable instruction bundles that Gilbert can inject only when they match the turn.
+
+- Premade skills include `$coding`, `$frontend`, `$review`, `$research`, `$skill-creator`, and `$release`.
+- Apps > Skills can install presets, import a folder containing `SKILL.md`, create a new custom skill, edit skill metadata/instructions, enable or disable skills, and copy triggers.
+- The composer has a skill mention picker, so a user can type `$review` or `$research` and select an installed skill directly.
+- The runtime can also match enabled skills by description when the prompt clearly fits the workflow.
+- Skill instructions are capped for prompt budget so large skill files do not swallow the whole context window.
+
+### Plugins
+
+Plugins now have a real directory experience.
+
+- Browse 27 curated plugin listings across coding, code intelligence, apps/data, research, design, security, testing, delivery, and authoring.
+- Track installed plugins separately from discoverable plugins.
+- Inspect components such as Skills, MCP, Agents, Hooks, LSP, and Monitors with permission sensitivity labels.
+- Preview a plugin manifest while creating a workspace-local plugin.
+- Use OpenAI/Codex marketplace metadata to route plugins toward native app connectors, MCP presets/search, or bundled skill import where supported.
+- Default installed plugin concepts include GitHub, Playwright browser automation, Figma, Stripe, and CodeRabbit.
+
+The plugin marketplace is still being polished, but the v0.8.x line moves it out of "idea" territory and into a working foundation for real capability packs.
+
+## Product Shape
+
+- Desktop shell: Tauri 2 window, custom chrome, local app metadata, Rust commands, branded installer assets, updater-ready release config, and Windows/macOS/Linux bundle outputs.
+- Local users: local account creation and sign-in for namespaced chat, project, settings, Skills, MCP, app-connector, and workspace state.
+- Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, queued sends, targeted stop controls, bulk delete review, and local persistence.
+- Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, empty-response retry handling, and malformed-tool retry guidance.
+- Subscription routing: optional local subscription routing for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported provider accounts, with account sign-in, sign-out, usage visibility, model catalogs, and OpenRouter fallback.
+- Skills and plugins: local skill registry, premade/custom/imported skills, plugin catalog, OpenAI/Codex marketplace import routes, plugin manifest preview, and component-aware permission language.
+- MCP and connected tools: MCP server registry/presets/custom setup, Gmail, Google Calendar, GitHub, Discord, browser preview, web search, local terminal, local Git, and workspace file actions.
+- Image generation: chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads.
+- Voice input: offline Whisper dictation for desktop builds, bundled model resources, configurable dictation hotkeys, and dictionary entries.
+- Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, browser preview capture, citation-aware web context, and clearer fallback messaging.
+- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
+- Settings: provider key/base URL entry, subscription account setup, subscription model catalogs without a required local API key, GitHub browser login, Google OAuth setup, Discord bridge setup/runtime controls, optional support links, connection validation, appearance mode, motion, voice dictation, model, generation, thinking, workspace, app, plugin, and MCP controls.
 
 ## Support
 
 Gilbert Codex stays open source and usable without payment. Optional project funding is available through the app's Fund project page, GitHub's Sponsor button, and [Cash App $kobeelijahh](https://cash.app/$kobeelijahh). See [Funding Gilbert Codex](docs/SUPPORT.md) for the safety rules and hosted-link setup notes.
 
-## Product Shape
-
-- Desktop shell: Tauri 2 window, custom chrome, local app metadata, and Rust commands.
-- Local users: local account creation and sign-in for namespaced chat, project, settings, and workspace state.
-- Chat workspace: searchable history, pinned chats, generated chat titles, project grouping, markdown rendering, image/file attachments, regeneration, queued sends, targeted stop controls, bulk delete review, and local persistence.
-- Model runtime: OpenRouter, OpenAI, Anthropic, Google Gemini, xAI, LM Studio, Ollama, Groq, Mistral, and DeepSeek chat streaming with live model catalogs where available, provider usage tracking, thinking controls, planning mode, and empty-response retry handling.
-- Subscription routing: optional local subscription routing for Codex / ChatGPT, Claude Code, Gemini CLI / Cloud Code, GitHub Copilot, and other supported provider accounts, with account sign-in, sign-out, usage visibility, model catalogs, and clean OpenRouter fallback.
-- Image generation: chat can attach generated image artifacts through subscription image routes, with composer controls, progress, image grids, lightbox preview, and downloads. Codex / ChatGPT-backed image generation is the first-class path in this release; broader provider coverage is still being tightened.
-- Voice input: offline Whisper dictation for desktop builds, bundled model resources, and configurable dictation hotkeys/dictionary entries.
-- Source context: DuckDuckGo/Brave-backed source cards, thinking/planning support, browser preview capture, and clearer fallback messaging.
-- Review posture: destructive chat deletion confirmation, explicit local workspace permission modes, source-write guardrails, desktop notification permission checks, a configured Tauri CSP, least-privilege notification capabilities, and visible activity/progress cards.
-- Settings: provider key/base URL entry, subscription account setup, subscription model catalogs without a required local API key, GitHub browser login, Google OAuth setup, Discord bridge setup/runtime controls, optional support links, connection validation, appearance mode, motion, voice dictation, model, generation, thinking, and workspace controls.
-
 ## Coming Next
 
-The next roadmap is focused on making Gilbert faster, clearer, and more capable in real coding sessions. See the full [roadmap](docs/ROADMAP.md) for the active direction.
+v0.8.1 keeps hardening the extensible platform. The next work is about making that platform smoother, deeper, and more trustworthy in real daily use.
 
-- Apps page: Gmail and MCP server connections now have real management surfaces. Skills remain the next catalog surface to finish.
-- Activity and inspector polish: grouped runs, easier progress scanning, cleaner source cards, and less protocol-facing noise.
-- Source-control workflow: richer review cards, GitHub issue/PR/release helpers, workflow visibility, and contributor-friendly starter issues.
-- Research upgrades: stronger source quality, thinking/planning context, and better citation surfaces.
-- Model and provider UX: provider profiles, model capability badges, context-window hints, local/cloud filters, and task-focused presets for coding, planning, research, review, and multimodal work.
-- Voice and multimodal creation: voice-first chat, image generation/editing, image-to-code flows, video job tracking, thumbnails, and saved media artifacts.
-- Release maturity: signed updater work, clearer installer diagnostics, macOS/Linux packaging help, and better public alpha validation notes.
+- Polish the Apps, Skills, and Plugins hub so installed, available, imported, and coming-soon capabilities are easier to scan.
+- Deepen the plugin install path beyond the current native/MCP/skill-import routes.
+- Improve activity cards so tools, files, approvals, sources, retries, artifacts, and long-running jobs read cleanly.
+- Expand provider compatibility tests for subscription routes, image generation, tool schemas, tool-result replay, malformed-call recovery, and streaming edge cases.
+- Improve GitHub/source-control UI with richer review cards, diff review, PR handoff, release workflow visibility, and CI status.
+- Add stronger model/provider UX: capability badges, context hints, local/cloud filters, provider profiles, and task presets.
+- Continue macOS and Linux launch verification, signing/notarization work, installer diagnostics, and public alpha validation notes.
+
+See the full [roadmap](docs/ROADMAP.md) for the active direction.
 
 ## Repository Layout
 
 ```text
 .
-|-- .github/               Issue forms, PR template, CODEOWNERS, CI, and Dependabot
+|-- .github/               Issue forms, PR template, CODEOWNERS, CI, release workflow, and Dependabot
 |-- public/                 Static app assets
 |-- docs/                   Project docs, release notes, and publishing checklists
 |   |-- INSTALLER.md        Windows customer installer build and release checklist
+|   |-- mcp/                MCP setup and protocol notes
 |   |-- platform/           Platform support matrix and macOS/Linux port checklist
 |   `-- ROADMAP.md          Upcoming product and contributor roadmap
 |-- src/                    React frontend
 |   |-- app/                App composition, auth, runtime helpers, Tauri clients
 |   |-- components/         Reusable UI grouped by product area
+|   |-- features/           Plugin catalog, skill mention, and capability feature helpers
 |   |-- lib/                Storage, chat helpers, model metadata, context windows
-|   |-- pages/              Top-level app surfaces
+|   |-- pages/              Top-level app surfaces, Apps, Plugins, Settings, Tasks
 |   |-- localWorkspace/     Host-provided workspace context helpers
-|   |-- services/           Provider, planning, usage, and web-search clients
+|   |-- services/           Provider, planning, usage, skills, and web-search clients
 |   |-- styles/             CSS split by surface
 |   `-- types/              Shared TypeScript contracts
 |-- src-tauri/              Tauri 2 and Rust host layer
 |   |-- capabilities/       Window and runtime permissions
 |   |-- icons/              App icon assets generated from the project logo
 |   |-- windows/            Branded NSIS installer artwork
-|   |-- src/commands/       Auth, app info, browser, Discord, GitHub, terminal, web, and workspace commands
+|   |-- src/commands/       Auth, app info, browser, Discord, GitHub, MCP, terminal, web, and workspace commands
 |   |-- src/core/           Rust storage, secure-storage, and filesystem helpers
 |   `-- tauri.conf.json     Desktop app configuration
 |-- CONTRIBUTING.md         Local setup and contribution rules
@@ -155,14 +214,15 @@ The next roadmap is focused on making Gilbert faster, clearer, and more capable 
 
 ## Getting Started
 
-For platform-specific status and porting work, start with [docs/platform/README.md](docs/platform/README.md). Windows is verified; macOS and Linux are port-ready but unverified until tested on real machines.
+For platform-specific status and porting work, start with [docs/platform/README.md](docs/platform/README.md).
 
 Prerequisites:
 
 - Node.js 18 or newer.
 - Rust and Cargo.
 - Microsoft WebView2 Runtime on Windows.
-- WebKitGTK runtime/development packages on Linux when running or building the Tauri desktop shell, plus `libsecret-tools` and a Secret Service provider for OS-backed secrets.
+- WebKitGTK runtime/development packages on Linux when running or building the Tauri desktop shell.
+- `libsecret-tools` and a Secret Service provider on Linux for OS-backed secrets.
 
 Install dependencies:
 
@@ -200,6 +260,8 @@ Individual checks:
 npm run build
 npm run rust:fmt:check
 npm run rust:check
+npm test
+git diff --check
 ```
 
 On Windows PowerShell, `npm.cmd` is also supported if local script execution policy blocks the `npm` shim.
@@ -208,6 +270,13 @@ Build the Windows customer installer:
 
 ```powershell
 npm.cmd run app:installer
+```
+
+Build native release bundles on macOS or Linux:
+
+```bash
+npm run app:release:macos
+npm run app:release:linux
 ```
 
 See [Windows Installer](docs/INSTALLER.md) for what is bundled, what stays local, and the release checklist.
@@ -220,7 +289,9 @@ GitHub browser login uses OAuth device flow. Create a GitHub OAuth App with devi
 
 Gmail and Google Calendar sign-in use Google OAuth for desktop apps. Each user adds their own Google Cloud desktop OAuth Client ID and Client secret in Settings > Google, then installs Gmail or Google Calendar from Apps and chooses a Google account in the browser. No shared Google OAuth client ID, Google access token, refresh token, or downloaded credential file belongs in the repository.
 
-Release-only app configuration stays out of the public source tree. The GitHub `Release` workflow restores private app-only runtime files from a private release overlay before building the installer, including the private tool bridge and optional plugin bundles. App-user OAuth values, provider keys, local accounts, and support links are not required as release secrets; users configure those inside the installed app.
+MCP bearer tokens and stdio environment values are stored through the app's OS-backed secure storage. The React UI and chat tools only see whether a secret exists; they do not receive the secret values back.
+
+Release-only app configuration stays out of the public source tree. The GitHub `Release` workflow restores private app-only runtime files from a private release overlay before building desktop artifacts, including the private tool bridge and optional plugin bundles. App-user OAuth values, provider keys, local accounts, and support links are not required as release secrets; users configure those inside the installed app.
 
 Discord bridge settings are local setup data for the desktop Discord runtime. Slash-command chat uses a signed local Interactions receiver and can start ngrok in the background to produce a public HTTPS endpoint. `/gilbert` continues the latest Discord-linked chat, while `/gilbertnewchat` intentionally starts a fresh chat. Incoming Discord webhooks are one-way posting URLs for app updates and chat follow-ups. Bot gateway chat is still future runtime work.
 
@@ -228,6 +299,7 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 
 ## Integration Setup
 
+- [MCP Support](docs/mcp/README.md): MCP transports, stdio setup, registry discovery, featured presets, chat tools, and protocol notes.
 - [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux port readiness, and the native testing checklist.
 - [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, and incoming webhooks.
 - [Gmail plugin setup](docs/gmail/README.md): Google OAuth desktop setup, user connection flow, requested scopes, and Gmail confirmation rules.

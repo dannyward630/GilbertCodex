@@ -262,6 +262,8 @@ export interface NineRouterLocalStatus {
   autoStartEnabled: boolean;
   built: boolean;
   dashboardUrl: string;
+  lanBaseUrls?: string[];
+  lanDashboardUrls?: string[];
   dataDir?: string | null;
   dockerVersion?: string | null;
   gitVersion?: string | null;

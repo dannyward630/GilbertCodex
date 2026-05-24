@@ -2,13 +2,13 @@
 
 use crate::{
     commands::auth,
-    core::{secure_storage, storage},
+    core::{process::hide_command_window, secure_storage, storage},
 };
 use reqwest::{header, Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -44,6 +44,13 @@ const USER_AGENT: &str = "GilbertCodex/0.5 (desktop MCP)";
 #[derive(Default)]
 pub struct McpState {
     lock: Mutex<()>,
+    stdio_sessions: StdioSessionCache,
+}
+
+impl Drop for McpState {
+    fn drop(&mut self) {
+        shutdown_all_cached_stdio_sessions(&self.stdio_sessions);
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -293,6 +300,7 @@ struct McpProbeResult {
     tools: Vec<McpToolSummary>,
 }
 
+#[derive(Clone, Debug)]
 struct McpInitializeResult {
     protocol_version: Option<String>,
     server_name: Option<String>,
@@ -306,6 +314,7 @@ struct McpRpcResponse {
 }
 
 type McpProgressSender = Arc<Channel<McpServerProgressEvent>>;
+type StdioSessionCache = Arc<Mutex<HashMap<String, CachedStdioMcpSession>>>;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,6 +339,12 @@ struct StdioMcpSession {
     stderr_rx: mpsc::Receiver<String>,
     stdin: ChildStdin,
     stdout_rx: mpsc::Receiver<String>,
+}
+
+struct CachedStdioMcpSession {
+    config_key: String,
+    initialized: McpInitializeResult,
+    session: StdioMcpSession,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -440,6 +455,7 @@ pub fn mcp_save_server(
 
     normalize_database(&mut database);
     save_database(&app, &database)?;
+    reset_cached_stdio_session(state.inner(), &server_id);
 
     let state = create_connection_state(&database);
     let server = state
@@ -478,6 +494,7 @@ pub fn mcp_remove_server(
     }
 
     save_database(&app, &database)?;
+    reset_cached_stdio_session(state.inner(), &id);
     delete_mcp_server_secrets(&app, &id, removed_server.as_ref());
     Ok(create_connection_state(&database))
 }
@@ -520,7 +537,7 @@ async fn run_mcp_test_server(
         None,
     );
 
-    let probe = probe_server(&record, progress.clone()).await;
+    let probe = probe_server(&record, progress.clone(), None).await;
 
     match probe {
         Ok(probe) => {
@@ -617,7 +634,7 @@ pub async fn mcp_list_tools(
 ) -> Result<McpListToolsResponse, String> {
     let server_id = normalize_id(&request.server_id, "MCP server id")?;
     let record = find_server_record(&app, &server_id)?;
-    let probe = probe_server(&record, None)
+    let probe = probe_server(&record, None, Some(state.inner().stdio_sessions.clone()))
         .await
         .map_err(|error| format!("Could not list tools for {}: {error}", record.name.trim()))?;
     let tools = probe.tools.clone();
@@ -638,15 +655,23 @@ pub async fn mcp_call_tool(
     request: McpCallToolRequest,
 ) -> Result<McpToolCallResponse, String> {
     let server_id = normalize_id(&request.server_id, "MCP server id")?;
-    let tool_name = normalize_tool_name(&request.tool_name)?;
+    let requested_tool_name = normalize_tool_name(&request.tool_name)?;
     let arguments = normalize_tool_arguments(request.arguments)?;
     let record = find_server_record(&app, &server_id)?;
+    let tool_name = resolve_mcp_tool_name(&record, &requested_tool_name);
+    let arguments = normalize_mcp_tool_arguments_for_server(&record, &tool_name, arguments);
 
     if !record.enabled {
         return Err(format!("MCP server {} is disabled.", record.name));
     }
 
-    let raw_result = call_server_tool(&record, &tool_name, arguments).await?;
+    let raw_result = call_server_tool(
+        &record,
+        state.inner().stdio_sessions.clone(),
+        &tool_name,
+        arguments.clone(),
+    )
+    .await?;
     let visible_result = sanitize_mcp_visible_value(&raw_result);
     let structured_content = visible_result.get("structuredContent").cloned();
     let is_error = visible_result
@@ -662,6 +687,16 @@ pub async fn mcp_call_tool(
     };
     let (_state_response, server) =
         update_server_after_probe(&app, state.inner(), &server_id, &probe, None)?;
+    let server = maybe_persist_firebase_project_directory(
+        &app,
+        state.inner(),
+        &server_id,
+        &record,
+        &tool_name,
+        &arguments,
+        is_error,
+        server,
+    )?;
 
     Ok(McpToolCallResponse {
         content,
@@ -1233,12 +1268,19 @@ fn update_server_after_error(
 async fn probe_server(
     record: &McpServerRecord,
     progress: Option<McpProgressSender>,
+    stdio_sessions: Option<StdioSessionCache>,
 ) -> Result<McpProbeResult, String> {
     if is_stdio_transport(record) {
         let record = record.clone();
-        return tauri::async_runtime::spawn_blocking(move || probe_stdio_server(&record, progress))
-            .await
-            .map_err(|error| format!("MCP stdio task failed: {error}"))?;
+        return tauri::async_runtime::spawn_blocking(move || {
+            if let Some(stdio_sessions) = stdio_sessions {
+                probe_stdio_server_persistent(&stdio_sessions, &record, progress)
+            } else {
+                probe_stdio_server(&record, progress)
+            }
+        })
+        .await
+        .map_err(|error| format!("MCP stdio task failed: {error}"))?;
     }
 
     send_mcp_progress(
@@ -1364,6 +1406,7 @@ async fn list_server_tools(
 
 async fn call_server_tool(
     record: &McpServerRecord,
+    stdio_sessions: StdioSessionCache,
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
@@ -1375,7 +1418,7 @@ async fn call_server_tool(
         let record = record.clone();
         let tool_name = tool_name.to_string();
         return tauri::async_runtime::spawn_blocking(move || {
-            call_stdio_server_tool(&record, &tool_name, arguments)
+            call_stdio_server_tool_persistent(&stdio_sessions, &record, &tool_name, arguments)
         })
         .await
         .map_err(|error| format!("MCP stdio task failed: {error}"))?;
@@ -1539,6 +1582,31 @@ fn probe_stdio_server(
     result
 }
 
+fn probe_stdio_server_persistent(
+    stdio_sessions: &StdioSessionCache,
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+) -> Result<McpProbeResult, String> {
+    with_persistent_stdio_session(stdio_sessions, record, progress.clone(), |entry| {
+        send_mcp_progress(
+            progress.as_ref(),
+            "step",
+            "Loading tools from the running MCP process.".to_string(),
+            None,
+        );
+        let tools =
+            filter_mcp_tools_for_server(record, list_stdio_server_tools(&mut entry.session)?);
+
+        Ok(McpProbeResult {
+            protocol_version: entry.initialized.protocol_version.clone(),
+            server_name: entry.initialized.server_name.clone(),
+            server_version: entry.initialized.server_version.clone(),
+            tools,
+        })
+    })
+}
+
+#[cfg(test)]
 fn call_stdio_server_tool(
     record: &McpServerRecord,
     tool_name: &str,
@@ -1564,6 +1632,123 @@ fn call_stdio_server_tool(
 
     shutdown_stdio_session(session);
     result
+}
+
+fn call_stdio_server_tool_persistent(
+    stdio_sessions: &StdioSessionCache,
+    record: &McpServerRecord,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    if is_firebase_mcp_server(record) && is_firebase_mcp_login_tool(tool_name) {
+        return Ok(firebase_mcp_login_guidance());
+    }
+
+    with_persistent_stdio_session(stdio_sessions, record, None, |entry| {
+        stdio_rpc_request(
+            &mut entry.session,
+            "tools/call",
+            Some(json!({
+                "name": tool_name,
+                "arguments": arguments,
+            })),
+        )
+    })
+}
+
+fn with_persistent_stdio_session<T>(
+    stdio_sessions: &StdioSessionCache,
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+    action: impl FnOnce(&mut CachedStdioMcpSession) -> Result<T, String>,
+) -> Result<T, String> {
+    let config_key = stdio_session_config_key(record);
+    let mut sessions = stdio_sessions
+        .lock()
+        .map_err(|_| "The MCP stdio session store is busy. Try again in a moment.".to_string())?;
+    let mut restart_reason: Option<String> = None;
+
+    if let Some(entry) = sessions.get_mut(&record.id) {
+        if entry.config_key != config_key {
+            restart_reason =
+                Some("MCP server configuration changed; restarting the stdio process.".to_string());
+        } else {
+            match entry.session.child.try_wait() {
+                Ok(Some(status)) => {
+                    restart_reason = Some(format!(
+                        "MCP stdio process exited with {status}; starting a fresh process."
+                    ));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    restart_reason = Some(format!(
+                        "Could not inspect the MCP stdio process ({error}); starting a fresh process."
+                    ));
+                }
+            }
+        }
+    }
+
+    if restart_reason.is_some() || !sessions.contains_key(&record.id) {
+        if let Some(reason) = restart_reason {
+            send_mcp_progress(progress.as_ref(), "step", reason, None);
+        }
+
+        if let Some(entry) = sessions.remove(&record.id) {
+            shutdown_stdio_session(entry.session);
+        }
+
+        let entry = open_initialized_stdio_session(record, progress.clone(), config_key)?;
+        sessions.insert(record.id.clone(), entry);
+    }
+
+    let result = {
+        let entry = sessions
+            .get_mut(&record.id)
+            .ok_or_else(|| "MCP stdio session was not available after startup.".to_string())?;
+        action(entry)
+    };
+
+    if let Err(error) = &result {
+        if is_broken_stdio_session_error(error) {
+            if let Some(entry) = sessions.remove(&record.id) {
+                shutdown_stdio_session(entry.session);
+            }
+        }
+    }
+
+    result
+}
+
+fn open_initialized_stdio_session(
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+    config_key: String,
+) -> Result<CachedStdioMcpSession, String> {
+    let mut session = open_stdio_session(record, progress.clone())?;
+    let initialized = (|| {
+        send_mcp_progress(
+            progress.as_ref(),
+            "step",
+            "Process started. Waiting for MCP initialize.".to_string(),
+            None,
+        );
+        let initialized = initialize_stdio_server(&mut session)?;
+        let _ = stdio_rpc_notification(&mut session, "notifications/initialized", Some(json!({})));
+        Ok(initialized)
+    })();
+
+    match initialized {
+        Ok(initialized) => Ok(CachedStdioMcpSession {
+            config_key,
+            initialized,
+            session,
+        }),
+        Err(error) => {
+            shutdown_stdio_session(session);
+            Err(error)
+        }
+    }
 }
 
 fn initialize_stdio_server(session: &mut StdioMcpSession) -> Result<McpInitializeResult, String> {
@@ -1949,6 +2134,7 @@ fn open_stdio_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_command_window(&mut process);
 
     prepend_stdio_path_dirs(&mut process, &resolved_command.extra_path_dirs);
 
@@ -2210,6 +2396,56 @@ fn shutdown_stdio_session(mut session: StdioMcpSession) {
     let _ = session.child.wait();
 }
 
+fn reset_cached_stdio_session(state: &McpState, server_id: &str) {
+    if let Ok(mut sessions) = state.stdio_sessions.lock() {
+        if let Some(entry) = sessions.remove(server_id) {
+            shutdown_stdio_session(entry.session);
+        }
+    }
+}
+
+fn shutdown_all_cached_stdio_sessions(stdio_sessions: &StdioSessionCache) {
+    if let Ok(mut sessions) = stdio_sessions.lock() {
+        for (_, entry) in sessions.drain() {
+            shutdown_stdio_session(entry.session);
+        }
+    }
+}
+
+fn stdio_session_config_key(record: &McpServerRecord) -> String {
+    serde_json::to_string(&json!({
+        "args": &record.args,
+        "command": &record.command,
+        "environment": record.environment.iter().map(|item| json!({
+            "name": item.name,
+            "value": item.value,
+        })).collect::<Vec<_>>(),
+        "transport": &record.transport,
+        "workingDirectory": &record.working_directory,
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{}|{}|{}",
+            record.command.as_deref().unwrap_or(""),
+            record.args.join("\u{1f}"),
+            record.working_directory.as_deref().unwrap_or("")
+        )
+    })
+}
+
+fn is_broken_stdio_session_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+
+    lower.contains("could not write mcp stdio")
+        || lower.contains("could not read mcp stdio")
+        || lower.contains("closed stdout")
+        || lower.contains("stdout closed")
+        || lower.contains("timed out waiting")
+        || lower.contains("non-json-rpc stdout")
+        || lower.contains("read error")
+        || lower.contains("broken pipe")
+}
+
 fn mcp_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -2397,6 +2633,139 @@ fn filter_mcp_tools_for_server(
         .collect()
 }
 
+fn resolve_mcp_tool_name(record: &McpServerRecord, requested_tool_name: &str) -> String {
+    let requested = requested_tool_name.trim();
+
+    if requested.is_empty() {
+        return requested_tool_name.to_string();
+    }
+
+    if let Some(tool) = record.tools.iter().find(|tool| tool.name == requested) {
+        return tool.name.clone();
+    }
+
+    let requested_key = compact_mcp_name(requested);
+    if let Some(tool) = record
+        .tools
+        .iter()
+        .find(|tool| compact_mcp_name(&tool.name) == requested_key)
+    {
+        return tool.name.clone();
+    }
+
+    if is_firebase_mcp_server(record) {
+        if let Some(name) = firebase_mcp_tool_alias(&requested_key) {
+            return name.to_string();
+        }
+    }
+
+    requested.to_string()
+}
+
+fn normalize_mcp_tool_arguments_for_server(
+    record: &McpServerRecord,
+    tool_name: &str,
+    arguments: Value,
+) -> Value {
+    if !is_firebase_mcp_server(record) || !is_firebase_update_environment_tool(tool_name) {
+        return arguments;
+    }
+
+    let Value::Object(mut object) = arguments else {
+        return arguments;
+    };
+
+    copy_mcp_argument_alias(
+        &mut object,
+        "project_dir",
+        &["projectDir", "projectDirectory", "project_directory"],
+    );
+    copy_mcp_argument_alias(
+        &mut object,
+        "active_project",
+        &["activeProject", "projectId", "projectID", "activeProjectId"],
+    );
+    copy_mcp_argument_alias(
+        &mut object,
+        "active_user_account",
+        &["activeUserAccount", "userAccount", "accountEmail"],
+    );
+
+    Value::Object(object)
+}
+
+fn copy_mcp_argument_alias(object: &mut Map<String, Value>, canonical: &str, aliases: &[&str]) {
+    if object.contains_key(canonical) {
+        return;
+    }
+
+    let Some(value) = aliases.iter().find_map(|alias| object.get(*alias).cloned()) else {
+        return;
+    };
+
+    object.insert(canonical.to_string(), value);
+}
+
+fn maybe_persist_firebase_project_directory(
+    app: &tauri::AppHandle,
+    state: &McpState,
+    server_id: &str,
+    record: &McpServerRecord,
+    tool_name: &str,
+    arguments: &Value,
+    is_error: bool,
+    fallback_server: McpServerState,
+) -> Result<McpServerState, String> {
+    if is_error
+        || !is_firebase_mcp_server(record)
+        || !is_firebase_update_environment_tool(tool_name)
+    {
+        return Ok(fallback_server);
+    }
+
+    let Some(project_dir) = firebase_project_dir_argument(arguments) else {
+        return Ok(fallback_server);
+    };
+
+    let project_path = PathBuf::from(&project_dir);
+    if !project_path.is_absolute() || !project_path.is_dir() {
+        return Ok(fallback_server);
+    }
+
+    let canonical_project_dir = project_path
+        .canonicalize()
+        .unwrap_or(project_path)
+        .to_string_lossy()
+        .to_string();
+    let _guard = state
+        .lock
+        .lock()
+        .map_err(|_| "The MCP server store is busy. Try again in a moment.".to_string())?;
+    let mut database = load_database(app)?;
+    let now = now_millis();
+    let server = database
+        .servers
+        .iter_mut()
+        .find(|server| server.id == server_id)
+        .ok_or_else(|| "MCP server was not found.".to_string())?;
+
+    if server.working_directory.as_deref() == Some(canonical_project_dir.as_str()) {
+        return Ok(fallback_server);
+    }
+
+    server.working_directory = Some(canonical_project_dir);
+    server.updated_at = Some(now);
+    save_database(app, &database)?;
+    reset_cached_stdio_session(state, server_id);
+
+    let state_response = create_connection_state(&database);
+    state_response
+        .servers
+        .into_iter()
+        .find(|server| server.id == server_id)
+        .ok_or_else(|| "MCP server was updated but could not be reloaded.".to_string())
+}
+
 fn is_firebase_mcp_server(record: &McpServerRecord) -> bool {
     let name = record.name.to_ascii_lowercase();
     let server_name = record
@@ -2413,11 +2782,59 @@ fn is_firebase_mcp_server(record: &McpServerRecord) -> bool {
         || command.contains("firebase")
 }
 
+fn is_firebase_update_environment_tool(tool_name: &str) -> bool {
+    matches!(
+        compact_mcp_name(tool_name).as_str(),
+        "firebaseupdateenvironment" | "updateenvironment"
+    )
+}
+
 fn is_firebase_mcp_login_tool(tool_name: &str) -> bool {
     matches!(
-        tool_name.trim().to_ascii_lowercase().as_str(),
-        "firebase_login" | "login"
+        compact_mcp_name(tool_name).as_str(),
+        "firebaselogin" | "login"
     )
+}
+
+fn firebase_project_dir_argument(arguments: &Value) -> Option<String> {
+    arguments
+        .get("project_dir")
+        .or_else(|| arguments.get("projectDir"))
+        .or_else(|| arguments.get("projectDirectory"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.contains('\0'))
+        .map(str::to_string)
+}
+
+fn firebase_mcp_tool_alias(compact_name: &str) -> Option<&'static str> {
+    match compact_name {
+        "firebaselogin" => Some("firebase_login"),
+        "firebaselogout" => Some("firebase_logout"),
+        "firebasegetproject" => Some("firebase_get_project"),
+        "firebaselistapps" => Some("firebase_list_apps"),
+        "firebaselistprojects" => Some("firebase_list_projects"),
+        "firebasegetsdkconfig" => Some("firebase_get_sdk_config"),
+        "firebasecreateproject" => Some("firebase_create_project"),
+        "firebasecreateapp" => Some("firebase_create_app"),
+        "firebasecreateandroidsha" => Some("firebase_create_android_sha"),
+        "firebasegetenvironment" => Some("firebase_get_environment"),
+        "firebaseupdateenvironment" => Some("firebase_update_environment"),
+        "firebaseinit" => Some("firebase_init"),
+        "firebasegetsecurityrules" => Some("firebase_get_security_rules"),
+        "firebasereadresources" => Some("firebase_read_resources"),
+        "firebasedeploy" => Some("firebase_deploy"),
+        "firebasedeploystatus" | "deploystatus" => Some("firebase_deploy_status"),
+        _ => None,
+    }
+}
+
+fn compact_mcp_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn firebase_mcp_login_guidance() -> Value {
@@ -2493,6 +2910,13 @@ fn format_mcp_tool_result_content(result: &Value) -> String {
         }
     }
 
+    if let Some(structured) = result.get("structuredContent") {
+        let details = format_structured_mcp_result_details(structured);
+        if !details.is_empty() && !lines.iter().any(|line| line.contains(&details)) {
+            lines.push(format!("--- Structured content ---\n{details}"));
+        }
+    }
+
     if lines.is_empty() {
         if let Some(structured) = result.get("structuredContent") {
             lines.push(format!(
@@ -2505,6 +2929,68 @@ fn format_mcp_tool_result_content(result: &Value) -> String {
     }
 
     truncate_chars(&lines.join("\n\n"), MCP_MAX_RESULT_CHARS)
+}
+
+fn format_structured_mcp_result_details(value: &Value) -> String {
+    let Value::Object(object) = value else {
+        return serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    };
+
+    let mut lines = Vec::new();
+
+    for key in ["status", "progress", "error", "message", "jobId"] {
+        if let Some(value) = object.get(key) {
+            if let Some(text) = structured_scalar_text(value) {
+                lines.push(format!("{}: {}", structured_label(key), text));
+            }
+        }
+    }
+
+    if let Some(logs) = object.get("logs").and_then(Value::as_array) {
+        let log_lines = logs
+            .iter()
+            .filter_map(structured_scalar_text)
+            .filter(|line| !line.trim().is_empty())
+            .take(20)
+            .collect::<Vec<_>>();
+
+        if !log_lines.is_empty() {
+            lines.push(format!("Logs:\n{}", log_lines.join("\n")));
+        }
+    }
+
+    if lines.is_empty() {
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn structured_scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::String(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn structured_label(key: &str) -> &'static str {
+    match key {
+        "jobId" => "Job ID",
+        "status" => "Status",
+        "progress" => "Progress",
+        "error" => "Error",
+        "message" => "Message",
+        _ => "Value",
+    }
 }
 
 fn sanitize_mcp_visible_value(value: &Value) -> Value {
@@ -3336,6 +3822,110 @@ rl.on("line", (line) => {
         path
     }
 
+    fn write_stateful_stdio_server() -> PathBuf {
+        let path = env::temp_dir().join(format!("gilbert-mcp-stateful-{}.js", Uuid::new_v4()));
+        let script = r#"
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+let activeJobId = null;
+let nextJobId = 1;
+function send(payload) {
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}
+function textResult(id, text, extra = {}) {
+  send({
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text }],
+      isError: false,
+      ...extra
+    }
+  });
+}
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: "2025-03-26",
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "Stateful MCP", version: "test" }
+      }
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [
+          {
+            name: "start_job",
+            description: "Start a stateful background job.",
+            inputSchema: { type: "object", properties: {} }
+          },
+          {
+            name: "job_status",
+            description: "Read stateful background job status.",
+            inputSchema: {
+              type: "object",
+              properties: { jobId: { type: "string" } },
+              required: ["jobId"]
+            }
+          }
+        ]
+      }
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const name = message.params && message.params.name;
+    const args = (message.params && message.params.arguments) || {};
+    if (name === "start_job") {
+      activeJobId = `job-${nextJobId++}`;
+      textResult(
+        message.id,
+        `Deployment started with Job ID: ${activeJobId}. Use job_status tool to track.`,
+        { structuredContent: { jobId: activeJobId } }
+      );
+      return;
+    }
+    if (name === "job_status") {
+      if (args.jobId === activeJobId) {
+        textResult(message.id, `Job ${args.jobId} finished successfully.`);
+      } else {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            content: [{ type: "text", text: `Error: Job not found: ${args.jobId}` }],
+            isError: true
+          }
+        });
+      }
+      return;
+    }
+  }
+  send({
+    jsonrpc: "2.0",
+    id: message.id,
+    error: { code: -32601, message: "Method not found" }
+  });
+});
+"#;
+
+        fs::write(&path, script).expect("write stateful MCP server");
+        path
+    }
+
     fn echo_stdio_record(script_path: &PathBuf) -> McpServerRecord {
         McpServerRecord {
             args: vec![script_path.to_string_lossy().to_string()],
@@ -3343,6 +3933,18 @@ rl.on("line", (line) => {
             enabled: true,
             id: "local-echo".to_string(),
             name: "Local Echo".to_string(),
+            transport: MCP_TRANSPORT_STDIO.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn stateful_stdio_record(script_path: &PathBuf) -> McpServerRecord {
+        McpServerRecord {
+            args: vec![script_path.to_string_lossy().to_string()],
+            command: Some("node".to_string()),
+            enabled: true,
+            id: "stateful-job".to_string(),
+            name: "Stateful Job".to_string(),
             transport: MCP_TRANSPORT_STDIO.to_string(),
             ..Default::default()
         }
@@ -3525,5 +4127,119 @@ rl.on("line", (line) => {
         );
 
         let _ = fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn persistent_stdio_session_preserves_server_job_state_between_tool_calls() {
+        if !node_available() {
+            eprintln!("Skipping stdio MCP test because node is not available.");
+            return;
+        }
+
+        let script_path = write_stateful_stdio_server();
+        let record = stateful_stdio_record(&script_path);
+        let state = McpState::default();
+        let start = call_stdio_server_tool_persistent(
+            &state.stdio_sessions,
+            &record,
+            "start_job",
+            json!({}),
+        )
+        .expect("start stateful job");
+        let job_id = start
+            .pointer("/structuredContent/jobId")
+            .and_then(Value::as_str)
+            .expect("job id");
+        let status = call_stdio_server_tool_persistent(
+            &state.stdio_sessions,
+            &record,
+            "job_status",
+            json!({ "jobId": job_id }),
+        )
+        .expect("read stateful job status");
+        let content = format_mcp_tool_result_content(&status);
+
+        assert_eq!(status.get("isError").and_then(Value::as_bool), Some(false));
+        assert!(content.contains("finished successfully"));
+
+        reset_cached_stdio_session(&state, &record.id);
+        let _ = fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn firebase_mcp_tool_names_accept_compact_aliases() {
+        let mut record = McpServerRecord {
+            args: vec!["firebase-tools@latest".to_string(), "mcp".to_string()],
+            command: Some("npx.cmd".to_string()),
+            enabled: true,
+            id: "firebase".to_string(),
+            name: "Firebase".to_string(),
+            transport: MCP_TRANSPORT_STDIO.to_string(),
+            ..Default::default()
+        };
+        record.tools = vec![McpToolSummary {
+            description: None,
+            input_schema: None,
+            name: "firebase_deploy_status".to_string(),
+        }];
+
+        assert_eq!(
+            resolve_mcp_tool_name(&record, "firebasedeploystatus"),
+            "firebase_deploy_status"
+        );
+        assert_eq!(
+            resolve_mcp_tool_name(&record, "firebase-deploy-status"),
+            "firebase_deploy_status"
+        );
+    }
+
+    #[test]
+    fn firebase_update_environment_normalizes_common_argument_aliases() {
+        let record = McpServerRecord {
+            args: vec!["firebase-tools@latest".to_string(), "mcp".to_string()],
+            command: Some("npx.cmd".to_string()),
+            enabled: true,
+            id: "firebase".to_string(),
+            name: "Firebase".to_string(),
+            transport: MCP_TRANSPORT_STDIO.to_string(),
+            ..Default::default()
+        };
+        let arguments = normalize_mcp_tool_arguments_for_server(
+            &record,
+            "firebase_update_environment",
+            json!({
+                "activeProject": "gilbertcodexweb",
+                "projectDirectory": "C:/Users/Kobe Work/Documents/Hello world"
+            }),
+        );
+
+        assert_eq!(
+            arguments.get("project_dir").and_then(Value::as_str),
+            Some("C:/Users/Kobe Work/Documents/Hello world")
+        );
+        assert_eq!(
+            arguments.get("active_project").and_then(Value::as_str),
+            Some("gilbertcodexweb")
+        );
+    }
+
+    #[test]
+    fn mcp_tool_result_includes_structured_error_when_text_logs_are_empty() {
+        let content = format_mcp_tool_result_content(&json!({
+            "content": [{
+                "type": "text",
+                "text": "Job ID: 1779662380537\nStatus: failed\nProgress: 0%\n\nLogs:\n"
+            }],
+            "structuredContent": {
+                "status": "failed",
+                "progress": 0,
+                "logs": [],
+                "error": "Expected to be in a project directory, but none was found."
+            }
+        }));
+
+        assert!(content.contains("Logs:"));
+        assert!(content.contains("--- Structured content ---"));
+        assert!(content.contains("Error: Expected to be in a project directory"));
     }
 }

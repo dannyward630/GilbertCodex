@@ -256,7 +256,7 @@ export function looksLikeUnnecessaryLocalActionConfirmation(content: string, too
 }
 
 const APP_TOOL_NAME_PATTERN =
-  /\b(?:files[._](?:append|apply_patch|copy|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|replace_span|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|gmail_[\w.-]+|calendar_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
+  /\b(?:files[._](?:append|apply_patch|copy|count_lines|edit_many|exact_replace|insert_at_line|list|move|read|read_many|read_range|replace_range|replace_span|search|stat|tree_summary|write|write_many)|terminal_run|browser_[\w.-]+|git_[\w.-]+|github_[\w.-]+|gmail_[\w.-]+|calendar_[\w.-]+|mcp_[\w.-]+|web_search|bridge_(?:echo|sum)|tool_smoke_test)\b/i;
 const FILE_LINE_EDIT_FRAME_PATTERN =
   /\b(?:current\s+)?`?[\w./\\ -]+\.(?:astro|c|cpp|cs|css|dart|go|html|java|js|jsx|json|kt|kts|md|mdx|php|py|rb|rs|scss|sh|sql|svelte|swift|toml|ts|tsx|txt|vue|xml|ya?ml)`?\s+lines?\s+\d+(?:\s*-\s*\d+)?\b/i;
 const EDITABLE_FILE_MENTION_PATTERN =
@@ -264,7 +264,7 @@ const EDITABLE_FILE_MENTION_PATTERN =
 const EDIT_INSTRUCTION_FRAME_PATTERN =
   /(?:^|\n)\s*(?:one precise change|replace lines?\s+\d+(?:\s*-\s*\d+)?|old text|new text|with:|replace(?:\s+the)?\s+following)\b/i;
 const TOOL_ACTION_PROMISE_PATTERN =
-  /\b(?:let me|i(?:['\u2019]ll| will)|i am going to|i(?:['\u2019]m) going to|we(?:['\u2019]ll| will)|now\s+i(?:['\u2019]ll| will| need to)|next(?:,|:)?|wait\s*[-:])\b[\s\S]{0,320}\b(?:add|apply|change|check|compact|create|delete|do|edit|examine|execute|fix|implement|inspect|look|make|modify|patch|perform|reduce|refine|remove|replace|resize|retry|run|shrink|tighten|try|update|use|write)\b/i;
+  /\b(?:let me|i(?:['\u2019]ll| will)|i am going to|i(?:['\u2019]m) going to|we(?:['\u2019]ll| will)|now\s+i(?:['\u2019]ll| will| need to)|next(?:,|:)?|wait\s*[-:])\b[\s\S]{0,320}\b(?:add|apply|call|change|check|compact|create|delete|do|edit|examine|execute|fix|implement|inspect|look|make|modify|patch|perform|reduce|refine|remove|replace|resize|retry|run|shrink|tighten|try|update|use|write)\b/i;
 const STANDALONE_CODING_ACTION_PROMISE_PATTERN =
   /\b(?:now\s+)?i\s+need\s+to\s+(?:add|change|create|delete|edit|fix|implement|modify|patch|remove|replace|update|write)\b[\s\S]{0,360}\b(?:api|app|code|component|css|database|file|function|handler|hook|jsx|logic|module|route|screen|service|state|support|tsx|ui)\b[\s:;.,-]*$/i;
 const TOOL_INVENTORY_NARRATION_PATTERN =

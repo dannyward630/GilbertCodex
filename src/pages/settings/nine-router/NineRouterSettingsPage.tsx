@@ -213,6 +213,8 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
   const isNineRouterActive = settings.provider === NINE_ROUTER_PROVIDER_ID;
   const nineRouterBaseUrl = settings.baseUrls[NINE_ROUTER_PROVIDER_ID]?.trim() || status?.baseUrl || getDefaultBaseUrlForProvider(NINE_ROUTER_PROVIDER_ID);
   const nineRouterDashboardUrl = status?.dashboardUrl || NINE_ROUTER_DASHBOARD_FALLBACK;
+  const primaryLanBaseUrl = status?.lanBaseUrls?.[0] ?? "";
+  const primaryLanDashboardUrl = status?.lanDashboardUrls?.[0] ?? "";
   const accountRows = useMemo(
     () => NINE_ROUTER_ACCOUNT_PROVIDERS.map((provider) => {
       const connections = connectionCatalog.connections.filter((connection) => connection.provider === provider.id);
@@ -1497,6 +1499,31 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
                 {connectionCatalog.status === "loading" ? "Checking" : "Refresh accounts"}
               </button>
             </article>
+
+            {primaryLanBaseUrl ? (
+              <article className="settings-card nine-router-routing-card">
+                <div className="settings-card-heading">
+                  <Cloud size={19} aria-hidden="true" />
+                  <div>
+                    <h2>Wi-Fi access</h2>
+                    <p>Devices on this network can use the subscription router through the desktop.</p>
+                  </div>
+                </div>
+                <div className="settings-row-list">
+                  <div className="settings-row">
+                    <span>Mobile API URL</span>
+                    <strong>{primaryLanBaseUrl}</strong>
+                    <span className="settings-row-static-pill">LAN</span>
+                  </div>
+                  {primaryLanDashboardUrl ? (
+                    <div className="settings-row">
+                      <span>Dashboard URL</span>
+                      <strong>{primaryLanDashboardUrl}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              </article>
+            ) : null}
 
             {showModelRoutingCard ? (
               <article className="settings-card nine-router-routing-card">

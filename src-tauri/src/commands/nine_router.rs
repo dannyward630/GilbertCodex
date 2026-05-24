@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Mutex},
@@ -24,6 +24,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const NINE_ROUTER_ADDR: &str = "127.0.0.1:20128";
 const NINE_ROUTER_BASE_URL: &str = "http://127.0.0.1:20128/v1";
 const NINE_ROUTER_DASHBOARD_URL: &str = "http://127.0.0.1:20128";
+const NINE_ROUTER_BIND_HOST: &str = "0.0.0.0";
 const NINE_ROUTER_STARTUP_WAIT_MS: u64 = 20_000;
 const NINE_ROUTER_HTTP_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const NINE_ROUTER_HTTP_TIMEOUT_MS: u64 = 180_000;
@@ -93,6 +94,8 @@ pub struct NineRouterLocalStatus {
     pub auto_start_enabled: bool,
     pub built: bool,
     pub dashboard_url: String,
+    pub lan_base_urls: Vec<String>,
+    pub lan_dashboard_urls: Vec<String>,
     pub data_dir: Option<String>,
     pub docker_version: Option<String>,
     pub git_version: Option<String>,
@@ -1099,6 +1102,11 @@ fn create_status(
         auto_start_enabled: read_preferences(app).auto_start,
         built,
         dashboard_url: NINE_ROUTER_DASHBOARD_URL.to_string(),
+        lan_base_urls: local_lan_dashboard_urls()
+            .into_iter()
+            .map(|url| format!("{url}/v1"))
+            .collect(),
+        lan_dashboard_urls: local_lan_dashboard_urls(),
         data_dir: data_dir.as_ref().map(|path| path_to_string(path)),
         docker_version: tool_versions.docker,
         git_version: tool_versions.git,
@@ -1124,6 +1132,8 @@ impl Clone for NineRouterLocalStatus {
             auto_start_enabled: self.auto_start_enabled,
             built: self.built,
             dashboard_url: self.dashboard_url.clone(),
+            lan_base_urls: self.lan_base_urls.clone(),
+            lan_dashboard_urls: self.lan_dashboard_urls.clone(),
             data_dir: self.data_dir.clone(),
             docker_version: self.docker_version.clone(),
             git_version: self.git_version.clone(),
@@ -1168,9 +1178,9 @@ fn validate_nine_router_http_url(raw_url: &str) -> Result<reqwest::Url, String> 
         .ok_or_else(|| "9Router Local requests need a URL host.".to_string())?
         .to_ascii_lowercase();
 
-    if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "0.0.0.0" | "::1") {
+    if !is_allowed_nine_router_host(&host) {
         return Err(
-            "9Router Local requests are restricted to localhost on port 20128.".to_string(),
+            "9Router Local requests are restricted to localhost or private LAN hosts on port 20128.".to_string(),
         );
     }
 
@@ -1187,6 +1197,41 @@ fn validate_nine_router_http_url(raw_url: &str) -> Result<reqwest::Url, String> 
     }
 
     Ok(url)
+}
+
+fn is_allowed_nine_router_host(host: &str) -> bool {
+    if matches!(host, "127.0.0.1" | "localhost" | "0.0.0.0" | "::1") {
+        return true;
+    }
+
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return false;
+    };
+
+    match ip {
+        IpAddr::V4(ipv4) => {
+            ipv4.is_loopback()
+                || ipv4.is_private()
+                || ipv4.is_link_local()
+                || Some(ipv4) == local_primary_lan_ipv4()
+        }
+        IpAddr::V6(ipv6) => ipv6.is_loopback(),
+    }
+}
+
+fn local_lan_dashboard_urls() -> Vec<String> {
+    local_primary_lan_ipv4()
+        .map(|address| vec![format!("http://{address}:20128")])
+        .unwrap_or_default()
+}
+
+fn local_primary_lan_ipv4() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    let _ = socket.connect("8.8.8.8:80");
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(address) if !address.is_loopback() => Some(address),
+        _ => None,
+    }
 }
 
 fn should_attach_nine_router_cli_token(url: &reqwest::Url) -> bool {
@@ -1718,10 +1763,14 @@ fn launch_env(app: &AppHandle) -> Vec<(String, String)> {
             NINE_ROUTER_DASHBOARD_URL.to_string(),
         ),
         ("DATA_DIR".to_string(), data_dir),
-        ("HOSTNAME".to_string(), "127.0.0.1".to_string()),
+        ("HOSTNAME".to_string(), NINE_ROUTER_BIND_HOST.to_string()),
         (
             "NEXT_PUBLIC_BASE_URL".to_string(),
             NINE_ROUTER_DASHBOARD_URL.to_string(),
+        ),
+        (
+            "NINE_ROUTER_ALLOW_PRIVATE_LAN_API".to_string(),
+            "true".to_string(),
         ),
         ("NODE_ENV".to_string(), "production".to_string()),
         ("PORT".to_string(), "20128".to_string()),
@@ -2013,6 +2062,16 @@ mod tests {
             compute_nine_router_cli_token("machine-123", "secret-456"),
             expected
         );
+    }
+
+    #[test]
+    fn nine_router_host_validation_allows_private_lan_urls() {
+        assert!(validate_nine_router_http_url("http://127.0.0.1:20128/v1/models").is_ok());
+        assert!(validate_nine_router_http_url("http://10.0.0.239:20128/v1/models").is_ok());
+        assert!(validate_nine_router_http_url("http://192.168.1.20:20128/api/providers").is_ok());
+        assert!(validate_nine_router_http_url("http://203.0.113.10:20128/v1/models").is_err());
+        assert!(validate_nine_router_http_url("https://10.0.0.239:20128/v1/models").is_err());
+        assert!(validate_nine_router_http_url("http://10.0.0.239:20129/v1/models").is_err());
     }
 
     #[test]

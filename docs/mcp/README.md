@@ -21,7 +21,7 @@ Many MCP servers are installed as command-line tools. Add these from Apps > MCP 
 - `Working directory`: optional folder used as the subprocess current directory
 - `Environment`: `NAME=value` lines, with values protected through secure storage
 
-The desktop backend starts a fresh subprocess for each list or call operation, initializes MCP over stdin/stdout, sends `notifications/initialized`, then performs `tools/list` or `tools/call`. Stderr is captured only for diagnostics, because MCP stdio servers must write only JSON-RPC messages to stdout.
+The desktop backend keeps a running stdio subprocess per configured server while the app is open, initializes MCP over stdin/stdout once, sends `notifications/initialized`, then reuses that process for `tools/list` and `tools/call`. This preserves server-owned state for workflows such as Firebase deploy job IDs. The cached process is restarted when the server config changes, the server is removed, or the subprocess exits. Stderr is captured only for diagnostics, because MCP stdio servers must write only JSON-RPC messages to stdout.
 
 Stdio startup/list/call waits up to 90 seconds so first-run package downloads and provider sign-in bridges have enough time to initialize.
 

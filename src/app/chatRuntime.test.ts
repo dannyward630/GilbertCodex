@@ -446,6 +446,10 @@ describe("tool protocol leak guards", () => {
     expect(looksLikeInFlightToolPlanning(content)).toBe(false);
   });
 
+  it("recognizes visible MCP tool promises as unexecuted tool actions", () => {
+    expect(looksLikeUnexecutedToolActionPromise("I will call mcp_list_servers and then mcp_call_tool to deploy it.")).toBe(true);
+  });
+
 });
 
 describe("createWebSearchProgress", () => {
