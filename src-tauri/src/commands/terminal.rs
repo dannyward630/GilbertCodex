@@ -1084,6 +1084,8 @@ fn configure_pty_command(
     command.env("GILBERT_CODEX_TERMINAL", "1");
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    #[cfg(not(windows))]
+    command.env("PATH", unix_gui_path());
     // Strip GilbertCodex dev-server env vars so child projects do not inherit our host/port settings.
     for key in inherited_env_vars_to_scrub() {
         command.env_remove(key);
@@ -1124,6 +1126,61 @@ fn scrub_inherited_dev_env(command: &mut Command) {
     for key in inherited_env_vars_to_scrub() {
         command.env_remove(key);
     }
+
+    #[cfg(not(windows))]
+    command.env("PATH", unix_gui_path());
+}
+
+#[cfg(not(windows))]
+fn unix_gui_path() -> String {
+    let mut parts: Vec<String> = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|path| path.to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        parts.push(
+            home.join(".local")
+                .join("bin")
+                .to_string_lossy()
+                .to_string(),
+        );
+        parts.push(
+            home.join(".cargo")
+                .join("bin")
+                .to_string_lossy()
+                .to_string(),
+        );
+        parts.push(
+            home.join(".npm-global")
+                .join("bin")
+                .to_string_lossy()
+                .to_string(),
+        );
+        parts.push(home.join(".yarn").join("bin").to_string_lossy().to_string());
+    }
+
+    if cfg!(target_os = "macos") {
+        parts.push("/opt/homebrew/bin".to_string());
+        parts.push("/usr/local/bin".to_string());
+    }
+
+    parts.push("/usr/local/bin".to_string());
+    parts.push("/usr/bin".to_string());
+    parts.push("/bin".to_string());
+
+    let mut deduped = Vec::new();
+    for part in parts {
+        if !part.trim().is_empty() && !deduped.iter().any(|existing| existing == &part) {
+            deduped.push(part);
+        }
+    }
+
+    deduped.join(":")
 }
 
 fn default_terminal_shell() -> TerminalShell {

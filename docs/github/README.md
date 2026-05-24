@@ -4,7 +4,7 @@ This guide explains how to connect GitHub to Gilbert Codex for the first-party G
 
 Last verified: May 20, 2026.
 
-Platform note: this flow is verified on Windows. macOS and Linux have partial source support and need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
+Platform note: this flow is verified on Windows. macOS and Linux are port-ready but need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
 
 ## What Gilbert Uses
 

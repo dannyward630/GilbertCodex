@@ -4,7 +4,7 @@ Thanks for helping make Gilbert Codex better. This project is early, so the best
 
 ## Local Setup
 
-Windows is the verified alpha platform. macOS and Linux have partial source support and need contributors on those operating systems to test and finish the port. Read [docs/platform/README.md](docs/platform/README.md) before submitting platform-specific changes.
+Windows is the verified alpha platform. macOS and Linux are port-ready but still need contributors on those operating systems to test packaged builds and finish native QA. Read [docs/platform/README.md](docs/platform/README.md) before submitting platform-specific changes.
 
 ```bash
 npm install

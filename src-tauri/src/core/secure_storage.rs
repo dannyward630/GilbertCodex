@@ -70,6 +70,10 @@ mod platform {
         Ok(())
     }
 
+    pub fn provider_name() -> &'static str {
+        "windows-credential-manager"
+    }
+
     fn wide_null(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
@@ -164,9 +168,160 @@ mod platform {
             "macOS Keychain could not delete secure secret `{target}`."
         ))
     }
+
+    pub fn provider_name() -> &'static str {
+        "macos-keychain"
+    }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+
+    const APPLICATION_ATTRIBUTE: &str = "GilbertCodex";
+
+    pub fn set_secret(target: &str, value: &str) -> Result<(), String> {
+        let mut child = Command::new("secret-tool")
+            .args([
+                "store",
+                "--label=Gilbert Codex",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "target",
+                target,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| secret_tool_missing_message("save", target, error))?;
+
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(format!(
+                "Linux Secret Service could not accept secure secret input for `{target}`."
+            ));
+        };
+
+        stdin
+            .write_all(value.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .map_err(|error| {
+                format!("Linux Secret Service could not write secure secret `{target}`: {error}")
+            })?;
+        drop(stdin);
+
+        let output = child.wait_with_output().map_err(|error| {
+            format!("Linux Secret Service could not save secure secret `{target}`: {error}")
+        })?;
+
+        if !output.status.success() {
+            return Err(secret_tool_error(
+                "save",
+                target,
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_secret(target: &str) -> Result<Option<String>, String> {
+        let output = Command::new("secret-tool")
+            .args([
+                "lookup",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "target",
+                target,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| secret_tool_missing_message("read", target, error))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if looks_like_missing_secret(&stderr) {
+                return Ok(None);
+            }
+
+            return Err(secret_tool_error("read", target, &stderr));
+        }
+
+        let secret = String::from_utf8(output.stdout)
+            .map_err(|error| format!("Linux Secret Service returned invalid UTF-8: {error}"))?
+            .trim_end_matches(&['\r', '\n'][..])
+            .to_string();
+
+        if secret.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(secret))
+        }
+    }
+
+    pub fn delete_secret(target: &str) -> Result<(), String> {
+        let output = Command::new("secret-tool")
+            .args([
+                "clear",
+                "application",
+                APPLICATION_ATTRIBUTE,
+                "target",
+                target,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| secret_tool_missing_message("delete", target, error))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if looks_like_missing_secret(&stderr) {
+            return Ok(());
+        }
+
+        Err(secret_tool_error("delete", target, &stderr))
+    }
+
+    pub fn provider_name() -> &'static str {
+        "linux-secret-service"
+    }
+
+    fn secret_tool_missing_message(operation: &str, target: &str, error: std::io::Error) -> String {
+        format!(
+            "Linux Secret Service could not {operation} secure secret `{target}`. Install `libsecret-tools` and make sure a Secret Service provider such as GNOME Keyring or KWallet is available: {error}"
+        )
+    }
+
+    fn secret_tool_error(operation: &str, target: &str, stderr: &str) -> String {
+        let details = stderr.trim();
+        if details.is_empty() {
+            format!("Linux Secret Service could not {operation} secure secret `{target}`.")
+        } else {
+            format!(
+                "Linux Secret Service could not {operation} secure secret `{target}`: {details}"
+            )
+        }
+    }
+
+    fn looks_like_missing_secret(stderr: &str) -> bool {
+        let stderr = stderr.to_ascii_lowercase();
+        stderr.contains("no such item")
+            || stderr.contains("not found")
+            || stderr.contains("no matching")
+            || stderr.contains("couldn't find")
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod platform {
     pub fn set_secret(target: &str, _value: &str) -> Result<(), String> {
         Err(format!(
@@ -180,6 +335,10 @@ mod platform {
 
     pub fn delete_secret(_target: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    pub fn provider_name() -> &'static str {
+        "unsupported"
     }
 }
 
@@ -196,6 +355,10 @@ pub fn get_secret(target: &str) -> Result<Option<String>, String> {
 pub fn delete_secret(target: &str) -> Result<(), String> {
     validate_target(target)?;
     platform::delete_secret(target)
+}
+
+pub fn provider_name() -> &'static str {
+    platform::provider_name()
 }
 
 fn validate_target(target: &str) -> Result<(), String> {

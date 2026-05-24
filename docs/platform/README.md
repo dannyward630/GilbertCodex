@@ -2,27 +2,28 @@
 
 This document tracks what is known about running Gilbert Codex on Windows, macOS, and Linux.
 
-Last updated: May 20, 2026.
+Last updated: May 24, 2026.
 
 ## Current Support State
 
 | Platform | Status | Notes |
 | --- | --- | --- |
 | Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
-| macOS arm64 | Port-ready, pending native verification | Frontend platform detection, Mac shortcut labels, left-side traffic-light window controls, Keychain-backed secure storage, and app/DMG build scripts are in place. A maintainer on Apple Silicon still needs to run the packaged app and complete the native QA checklist before this becomes verified support. |
-| Linux | Partial source support | Tauri, terminal shell selection, npm scripts, ngrok path handling, and docs have been adjusted for Linux, but the desktop app still needs someone on Linux to run, package, and finish any native issues. |
+| macOS arm64 | Port-ready, pending native verification | Frontend platform detection, Mac shortcut labels, left-side traffic-light window controls, Keychain-backed secure storage, ad-hoc test signing, and app/DMG build scripts are in place. A maintainer on Apple Silicon still needs to run the packaged app and complete the native QA checklist before this becomes verified support. |
+| Linux x64 | Port-ready, pending native verification | Tauri, terminal shell selection, npm scripts, Secret Service-backed secure storage, ngrok path handling, and deb/AppImage packaging config are in place. The desktop app still needs someone on Linux to run, package, and finish native QA before this becomes verified support. |
 
-The macOS and Linux port is intentionally marked partial. The codebase should no longer be Windows-locked, but native desktop behavior needs real OS coverage before the project should promise official support.
+The macOS and Linux port is intentionally marked unverified. The codebase should no longer be Windows-locked, but native desktop behavior needs real OS coverage before the project should promise official support.
 
 ## What Has Been Ported
 
 - Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
-- Tauri bundle scripts are platform-specific: Windows uses NSIS, and macOS uses the `app` and `dmg` targets with `src-tauri/tauri.macos.conf.json`.
+- Tauri bundle scripts are platform-specific: Windows uses NSIS, macOS uses the `app` and `dmg` targets with `src-tauri/tauri.macos.conf.json`, and Linux uses the `deb` and `appimage` targets with `src-tauri/tauri.linux.conf.json`.
 - Main and detached chat windows use Tauri window-state persistence so the next launch restores the user's last size, screen position, maximized state, and fullscreen state instead of forcing a fresh maximize.
 - First-launch window defaults are centered, resizable, constrained to the working area, and sized to fit common laptop and snapped-window layouts.
 - The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
 - macOS secure secrets use Keychain through the native `security` tool.
+- Linux secure secrets use the freedesktop Secret Service path through `secret-tool`, so Debian/Ubuntu packages depend on `libsecret-tools`.
 - The frontend renders Mac-appropriate shortcut labels and window controls when the host platform is macOS.
 - Native terminal, browser preview, file picker, source context, and packaging behavior still need OS-specific verification.
 - ngrok setup accepts a generic executable path instead of assuming `ngrok.exe`.
@@ -91,6 +92,7 @@ Expected baseline:
 - Node.js 18 or newer.
 - Rust and Cargo.
 - Tauri 2 Linux system dependencies, including WebKitGTK and appindicator/tray-related packages where required by the target distribution.
+- `libsecret-tools` and a Secret Service provider such as GNOME Keyring or KWallet for MCP bearer tokens and other OS-backed secrets.
 
 Useful commands:
 
@@ -98,7 +100,8 @@ Useful commands:
 npm install
 npm run app:dev
 npm run check
-npm run app:build
+npm run app:build:linux
+./scripts/linux-verify.sh
 ```
 
 Potential follow-up work:
@@ -106,7 +109,7 @@ Potential follow-up work:
 - Document exact package install commands for Ubuntu/Debian, Fedora, and Arch after real testing.
 - Verify Wayland and X11 behavior.
 - Validate WebKitGTK version requirements and packaging output.
-- Confirm file picker behavior, notifications, shell execution, and browser preview behavior across common desktops.
+- Confirm file picker behavior, notifications, shell execution, Secret Service prompts, MCP stdio servers, and browser preview behavior across common desktops.
 
 ## Port Completion Checklist
 

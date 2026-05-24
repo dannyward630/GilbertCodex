@@ -1022,7 +1022,7 @@ fn protect_json_string_secret(
     *value = Value::String(format!("{SECRET_REFERENCE_PREFIX}{target}"));
     references.push(SecureSecretReference {
         keyring_target: target,
-        provider: "windows-credential-manager".to_string(),
+        provider: secure_storage::provider_name().to_string(),
         secret_key: format!("{storage_key}:{field}"),
     });
     Ok(())

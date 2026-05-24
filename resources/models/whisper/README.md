@@ -4,8 +4,8 @@ Gilbert Codex looks for `ggml-base.en.bin` in this folder when building or runni
 
 Run this from the repository root before making a release build:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-whisper-model.ps1
+```bash
+npm run dictation:model
 ```
 
 The Windows installer and release scripts run this preparation step automatically and build Tauri with the `offline-dictation` Cargo feature enabled.

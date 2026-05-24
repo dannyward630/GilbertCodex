@@ -32,7 +32,7 @@
 
 Gilbert Codex v0.5.7 is a desktop reliability update for the Windows public alpha. It focuses on subscription setup clarity, route/source labels, full-computer workspace handling, safer local file tooling, automation cleanup, review activity visibility, and support/funding polish.
 
-This is still alpha software. Windows x64 is the verified packaged target. macOS support is in active development and should land soon; Linux remains source-first until native testing catches up. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+This is still alpha software. Windows x64 is the verified packaged target. macOS and Linux are port-ready but still need native packaged-app QA before they should be treated as official downloads. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
 
 Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace work. It can inspect files, but write/edit tool calls are not completing reliably on that route yet. Use the other available Codex/ChatGPT, OpenRouter, or local routes for file changes until this is fixed.
 
@@ -90,7 +90,7 @@ The v0.5.7 Windows public alpha is prepared for [GitHub Releases](https://github
 
 Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
 
-macOS release artifacts are in development and should be out soon. Linux release artifacts are not official yet; source support exists, but native testing is still needed before the project promises a packaged Linux download.
+macOS and Linux release artifacts are not official yet. The codebase has app/DMG and deb/AppImage build paths, but native testing is still needed before the project promises packaged downloads.
 
 See [v0.5.7 release notes](docs/releases/v0.5.7.md) for update notes, setup notes, known limitations, and validation commands.
 
@@ -157,14 +157,14 @@ The next roadmap is focused on making Gilbert faster, clearer, and more capable 
 
 ## Getting Started
 
-For platform-specific status and porting work, start with [docs/platform/README.md](docs/platform/README.md). Windows is verified; macOS and Linux are partial until tested on real machines.
+For platform-specific status and porting work, start with [docs/platform/README.md](docs/platform/README.md). Windows is verified; macOS and Linux are port-ready but unverified until tested on real machines.
 
 Prerequisites:
 
 - Node.js 18 or newer.
 - Rust and Cargo.
 - Microsoft WebView2 Runtime on Windows.
-- WebKitGTK runtime/development packages on Linux when running or building the Tauri desktop shell.
+- WebKitGTK runtime/development packages on Linux when running or building the Tauri desktop shell, plus `libsecret-tools` and a Secret Service provider for OS-backed secrets.
 
 Install dependencies:
 
@@ -230,7 +230,7 @@ See [SECURITY.md](SECURITY.md) before sharing bug reports that include logs, scr
 
 ## Integration Setup
 
-- [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux partial support, and the native testing checklist.
+- [Platform support and porting notes](docs/platform/README.md): Windows verification status, macOS/Linux port readiness, and the native testing checklist.
 - [Discord integration setup](docs/discord/README.md): Discord application setup, one-click ngrok-backed slash-command bridge setup, bot gateway notes, and incoming webhooks.
 - [Gmail plugin setup](docs/gmail/README.md): Google OAuth desktop setup, user connection flow, requested scopes, and Gmail confirmation rules.
 - [Google OAuth setup](docs/google/README.md): Bring-your-own Google OAuth client setup and production verification notes.

@@ -4,7 +4,7 @@ This guide explains how to prepare Discord so users can chat with Gilbert Codex 
 
 Last verified: May 14, 2026.
 
-Platform note: this bridge is verified on Windows. macOS and Linux have partial source support and need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
+Platform note: this bridge is verified on Windows. macOS and Linux are port-ready but need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
 
 ## What Works Today
 
