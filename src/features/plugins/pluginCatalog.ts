@@ -1,3 +1,5 @@
+import { getInstalledSkillMentionOptions } from "../../services/skillRegistry";
+
 export type PluginComponentKind = "agent" | "hook" | "lsp" | "mcp" | "monitor" | "skill";
 
 export type PluginListingStatus = "available" | "installed" | "queued";
@@ -513,7 +515,9 @@ export const CATALOG_PLUGIN_SKILL_OPTIONS: PluginSkillOption[] = PLUGIN_LISTINGS
 
 // The composer can only mention skills that are actually installed and callable.
 // Keep the marketplace catalog separate so future skill ideas do not appear as live actions.
-export const PLUGIN_SKILL_OPTIONS: PluginSkillOption[] = [];
+export function getInstalledPluginSkillOptions(): PluginSkillOption[] {
+  return getInstalledSkillMentionOptions();
+}
 
 export function getPluginById(pluginId: string) {
   return PLUGIN_LISTINGS.find((plugin) => plugin.id === pluginId);
@@ -521,12 +525,13 @@ export function getPluginById(pluginId: string) {
 
 export function getSkillMentionMatches(query: string, limit = 7) {
   const normalizedQuery = normalizeSkillQuery(query);
+  const installedSkillOptions = getInstalledPluginSkillOptions();
 
   if (!normalizedQuery) {
-    return PLUGIN_SKILL_OPTIONS.slice(0, limit);
+    return installedSkillOptions.slice(0, limit);
   }
 
-  return PLUGIN_SKILL_OPTIONS.filter((skillOption) => {
+  return installedSkillOptions.filter((skillOption) => {
     const haystack = [
       skillOption.mention,
       ...skillOption.aliases,

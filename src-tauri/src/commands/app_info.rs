@@ -1,5 +1,5 @@
+use crate::core::process::open_external_target;
 use serde::Serialize;
-use std::process::{Command, Stdio};
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -43,27 +43,7 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         return Err("Only http, https, and mailto links can be opened externally.".to_string());
     }
 
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("rundll32.exe");
-        command.args(["url.dll,FileProtocolHandler", trimmed]);
-        command
-    } else if cfg!(target_os = "macos") {
-        let mut command = Command::new("open");
-        command.arg(trimmed);
-        command
-    } else {
-        let mut command = Command::new("xdg-open");
-        command.arg(trimmed);
-        command
-    };
-
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open link in the default browser: {error}"))
+    open_external_target(trimmed, "Could not open link in the default browser")
 }
 
 fn is_allowed_external_url(url: &str) -> bool {

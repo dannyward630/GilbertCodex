@@ -1,4 +1,5 @@
 import { createId, DEFAULT_PROJECT, isNoProjectName, normalizeProjectName } from "../../lib/chatUtils";
+import { cleanVisibleWorkTraceContent } from "../../lib/workTraceContent";
 import type { AgentApproval, AgentRun } from "../../types/agentRun";
 import type { ChatArtifact, ChatMessage, ChatProgressItem, ChatSource, ChatSummary, ChatToolCall, ChatWorkTraceItem } from "../../types/chat";
 import type { ProjectSummary } from "../../types/project";
@@ -563,11 +564,7 @@ export function getToolCallInputIdentity(toolCall: ChatToolCall) {
 }
 
 export function cleanWorkThinkingContent(content: string) {
-  return content
-    .replace(/\r\n/g, "\n")
-    .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:analysis|reasoning|thinking|thought|scratchpad|internal(?:\s+monologue)?|private\s+notes?)(?:\*\*)?\s*[:.-]\s*/i, "")
-    .replace(/<\/?(?:analysis|reasoning|thinking|thought|scratchpad)\b[^>]*>/gi, "")
-    .trim();
+  return cleanVisibleWorkTraceContent(content);
 }
 
 export function mergeAgentApprovals(currentApprovals: AgentApproval[], nextApprovals: AgentApproval[]) {

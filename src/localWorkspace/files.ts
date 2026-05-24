@@ -46,6 +46,7 @@ const SEARCH_PREVIEW_MAX_CHARS = 360;
 const COMPUTER_LIST_DIRECTORY_TIMEOUT_MS = 8_000;
 const COMPUTER_READ_TEXT_FILE_TIMEOUT_MS = 12_000;
 const COMPUTER_SEARCH_TEXT_FILES_TIMEOUT_MS = 20_000;
+const COMPUTER_GIT_STATUS_TIMEOUT_MS = 10_000;
 
 interface ComputerGitStatusOptions {
   force?: boolean;
@@ -316,12 +317,17 @@ export async function getComputerGitStatus(path: string, options: ComputerGitSta
     return cached.status;
   }
 
-  const request = invoke<ComputerGitStatus>("computer_get_git_status", {
-    request: {
-      includeDiffPreview,
-      path,
+  const request = invokeComputerCommand<ComputerGitStatus>(
+    "computer_get_git_status",
+    {
+      request: {
+        includeDiffPreview,
+        path,
+      },
     },
-  }).then((status) => {
+    COMPUTER_GIT_STATUS_TIMEOUT_MS,
+    `Check Git status for ${path}`,
+  ).then((status) => {
     gitStatusCache.set(cacheKey, { capturedAt: Date.now(), status });
     return status;
   }).finally(() => {

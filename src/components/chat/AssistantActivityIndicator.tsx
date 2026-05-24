@@ -1,8 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { BrainCircuit, ChevronDown, ChevronRight } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
+import { AssistantRunCard, AssistantRunToolProcessRow, isVisibleAssistantRunToolCall } from "./AssistantRunCard";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { cleanVisibleWorkTraceContent } from "../../lib/workTraceContent";
 import type { ChatMessage, ChatProgressItem, ChatThinking, ChatToolCall, ChatToolFileChange, ChatWorkTraceItem, ChatWorkTraceStatus } from "../../types/chat";
-import { formatReasoningEffort } from "../../types/settings";
+import type { AgentApprovalDecision } from "../../types/agentRun";
 
 type AssistantActivityFileKind = NonNullable<ChatToolFileChange["kind"]> | "write" | "unknown";
 
@@ -59,6 +61,8 @@ interface CreateAssistantActivitySnapshotOptions {
 interface AssistantWorkTraceProps {
   activitySnapshot: AssistantActivitySnapshot | null;
   createdAt?: string;
+  message?: ChatMessage;
+  onResolveToolApproval?: (messageId: string, approvalId: string, decision: AgentApprovalDecision) => void | Promise<void>;
   responseStarted?: boolean;
   thinking?: ChatThinking;
   thinkingContent: string;
@@ -73,6 +77,8 @@ interface AssistantWorkTraceProps {
 export function AssistantWorkTrace({
   activitySnapshot,
   createdAt,
+  message,
+  onResolveToolApproval,
   responseStarted = false,
   thinking,
   thinkingContent,
@@ -85,8 +91,34 @@ export function AssistantWorkTrace({
     [activitySnapshot, renderThinkingContent, workTrace],
   );
   const live = Boolean(thinkingStreaming || activitySnapshot?.live || renderItems.some(isLiveWorkRenderItem));
+  const hasEmbeddedRunActivity = Boolean(
+    message?.agentRunId ||
+      message?.agentRunStatus ||
+      message?.toolCalls?.length ||
+      message?.approvals?.length ||
+      message?.progress?.length ||
+      message?.webSearch?.searchedAt ||
+      message?.webSearch?.status ||
+      typeof message?.webSearch?.resultCount === "number",
+  );
   const hasWaitingIndicator = Boolean(thinkingStreaming && !responseStarted && renderItems.length === 0);
-  const canRender = renderItems.length > 0 || hasWaitingIndicator;
+  const processItems = useMemo(
+    () => createChronologicalProcessItems(renderItems, message),
+    [renderItems, message],
+  );
+  const thoughtItems = hasEmbeddedRunActivity
+    ? processItems.filter((item) => item.kind === "thinking")
+    : filterThoughtItemsForEmbeddedRun(
+      renderItems.filter((item) => item.kind === "thinking"),
+      message,
+    );
+  const supportingItems = hasEmbeddedRunActivity
+    ? []
+    : renderItems.filter((item) => item.kind !== "thinking");
+  const showThoughtSection = thoughtItems.length > 0 || hasWaitingIndicator;
+  const showSupportingItems = supportingItems.length > 0;
+  const hasThinkingDuration = Boolean(thinking?.startedAt && (live || thinking.completedAt));
+  const canRender = renderItems.length > 0 || hasEmbeddedRunActivity || hasWaitingIndicator || hasThinkingDuration;
   const shouldAutoExpand = !responseStarted || live;
 
   const [expanded, setExpanded] = useState(() => shouldAutoExpand);
@@ -115,6 +147,18 @@ export function AssistantWorkTrace({
     return null;
   }
 
+  function renderWorkItem(item: AssistantWorkRenderItem) {
+    if (item.kind === "thinking") {
+      return <AssistantWorkThinkingLine key={item.id} content={item.content} status={item.status} />;
+    }
+
+    if (item.kind === "tool") {
+      return <AssistantWorkToolLine key={item.id} toolCall={item.toolCall} />;
+    }
+
+    return <AssistantWorkProgressLine key={item.id} progress={item.progress} />;
+  }
+
   function toggleExpanded() {
     setManuallyToggled(true);
     setExpanded((current) => !current);
@@ -126,25 +170,24 @@ export function AssistantWorkTrace({
     nowMs,
     thinking,
   });
-  const effortLabel = thinking ? formatReasoningEffort(thinking.effort) : "";
-  const headerDetail = [effortLabel, durationLabel].filter(Boolean).join(" · ");
-  const headerAria = headerDetail ? `Assistant thinking summary - ${headerDetail}` : "Assistant thinking summary";
+  const headerLabel = durationLabel || (live ? "Working" : "Worked");
+  const headerAria = headerLabel ? `Assistant work summary - ${headerLabel}` : "Assistant work summary";
   const collapsedInteractionProps = expanded ? {} : ({ inert: "" } as Record<string, string>);
+  const HeaderIcon = live ? LoaderCircle : CheckCircle2;
 
   return (
-    <section className="assistant-thinking" data-live={live} data-expanded={expanded} data-effort={thinking?.effort} aria-label="Assistant thinking">
+    <section className="assistant-thinking" data-live={live} data-expanded={expanded} data-effort={thinking?.effort} aria-label="Assistant work">
       <button
         className="assistant-thinking-toggle"
         type="button"
         aria-expanded={expanded}
         aria-controls={bodyId}
-        aria-label={live ? `Assistant thinking is in progress${headerDetail ? ` - ${headerDetail}` : ""}` : headerAria}
+        aria-label={live ? `Assistant is working${headerLabel ? ` - ${headerLabel}` : ""}` : headerAria}
         onClick={toggleExpanded}
       >
-        <BrainCircuit className="assistant-thinking-icon" size={15} aria-hidden="true" />
+        <HeaderIcon className="assistant-thinking-icon" size={15} aria-hidden="true" />
         <span className="assistant-thinking-title">
-          <strong>Thinking</strong>
-          {headerDetail ? <small>{headerDetail}</small> : null}
+          <strong>{headerLabel}</strong>
         </span>
         <span className="assistant-thinking-chevron" aria-hidden="true">
           {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -155,32 +198,54 @@ export function AssistantWorkTrace({
         id={bodyId}
         className="assistant-thinking-body"
         role="region"
-        aria-label="Assistant reasoning and tool progress"
+        aria-label="Assistant work and tool progress"
         aria-hidden={!expanded}
         {...collapsedInteractionProps}
       >
         <div className="assistant-thinking-body-inner">
-          <div className="assistant-thinking-list">
-            {renderItems.map((item) => {
-              if (item.kind === "thinking") {
-                return <AssistantWorkThinkingLine key={item.id} content={item.content} status={item.status} />;
-              }
+          <section className="assistant-thinking-flow" aria-label="Assistant work process">
+            {hasEmbeddedRunActivity && processItems.length > 0 ? (
+              <div className="assistant-thinking-list" data-kind="process">
+                {processItems.map((item) => {
+                  if (item.kind === "thinking") {
+                    return <AssistantWorkThinkingLine key={item.id} content={item.content} status={item.status} />;
+                  }
 
-              if (item.kind === "tool") {
-                return <AssistantWorkToolLine key={item.id} toolCall={item.toolCall} />;
-              }
+                  if (item.kind === "tool") {
+                    return <AssistantRunToolProcessRow key={item.id} toolCall={item.toolCall} />;
+                  }
 
-              return <AssistantWorkProgressLine key={item.id} progress={item.progress} />;
-            })}
-
-            {hasWaitingIndicator ? (
-              <div className="assistant-thinking-bars" aria-hidden="true">
-                <span />
-                <span />
-                <span />
+                  return <AssistantWorkProgressLine key={item.id} progress={item.progress} />;
+                })}
+              </div>
+            ) : showThoughtSection ? (
+              <div className="assistant-thinking-list" data-kind="thoughts">
+                {thoughtItems.map(renderWorkItem)}
+                {hasWaitingIndicator ? (
+                  <div className="assistant-thinking-bars" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                ) : null}
               </div>
             ) : null}
-          </div>
+
+            {message && !(hasEmbeddedRunActivity && processItems.some((item) => item.kind === "tool")) ? (
+              <AssistantRunCard
+                embedded
+                message={message}
+                responseStarted={responseStarted}
+                onResolveToolApproval={onResolveToolApproval}
+              />
+            ) : null}
+
+            {showSupportingItems ? (
+              <div className="assistant-thinking-list" data-kind={hasEmbeddedRunActivity ? "progress" : "tools"}>
+                {supportingItems.map(renderWorkItem)}
+              </div>
+            ) : null}
+          </section>
         </div>
       </div>
     </section>
@@ -191,6 +256,192 @@ type AssistantWorkRenderItem =
   | { id: string; content: string; kind: "thinking"; status?: ChatWorkTraceStatus }
   | { id: string; kind: "tool"; toolCall: ChatToolCall }
   | { id: string; kind: "progress"; progress: ChatProgressItem };
+
+function createChronologicalProcessItems(items: AssistantWorkRenderItem[], message?: ChatMessage): AssistantWorkRenderItem[] {
+  if (!message) {
+    return items;
+  }
+
+  const filteredItems: AssistantWorkRenderItem[] = [];
+  const seenThoughts = new Set<string>();
+  const seenToolIdentities = new Set<string>();
+  const hasMutation = messageHasActualFileMutation(message);
+  const messageToolCalls = (message.toolCalls ?? []).filter(isVisibleAssistantRunToolCall);
+
+  for (const item of items) {
+    if (item.kind === "thinking") {
+      const content = cleanVisibleWorkTraceContent(item.content);
+      const normalized = content.toLowerCase().replace(/\s+/g, " ").trim();
+
+      if (!normalized || seenThoughts.has(normalized)) {
+        continue;
+      }
+
+      seenThoughts.add(normalized);
+
+      if (/^applied file changes to \d+ files?(?:[.;:].*)?$/i.test(content) && !hasMutation) {
+        continue;
+      }
+
+      if (isLowValueWorkspaceEvidenceNarration(content)) {
+        continue;
+      }
+
+      if (isToolBackedStatusNarration(content, messageToolCalls)) {
+        continue;
+      }
+
+      filteredItems.push({ ...item, content });
+    } else if (item.kind === "tool") {
+      if (!isVisibleAssistantRunToolCall(item.toolCall)) {
+        continue;
+      }
+
+      const identity = getToolCallIdentity(item.toolCall);
+
+      if (seenToolIdentities.has(identity)) {
+        continue;
+      }
+
+      seenToolIdentities.add(identity);
+      filteredItems.push(item);
+    } else if (!isInternalOnlyProgressItem(item.progress)) {
+      filteredItems.push(item);
+    }
+  }
+
+  for (const toolCall of messageToolCalls) {
+    const identity = getToolCallIdentity(toolCall);
+
+    if (seenToolIdentities.has(identity)) {
+      continue;
+    }
+
+    seenToolIdentities.add(identity);
+    filteredItems.push({
+      id: `tool-${toolCall.id}`,
+      kind: "tool",
+      toolCall,
+    });
+  }
+
+  return filteredItems;
+}
+
+function filterThoughtItemsForEmbeddedRun(items: AssistantWorkRenderItem[], message?: ChatMessage): AssistantWorkRenderItem[] {
+  if (!message) {
+    return items;
+  }
+
+  const hasRunActivity = Boolean(
+    message.agentRunId ||
+      message.agentRunStatus ||
+      message.toolCalls?.length ||
+      message.approvals?.length ||
+      message.progress?.length ||
+      message.webSearch?.searchedAt ||
+      message.webSearch?.status ||
+      typeof message.webSearch?.resultCount === "number",
+  );
+  const hasMutation = messageHasActualFileMutation(message);
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    if (item.kind !== "thinking") {
+      return true;
+    }
+
+    const content = cleanVisibleWorkTraceContent(item.content);
+    const normalized = content.toLowerCase().replace(/\s+/g, " ").trim();
+
+    if (!normalized || seen.has(normalized)) {
+      return false;
+    }
+
+    seen.add(normalized);
+
+    if (/^applied file changes to \d+ files?(?:[.;:].*)?$/i.test(content) && (!hasMutation || hasRunActivity)) {
+      return false;
+    }
+
+    if (hasRunActivity && isLowValueWorkspaceEvidenceNarration(content)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function messageHasActualFileMutation(message: ChatMessage) {
+  return (message.toolCalls ?? []).some((toolCall) =>
+    (toolCall.fileChanges ?? []).some(fileChangeHasMutation) ||
+    (toolCall.batchFileResults ?? []).some((result) =>
+      result.status === "ok" &&
+      (result.additions > 0 || result.deletions > 0 || result.kind === "create" || result.kind === "delete" || result.kind === "move"),
+    ),
+  );
+}
+
+function fileChangeHasMutation(change: ChatToolFileChange) {
+  return change.additions > 0 || change.deletions > 0 || change.kind === "create" || change.kind === "delete" || change.kind === "move";
+}
+
+function isLowValueWorkspaceEvidenceNarration(content: string) {
+  return (
+    /^i have current workspace evidence(?: for .*)?\.?$/i.test(content) ||
+    /^reading workspace (?:evidence|files)(?: for .*)?\.?$/i.test(content) ||
+    /^searching workspace (?:evidence|files)(?: for .*)?\.?$/i.test(content)
+  );
+}
+
+function isToolBackedStatusNarration(content: string, toolCalls: ChatToolCall[]) {
+  const normalized = content.toLowerCase().replace(/\s+/g, " ").trim();
+
+  if (!normalized || toolCalls.length === 0) {
+    return false;
+  }
+
+  if (/^running commands?\.?$/.test(normalized) && toolCalls.some(isCommandToolCall)) {
+    return true;
+  }
+
+  if (/^reading (?:relevant files|workspace evidence|workspace files)(?:: .*)?\.?$/.test(normalized) && toolCalls.some(isFileContextToolCall)) {
+    return true;
+  }
+
+  if (/^searching(?: the workspace| for .*)?\.?$/.test(normalized) && toolCalls.some(isFileContextToolCall)) {
+    return true;
+  }
+
+  if (/^applying file changes(?: .*)?\.?$/.test(normalized) && toolCalls.some(isFileMutationToolCall)) {
+    return true;
+  }
+
+  if (/^checking (?:the app in )?the browser\.?$/.test(normalized) && toolCalls.some(isBrowserContextToolCall)) {
+    return true;
+  }
+
+  if (/^used \d+ tools?:/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isFileContextToolCall(toolCall: ChatToolCall) {
+  const action = getToolCallAction(toolCall);
+  return action === "Reading" || action === "Searching";
+}
+
+function isFileMutationToolCall(toolCall: ChatToolCall) {
+  const action = getToolCallAction(toolCall);
+  return action === "Writing" || action === "Editing" || action === "Moving" || action === "Copying";
+}
+
+function isBrowserContextToolCall(toolCall: ChatToolCall) {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label} ${toolCall.detail ?? ""}`.toLowerCase();
+  return /\bbrowser[._-]/.test(key) || /\bbrowser\b|\bpreview\b|\bscreenshot\b|\bconsole\b/.test(key);
+}
 
 function createThinkingDurationLabel({
   createdAt,
@@ -207,7 +458,7 @@ function createThinkingDurationLabel({
   const completedAt = live ? nowMs : readTimeMs(thinking?.completedAt);
 
   if (!startedAt) {
-    return live ? "working" : "";
+    return live ? "Working" : "";
   }
 
   if (!completedAt) {
@@ -215,7 +466,7 @@ function createThinkingDurationLabel({
   }
 
   const duration = formatThinkingDuration(Math.max(0, completedAt - startedAt));
-  return duration ? `${live ? "working" : "worked"} ${duration}` : "";
+  return duration ? `${live ? "Working for" : "Worked for"} ${duration}` : "";
 }
 
 function readTimeMs(value: string | undefined) {
@@ -256,7 +507,7 @@ function createAssistantWorkRenderItems({
   const items: AssistantWorkRenderItem[] = [];
   const latestTools = new Map((activitySnapshot?.toolCalls ?? []).map((toolCall) => [toolCall.id, toolCall]));
   const latestToolsByIdentity = new Map((activitySnapshot?.toolCalls ?? []).map((toolCall) => [getToolCallIdentity(toolCall), toolCall]));
-  const inlineThinking = cleanThinkingContent(thinkingContent);
+  const inlineThinking = cleanVisibleWorkTraceContent(thinkingContent);
   const toolNarrationContext = collectToolNarrationContext(activitySnapshot, workTrace);
   const seenToolIdentities = new Set<string>();
   let sawThinking = false;
@@ -264,7 +515,7 @@ function createAssistantWorkRenderItems({
   if (workTrace?.length) {
     for (const traceItem of workTrace) {
       if (traceItem.kind === "thinking") {
-        const content = cleanThinkingContent(traceItem.content);
+        const content = cleanVisibleWorkTraceContent(traceItem.content);
         sawThinking = true;
         if (!content) {
           continue;
@@ -459,25 +710,43 @@ function isLiveWorkRenderItem(item: AssistantWorkRenderItem) {
 }
 
 function AssistantWorkThinkingLine({ content, status }: { content: string; status?: ChatWorkTraceStatus }) {
-  const displayContent = cleanThinkingContent(content);
+  const displayContent = cleanVisibleWorkTraceContent(content);
 
   if (!displayContent) {
     return null;
   }
 
+  const tone = getAssistantWorkThinkingTone(displayContent);
+
   return (
-    <article className="assistant-thinking-note" data-status={status ?? "complete"}>
+    <article className="assistant-thinking-note" data-status={status ?? "complete"} data-tone={tone}>
       <MarkdownMessage className="assistant-thinking-markdown" content={displayContent} isStreaming={status === "active"} />
     </article>
   );
 }
 
-function cleanThinkingContent(content: string | undefined) {
-  return (content ?? "")
-    .replace(/\r\n/g, "\n")
-    .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:analysis|reasoning|thinking|thought|scratchpad|internal(?:\s+monologue)?|private\s+notes?)(?:\*\*)?\s*[:.-]\s*/i, "")
-    .replace(/<\/?(?:analysis|reasoning|thinking|thought|scratchpad)\b[^>]*>/gi, "")
-    .trim();
+type AssistantWorkThinkingTone = "action" | "check" | "evidence" | "result" | "review";
+
+function getAssistantWorkThinkingTone(content: string): AssistantWorkThinkingTone {
+  const normalized = cleanInlineText(content).toLowerCase();
+
+  if (/^(?:read|searched|searching|checking current web|checked current source|checked project context|checking git|checking saved)/i.test(normalized)) {
+    return "evidence";
+  }
+
+  if (/^(?:applying|preparing|running|recovering|retrying|working through)/i.test(normalized)) {
+    return "action";
+  }
+
+  if (/^(?:this action needs review|review needed|waiting for approval|action canceled)/i.test(normalized)) {
+    return "review";
+  }
+
+  if (/^(?:checked|checking|browser preview|search activity)/i.test(normalized)) {
+    return "check";
+  }
+
+  return "result";
 }
 
 function AssistantWorkToolLine({ toolCall }: { toolCall: ChatToolCall }) {
@@ -920,6 +1189,10 @@ export function createAssistantActivitySnapshot(
 }
 
 function shouldShowActivityToolCall(toolCall: ChatToolCall, message: ChatMessage, live: boolean) {
+  if (!isVisibleAssistantRunToolCall(toolCall)) {
+    return false;
+  }
+
   if (toolCall.toolId !== "image_generate") {
     return true;
   }
@@ -1152,6 +1425,7 @@ function getInlineProgressItems(progress: ChatProgressItem[] | undefined) {
 function isInternalOnlyProgressItem(item: ChatProgressItem) {
   const id = item.id ?? "";
   const label = cleanInlineText(item.label).toLowerCase();
+  const detail = cleanInlineText(item.detail ?? "");
 
   // Plan-mode phase items belong to the PlanReviewCard / PlanReviewPanel, not
   // this inline thinking surface. They render the wrong way out here
@@ -1159,7 +1433,12 @@ function isInternalOnlyProgressItem(item: ChatProgressItem) {
   // UX where the plan card owns its own indicator.
   const isPlanPhase = id === "plan-context" || id === "plan-input" || id === "plan-research" || id === "plan-write";
 
-  return isPlanPhase || id === "provider-payload-guardrail" || id === "final-answer-recovery" || id === "context-compaction" || label === "provider payload guardrail";
+  return isPlanPhase
+    || id === "provider-payload-guardrail"
+    || id === "final-answer-recovery"
+    || id === "context-compaction"
+    || label === "provider payload guardrail"
+    || (isGenericProgressLabel(label) && !detail);
 }
 
 function getAssistantFileItems(toolCalls: ChatToolCall[], options: { includeEstimated?: boolean } = {}): AssistantActivityFileItem[] {
@@ -1629,13 +1908,16 @@ function formatToolDetail(toolCall: ChatToolCall) {
 function formatProgressDetail(progress: ChatProgressItem) {
   const detail = cleanInlineText(progress.detail ?? "");
   const label = cleanInlineText(progress.label);
-  const genericLabels = new Set(["activity", "progress", "thinking", "tool progress"]);
 
   if (!detail) {
     return label || "Progress";
   }
 
-  return genericLabels.has(label.toLowerCase()) ? detail : `${label}: ${detail}`;
+  return isGenericProgressLabel(label.toLowerCase()) ? detail : `${label}: ${detail}`;
+}
+
+function isGenericProgressLabel(label: string) {
+  return label === "activity" || label === "progress" || label === "thinking" || label === "tool progress";
 }
 
 function formatToolActivityLine(toolCall: ChatToolCall) {
@@ -1780,7 +2062,7 @@ function isApprovalDeniedToolCall(toolCall: ChatToolCall) {
   return /\bapproval denied\b|\bno tool action ran\b|\bdenied before/i.test(text);
 }
 
-function formatActivityPath(path: string) {
+function formatActivityPath(path: string): string {
   if (isWorkspaceRootActivityPath(path)) {
     return "";
   }
@@ -1792,7 +2074,7 @@ function formatActivityPath(path: string) {
   return formatSingleActivityPath(path);
 }
 
-function formatSingleActivityPath(path: string) {
+function formatSingleActivityPath(path: string): string {
   if (isWorkspaceRootActivityPath(path)) {
     return "";
   }

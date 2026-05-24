@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag to publish, for example v0.5.5.
+        description: Release tag to publish, for example v0.8.0.
         required: true
         type: string
   push:
@@ -147,7 +147,7 @@ jobs:
           if (Test-Path $releaseNotesPath) {
             $body = Get-Content -LiteralPath $releaseNotesPath -Raw
           } else {
-            $body = "Signed Windows x64 installer and updater feed for Gilbert Codex $tag."
+            $body = "Signed Windows x64 installer, macOS app/DMG, Linux deb/AppImage, and updater feed for Gilbert Codex $tag."
           }
 
           "body<<GILBERT_RELEASE_NOTES" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -285,3 +285,391 @@ jobs:
           $checksumPath = Join-Path $env:RUNNER_TEMP "$assetName.sha256"
           "$hash  $assetName" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
           gh release upload $tag $checksumPath --clobber
+
+  macos:
+    name: macos-${{ matrix.asset_arch }}-updater-release
+    runs-on: macos-latest
+    needs: windows
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            asset_arch: aarch64
+          - target: x86_64-apple-darwin
+            asset_arch: x64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check private release overlay config
+        shell: bash
+        env:
+          GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+        run: |
+          if [[ -f "src/toolBridge/index.ts" ]]; then
+            exit 0
+          fi
+
+          if [[ -z "${GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY:-}" || -z "${GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN:-}" ]]; then
+            echo "::error::Missing private release overlay. Add GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY as a repository variable or secret, and add GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN as a repository secret, so release builds can restore src/toolBridge and optional local plugin bundles without committing them to the public repo."
+            exit 1
+          fi
+
+      - name: Check out private release overlay
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
+          token: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+          path: .private-release-overlay
+
+      - name: Install private release overlay
+        shell: bash
+        run: |
+          tool_bridge_source=""
+          for candidate in ".private-release-overlay/src/toolBridge" ".private-release-overlay/toolBridge"; do
+            if [[ -f "${candidate}/index.ts" ]]; then
+              tool_bridge_source="${candidate}"
+              break
+            fi
+          done
+
+          if [[ -z "${tool_bridge_source}" ]]; then
+            echo "::error::The private release overlay did not contain src/toolBridge/index.ts or toolBridge/index.ts."
+            exit 1
+          fi
+
+          rm -rf "src/toolBridge"
+          mkdir -p "src"
+          cp -R "${tool_bridge_source}" "src/toolBridge"
+
+          for optional_path in "plugins" ".agents/plugins"; do
+            source_path=".private-release-overlay/${optional_path}"
+            if [[ -d "${source_path}" ]]; then
+              rm -rf "${optional_path}"
+              mkdir -p "$(dirname "${optional_path}")"
+              cp -R "${source_path}" "${optional_path}"
+            fi
+          done
+
+          if [[ ! -f "src/toolBridge/index.ts" ]]; then
+            echo "::error::Private release overlay restore did not produce src/toolBridge/index.ts."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify private release tool bridge is available
+        shell: bash
+        run: |
+          if [[ ! -f "src/toolBridge/index.ts" ]]; then
+            echo "::error::Release builds must include the private local tool bridge. Refusing to ship a public shim installer without tools."
+            exit 1
+          fi
+
+      - name: Check updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY. Add the Tauri updater private key as a repository secret before publishing an auto-update release."
+            exit 1
+          fi
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.version }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+
+          if [[ "${tag}" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve release notes
+        id: release_notes
+        shell: bash
+        run: |
+          tag="${{ steps.release_tag.outputs.tag }}"
+          release_notes_path="docs/releases/${tag}.md"
+
+          if [[ ! -f "${release_notes_path}" ]]; then
+            version="${tag#v}"
+            release_notes_path="docs/releases/${version}.md"
+          fi
+
+          if [[ -f "${release_notes_path}" ]]; then
+            body="$(cat "${release_notes_path}")"
+          else
+            body="Signed Windows x64 installer, macOS app/DMG, Linux deb/AppImage, and updater feed for Gilbert Codex ${tag}."
+          fi
+
+          {
+            echo "body<<GILBERT_RELEASE_NOTES"
+            echo "${body}"
+            echo "GILBERT_RELEASE_NOTES"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build signed macOS updater release
+        uses: tauri-apps/tauri-action@action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release_tag.outputs.tag }}
+          releaseName: Gilbert Codex ${{ steps.release_tag.outputs.tag }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.updater.conf.json
+          includeUpdaterJson: true
+          assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
+
+      - name: Upload macOS checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.release_tag.outputs.tag }}"
+          version="${tag#v}"
+          found=0
+
+          while IFS= read -r artifact; do
+            found=1
+            case "${artifact}" in
+              *.app.tar.gz) ext=".app.tar.gz" ;;
+              *.dmg) ext=".dmg" ;;
+              *) continue ;;
+            esac
+
+            asset_name="Gilbert-Codex-${version}-macos-${{ matrix.asset_arch }}${ext}"
+            checksum_path="${RUNNER_TEMP}/${asset_name}.sha256"
+            shasum -a 256 "${artifact}" | awk -v name="${asset_name}" '{ print $1 "  " name }' > "${checksum_path}"
+            gh release upload "${tag}" "${checksum_path}" --clobber
+          done < <(find src-tauri/target -type f \( -name '*.app.tar.gz' -o -name '*.dmg' \) -print)
+
+          if [[ "${found}" -eq 0 ]]; then
+            echo "::error::Could not find macOS .app.tar.gz or .dmg artifacts to checksum."
+            exit 1
+          fi
+
+  linux:
+    name: linux-x64-updater-release
+    runs-on: ubuntu-22.04
+    needs: macos
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check private release overlay config
+        shell: bash
+        env:
+          GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+        run: |
+          if [[ -f "src/toolBridge/index.ts" ]]; then
+            exit 0
+          fi
+
+          if [[ -z "${GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY:-}" || -z "${GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN:-}" ]]; then
+            echo "::error::Missing private release overlay. Add GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY as a repository variable or secret, and add GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN as a repository secret, so release builds can restore src/toolBridge and optional local plugin bundles without committing them to the public repo."
+            exit 1
+          fi
+
+      - name: Check out private release overlay
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
+          ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
+          token: ${{ secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN }}
+          path: .private-release-overlay
+
+      - name: Install private release overlay
+        shell: bash
+        run: |
+          tool_bridge_source=""
+          for candidate in ".private-release-overlay/src/toolBridge" ".private-release-overlay/toolBridge"; do
+            if [[ -f "${candidate}/index.ts" ]]; then
+              tool_bridge_source="${candidate}"
+              break
+            fi
+          done
+
+          if [[ -z "${tool_bridge_source}" ]]; then
+            echo "::error::The private release overlay did not contain src/toolBridge/index.ts or toolBridge/index.ts."
+            exit 1
+          fi
+
+          rm -rf "src/toolBridge"
+          mkdir -p "src"
+          cp -R "${tool_bridge_source}" "src/toolBridge"
+
+          for optional_path in "plugins" ".agents/plugins"; do
+            source_path=".private-release-overlay/${optional_path}"
+            if [[ -d "${source_path}" ]]; then
+              rm -rf "${optional_path}"
+              mkdir -p "$(dirname "${optional_path}")"
+              cp -R "${source_path}" "${optional_path}"
+            fi
+          done
+
+          if [[ ! -f "src/toolBridge/index.ts" ]]; then
+            echo "::error::Private release overlay restore did not produce src/toolBridge/index.ts."
+            exit 1
+          fi
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libsecret-1-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf \
+            wget
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify private release tool bridge is available
+        shell: bash
+        run: |
+          if [[ ! -f "src/toolBridge/index.ts" ]]; then
+            echo "::error::Release builds must include the private local tool bridge. Refusing to ship a public shim installer without tools."
+            exit 1
+          fi
+
+      - name: Check updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY. Add the Tauri updater private key as a repository secret before publishing an auto-update release."
+            exit 1
+          fi
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.version }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+
+          if [[ "${tag}" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve release notes
+        id: release_notes
+        shell: bash
+        run: |
+          tag="${{ steps.release_tag.outputs.tag }}"
+          release_notes_path="docs/releases/${tag}.md"
+
+          if [[ ! -f "${release_notes_path}" ]]; then
+            version="${tag#v}"
+            release_notes_path="docs/releases/${version}.md"
+          fi
+
+          if [[ -f "${release_notes_path}" ]]; then
+            body="$(cat "${release_notes_path}")"
+          else
+            body="Signed Windows x64 installer, macOS app/DMG, Linux deb/AppImage, and updater feed for Gilbert Codex ${tag}."
+          fi
+
+          {
+            echo "body<<GILBERT_RELEASE_NOTES"
+            echo "${body}"
+            echo "GILBERT_RELEASE_NOTES"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build signed Linux updater release
+        uses: tauri-apps/tauri-action@action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release_tag.outputs.tag }}
+          releaseName: Gilbert Codex ${{ steps.release_tag.outputs.tag }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: false
+          args: --bundles deb,appimage --config src-tauri/tauri.updater.conf.json
+          includeUpdaterJson: true
+          assetNamePattern: Gilbert-Codex-[version]-linux-x64[ext]
+
+      - name: Upload Linux checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.release_tag.outputs.tag }}"
+          version="${tag#v}"
+          found=0
+
+          while IFS= read -r artifact; do
+            found=1
+            case "${artifact}" in
+              *.AppImage) ext=".AppImage" ;;
+              *.deb) ext=".deb" ;;
+              *) continue ;;
+            esac
+
+            asset_name="Gilbert-Codex-${version}-linux-x64${ext}"
+            checksum_path="${RUNNER_TEMP}/${asset_name}.sha256"
+            sha256sum "${artifact}" | awk -v name="${asset_name}" '{ print $1 "  " name }' > "${checksum_path}"
+            gh release upload "${tag}" "${checksum_path}" --clobber
+          done < <(find src-tauri/target -type f \( -name '*.AppImage' -o -name '*.deb' \) -print)
+
+          if [[ "${found}" -eq 0 ]]; then
+            echo "::error::Could not find Linux .deb or .AppImage artifacts to checksum."
+            exit 1
+          fi

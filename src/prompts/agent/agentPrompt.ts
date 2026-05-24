@@ -8,6 +8,7 @@ import {
 import { createRuntimeToolPrompt } from "./runtimeToolPrompt";
 import { formatWorkspaceContextForPrompt, getWorkspaceContextSnapshot } from "../../localWorkspace/workspaceContext";
 import { formatBackgroundTerminalSessionsForPrompt } from "../../lib/terminalSessions";
+import { formatSkillsPromptSection } from "../../services/skillRegistry";
 import type { ChatMessage } from "../../types/chat";
 import type { ProviderSettings } from "../../types/settings";
 import type { ProviderToolBridgeOptions } from "../../toolBridge/types";
@@ -40,6 +41,7 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings, toolBri
     formatCurrentRuntimeContext(),
     formatCurrentWorkspaceContext(),
     formatBackgroundTerminalSessionsForPrompt(),
+    formatSkillsPromptSection(retrievalContext.latestUserPrompt),
     ...selectedChunks.map((entry) => formatPromptChunk(entry)),
     formatConfiguredSystemPrompt(settings.systemPrompt),
     formatUserInstructions(settings.userInstructions),

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { lazy, startTransition, Suspense, useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { Info, Trash2 } from "lucide-react";
 import { ConfirmDialog, NoticeDialog, TextInputDialog } from "../../components/dialogs/AppDialog";
 import { BulkDeleteChatsDialog } from "../../components/dialogs/BulkDeleteChatsDialog";
@@ -15,6 +15,7 @@ import {
   loadAppGeneralSettings,
   loadAppPersonalizationSettings,
   loadAppearanceMode,
+  loadChatById,
   loadChats,
   loadDiscordBridgeSettings,
   loadLocalWorkspaceSettings,
@@ -75,7 +76,7 @@ import {
   updateProjectRunLastRun,
 } from "../../lib/projectRunConfig";
 import { CHAT_MODEL_OPTIONS, getDefaultBaseUrlForProvider, getDefaultModelForProvider, getModelProvider, getNineRouterCodexContextWindowTokens, getProviderApiKey, isModelProviderId, isNineRouterCodexModelId, isNineRouterGithubCopilotModelId, supportsProviderThinking } from "../../lib/models";
-import { scheduleIdleTask } from "../../lib/idleTask";
+import { scheduleDelayedIdleTask, scheduleIdleTask } from "../../lib/idleTask";
 import {
   computeAutomationSchedulerDelayMs,
   computeNextRunAt,
@@ -449,8 +450,17 @@ const SIMPLE_THINKING_PROMPT_PATTERN = /\b(?:answer|change|clean up|explain|fix 
 const COMPLEX_THINKING_PROMPT_PATTERN = /\b(?:all|architecture|audit|build|debug|deep|end[-\s]?to[-\s]?end|entire|every|investigate|migrate|plan|publish|refactor|release|research|review|security|test|verify)\b/i;
 const PENDING_CHAT_TITLE = "Naming chat...";
 const DURABLE_MEMORY_PERSIST_DELAY_MS = 350;
-const DURABLE_MEMORY_BACKFILL_DELAY_MS = 5_000;
+const DURABLE_MEMORY_BACKFILL_DELAY_MS = 45_000;
 const DURABLE_MEMORY_BATCH_DELAY_MS = 700;
+const LIVE_CHAT_PERSISTENCE_DELAY_MS = 2_000;
+const AGENT_RUN_RECOVERY_DELAY_MS = 8_000;
+const DEFAULT_TERMINAL_CWD_DELAY_MS = 4_000;
+const DESKTOP_NOTIFICATION_PREPARE_DELAY_MS = 20_000;
+const DISCORD_BRIDGE_AUTOSTART_DELAY_MS = 15_000;
+const MODEL_CONTEXT_REFRESH_DELAY_MS = 6_000;
+const ROUTE_PRELOAD_DELAY_MS = 35_000;
+const WORKSPACE_CONTEXT_REFRESH_DELAY_MS = 8_000;
+const CHAT_HYDRATION_SWITCH_SETTLE_DELAY_MS = 140;
 const DURABLE_MEMORY_BATCH_SIZE = 1;
 
 function createApprovedPlanExecutionPrompt(originalPrompt: string, planContent: string) {
@@ -717,7 +727,7 @@ function createProjectRunRequestPrompt({
     "Use the real app tools for this run. First call terminal_list_sessions and terminal_dev_server_status with the working directory, command, and configured/inferred preview URL and port above. Reuse only an app-owned session or external localhost server that matches this exact target command/cwd/preview URL. Do not treat unrelated reachable common localhost ports as reusable, and do not open them in the browser. Be honest that external Windows Terminal or PowerShell scrollback cannot be read; if full logs are needed, offer to restart or run the command inside Gilbert's integrated terminal.",
     "",
     action.background
-      ? `If no matching server is reusable, call terminal_run with background=true, backgroundWaitMs=8000, the command above, cwd/workingDirectory, shell when configured${previewUrl ? `, and previewUrl "${previewUrl}"` : ""}.`
+      ? `If no matching server is reusable, call terminal_run with background=true, backgroundWaitMs=15000, the command above, cwd/workingDirectory, shell when configured${previewUrl ? `, and previewUrl "${previewUrl}"` : ""}.`
       : "If no matching completed run is reusable, call terminal_run with background=false, the command above, cwd/workingDirectory, and shell when configured.",
     "",
     "Never call terminal_run more than once for this same command/cwd/preview target in one run. If startup output is quiet or incomplete, poll terminal_read_session on the existing session instead of starting another npm/dev-server process.",
@@ -737,6 +747,48 @@ function getPreviewUrlPort(previewUrl: string | undefined) {
   } catch {
     return undefined;
   }
+}
+
+function preloadRouteBundles(locationServicesEnabled: boolean) {
+  const loaders = [
+    loadAppsPage,
+    loadTasksPage,
+    loadSettingsPage,
+    loadSupportPage,
+    ...(locationServicesEnabled ? [loadWeatherRadarPage] : []),
+  ];
+  let index = 0;
+
+  const loadNext = () => {
+    const loader = loaders[index];
+    index += 1;
+
+    if (!loader) {
+      return;
+    }
+
+    void loader().finally(() => {
+      if (index < loaders.length) {
+        scheduleIdleTask(loadNext, 1_500);
+      }
+    });
+  };
+
+  loadNext();
+}
+
+function mergeHydratedChat(summaryChat: ChatSummary, loadedChat: ChatSummary): ChatSummary {
+  return {
+    ...loadedChat,
+    archived: summaryChat.archived ?? loadedChat.archived,
+    composerDraft: summaryChat.composerDraft ?? loadedChat.composerDraft,
+    isDraft: loadedChat.messages.length === 0 ? summaryChat.isDraft ?? loadedChat.isDraft : undefined,
+    messagesLoaded: true,
+    pinned: summaryChat.pinned ?? loadedChat.pinned,
+    project: summaryChat.project || loadedChat.project,
+    title: summaryChat.title || loadedChat.title,
+    updatedAt: summaryChat.updatedAt || loadedChat.updatedAt,
+  };
 }
 
 interface WorkspaceAppProps {
@@ -771,6 +823,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   });
   const [appInfoResolved, setAppInfoResolved] = useState(false);
   const [sendingChatIds, setSendingChatIds] = useState<string[]>([]);
+  const [loadingChatIds, setLoadingChatIds] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>("general");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -828,6 +881,8 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   const activeSendRef = useRef(0);
   const activeGenerationsRef = useRef(new Map<string, ActiveGeneration>());
   const activeRequestChatIdsRef = useRef(new Map<number, string>());
+  const hydratingChatIdsRef = useRef(new Set<string>());
+  const hydratedChatCacheRef = useRef(new Map<string, ChatSummary>());
   const discordAutoStartKeyRef = useRef<string | null>(null);
   const discordBridgeSettingsRef = useRef(discordBridgeSettings);
   const providerSettingsRef = useRef(providerSettings);
@@ -883,11 +938,11 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     pendingIdlePersistenceRef.current.set(key, { cancel, run: wrappedRun });
   }, []);
 
-  const scheduleChatStatePersistence = useCallback((nextChats: ChatSummary[]) => {
+  const scheduleChatStatePersistence = useCallback((nextChats: ChatSummary[], timeoutMs = 250) => {
     scheduleIdlePersistence("chats", () => {
       saveChats(nextChats);
       syncPdfLibraryFromChats(nextChats);
-    }, 250);
+    }, timeoutMs);
   }, [scheduleIdlePersistence]);
 
   useEffect(() => {
@@ -900,6 +955,44 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   function setChats(update: SetStateAction<ChatSummary[]>) {
     return (setChatsImpl as any)(runtime, update);
+  }
+
+  function setChatsLive(update: SetStateAction<ChatSummary[]>) {
+    const currentChats = pendingChatsRef.current;
+    const nextChats = typeof update === "function" ? (update as (currentChats: ChatSummary[]) => ChatSummary[])(currentChats) : update;
+
+    if (nextChats === currentChats) {
+      return;
+    }
+
+    pendingChatsRef.current = nextChats;
+    scheduleChatStatePersistence(nextChats, LIVE_CHAT_PERSISTENCE_DELAY_MS);
+    startTransition(() => {
+      setChatsState(nextChats);
+    });
+  }
+
+  function applyHydratedChatToView(chatId: string, loadedChat: ChatSummary) {
+    let changed = false;
+    const nextChats = pendingChatsRef.current.map((chat) => {
+      if (chat.id !== chatId) {
+        return chat;
+      }
+
+      if (chat.messagesLoaded !== false) {
+        return chat;
+      }
+
+      changed = true;
+      return mergeHydratedChat(chat, loadedChat);
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    pendingChatsRef.current = nextChats;
+    setChatsState(nextChats);
   }
 
   function handleComposerDraftChange(chatId: string, draft: ChatComposerDraft | null) {
@@ -962,7 +1055,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     durableMemoryBackfillTimerRef.current = window.setTimeout(() => {
       queueDurableMemoryForChatIds(
         pendingChatsRef.current
-          .filter((chat) => !isEmptyChat(chat))
+          .filter((chat) => chat.messagesLoaded !== false && !isEmptyChat(chat))
           .map((chat) => chat.id),
         DURABLE_MEMORY_BATCH_DELAY_MS,
         false,
@@ -1009,7 +1102,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
   useEffect(() => {
     let mounted = true;
-    const cancelIdleLoad = scheduleIdleTask(() => {
+    const cancelIdleLoad = scheduleDelayedIdleTask(() => {
       void listAgentRuns().then(async (storedRuns) => {
         if (!mounted) {
           return;
@@ -1026,7 +1119,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
             .map((run) => saveAgentRun(run).catch(() => undefined)),
         );
       });
-    }, 1_200);
+    }, AGENT_RUN_RECOVERY_DELAY_MS, 3_000);
 
     return () => {
       mounted = false;
@@ -1105,9 +1198,9 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
       return;
     }
 
-    return scheduleIdleTask(() => {
+    return scheduleDelayedIdleTask(() => {
       void prepareDesktopNotifications();
-    }, 3_000);
+    }, DESKTOP_NOTIFICATION_PREPARE_DELAY_MS, 5_000);
   }, [generalSettings.notifications, isDesktopRuntime]);
 
   useEffect(() => {
@@ -1116,7 +1209,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     }
 
     let disposed = false;
-    const cancelIdleLoad = scheduleIdleTask(() => {
+    const cancelIdleLoad = scheduleDelayedIdleTask(() => {
       void getDefaultTerminalWorkingDirectory()
         .then((path) => {
           if (!disposed) {
@@ -1124,7 +1217,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
           }
         })
         .catch(() => undefined);
-    }, 900);
+    }, DEFAULT_TERMINAL_CWD_DELAY_MS, 2_000);
 
     return () => {
       disposed = true;
@@ -1291,7 +1384,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
 
     discordAutoStartKeyRef.current = autoStartKey;
 
-    return scheduleIdleTask(() => {
+    return scheduleDelayedIdleTask(() => {
       void ensureDiscordBridgeAutoStarted(discordBridgeSettings)
         .then((result) => {
           if (!result.status?.publicUrl) {
@@ -1307,15 +1400,15 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         .catch(() => {
           discordAutoStartKeyRef.current = null;
         });
-    }, 1_500);
+    }, DISCORD_BRIDGE_AUTOSTART_DELAY_MS, 5_000);
   }, [discordBridgeSettings, isDesktopRuntime]);
 
   useEffect(() => {
     localWorkspaceRef.current = localWorkspace;
     scheduleIdlePersistence("local-workspace", () => saveLocalWorkspaceSettings(localWorkspace), 500);
-    return scheduleIdleTask(() => {
+    return scheduleDelayedIdleTask(() => {
       void refreshWorkspaceContext(localWorkspace);
-    }, localWorkspace.roots.length > 0 ? 1_500 : 300);
+    }, WORKSPACE_CONTEXT_REFRESH_DELAY_MS, 3_000);
   }, [localWorkspace, scheduleIdlePersistence]);
 
   useEffect(() => {
@@ -1335,6 +1428,63 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     chats.find((chat) => !chat.archived) ??
     createEmptyChat(DEFAULT_PROJECT);
   const activeChatProviderSettings = createChatProviderSettings(activeChat);
+
+  useEffect(() => {
+    if (activeChat.messagesLoaded !== false) {
+      return;
+    }
+
+    const chatId = activeChat.id;
+    const cachedChat = hydratedChatCacheRef.current.get(chatId);
+    if (cachedChat) {
+      applyHydratedChatToView(chatId, cachedChat);
+      setLoadingChatIds((currentIds) => currentIds.filter((id) => id !== chatId));
+      return;
+    }
+
+    setLoadingChatIds((currentIds) => currentIds.includes(chatId) ? currentIds : [...currentIds, chatId]);
+
+    if (hydratingChatIdsRef.current.has(chatId)) {
+      return;
+    }
+
+    const hydrateActiveChat = () => {
+      if (activeChatIdRef.current !== chatId || hydratingChatIdsRef.current.has(chatId)) {
+        return;
+      }
+
+      hydratingChatIdsRef.current.add(chatId);
+
+      void loadChatById(chatId)
+        .then((loadedChat) => {
+          if (!loadedChat) {
+            return;
+          }
+
+          hydratedChatCacheRef.current.set(chatId, loadedChat);
+
+          if (activeChatIdRef.current === chatId) {
+            applyHydratedChatToView(chatId, loadedChat);
+          }
+        })
+        .finally(() => {
+          hydratingChatIdsRef.current.delete(chatId);
+          setLoadingChatIds((currentIds) => currentIds.filter((id) => id !== chatId));
+        });
+    };
+
+    if (typeof window === "undefined") {
+      hydrateActiveChat();
+      return;
+    }
+
+    const hydrationTimer = window.setTimeout(hydrateActiveChat, CHAT_HYDRATION_SWITCH_SETTLE_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(hydrationTimer);
+      setLoadingChatIds((currentIds) => currentIds.includes(chatId) ? currentIds.filter((id) => id !== chatId) : currentIds);
+    };
+  }, [activeChat.id, activeChat.messagesLoaded]);
 
   useEffect(() => {
     const selectedSettings = activeChatProviderSettings;
@@ -1409,7 +1559,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         : fallbackCandidate;
     setContextWindow(initialSelectedWindow);
 
-    const cancelContextLengthFetch = scheduleIdleTask(() => {
+    const cancelContextLengthFetch = scheduleDelayedIdleTask(() => {
       void fetchProviderModelContextLengths(selectedSettings, modelIds, {
         signal: controller.signal,
       })
@@ -1453,7 +1603,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
         .catch(() => {
           return;
         });
-    }, 1_000);
+    }, MODEL_CONTEXT_REFRESH_DELAY_MS, 3_000);
 
     return () => {
       cancelContextLengthFetch();
@@ -3524,16 +3674,9 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
   }, []);
 
   useEffect(() => {
-    return scheduleIdleTask(() => {
-      void loadAppsPage();
-      void loadTasksPage();
-      void loadSettingsPage();
-      void loadSupportPage();
-
-      if (locationServicesEnabled) {
-        void loadWeatherRadarPage();
-      }
-    }, 700);
+    return scheduleDelayedIdleTask(() => {
+      preloadRouteBundles(locationServicesEnabled);
+    }, ROUTE_PRELOAD_DELAY_MS, 5_000);
   }, [locationServicesEnabled]);
 
 
@@ -3852,6 +3995,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     localWorkspace,
     localWorkspaceRef,
     locationServicesEnabled,
+    loadingChatIds,
     looksLikeContradictedSuccessfulFileMutationAnswer,
     looksLikeFabricatedToolProgress,
     looksLikeInFlightToolPlanning,
@@ -3991,6 +4135,7 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     setBulkDeleteChatIds,
     setBulkDeleteChatsOpen,
     setChats,
+    setChatsLive,
     setChatSending,
     setChatsState,
     setComposerDraftToRestore,

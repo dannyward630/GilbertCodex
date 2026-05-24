@@ -204,6 +204,19 @@ pub async fn gilbert_database_load(
 }
 
 #[tauri::command]
+pub async fn gilbert_database_load_chat(
+    app: AppHandle,
+    namespace: String,
+    chat_id: String,
+) -> Result<Option<String>, String> {
+    run_database_worker("Database chat load", move || {
+        let namespace = require_active_namespace(&app, &namespace)?;
+        storage::load_chat(&app, &namespace, &chat_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn gilbert_database_set_value(
     app: AppHandle,
     namespace: String,

@@ -21,4 +21,4 @@ description: Use for implementing code changes, debugging, refactoring, reposito
    Run attached terminal or test tools when they are available. Otherwise recommend the narrowest useful check first, and avoid claiming it passed without evidence.
 
 6. Finish with evidence.
-   Summarize changed behavior, changed files, verification, and remaining risk.
+   Summarize changed behavior, changed files, verification, and remaining risk in a compact Markdown wrap-up. Use **Summary**, **Changed Files**, **Verification**, and **Notes** when useful, and omit sections that have nothing to say.

@@ -10,7 +10,7 @@ import {
   normalizeTopK,
   normalizeTopP,
 } from "./generationSettings";
-import { isTerminalShellId } from "./terminalShells";
+import { getDefaultTerminalShell, isTerminalShellId } from "./terminalShells";
 import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_PROVIDER_ID,
@@ -26,8 +26,8 @@ import { DEFAULT_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_RESULTS } from "../servi
 import { normalizeToolBridgePermissionMode } from "../toolBridge/permissions";
 import { DEFAULT_DISCORD_BRIDGE_SETTINGS, normalizeDiscordBridgeSettings } from "../types/discord";
 import { DEFAULT_TOOL_REGISTRY_SETTINGS, normalizeToolRegistrySettings } from "../types/tools";
-import { autoFinalizeDeviceDatabaseMigration, isDeviceDatabaseAvailable, loadDeviceDatabaseNamespace, saveDeviceDatabaseValues, type DeviceDatabaseSeed } from "./deviceDatabase";
-import { scheduleIdleTask } from "./idleTask";
+import { autoFinalizeDeviceDatabaseMigration, isDeviceDatabaseAvailable, loadDeviceDatabaseChat, loadDeviceDatabaseNamespace, saveDeviceDatabaseValues, type DeviceDatabaseSeed } from "./deviceDatabase";
+import { scheduleDelayedIdleTask, scheduleIdleTask } from "./idleTask";
 import { normalizeProjectRunConfig } from "./projectRunConfig";
 import type {
   ChatAttachment,
@@ -143,7 +143,13 @@ const PERSISTED_STORAGE_KEYS = [
 const PERSISTED_STORAGE_KEY_PREFIXES = [PROJECT_TOOL_MEMORY_STORAGE_PREFIX, CHAT_MEMORY_STORAGE_PREFIX, PROJECT_MEMORY_STORAGE_PREFIX];
 const LEGACY_BROWSER_ONLY_KEYS = [BROWSER_AUTH_DB_KEY];
 const PENDING_DEVICE_WRITE_PREFIX = "gilbert-codex.pending-device-write.v1.";
+const PENDING_DEVICE_WRITE_INDEX_PREFIX = "gilbert-codex.pending-device-write-index.v1.";
 const PENDING_DEVICE_RECOVERY_WRITE_DELAY_MS = 250;
+const PENDING_DEVICE_RECOVERY_LEGACY_SCAN_LIMIT = 250;
+const PREFIXED_SEED_MIGRATION_MARKER_PREFIX = "gilbert-codex.prefixed-storage-seeds-migrated.v1.";
+const PREFIXED_SEED_MIGRATION_DELAY_MS = 45_000;
+const PREFIXED_SEED_MIGRATION_CHUNK_SIZE = 75;
+const LEGACY_BROWSER_STORAGE_CLEANUP_DELAY_MS = 60_000;
 let storageNamespace = "legacy";
 let deviceDatabasePath: string | null = null;
 let deviceStorageInitialized = false;
@@ -154,6 +160,7 @@ const deviceStoragePendingWrites = new Map<string, { key: string; namespace: str
 const deviceStoragePendingRecoveryWrites = new Map<string, PendingDeviceStorageWrite>();
 const deviceStoragePendingRecoveryTimers = new Map<string, number>();
 let deviceStorageRecoveryFlushRegistered = false;
+const prefixedSeedMigrationNamespaces = new Set<string>();
 
 interface PendingDeviceStorageWrite {
   key: string;
@@ -220,7 +227,7 @@ export const defaultAppGeneralSettings: AppGeneralSettings = {
   },
   popoutWindowHotkey: "",
   requireCtrlEnterForLongPrompts: false,
-  terminalShell: "cmd",
+  terminalShell: getDefaultTerminalShell(),
 };
 
 export const defaultAppPersonalizationSettings: AppPersonalizationSettings = {
@@ -266,7 +273,7 @@ export async function initializeDeviceStorage(userId: string | null) {
     return;
   }
 
-  const snapshot = await loadDeviceDatabaseNamespace(namespace, collectLocalStorageSeeds());
+  const snapshot = await loadDeviceDatabaseNamespace(namespace, collectStartupLocalStorageSeeds());
 
   if (initializationToken !== storageInitializationToken || namespace !== storageNamespace) {
     return;
@@ -281,10 +288,11 @@ export async function initializeDeviceStorage(userId: string | null) {
     queueDeviceStorageWrite(recoveredWrite.namespace, recoveredWrite.key, recoveredWrite.value);
   }
 
-  purgeLegacyBrowserStorage();
-  scheduleIdleTask(() => {
+  schedulePrefixedLocalStorageSeedMigration(namespace);
+  scheduleLegacyBrowserStorageCleanup();
+  scheduleDelayedIdleTask(() => {
     void autoFinalizeDeviceDatabaseMigration().catch(() => undefined);
-  }, 4_000);
+  }, 45_000, 5_000);
 }
 
 export function getDeviceDatabasePath() {
@@ -298,37 +306,73 @@ export function loadChats(): ChatSummary[] {
     return [createEmptyChat(DEFAULT_PROJECT)];
   }
 
-  const normalizedChats = storedChats.map((chat) => {
-    const normalizedMessages = Array.isArray(chat.messages) ? chat.messages.map(normalizeChatMessage) : [];
-    const messages = normalizedMessages;
-    const composerDraft = normalizeComposerDraft(chat.composerDraft);
-    const project = normalizeProjectName(chat.project);
-    const provider = isModelProviderId(chat.provider) ? chat.provider : undefined;
-    const model = normalizeOptionalText(chat.model);
-    const isLegacyDiscordChat = project.toLowerCase() === "discord" && messages.some((message) => message.source?.kind === "discord");
-    const firstUserMessage = messages.find((message) => message.role === "user");
-
-    return {
-      ...chat,
-      composerDraft,
-      isDraft: isEmptyChat({ messages }) ? true : undefined,
-      messages,
-      model,
-      project: isLegacyDiscordChat ? DEFAULT_PROJECT : project,
-      provider,
-      title: isLegacyDiscordChat && firstUserMessage ? titleFromMessage(firstUserMessage.content) : chat.title || "New chat",
-      toolRuntimeVersion: 0,
-      updatedAt: chat.updatedAt || new Date().toISOString(),
-    };
-  });
+  const normalizedChats = storedChats.map(normalizeStoredChat);
 
   const durableChats = normalizedChats.filter((chat) => !isDiscardableEmptyChat(chat));
 
   return durableChats.length > 0 ? durableChats : [createEmptyChat(DEFAULT_PROJECT)];
 }
 
+export async function loadChatById(chatId: string): Promise<ChatSummary | null> {
+  const normalizedChatId = chatId.trim();
+
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  const cachedChat = readJson<ChatSummary[]>(CHATS_KEY)?.find((chat) => chat.id === normalizedChatId);
+
+  if (cachedChat && cachedChat.messagesLoaded !== false) {
+    return normalizeStoredChat(cachedChat);
+  }
+
+  if (isDeviceDatabaseAvailable()) {
+    const rawChat = await loadDeviceDatabaseChat(storageNamespace, normalizedChatId);
+
+    if (rawChat) {
+      try {
+        return normalizeStoredChat({
+          ...(JSON.parse(rawChat) as ChatSummary),
+          messagesLoaded: true,
+        });
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return loadChats().find((chat) => chat.id === normalizedChatId) ?? null;
+}
+
 export function saveChats(chats: ChatSummary[]) {
   writeJson(CHATS_KEY, chats.filter((chat) => !isDiscardableEmptyChat(chat)));
+}
+
+function normalizeStoredChat(chat: ChatSummary): ChatSummary {
+  const messagesLoaded = chat.messagesLoaded === false ? false : undefined;
+  const messages = messagesLoaded === false
+    ? []
+    : Array.isArray(chat.messages) ? chat.messages.map(normalizeChatMessage) : [];
+  const composerDraft = normalizeComposerDraft(chat.composerDraft);
+  const project = normalizeProjectName(chat.project);
+  const provider = isModelProviderId(chat.provider) ? chat.provider : undefined;
+  const model = normalizeOptionalText(chat.model);
+  const isLegacyDiscordChat = project.toLowerCase() === "discord" && messages.some((message) => message.source?.kind === "discord");
+  const firstUserMessage = messages.find((message) => message.role === "user");
+
+  return {
+    ...chat,
+    composerDraft,
+    isDraft: isEmptyChat({ messages, messagesLoaded }) ? true : undefined,
+    messages,
+    messagesLoaded,
+    model,
+    project: isLegacyDiscordChat ? DEFAULT_PROJECT : project,
+    provider,
+    title: isLegacyDiscordChat && firstUserMessage ? titleFromMessage(firstUserMessage.content) : chat.title || "New chat",
+    toolRuntimeVersion: 0,
+    updatedAt: chat.updatedAt || new Date().toISOString(),
+  };
 }
 
 export function loadProjects(): ProjectSummary[] {
@@ -767,7 +811,9 @@ function queuePendingDeviceStorageRecovery(namespace: string, key: string, value
 
 function writePendingDeviceStorageRecovery(pendingWrite: PendingDeviceStorageWrite) {
   try {
-    window.localStorage.setItem(pendingDeviceStorageKey(pendingWrite.namespace, pendingWrite.key), JSON.stringify(pendingWrite));
+    const storageKey = pendingDeviceStorageKey(pendingWrite.namespace, pendingWrite.key);
+    window.localStorage.setItem(storageKey, JSON.stringify(pendingWrite));
+    addPendingDeviceStorageRecoveryIndex(pendingWrite.namespace, storageKey);
   } catch {
     return;
   }
@@ -796,6 +842,7 @@ function clearPendingDeviceStorageRecovery(namespace: string, key: string, value
 
     if (!pendingWrite || pendingWrite.value === value) {
       window.localStorage.removeItem(storageKey);
+      removePendingDeviceStorageRecoveryIndex(namespace, storageKey);
     }
   } catch {
     return;
@@ -833,6 +880,20 @@ function readPendingDeviceStorageRecoveries(namespace: string) {
     return [];
   }
 
+  const indexedPendingWrites = readIndexedPendingDeviceStorageRecoveries(namespace);
+
+  if (indexedPendingWrites.length > 0) {
+    return indexedPendingWrites.sort((left, right) => left.updatedAt - right.updatedAt);
+  }
+
+  try {
+    if (window.localStorage.length > PENDING_DEVICE_RECOVERY_LEGACY_SCAN_LIMIT) {
+      return [];
+    }
+  } catch {
+    return [];
+  }
+
   const pendingWrites: PendingDeviceStorageWrite[] = [];
   const namespacePrefix = pendingDeviceStorageNamespacePrefix(namespace);
 
@@ -855,6 +916,61 @@ function readPendingDeviceStorageRecoveries(namespace: string) {
   }
 
   return pendingWrites.sort((left, right) => left.updatedAt - right.updatedAt);
+}
+
+function readIndexedPendingDeviceStorageRecoveries(namespace: string) {
+  const pendingWrites: PendingDeviceStorageWrite[] = [];
+
+  for (const storageKey of readPendingDeviceStorageRecoveryIndex(namespace)) {
+    try {
+      const pendingWrite = parsePendingDeviceStorageWrite(window.localStorage.getItem(storageKey));
+
+      if (pendingWrite?.namespace === namespace) {
+        pendingWrites.push(pendingWrite);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return pendingWrites;
+}
+
+function readPendingDeviceStorageRecoveryIndex(namespace: string) {
+  try {
+    const rawIndex = window.localStorage.getItem(pendingDeviceStorageIndexKey(namespace));
+    const parsed = rawIndex ? JSON.parse(rawIndex) : [];
+
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addPendingDeviceStorageRecoveryIndex(namespace: string, storageKey: string) {
+  const indexedKeys = new Set(readPendingDeviceStorageRecoveryIndex(namespace));
+  indexedKeys.add(storageKey);
+  writePendingDeviceStorageRecoveryIndex(namespace, Array.from(indexedKeys));
+}
+
+function removePendingDeviceStorageRecoveryIndex(namespace: string, storageKey: string) {
+  const indexedKeys = readPendingDeviceStorageRecoveryIndex(namespace).filter((indexedKey) => indexedKey !== storageKey);
+  writePendingDeviceStorageRecoveryIndex(namespace, indexedKeys);
+}
+
+function writePendingDeviceStorageRecoveryIndex(namespace: string, indexedKeys: string[]) {
+  try {
+    const indexKey = pendingDeviceStorageIndexKey(namespace);
+
+    if (indexedKeys.length === 0) {
+      window.localStorage.removeItem(indexKey);
+      return;
+    }
+
+    window.localStorage.setItem(indexKey, JSON.stringify(indexedKeys));
+  } catch {
+    return;
+  }
 }
 
 function parsePendingDeviceStorageWrite(value: string | null): PendingDeviceStorageWrite | null {
@@ -882,6 +998,10 @@ function parsePendingDeviceStorageWrite(value: string | null): PendingDeviceStor
 
 function pendingDeviceStorageNamespacePrefix(namespace: string) {
   return `${PENDING_DEVICE_WRITE_PREFIX}${encodeURIComponent(namespace)}.`;
+}
+
+function pendingDeviceStorageIndexKey(namespace: string) {
+  return `${PENDING_DEVICE_WRITE_INDEX_PREFIX}${encodeURIComponent(namespace)}`;
 }
 
 function pendingDeviceStorageKey(namespace: string, key: string) {
@@ -912,7 +1032,7 @@ function readRawStorageValue(key: string) {
   }
 }
 
-function collectLocalStorageSeeds(): DeviceDatabaseSeed[] {
+function collectStartupLocalStorageSeeds(): DeviceDatabaseSeed[] {
   if (typeof window === "undefined") {
     return [];
   }
@@ -927,46 +1047,118 @@ function collectLocalStorageSeeds(): DeviceDatabaseSeed[] {
     }
   }
 
-  for (const seed of collectPrefixedLocalStorageSeeds()) {
-    seeds.set(seed.key, seed.value);
-  }
-
   return Array.from(seeds.entries()).map(([key, value]) => ({ key, value }));
 }
 
-function collectPrefixedLocalStorageSeeds(): DeviceDatabaseSeed[] {
-  const seeds: DeviceDatabaseSeed[] = [];
-  const namespaceSuffix = storageNamespace === "legacy" ? "" : `.${storageNamespace}`;
-
-  try {
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const rawKey = window.localStorage.key(index);
-
-      if (!rawKey) {
-        continue;
-      }
-
-      const key = namespaceSuffix
-        ? rawKey.endsWith(namespaceSuffix)
-          ? rawKey.slice(0, -namespaceSuffix.length)
-          : ""
-        : rawKey;
-
-      if (!key || !PERSISTED_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-        continue;
-      }
-
-      const value = window.localStorage.getItem(rawKey);
-
-      if (value !== null) {
-        seeds.push({ key, value });
-      }
-    }
-  } catch {
-    return [];
+function schedulePrefixedLocalStorageSeedMigration(namespace: string) {
+  if (typeof window === "undefined" || prefixedSeedMigrationNamespaces.has(namespace)) {
+    return;
   }
 
-  return seeds;
+  const markerKey = prefixedSeedMigrationMarkerKey(namespace);
+  try {
+    if (window.localStorage.getItem(markerKey) === "true") {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  prefixedSeedMigrationNamespaces.add(namespace);
+  let index = 0;
+
+  const migrateChunk = () => {
+    if (namespace !== storageNamespace || !deviceStorageInitialized || !isDeviceDatabaseAvailable()) {
+      prefixedSeedMigrationNamespaces.delete(namespace);
+      return;
+    }
+
+    const migrated = migratePrefixedLocalStorageSeedChunk(namespace, index, PREFIXED_SEED_MIGRATION_CHUNK_SIZE);
+    index = migrated.nextIndex;
+
+    if (!migrated.complete) {
+      scheduleIdleTask(migrateChunk, 1_500);
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(markerKey, "true");
+    } catch {
+      // A marker is only a startup optimization; the migrated values already live in the database queue.
+    } finally {
+      prefixedSeedMigrationNamespaces.delete(namespace);
+    }
+  };
+
+  scheduleDelayedIdleTask(migrateChunk, PREFIXED_SEED_MIGRATION_DELAY_MS, 5_000);
+}
+
+function migratePrefixedLocalStorageSeedChunk(namespace: string, startIndex: number, chunkSize: number) {
+  let index = startIndex;
+  let scanned = 0;
+
+  try {
+    const total = window.localStorage.length;
+
+    while (index < total && scanned < chunkSize) {
+      const rawKey = window.localStorage.key(index);
+      index += 1;
+      scanned += 1;
+
+      const seed = createPrefixedLocalStorageSeed(namespace, rawKey);
+
+      if (!seed || deviceStorageValues.has(seed.key)) {
+        continue;
+      }
+
+      deviceStorageValues.set(seed.key, seed.value);
+      queueDeviceStorageWrite(namespace, seed.key, seed.value);
+    }
+
+    return {
+      complete: index >= total,
+      nextIndex: index,
+    };
+  } catch {
+    return {
+      complete: true,
+      nextIndex: index,
+    };
+  }
+}
+
+function createPrefixedLocalStorageSeed(namespace: string, rawKey: string | null): DeviceDatabaseSeed | null {
+  if (!rawKey) {
+    return null;
+  }
+
+  const namespaceSuffix = namespace === "legacy" ? "" : `.${namespace}`;
+
+  try {
+    const key = namespaceSuffix
+      ? rawKey.endsWith(namespaceSuffix)
+        ? rawKey.slice(0, -namespaceSuffix.length)
+        : ""
+      : rawKey;
+
+    if (!key || !PERSISTED_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      return null;
+    }
+
+    const value = window.localStorage.getItem(rawKey);
+
+    return value !== null ? { key, value } : null;
+  } catch {
+    return null;
+  }
+}
+
+function prefixedSeedMigrationMarkerKey(namespace: string) {
+  return `${PREFIXED_SEED_MIGRATION_MARKER_PREFIX}${encodeURIComponent(namespace)}`;
+}
+
+function scheduleLegacyBrowserStorageCleanup() {
+  scheduleDelayedIdleTask(purgeLegacyBrowserStorage, LEGACY_BROWSER_STORAGE_CLEANUP_DELAY_MS, 5_000);
 }
 
 function purgeLegacyBrowserStorage() {
@@ -974,29 +1166,15 @@ function purgeLegacyBrowserStorage() {
     return;
   }
 
-  const keysToRemove: string[] = [];
   const allLegacyKeys = [...PERSISTED_STORAGE_KEYS, ...LEGACY_BROWSER_ONLY_KEYS];
-  const storageKeyPrefixes = allLegacyKeys.map((key) => `${key}.user.`);
 
   try {
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-
-      if (!key) {
-        continue;
-      }
-
-      if (
-        allLegacyKeys.includes(key) ||
-        storageKeyPrefixes.some((prefix) => key.startsWith(prefix)) ||
-        PERSISTED_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))
-      ) {
-        keysToRemove.push(key);
-      }
-    }
-
-    for (const key of keysToRemove) {
+    for (const key of allLegacyKeys) {
       window.localStorage.removeItem(key);
+
+      if (storageNamespace !== "legacy") {
+        window.localStorage.removeItem(scopedStorageKey(key));
+      }
     }
   } catch {
     return;
@@ -1193,7 +1371,7 @@ function normalizeChatMessage(message: ChatMessage): ChatMessage {
     reasoning: undefined,
     role: message.role === "assistant" ? "assistant" : "user",
     researchReferences: normalizeResearchReferences(message.researchReferences),
-    responseThinking: undefined,
+    responseThinking: normalizeOptionalText(message.responseThinking),
     source: normalizeChatMessageSource(message.source) ?? legacyDiscordMessage?.source,
     sources: normalizeChatSources(message.sources),
     status: message.status === "error" ? "error" : undefined,

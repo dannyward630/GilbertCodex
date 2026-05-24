@@ -35,7 +35,11 @@ export function createEmptyChat(project = DEFAULT_PROJECT): ChatSummary {
   };
 }
 
-export function isEmptyChat(chat: Pick<ChatSummary, "messages">) {
+export function isEmptyChat(chat: Pick<ChatSummary, "messages"> & Pick<Partial<ChatSummary>, "messagesLoaded">) {
+  if (chat.messagesLoaded === false) {
+    return false;
+  }
+
   return chat.messages.length === 0;
 }
 
@@ -43,7 +47,7 @@ export function hasComposerDraftContent(draft?: ChatComposerDraft | null): draft
   return Boolean(draft && (draft.content.trim() || draft.attachments.length > 0));
 }
 
-export function isDiscardableEmptyChat(chat: Pick<ChatSummary, "composerDraft" | "messages">) {
+export function isDiscardableEmptyChat(chat: Pick<ChatSummary, "composerDraft" | "messages"> & Pick<Partial<ChatSummary>, "messagesLoaded">) {
   return isEmptyChat(chat) && !hasComposerDraftContent(chat.composerDraft);
 }
 

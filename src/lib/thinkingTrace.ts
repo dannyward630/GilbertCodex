@@ -7,25 +7,29 @@ interface VisibleToolThinkingOptions {
 type ToolIntent = "approval" | "browser" | "edit" | "git" | "memory" | "read" | "search" | "terminal" | "web" | "other";
 
 export function createVisibleToolPlanThinking(toolCalls: ChatToolCall[]) {
-  const visibleToolCalls = toolCalls.filter(Boolean);
+  const visibleToolCalls = toolCalls.filter(isVisibleTraceToolCall);
 
   if (visibleToolCalls.length === 0) {
     return "";
   }
 
-  const action = describePlannedAction(visibleToolCalls);
-  const target = describeToolTargets(visibleToolCalls);
-  return `${action}${target ? ` ${target}` : ""}.`;
+  return describePlannedAction(visibleToolCalls);
 }
 
 export function createVisibleToolApprovalThinking(toolCalls: ChatToolCall[]) {
-  const target = describeToolTargets(toolCalls);
+  const visibleToolCalls = toolCalls.filter(isVisibleTraceToolCall);
+
+  if (visibleToolCalls.length === 0) {
+    return "";
+  }
+
+  const target = describeToolTargets(visibleToolCalls);
 
   return `This action needs review before it runs${target ? ` ${target}` : ""}.`;
 }
 
 export function createVisibleToolResultThinking(toolCalls: ChatToolCall[], options: VisibleToolThinkingOptions = {}) {
-  const visibleToolCalls = toolCalls.filter(Boolean);
+  const visibleToolCalls = toolCalls.filter(isVisibleTraceToolCall);
 
   if (visibleToolCalls.length === 0) {
     return "";
@@ -38,39 +42,47 @@ export function createVisibleToolResultThinking(toolCalls: ChatToolCall[], optio
 }
 
 function describePlannedAction(toolCalls: ChatToolCall[]) {
+  const target = describeThoughtTargetContext(toolCalls);
+
   if (toolCalls.length > 1) {
     const dominantIntent = getDominantIntent(toolCalls);
     if (dominantIntent === "edit") {
-      return `Updating files with ${toolCalls.length} tool calls`;
+      return `Applying file changes${target ? ` in ${target}` : ""}.`;
     }
-    if (dominantIntent === "read" || dominantIntent === "search") {
-      return `Gathering workspace evidence with ${toolCalls.length} tool calls`;
+    if (dominantIntent === "read") {
+      return `Reading relevant files${target ? `: ${target}` : ""}.`;
     }
-    return `Running ${toolCalls.length} tool calls`;
+    if (dominantIntent === "search") {
+      return describeSearchPlan(toolCalls) || `Searching the workspace${target ? ` for ${target}` : ""}.`;
+    }
+    if (dominantIntent === "terminal") {
+      return `Running commands${target ? ` for ${target}` : ""}.`;
+    }
+    return `Working through concrete actions${target ? ` for ${target}` : ""}.`;
   }
 
   const toolCall = toolCalls[0]!;
   switch (getToolIntent(toolCall)) {
     case "browser":
-      return "Checking the app in the browser";
+      return "Checking the app in the browser.";
     case "edit":
-      return "Applying file changes";
+      return `Applying file changes${target ? ` in ${target}` : ""}.`;
     case "git":
-      return "Checking Git state";
+      return "Checking Git state.";
     case "memory":
-      return "Checking saved project memory";
+      return "Checking saved project memory.";
     case "read":
-      return "Reading workspace evidence";
+      return target ? `Reading workspace files: ${target}.` : "Reading workspace files.";
     case "search":
-      return "Searching the workspace";
+      return describeSearchPlan(toolCalls) || `Searching${target ? ` for ${target}` : " the workspace"}.`;
     case "terminal":
-      return "Running a command";
+      return `Running ${target || "a command"}.`;
     case "web":
-      return "Searching the web";
+      return `Checking current web sources${target ? ` for ${target}` : ""}.`;
     case "approval":
-      return "Preparing an action for review";
+      return "Waiting for approval.";
     default:
-      return `Using ${cleanInlineText(toolCall.label) || "a tool"}`;
+      return `Using ${cleanInlineText(toolCall.label) || "the next action"}.`;
   }
 }
 
@@ -90,6 +102,7 @@ function describeToolFinding(toolCalls: ChatToolCall[]) {
     return changedFiles;
   }
 
+  const intent = getDominantIntent(toolCalls);
   const terminal = toolCalls.find((toolCall) => toolCall.terminal || getToolIntent(toolCall) === "terminal");
   if (terminal?.terminal) {
     const command = terminal.terminal.command ? `\`${limitInline(terminal.terminal.command, 90)}\`` : "the command";
@@ -98,13 +111,20 @@ function describeToolFinding(toolCalls: ChatToolCall[]) {
   }
 
   const targets = describeToolTargets(toolCalls);
-  const intent = getDominantIntent(toolCalls);
-  if (intent === "read" || intent === "search" || intent === "git" || intent === "memory") {
-    return `I have current workspace evidence${targets ? ` ${targets}` : ""}.`;
+  if (intent === "read") {
+    return summarizeEvidenceResult(toolCalls, "read") || `Read workspace files${targets ? ` ${targets}` : ""}.`;
+  }
+
+  if (intent === "search") {
+    return summarizeEvidenceResult(toolCalls, "search") || `Searched the workspace${targets ? ` ${targets}` : ""}.`;
+  }
+
+  if (intent === "git" || intent === "memory") {
+    return `Checked project context${targets ? ` ${targets}` : ""}.`;
   }
 
   if (intent === "web") {
-    return `I have web evidence${targets ? ` ${targets}` : ""}.`;
+    return `Checked current sources${targets ? ` ${targets}` : ""}.`;
   }
 
   const outputSummary = summarizeToolOutput(toolCalls);
@@ -115,23 +135,184 @@ function describeToolFinding(toolCalls: ChatToolCall[]) {
   return `${toolCalls.length === 1 ? cleanInlineText(toolCalls[0]!.label) || "The tool" : `${toolCalls.length} tools`} completed.`;
 }
 
+function summarizeEvidenceResult(toolCalls: ChatToolCall[], intent: "read" | "search") {
+  const searchTerms = intent === "search" ? collectSearchTerms(toolCalls) : [];
+  const fileTargets = unique(toolCalls.flatMap(extractToolEvidencePaths)).filter(isUsefulEvidenceTarget);
+  const targetText = intent === "read"
+    ? formatEvidenceReadTargets(fileTargets)
+    : formatEvidenceSearchTargets(fileTargets, searchTerms);
+  const focusText = inferEvidenceFocus([...fileTargets, ...searchTerms]);
+
+  if (!targetText && !focusText) {
+    return "";
+  }
+
+  const verb = intent === "read" ? "Read" : "Searched";
+  const fallbackTarget = intent === "read" ? "workspace files" : "the workspace";
+  const subject = targetText || fallbackTarget;
+
+  return `${verb} ${subject}${focusText ? `; ${focusText}` : ""}.`;
+}
+
+function describeSearchPlan(toolCalls: ChatToolCall[]) {
+  const terms = collectSearchTerms(toolCalls);
+  const scopes = unique(toolCalls.flatMap(extractToolEvidencePaths)).filter(isUsefulEvidenceTarget);
+  const focus = inferEvidenceFocus([...scopes, ...terms]);
+  const termText = formatEvidenceTargets(terms);
+  const scopeText = formatEvidenceTargets(scopes);
+
+  if (!termText && !scopeText && !focus) {
+    return "";
+  }
+
+  if (termText && scopeText) {
+    return `Searching ${scopeText} for ${termText}${focus ? ` (${focus})` : ""}.`;
+  }
+
+  if (termText) {
+    return `Searching the workspace for ${termText}${focus ? ` (${focus})` : ""}.`;
+  }
+
+  return `Searching ${scopeText || "the workspace"}${focus ? ` (${focus})` : ""}.`;
+}
+
+function formatEvidenceReadTargets(targets: string[]) {
+  if (targets.length === 0) {
+    return "";
+  }
+
+  const commonDirectory = findCommonEvidenceDirectory(targets.map(stripTargetFormatting));
+  if (targets.length > 3 && commonDirectory) {
+    const fileNames = targets.map(formatEvidenceBasename).filter(Boolean);
+    const preview = formatEvidenceTargets(fileNames);
+    return `${targets.length} files in \`${commonDirectory}\`${preview ? ` (${preview})` : ""}`;
+  }
+
+  return formatEvidenceTargets(targets);
+}
+
+function formatEvidenceSearchTargets(targets: string[], terms: string[]) {
+  const termText = formatEvidenceTargets(terms);
+  const targetText = formatEvidenceTargets(targets);
+
+  if (termText && targetText) {
+    return `${targetText} for ${termText}`;
+  }
+
+  if (termText) {
+    return `workspace for ${termText}`;
+  }
+
+  return targetText;
+}
+
+function formatEvidenceTargets(targets: string[]) {
+  if (targets.length === 0) {
+    return "";
+  }
+
+  const visibleTargets = targets.slice(0, 3);
+  const remaining = targets.length - visibleTargets.length;
+  const targetText = remaining > 0 ? visibleTargets.join(", ") : joinReadableList(visibleTargets);
+
+  return remaining > 0 ? `${targetText}, and ${remaining} more` : targetText;
+}
+
+function formatEvidenceBasename(target: string) {
+  const cleaned = stripTargetFormatting(target);
+  const basename = cleaned.split("/").filter(Boolean).pop() ?? "";
+  return basename ? `\`${basename}\`` : "";
+}
+
+function isUsefulEvidenceTarget(target: string) {
+  const cleaned = stripTargetFormatting(target);
+
+  if (!cleaned) {
+    return false;
+  }
+
+  if (isWorkspaceRootLikePath(cleaned)) {
+    return false;
+  }
+
+  if (/^(?:gilbertcodex|src|app|workspace)$/i.test(cleaned)) {
+    return false;
+  }
+
+  return true;
+}
+
+function inferEvidenceFocus(targets: string[]) {
+  const normalizedTargets = targets.map(stripTargetFormatting).map((target) => target.toLowerCase());
+  const joined = normalizedTargets.join("\n");
+  const focusLabels = [
+    /\bsrc\/toolbridge\/tools\/terminal\b|\bterminal(?:run|diagnostics|session|backend)?\b/.test(joined) ? "terminal session lifecycle" : "",
+    /\bsrc\/toolbridge\/(?:registry|selection|capabilityplan|adapters|tools)\b/.test(joined) ? "tool bridge registration/selection" : "",
+    /\b(?:src\/app\/)?workspace\/tools\/localtoolstreaming\.tsx\b/.test(joined) ? "local tool streaming" : "",
+    /\bsrc\/app\/tauriclient\.ts\b/.test(joined) ? "desktop bridge calls" : "",
+    /\b(?:assistantactivityindicator|assistantruncard|chatthread)\.(?:tsx|ts)\b/.test(joined) ? "assistant work-trace rendering" : "",
+    /\b(?:thinkingtrace|worktracecontent)\.(?:tsx|ts)\b/.test(joined) ? "visible trace generation/filtering" : "",
+    /\b(?:conversation|chat)\.css\b/.test(joined) ? "thinking surface styling" : "",
+    /\bruntimetoolprompt\.ts\b/.test(joined) ? "runtime tool prompt guidance" : "",
+    /\bsrc\/toolbridge\b/.test(joined) ? "the tool bridge" : "",
+  ].filter(Boolean);
+  const uniqueFocusLabels = unique(focusLabels).slice(0, 2);
+
+  if (uniqueFocusLabels.length > 0) {
+    return `focus: ${joinReadableList(uniqueFocusLabels)}`;
+  }
+
+  const commonDirectory = findCommonEvidenceDirectory(normalizedTargets);
+  return commonDirectory ? `focus: files clustered in \`${commonDirectory}\`` : "";
+}
+
+function findCommonEvidenceDirectory(targets: string[]) {
+  const pathParts = targets
+    .filter((target) => target.includes("/"))
+    .map((target) => target.split("/").filter(Boolean).slice(0, -1))
+    .filter((parts) => parts.length > 0);
+
+  if (pathParts.length < 2) {
+    return "";
+  }
+
+  const commonParts: string[] = [];
+  const [firstParts] = pathParts;
+
+  for (let index = 0; index < firstParts.length; index += 1) {
+    const candidate = firstParts[index];
+    if (!candidate || pathParts.some((parts) => parts[index] !== candidate)) {
+      break;
+    }
+    commonParts.push(candidate);
+  }
+
+  return commonParts.length >= 2 ? commonParts.join("/") : "";
+}
+
 function summarizeChangedFiles(toolCalls: ChatToolCall[]) {
-  const changes = toolCalls.flatMap((toolCall) => [
+  const fileRecords = toolCalls.flatMap((toolCall) => [
     ...(toolCall.fileChanges ?? []).map((change) => ({
       additions: change.additions,
       deletions: change.deletions,
+      kind: "update",
       path: change.path,
       status: toolCall.status,
     })),
     ...(toolCall.batchFileResults ?? []).map((result) => ({
       additions: result.additions,
       deletions: result.deletions,
+      kind: result.kind,
       path: result.path,
       status: result.status === "error" ? "error" : result.status === "skipped" ? "skipped" : toolCall.status,
     })),
   ]);
+  const changes = fileRecords.filter((record) => isMutatingFileRecord(record));
 
   if (changes.length === 0) {
+    if (fileRecords.length > 0 && toolCalls.some((toolCall) => getToolIntent(toolCall) === "edit")) {
+      return "Checked file changes; no file contents changed.";
+    }
     return "";
   }
 
@@ -151,6 +332,12 @@ function summarizeChangedFiles(toolCalls: ChatToolCall[]) {
   return `Applied file changes to ${changedCount} file${changedCount === 1 ? "" : "s"}${diffText}${failureText}.`;
 }
 
+function isMutatingFileRecord(record: { additions?: number; deletions?: number; kind?: string; path: string; status?: string }) {
+  const additions = typeof record.additions === "number" && Number.isFinite(record.additions) ? record.additions : 0;
+  const deletions = typeof record.deletions === "number" && Number.isFinite(record.deletions) ? record.deletions : 0;
+  return additions > 0 || deletions > 0 || record.kind === "create" || record.kind === "delete" || record.kind === "move";
+}
+
 function summarizeToolActivity(toolCalls: ChatToolCall[], changedFileCount: number) {
   const counts = countToolIntents(toolCalls);
   const visibleIntents = (Object.entries(counts) as Array<[ToolIntent, number]>).filter(([, count]) => count > 0);
@@ -161,7 +348,7 @@ function summarizeToolActivity(toolCalls: ChatToolCall[], changedFileCount: numb
 
   const parts = [
     counts.search > 0 ? counts.search === 1 ? "searched workspace" : `${counts.search} workspace searches` : "",
-    counts.read > 0 ? counts.read === 1 ? "read workspace evidence" : `${counts.read} workspace reads` : "",
+    counts.read > 0 ? counts.read === 1 ? "read files" : `${counts.read} file reads` : "",
     counts.edit > 0 ? `edited ${changedFileCount} file${changedFileCount === 1 ? "" : "s"}` : "",
     counts.terminal > 0 ? counts.terminal === 1 ? "ran 1 command" : `ran ${counts.terminal} commands` : "",
     counts.git > 0 ? counts.git === 1 ? "checked Git" : `${counts.git} Git checks` : "",
@@ -268,6 +455,40 @@ function describeToolTargets(toolCalls: ChatToolCall[]) {
   return `for ${targets.join(", ")}${suffix}`;
 }
 
+function describeThoughtTargetContext(toolCalls: ChatToolCall[]) {
+  const targets = unique(toolCalls.flatMap(extractToolTargets)).filter(isUsefulThoughtTarget).slice(0, 2);
+
+  if (targets.length === 0) {
+    return "";
+  }
+
+  const extraCount = countExtraTargets(toolCalls, targets);
+  const label = joinReadableList(targets);
+  return extraCount > 0 ? `${label} and ${extraCount} more` : label;
+}
+
+function isUsefulThoughtTarget(target: string) {
+  const cleaned = stripTargetFormatting(target);
+
+  if (!cleaned) {
+    return false;
+  }
+
+  if (isWorkspaceRootLikePath(cleaned)) {
+    return false;
+  }
+
+  if (cleaned.includes("|") || /[*+?()[\]{}]/.test(cleaned)) {
+    return false;
+  }
+
+  if (cleaned.length > 88) {
+    return false;
+  }
+
+  return true;
+}
+
 function countExtraTargets(toolCalls: ChatToolCall[], visibleTargets: string[]) {
   return Math.max(0, unique(toolCalls.flatMap(extractToolTargets)).length - visibleTargets.length);
 }
@@ -290,6 +511,51 @@ function extractToolTargets(toolCall: ChatToolCall) {
   ];
 
   return targets.map(formatPath).filter(Boolean);
+}
+
+function extractToolEvidencePaths(toolCall: ChatToolCall) {
+  const parsed = parseToolInput(toolCall.input);
+  const targets = [
+    toolCall.terminal?.command ? `\`${limitInline(toolCall.terminal.command, 82)}\`` : "",
+    stringValue(parsed?.path),
+    stringValue(parsed?.fromPath),
+    stringValue(parsed?.toPath),
+    ...stringArrayValue(parsed?.paths),
+    ...recordArrayValue(parsed?.files).map((record) => stringValue(record.path)),
+    ...recordArrayValue(parsed?.edits).map((record) => stringValue(record.path)),
+    ...(toolCall.fileChanges ?? []).map((change) => change.path),
+    ...(toolCall.batchFileResults ?? []).map((result) => result.path),
+  ];
+
+  return targets.map(formatPath).filter(Boolean);
+}
+
+function collectSearchTerms(toolCalls: ChatToolCall[]) {
+  const terms = toolCalls.flatMap((toolCall) => {
+    const parsed = parseToolInput(toolCall.input);
+    return [
+      stringValue(parsed?.query),
+      stringValue(parsed?.searchQuery),
+      stringValue(parsed?.q),
+    ];
+  });
+
+  return unique(terms.map(formatSearchTerm).filter(Boolean)).slice(0, 4);
+}
+
+function formatSearchTerm(value: string) {
+  const cleaned = cleanInlineText(value)
+    .replace(/\b(?:users[\\/])?kobe work[\\/]documents[\\/]gilbertcodex\b/ig, "")
+    .replace(/\b(?:users[\\/][^\\/]+[\\/])?documents[\\/]gilbertcodex\b/ig, "")
+    .replace(/\bgilbertcodex\b/ig, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned || isWorkspaceRootLikePath(cleaned) || cleaned.length > 90) {
+    return "";
+  }
+
+  return `\`${limitInline(cleaned, 72)}\``;
 }
 
 function getDominantIntent(toolCalls: ChatToolCall[]) {
@@ -330,6 +596,10 @@ function getToolIntent(toolCall: ChatToolCall): ToolIntent {
     return "read";
   }
 
+  if (/\b(web_search|web|duckduckgo|brave|google|http|source|url)\b/.test(key)) {
+    return "web";
+  }
+
   if (/\b(files_(?:search|grep)|search|rg|grep|find)\b/.test(key)) {
     return "search";
   }
@@ -338,11 +608,26 @@ function getToolIntent(toolCall: ChatToolCall): ToolIntent {
     return "terminal";
   }
 
-  if (/\b(web|duckduckgo|brave|google|http|source|url)\b/.test(key)) {
-    return "web";
+  return "other";
+}
+
+function isVisibleTraceToolCall(toolCall: ChatToolCall | undefined): toolCall is ChatToolCall {
+  if (!toolCall) {
+    return false;
   }
 
-  return "other";
+  return !isTerminalSessionDiagnosticToolCall(toolCall);
+}
+
+function isTerminalSessionDiagnosticToolCall(toolCall: ChatToolCall) {
+  const key = `${toolCall.toolId ?? ""} ${toolCall.label} ${toolCall.detail ?? ""}`.toLowerCase();
+
+  return (
+    /\bterminal_(?:list_sessions|read_session|dev_server_status)\b/.test(key) ||
+    /\b(?:list|read) terminal sessions?\b/.test(key) ||
+    /\bterminal dev server status\b/.test(key) ||
+    /\bcould not read that terminal session\b/.test(key)
+  );
 }
 
 function parseToolInput(input: string | undefined): Record<string, unknown> | undefined {
@@ -407,8 +692,20 @@ function formatPath(value: string) {
   }
 
   const normalized = cleaned.replace(/\\/g, "/");
+  if (isWorkspaceRootLikePath(normalized)) {
+    return "";
+  }
+
   const srcIndex = normalized.lastIndexOf("/src/");
-  const shortPath = srcIndex >= 0 ? normalized.slice(srcIndex + 1) : normalized.split("/").filter(Boolean).slice(-3).join("/");
+  const workspaceMatch =
+    normalized.match(/(?:^|\/)Users\/[^/]+\/(?:Documents|StudioProjects|AndroidStudioProjects)\/[^/]+\/(.+)$/i) ??
+    normalized.match(/(?:^|\/)[^/]+\/(?:Documents|StudioProjects|AndroidStudioProjects)\/[^/]+\/(.+)$/i) ??
+    normalized.match(/(?:^|\/)(?:Documents|StudioProjects|AndroidStudioProjects)\/[^/]+\/(.+)$/i);
+  const shortPath = /^src\//i.test(normalized)
+    ? normalized
+    : srcIndex >= 0
+    ? normalized.slice(srcIndex + 1)
+    : workspaceMatch?.[1] || normalized.split("/").filter(Boolean).slice(-3).join("/");
 
   return shortPath && !isNoiseOnlyTarget(shortPath) ? `\`${limitInline(shortPath, 88)}\`` : "";
 }
@@ -435,9 +732,35 @@ function cleanInlineText(value: string) {
     .trim();
 }
 
+function stripTargetFormatting(value: string) {
+  return cleanInlineText(value)
+    .replace(/^`|`$/g, "")
+    .replace(/\\/g, "/")
+    .trim();
+}
+
 function isNoiseOnlyTarget(value: string) {
   const normalized = cleanInlineText(value).replace(/[`'"\[\]{}()]/g, "").replace(/\\/g, "/").trim();
   return !normalized || normalized === "." || normalized === "./" || /^[.\-–—•·]+$/.test(normalized);
+}
+
+function isWorkspaceRootLikePath(value: string) {
+  const normalized = cleanInlineText(value)
+    .replace(/[`'"]/g, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .trim();
+
+  if (!normalized || normalized === "." || normalized === "./") {
+    return true;
+  }
+
+  return (
+    /^(?:users\/[^/]+\/)?(?:documents|studioprojects|androidstudioprojects)\/[^/]+$/i.test(normalized) ||
+    /^[^/]+\/(?:documents|studioprojects|androidstudioprojects)\/[^/]+$/i.test(normalized) ||
+    /(?:^|\/)(?:documents|studioprojects|androidstudioprojects)\/gilbertcodex$/i.test(normalized) ||
+    /(?:^|\/)gilbertcodex$/i.test(normalized)
+  );
 }
 
 function limitInline(value: string, maxChars: number) {

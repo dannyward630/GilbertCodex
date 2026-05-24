@@ -9,13 +9,15 @@ import {
   nativeDictationVoiceState,
   normalizeDictationWaveLevel,
   pushDictationWaveLevel,
+  shouldRefreshComposerGitStatus,
+  shouldShowComposerGitStatusLoading,
   shouldShowComposerWorkspaceControl,
   shouldLoadLiveModelCatalogProvider,
   shouldShowMediaFallbackNotice,
   voiceUnsupportedStatusMessage,
 } from "./ChatComposer";
 import type { ChatAttachment } from "../../types/chat";
-import type { LocalWorkspaceSettings } from "../../types/localWorkspace";
+import type { ComputerGitStatus, LocalWorkspaceSettings } from "../../types/localWorkspace";
 
 const workspaceOff: LocalWorkspaceSettings = {
   enabled: false,
@@ -57,6 +59,31 @@ describe("chat composer workspace control", () => {
         scope: "selected-folder",
       }),
     ).toBe(false);
+  });
+});
+
+describe("chat composer Git status", () => {
+  const unavailableStatus: ComputerGitStatus = {
+    additions: 0,
+    ahead: 0,
+    available: false,
+    behind: 0,
+    changedFiles: 0,
+    clean: true,
+    deletions: 0,
+    error: "not a git repository",
+  };
+
+  it("treats a selected workspace with no result yet as still loading", () => {
+    expect(shouldShowComposerGitStatusLoading(null, false, String.raw`C:\Users\Kobe Work\Documents\GilbertCodex`)).toBe(true);
+  });
+
+  it("still refreshes Git for a project root when the workspace has full-computer permission scope", () => {
+    expect(shouldRefreshComposerGitStatus(String.raw`C:\Users\Kobe Work\Documents\GilbertCodex`, "full-computer")).toBe(true);
+  });
+
+  it("does not mask completed unavailable Git statuses as loading", () => {
+    expect(shouldShowComposerGitStatusLoading(unavailableStatus, false, String.raw`C:\Users\Kobe Work\Documents\GilbertCodex`)).toBe(false);
   });
 });
 

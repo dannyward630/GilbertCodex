@@ -2,7 +2,10 @@
 
 use crate::{
     commands::auth,
-    core::storage::{self, SYSTEM_NAMESPACE},
+    core::{
+        process::open_external_target,
+        storage::{self, SYSTEM_NAMESPACE},
+    },
 };
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::{Method, Url};
@@ -13,7 +16,6 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    process::{Command, Stdio},
     sync::Mutex,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -2631,27 +2633,7 @@ fn escape_html(value: &str) -> String {
 }
 
 fn open_external_url(url: &str) -> Result<(), String> {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("rundll32.exe");
-        command.args(["url.dll,FileProtocolHandler", url]);
-        command
-    } else if cfg!(target_os = "macos") {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    } else {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the Google Calendar sign-in page: {error}"))
+    open_external_target(url, "Could not open the Google Calendar sign-in page")
 }
 
 fn now_millis() -> u64 {

@@ -5,7 +5,7 @@ import type { PlanningProviderRequest } from "../../../services/planningClient";
 import type { ProviderUsage } from "../../../services/modelProviderClient";
 import type { PlanResearchEvidence } from "../../../services/planResearchClient";
 import type { AgentApproval, AgentApprovalDecision, AgentRun } from "../../../types/agentRun";
-import type { ChatArtifact, ChatAttachment, ChatComposerDraft, ChatMessage, ChatPlanningInputRequest, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch } from "../../../types/chat";
+import type { ChatArtifact, ChatAttachment, ChatComposerDraft, ChatMessage, ChatPlanningInputRequest, ChatProgressItem, ChatResearchReference, ChatSendInput, ChatSource, ChatSummary, ChatToolCall, ChatWebSearch, ChatWorkTraceItem } from "../../../types/chat";
 import type { LocalWorkspaceSettings } from "../../../types/localWorkspace";
 import type { PrimaryRoute } from "../../../types/navigation";
 import type { ProviderSettings, WebSearchSettings } from "../../../types/settings";
@@ -218,6 +218,72 @@ export async function handleSendMessage(deps: SendActionsDeps, input: ChatSendIn
     await startSendMessage(input);
   }
 
+const SUBSCRIPTION_RUNTIME_WARMUP_PROGRESS_ID = "subscription-runtime-warmup";
+
+function createAssistantStartupProgress(settings: ProviderSettings): ChatProgressItem | undefined {
+  void settings;
+  return undefined;
+}
+
+function createAssistantStartupWorkTrace(params: {
+  assistantMessageId: string;
+  isPlanningMode: boolean;
+  progress?: ChatProgressItem;
+  thinkingEnabled: boolean;
+  workspaceSettings: LocalWorkspaceSettings;
+}): ChatWorkTraceItem[] | undefined {
+  const items: ChatWorkTraceItem[] = [];
+
+  if (params.progress) {
+    items.push({
+      id: `${params.assistantMessageId}-subscription-runtime`,
+      kind: "progress",
+      progress: params.progress,
+    });
+  }
+
+  return items.length > 0 ? items : undefined;
+}
+
+function withStartupProgress(progress: ChatProgressItem[] | undefined, startupProgress: ChatProgressItem | undefined) {
+  if (!startupProgress) {
+    return progress;
+  }
+
+  return [startupProgress, ...(progress ?? [])];
+}
+
+function completeStartupProgress(progress: ChatProgressItem[] | undefined) {
+  if (!progress?.length) {
+    return progress;
+  }
+
+  return progress.map((item) =>
+    item.id === SUBSCRIPTION_RUNTIME_WARMUP_PROGRESS_ID && item.status === "active"
+      ? {
+          ...item,
+          detail: "Subscription runtime checked.",
+          status: "complete" as const,
+        }
+      : item,
+  );
+}
+
+function completeStartupWorkTrace(workTrace: ChatWorkTraceItem[] | undefined) {
+  if (!workTrace?.length) {
+    return workTrace;
+  }
+
+  return workTrace.map((item) =>
+    item.kind === "thinking" && item.id.endsWith("-startup-thinking") && item.status === "active"
+      ? {
+          ...item,
+          status: "complete" as const,
+        }
+      : item,
+  );
+}
+
 export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInput, queuedSend?: QueuedSendTarget, options: StartSendMessageOptions = {}) {
   const { activeChat, CONTEXT_COMPACTION_PROGRESS_ID, createActiveGeneration, createAgentRunForMessage, createChatToolSelectionPrompt, createDiscordResponseStreamer, createDiscordRuntimeContextMessages, createEmptyChat, createFallbackChatTitle, createId, createMessage, createMessagesForProvider, createPlanningExecutionApproval, createPlanningInputRequest, createPlanningProgress, createPlanResearchFollowupInstruction, createPlanResearchInstruction, createPromptAwareProviderSettings, createToolAwareProviderSettings, DEFAULT_PROJECT, finishActiveGeneration, formatResearchPayload, formatTokenCount, getEnabledWorkspaceRoots, getRuntimeWebSearchSettings, isAbortError, isChatSending, isRequestInactive, isResearchDeepEnough, localWorkspaceRef, mergeAgentApprovals, mergeChatArtifacts, mergeChatSources, notifyPlanningInputNeeded, notifyRunComplete, notifyRunNeedsAttention, pendingChatsRef, PLAN_RESEARCH_BUDGET, preserveVisibleResponseThinking, recordPlanningProviderRequest, recordPlanningProviderUsage, resolveChatResearchReferences, resolveWorkspaceForChatProject, runAppOwnedCodingAgent, runPlanningMode, scheduleGeneratedChatTitle, sendDiscordReply, setActiveChatId, setActiveGenerationTarget, setActiveRoute, setAgentRunCompleted, setAgentRunFailed, setAgentRunWaiting, setChats, setNoticeDialog, shouldStartAppAgentRun, sortChatsByUpdatedAt, stopStaleStreamingMessages, streamAssistantWithLocalTools, summarizeResearchEvidence, toolSettings, touchProject, updateAgentRun, updateGeneratedMessage, withContextCompactionMarker, withContextCompactionProgress, withLocalComputerProgress, withWebSearchProgress } = deps;
 
@@ -304,8 +370,11 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
           };
     const effectiveThinkingSettings = effectiveProviderSettings.thinking;
     const discordContextMessages = options.discordReply ? createDiscordRuntimeContextMessages(workspaceSettings, webSearchToolAvailable, runtimeWebSearchSettings.provider) : [];
+    const assistantDraft = createMessage("assistant", "");
+    const assistantThinkingEnabled = Boolean(toolSettings.thinking && (isPlanningMode || effectiveThinkingSettings.enabled));
+    const startupProgress = createAssistantStartupProgress(effectiveProviderSettings);
     assistantMessage = {
-      ...createMessage("assistant", ""),
+      ...assistantDraft,
       isStreaming: true,
       mode: isPlanningMode ? "plan" : "chat",
       planning: isPlanningMode
@@ -315,13 +384,20 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
             startedAt: now,
           }
         : undefined,
-      progress: isPlanningMode ? createPlanningProgress("input") : undefined,
-      thinking: toolSettings.thinking && (isPlanningMode || effectiveThinkingSettings.enabled)
+      progress: withStartupProgress(isPlanningMode ? createPlanningProgress("input") : undefined, startupProgress),
+      thinking: assistantThinkingEnabled
         ? {
             effort: isPlanningMode ? "high" : effectiveThinkingSettings.effort,
             startedAt: now,
           }
         : undefined,
+      workTrace: createAssistantStartupWorkTrace({
+        assistantMessageId: assistantDraft.id,
+        isPlanningMode,
+        progress: startupProgress,
+        thinkingEnabled: assistantThinkingEnabled,
+        workspaceSettings,
+      }),
     };
     agentRun = createAgentRunForMessage({
       chatId: currentChat.id,
@@ -803,10 +879,11 @@ export async function startSendMessage(deps: SendActionsDeps, input: ChatSendInp
                             artifacts: mergeChatArtifacts(message.artifacts, assistantResponse.artifacts),
                             content: assistantResponse.content,
                             isStreaming: false,
-                            progress: withLocalComputerProgress(assistantResponse.progress, message.progress),
+                            progress: completeStartupProgress(withLocalComputerProgress(assistantResponse.progress, message.progress)),
                             sources: assistantResponse.sources && assistantResponse.sources.length > 0 ? mergeChatSources(message.sources, assistantResponse.sources) : message.sources,
                             streamTiming: assistantResponse.streamTiming ?? message.streamTiming,
                             toolCalls: assistantResponse.toolCalls ?? message.toolCalls,
+                            workTrace: completeStartupWorkTrace(message.workTrace),
                             thinking: message.thinking
                               ? {
                                   ...message.thinking,

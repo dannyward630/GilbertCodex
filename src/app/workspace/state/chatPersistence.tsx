@@ -22,6 +22,8 @@ import type { DiscordInteractionEvent } from "../../tauriClient";
 import type { ActiveGeneration, ApprovedPlanExecutionContext, AssistantToolResponse, ComposerDraftRestoreRequest, DiscordReplyTarget, DiscordStreamUpdate, QueuedChatSend, SessionApprovalDecisionMap, SessionApprovalDecisionsByWorkspace, StartSendMessageOptions } from "../WorkspaceApp";
 import type { WorkspaceRuntimeDeps } from "../runtimeTypes";
 
+const DRAFT_CHAT_PERSISTENCE_DELAY_MS = 1_200;
+
 export function persistChatState(deps: WorkspaceRuntimeDeps, nextChats: ChatSummary[], previousChats: ChatSummary[]) {
   const { pendingChatsRef, queueDurableMemoryForChangedChats, scheduleChatStatePersistence } = deps;
 
@@ -53,6 +55,7 @@ export function handleComposerDraftChange(deps: WorkspaceRuntimeDeps, chatId: st
 
     const nextDraft = hasComposerDraftContent(draft) ? draft : undefined;
     let changed = false;
+    let shouldSort = false;
     const now = new Date().toISOString();
     const nextChats = pendingChatsRef.current.map((chat) => {
       if (chat.id !== chatId) {
@@ -64,11 +67,14 @@ export function handleComposerDraftChange(deps: WorkspaceRuntimeDeps, chatId: st
       }
 
       changed = true;
+      const hadDraft = hasComposerDraftContent(chat.composerDraft);
+      const nextUpdatedAt = !hadDraft && nextDraft ? now : chat.updatedAt;
+      shouldSort = shouldSort || nextUpdatedAt !== chat.updatedAt;
       return {
         ...chat,
         composerDraft: nextDraft,
         isDraft: chat.messages.length === 0 ? true : chat.isDraft,
-        updatedAt: nextDraft ? now : chat.updatedAt,
+        updatedAt: nextUpdatedAt,
       };
     });
 
@@ -76,9 +82,12 @@ export function handleComposerDraftChange(deps: WorkspaceRuntimeDeps, chatId: st
       return;
     }
 
-    const prunedChats = sortChatsByUpdatedAt(pruneEmptyChats(nextChats, activeChatIdRef.current));
+    const nextPrunedChats = pruneEmptyChats(nextChats, activeChatIdRef.current);
+    const prunedChats = shouldSort || nextPrunedChats.length !== nextChats.length
+      ? sortChatsByUpdatedAt(nextPrunedChats)
+      : nextPrunedChats;
     pendingChatsRef.current = prunedChats;
-    scheduleChatStatePersistence(prunedChats);
+    scheduleChatStatePersistence(prunedChats, DRAFT_CHAT_PERSISTENCE_DELAY_MS);
     setChatsState(prunedChats);
   }
 
@@ -89,6 +98,14 @@ export function queueDurableMemoryForChangedChats(deps: WorkspaceRuntimeDeps, ne
     const changedChatIds: string[] = [];
 
     for (const chat of nextChats) {
+      if (chat.messagesLoaded === false) {
+        continue;
+      }
+
+      if (chat.messages.some((message) => message.role === "assistant" && message.isStreaming)) {
+        continue;
+      }
+
       if (isEmptyChat(chat)) {
         chatMemoryFingerprintsRef.current.delete(chat.id);
         pendingDurableMemoryChatIdsRef.current.delete(chat.id);
@@ -176,7 +193,7 @@ export function persistDurableMemoryForChatId(deps: WorkspaceRuntimeDeps, chatId
 
     const chat = pendingChatsRef.current.find((candidate) => candidate.id === chatId);
 
-    if (!chat || isEmptyChat(chat)) {
+    if (!chat || chat.messagesLoaded === false || isEmptyChat(chat) || chat.messages.some((message) => message.role === "assistant" && message.isStreaming)) {
       chatMemoryFingerprintsRef.current.delete(chatId);
       return;
     }

@@ -58,7 +58,7 @@ import {
 } from "./nineRouterFallbackRouting";
 import { loadNineRouterModels, NINE_ROUTER_DASHBOARD_FALLBACK } from "./nineRouterClient";
 
-const STREAM_FLUSH_MS = 80;
+const STREAM_FLUSH_MS = 140;
 const MAX_STREAM_REASONING_CHARS = 500_000;
 const PROVIDER_RESPONSE_START_TIMEOUT_MS = 120_000;
 const PROVIDER_STREAM_READ_TIMEOUT_MS = 90_000;
@@ -696,6 +696,7 @@ function createProviderFetchError(providerId: ModelProviderId, _providerLabel: s
 }
 
 type NineRouterRuntimeStatus = Awaited<ReturnType<typeof ensureNineRouterLocal>>;
+let nineRouterRuntimeReadyPromise: Promise<NineRouterRuntimeStatus> | null = null;
 
 async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: AbortSignal | undefined): Promise<NineRouterRuntimeStatus | undefined> {
   if (settings.provider !== "9router" || !isTauriDesktopRuntime()) {
@@ -703,7 +704,10 @@ async function ensureProviderRuntimeReady(settings: ProviderSettings, signal: Ab
   }
 
   throwIfSignalAborted(signal);
-  const status = await ensureNineRouterLocal();
+  nineRouterRuntimeReadyPromise ??= ensureNineRouterLocal().finally(() => {
+    nineRouterRuntimeReadyPromise = null;
+  });
+  const status = await nineRouterRuntimeReadyPromise;
   throwIfSignalAborted(signal);
 
   if (!status.running) {

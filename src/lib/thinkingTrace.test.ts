@@ -14,7 +14,7 @@ describe("thinking trace summaries", () => {
 
     const note = createVisibleToolPlanThinking([toolCall]);
 
-    expect(note).toContain("Reading workspace evidence");
+    expect(note).toContain("Reading workspace files");
     expect(note).toContain("`src/components/chat/ChatThread.tsx`");
     expect(note).not.toContain("**Next:**");
     expect(note).not.toContain("I’m using that");
@@ -81,7 +81,7 @@ describe("thinking trace summaries", () => {
 
     const note = createVisibleToolResultThinking(toolCalls);
 
-    expect(note).toBe("Used 4 tools: searched workspace, read workspace evidence, edited 4 files, and ran 1 command (+17 -4).");
+    expect(note).toBe("Used 4 tools: searched workspace, read files, edited 4 files, and ran 1 command (+17 -4).");
     expect(note).not.toContain("4 files changed in");
     expect(note).not.toContain("and 2 more");
   });
@@ -102,6 +102,122 @@ describe("thinking trace summaries", () => {
     expect(note).not.toContain("https://www.googleapis.com");
   });
 
+  it("keeps terminal session diagnostics out of visible work summaries", () => {
+    const diagnostics: ChatToolCall[] = [
+      {
+        id: "sessions",
+        label: "List terminal sessions",
+        output: "No app-owned background terminal sessions are currently registered.",
+        status: "complete",
+        toolId: "terminal_list_sessions",
+      },
+      {
+        detail: "Could not read that terminal session.",
+        id: "read-session",
+        label: "Read terminal session",
+        output: "Could not read that terminal session.",
+        status: "error",
+        toolId: "terminal_read_session",
+      },
+    ];
+
+    expect(createVisibleToolPlanThinking(diagnostics)).toBe("");
+    expect(createVisibleToolResultThinking(diagnostics)).toBe("");
+  });
+
+  it("summarizes read evidence with concrete files instead of stale file-context filler", () => {
+    const toolCall: ChatToolCall = {
+      id: "read-tool-bridge",
+      input: JSON.stringify({
+        paths: [
+          "src/toolBridge/registry.ts",
+          "src/toolBridge/selection.ts",
+          "src/app/workspace/tools/localToolStreaming.tsx",
+        ],
+      }),
+      label: "Read 3 files",
+      status: "complete",
+      toolId: "files_read",
+    };
+
+    const note = createVisibleToolResultThinking([toolCall]);
+
+    expect(note).toBe("Read `src/toolBridge/registry.ts`, `src/toolBridge/selection.ts`, and `src/app/workspace/tools/localToolStreaming.tsx`; focus: tool bridge registration/selection and local tool streaming.");
+    expect(note).not.toContain("I have the file context now");
+    expect(note).not.toContain("so I can connect");
+  });
+
+  it("summarizes searches as evidence instead of generic narrowing copy", () => {
+    const toolCall: ChatToolCall = {
+      id: "search-thinking",
+      input: JSON.stringify({
+        path: "src/lib/thinkingTrace.ts",
+        query: "I have the file context now",
+      }),
+      label: "Searched 1 file",
+      status: "complete",
+      toolId: "files_search",
+    };
+
+    const note = createVisibleToolResultThinking([toolCall]);
+
+    expect(note).toBe("Searched `src/lib/thinkingTrace.ts` for `I have the file context now`; focus: visible trace generation/filtering.");
+    expect(note).not.toContain("The search narrowed");
+  });
+
+  it("drops workspace-root noise and uses focus copy for terminal evidence", () => {
+    const searched = createVisibleToolPlanThinking([
+      {
+        id: "search-root",
+        input: JSON.stringify({ path: "Users/Kobe Work/Documents/GilbertCodex", query: "terminal tool" }),
+        label: "Search workspace files",
+        status: "active",
+        toolId: "files_search",
+      },
+    ]);
+
+    expect(searched).toBe("Searching the workspace for `terminal tool` (focus: terminal session lifecycle).");
+    expect(searched).not.toContain("Users/Kobe");
+    expect(searched).not.toContain("evidence is tied");
+
+    const read = createVisibleToolResultThinking([
+      {
+        id: "read-terminal",
+        input: JSON.stringify({
+          paths: [
+            "src/toolBridge/tools/terminal/terminalRun.ts",
+            "src/toolBridge/tools/terminal/backend.ts",
+            "src/toolBridge/tools/terminal/terminalDiagnostics.ts",
+            "src/toolBridge/tools/terminal/sessionRegistry.ts",
+          ],
+        }),
+        label: "Read 4 files",
+        status: "complete",
+        toolId: "files_read",
+      },
+    ]);
+
+    expect(read).toBe("Read 4 files in `src/toolBridge/tools/terminal` (`terminalRun.ts`, `backend.ts`, `terminalDiagnostics.ts`, and 1 more); focus: terminal session lifecycle and tool bridge registration/selection.");
+  });
+
+  it("uses checked evidence copy for project and web context", () => {
+    expect(createVisibleToolResultThinking([{
+      id: "git-status",
+      input: JSON.stringify({ path: "." }),
+      label: "Check Git status",
+      status: "complete",
+      toolId: "git_status",
+    }])).toBe("Checked project context.");
+
+    expect(createVisibleToolResultThinking([{
+      id: "web",
+      input: JSON.stringify({ query: "OpenAI Codex app docs" }),
+      label: "Search web",
+      status: "complete",
+      toolId: "web_search",
+    }])).toBe("Checked current sources for `OpenAI Codex app docs`.");
+  });
+
   it("does not describe workspace root targets as a dot", () => {
     const toolCall: ChatToolCall = {
       id: "tree",
@@ -113,7 +229,7 @@ describe("thinking trace summaries", () => {
 
     const note = createVisibleToolPlanThinking([toolCall]);
 
-    expect(note).toBe("Reading workspace evidence.");
+    expect(note).toBe("Reading workspace files.");
     expect(note).not.toContain("`.");
   });
 

@@ -381,6 +381,10 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("Be honest about uncertainty and limits");
     expect(prompt).toContain("senior-developer clear");
     expect(prompt).toContain("easy for non-experts to follow");
+    expect(prompt).toContain("Default final responses should be concise, structured, and scannable");
+    expect(prompt).toContain("**Changed Files**");
+    expect(prompt).toContain("**Verification**");
+    expect(prompt).toContain("go exhaustive only when the user explicitly asks for a full report or complete detail");
     expect(prompt).toContain("Use fenced code blocks only for actual code snippets");
     expect(prompt).toContain("always close every fence");
     expect(prompt).toContain("complete delimiter row");

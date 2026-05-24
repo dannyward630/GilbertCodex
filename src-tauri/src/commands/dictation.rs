@@ -85,8 +85,12 @@ mod stub {
     pub async fn dictation_stop(
         _app: tauri::AppHandle,
         _state: tauri::State<'_, DictationState>,
-        _request: Option<DictationStopRequest>,
+        request: Option<DictationStopRequest>,
     ) -> Result<DictationStopResponse, String> {
+        let _dictionary = request
+            .as_ref()
+            .and_then(|request| request.dictionary.as_deref());
+
         Ok(DictationStopResponse {
             duration_ms: 0,
             status: unavailable_status(),

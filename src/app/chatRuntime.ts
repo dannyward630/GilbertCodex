@@ -1,4 +1,5 @@
 import { createPlanningAnswersMessage } from "../services/planningClient";
+import { FINAL_RESPONSE_COMPLETION_GUIDANCE } from "../prompts/agent/finalResponseStyle";
 import { formatWebSearchProviderLabel } from "../services/webSearchClient";
 import { createVisibleFallbackFromToolCall, shouldToolCallForceSynthesis } from "../toolBridge";
 import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../localWorkspace/localToolRuntimeDisabled";
@@ -934,6 +935,7 @@ export function createLocalToolFinalInstruction(prompt: string) {
     "Do not reply with a promise to read, inspect, check, analyze, or explore more files.",
     "If more evidence is truly required, ask for it. Otherwise write the final answer now.",
     "Claim completed work only when current tool results prove it. If something is unverified or blocked, say that plainly.",
+    FINAL_RESPONSE_COMPLETION_GUIDANCE,
     "Do not describe the tool loop, provider behavior, saved evidence, continuation state, recovery state, or why an answer was missing.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as valid GitHub-flavored Markdown prose with headings, bullets, and links when helpful. Start with the direct answer. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs, and always close every fence. If you use a pipe table, include a complete GFM delimiter row for every column, or use bullets instead.",
@@ -952,6 +954,7 @@ export function createLocalToolBudgetFinalInstruction(prompt: string, detail: st
     "The original user request is the success condition. Address it directly and do not substitute a plan, recap, or adjacent task.",
     "Start with the answer to the user's request. Do not explain that tools were completed, that a provider failed, that saved evidence exists, or that the response needs continuation.",
     "Claim completed work only when current tool results prove it. If something is unverified or blocked, say that plainly.",
+    FINAL_RESPONSE_COMPLETION_GUIDANCE,
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
     "Format the visible answer as valid GitHub-flavored Markdown prose with headings, bullets, and links when helpful. Do not wrap the whole answer in a fenced code block. Use fenced code blocks only for actual code, diffs, terminal output, or logs, and always close every fence. If you use a pipe table, include a complete GFM delimiter row for every column, or use bullets instead.",
     "Do not emit hidden tool protocol text, JSON envelopes, provider tool_calls, or a whole-response code fence unless the original user explicitly requested JSON or code-only output. Do not promise to keep inspecting unless the next step is impossible without user input.",
@@ -967,6 +970,7 @@ export function createFinalAnswerRecoveryInstruction(prompt: string, detail: str
     "Use the conversation context, web context, and local workspace context already provided above.",
     "Write only the user-facing answer now.",
     "The original user request is the success condition. Address it directly, and claim completed work only when current evidence proves it.",
+    FINAL_RESPONSE_COMPLETION_GUIDANCE,
     "Do not mention background work, Continue response, provider behavior, saved evidence, recovery, retry attempts, tool loops, or missing final write-ups.",
     "Do not paste raw TOOL blocks or adaptation recommendations.",
     "Do not use headings such as Answer From Completed Tool Results, Tool Run Needs Continuation, Original Request, What Ran, or Evidence.",
@@ -999,6 +1003,7 @@ export function createInterruptedResponseContinuationInstruction(prompt: string,
     visibleContent ? "The previous partial visible response is included as assistant context. Do not repeat it unless needed for coherence." : "The previous response was interrupted before visible answer text was saved.",
     toolCallCount > 0 ? `Saved tool results available: ${toolCallCount}. Treat them as already completed evidence.` : "",
     message.webSearch?.enabled ? "Saved web-search state is included above. If it failed, say that briefly and continue with non-current claims only when appropriate." : "",
+    FINAL_RESPONSE_COMPLETION_GUIDANCE,
     "If the next step requires unavailable local tools, say that plainly. Otherwise finish the answer now.",
   ]
     .filter(Boolean)

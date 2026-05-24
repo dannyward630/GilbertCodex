@@ -54,16 +54,16 @@ interface OnboardingDialogProps {
 
 const onboardingPages: OnboardingPage[] = [
   {
-    checklist: ["Choose provider and model", "Set thinking depth", "Keep web available on demand", "Start with a clear goal"],
+    checklist: ["Choose provider and model", "Set reasoning effort", "Keep web available on demand", "Start with a clear goal"],
     description: "Pick the model route, context behavior, and web/search posture before the first serious run. The point is to start calm, capable, and already aimed at the work.",
     eyebrow: "First run",
     features: [
       { detail: "Open provider settings, confirm API/runtime state, and keep the selected model intentional.", icon: Settings, label: "Model", title: "Set the path" },
-      { detail: "Use planning or higher thinking depth when the task needs staged reasoning, broad inspection, or careful source review.", icon: BrainCircuit, label: "Reasoning", title: "Choose depth" },
+      { detail: "Use higher reasoning effort when the task needs staged work, broad inspection, or careful source review.", icon: BrainCircuit, label: "Reasoning", title: "Set effort" },
       { detail: "Leave web search available for current facts, docs, dependency changes, and release checks.", icon: Globe2, label: "Fresh facts", title: "Search when needed" },
       { detail: "Ask for real work directly: inspect, change, test, rebuild, and summarize the result.", icon: Bot, label: "Agent", title: "Give it momentum" },
     ],
-    flow: ["Model", "Thinking", "Web", "First prompt"],
+    flow: ["Model", "Reasoning", "Web", "First prompt"],
     icon: Sparkles,
     id: "launch",
     primaryAction: "settings",
@@ -101,7 +101,7 @@ const onboardingPages: OnboardingPage[] = [
     eyebrow: "Ship safely",
     features: [
       { detail: "Sensitive local and remote actions stay visible through approvals, activity records, and final verification.", icon: ShieldCheck, label: "Control", title: "Keep authority visible" },
-      { detail: "Planning and deep thinking help split broad requests into staged, checkable moves.", icon: BrainCircuit, label: "Depth", title: "Think before impact" },
+      { detail: "Planning and higher reasoning effort help split broad requests into staged, checkable moves.", icon: BrainCircuit, label: "Depth", title: "Plan before impact" },
       { detail: "Session approval and connected accounts keep repeated work smooth while preserving clear trust boundaries.", icon: KeyRound, label: "Access", title: "Approve once, work faster" },
       { detail: "End with tests, build checks, diffs, links, or release notes depending on what changed.", icon: CheckCircle2, label: "Evidence", title: "Finish with proof" },
     ],

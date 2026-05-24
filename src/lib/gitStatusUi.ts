@@ -38,10 +38,10 @@ export function getGitStatusIssue(status: ComputerGitStatus | null, root: string
 
   if (!status) {
     return {
-      detail: "Gilbert has not received a Git status result yet.",
-      hint: "Open this again after the workspace finishes loading.",
+      detail: "Gilbert is checking local Git status for this workspace.",
+      hint: "This should finish automatically; refresh Git if it takes more than a few seconds.",
       kind: "unknown",
-      title: "Git status unavailable",
+      title: "Checking Git status",
     };
   }
 

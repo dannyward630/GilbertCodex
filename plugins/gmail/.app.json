@@ -1,0 +1,31 @@
+{
+  "apps": {
+    "gmail": {
+      "id": "gilbert.gmail",
+      "provider": "google",
+      "auth": "oauth2",
+      "clientIdEnv": "VITE_GOOGLE_OAUTH_CLIENT_ID",
+      "clientSecretEnv": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "maxAccounts": 6,
+      "redirect": "loopback",
+      "safety": {
+        "fullReadApproval": true,
+        "metadataFirst": true,
+        "neverOpenEmailLinks": true,
+        "sendApproval": true
+      },
+      "scopes": [
+        "openid",
+        "email",
+        "profile",
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.labels",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+        "https://www.googleapis.com/auth/gmail.settings.sharing"
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@ export interface WorkspaceRuntimeDeps {
   discordBridgeSettings: DiscordBridgeSettings;
   generalSettings: AppGeneralSettings;
   localWorkspace: LocalWorkspaceSettings;
+  loadingChatIds: string[];
   pendingChatsRef: MutableRefObject<ChatSummary[]>;
   projects: ProjectSummary[];
   providerSettings: ProviderSettings;
@@ -40,6 +41,7 @@ export interface WorkspaceRuntimeDeps {
   setAppearanceSettings: Dispatch<SetStateAction<AppAppearanceSettings>>;
   setBrowserPreviewTarget: Dispatch<SetStateAction<{ id: number; url: string } | null>>;
   setChats: (action: SetStateAction<ChatSummary[]>) => void;
+  setChatsLive: (action: SetStateAction<ChatSummary[]>) => void;
   setChatsState: Dispatch<SetStateAction<ChatSummary[]>>;
   setComposerDraftToRestore: Dispatch<SetStateAction<ComposerDraftRestoreRequest | null>>;
   setDefaultTerminalWorkingDirectory: Dispatch<SetStateAction<string>>;

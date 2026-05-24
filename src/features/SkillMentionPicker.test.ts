@@ -5,8 +5,8 @@ import { getSkillMentionMatches } from "./plugins/pluginCatalog";
 import { SkillMentionPicker } from "./plugins/SkillMentionPicker";
 
 describe("skill mention picker", () => {
-  it("shows coming soon instead of catalog skills when no skills are installed", () => {
-    expect(getSkillMentionMatches("")).toEqual([]);
+  it("shows installed skills from the active skill registry", () => {
+    expect(getSkillMentionMatches("").map((skill) => skill.mention)).toContain("$coding");
 
     const html = renderToStaticMarkup(createElement(SkillMentionPicker, {
       activeIndex: 0,
@@ -16,8 +16,8 @@ describe("skill mention picker", () => {
       trigger: "@",
     }));
 
-    expect(html).toContain("Skills coming soon");
-    expect(html).toContain("No installed skills yet");
-    expect(html).not.toContain("<button");
+    expect(html).toContain("Coding Agent Workflow");
+    expect(html).toContain("$coding");
+    expect(html).toContain("<button");
   });
 });

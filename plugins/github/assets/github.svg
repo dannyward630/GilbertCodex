@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GitHub">
+  <rect width="64" height="64" rx="14" fill="#24292f"/>
+  <circle cx="32" cy="32" r="20" fill="#ffffff"/>
+  <path fill="#24292f" d="M22 35.4c0 5.1 3.9 8.6 10 8.6s10-3.5 10-8.6V24.2h-5.2v11c0 2.9-1.8 4.7-4.8 4.7s-4.8-1.8-4.8-4.7v-11H22v11.2z"/>
+  <path fill="#24292f" d="M20.8 20h22.4v4.2H20.8z"/>
+  <path fill="#24292f" d="M41.8 38.4h4.8c1 0 1.8.8 1.8 1.8v1c0 1-.8 1.8-1.8 1.8h-7.8c-1 0-1.8-.8-1.8-1.8v-4.8h4.8v2z"/>
+</svg>

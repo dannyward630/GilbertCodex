@@ -1,0 +1,47 @@
+{
+  "name": "google-calendar",
+  "version": "0.1.0",
+  "description": "Google Calendar workflows for agenda review, event search, free-busy checks, meeting prep, and review-gated scheduling actions.",
+  "author": {
+    "name": "Gilbert Codex",
+    "email": "support@gilbertcodex.local",
+    "url": "https://github.com/UrbanWafflezz/GilbertCodex"
+  },
+  "homepage": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "repository": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "license": "MIT",
+  "keywords": [
+    "calendar",
+    "google-calendar",
+    "schedule",
+    "meetings",
+    "google"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "Google Calendar",
+    "shortDescription": "Read agendas, find events, check availability, and schedule with confirmation safeguards.",
+    "longDescription": "Google Calendar gives Gilbert Codex a dedicated plugin surface for schedule workflows with up to six connected Google accounts, agenda and event search, free-busy checks, meeting prep context, and review-gated create, update, and delete actions.",
+    "developerName": "Gilbert Codex",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://calendar.google.com/",
+    "privacyPolicyURL": "https://policies.google.com/privacy",
+    "termsOfServiceURL": "https://policies.google.com/terms",
+    "defaultPrompt": [
+      "Summarize my Google Calendar agenda for today.",
+      "Find a free 30 minute window this week.",
+      "Create a draft calendar event and let me review it before adding it."
+    ],
+    "brandColor": "#1A73E8",
+    "composerIcon": "./assets/google-calendar.svg",
+    "logo": "./assets/google-calendar.svg",
+    "screenshots": []
+  }
+}

@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, Gauge, Power } from "lucide-react";
+import { BrainCircuit, Check, ChevronDown } from "lucide-react";
 import { useRef, useState } from "react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { formatReasoningEffort } from "../../types/settings";
@@ -12,17 +12,25 @@ interface ThinkingModeControlsProps {
 }
 
 const effortOptions: Array<{ detail: string; label: string; value: ReasoningEffort }> = [
-  { detail: "Quick", label: "Low", value: "low" },
-  { detail: "Balanced", label: "Medium", value: "medium" },
-  { detail: "Most careful", label: "High", value: "high" },
+  { detail: "Quick passes", label: "Low", value: "low" },
+  { detail: "Default Codex", label: "Medium", value: "medium" },
+  { detail: "Hard tasks", label: "High", value: "high" },
 ];
 
 function formatThinkingChipLabel(settings: ThinkingSettings) {
   if (!settings.enabled) {
-    return "Think";
+    return "Reasoning";
   }
 
-  return formatReasoningEffort(settings.effort);
+  return formatEffortOptionLabel(settings.effort);
+}
+
+function formatThinkingStatus(settings: ThinkingSettings) {
+  return settings.enabled ? `${formatEffortOptionLabel(settings.effort)} reasoning` : "Reasoning off";
+}
+
+function formatEffortOptionLabel(effort: ReasoningEffort) {
+  return effortOptions.find((option) => option.value === effort)?.label ?? formatReasoningEffort(effort);
 }
 
 export function ThinkingModeControls({ disabledReason, onChange, settings, variant = "chip" }: ThinkingModeControlsProps) {
@@ -54,7 +62,7 @@ export function ThinkingModeControls({ disabledReason, onChange, settings, varia
     );
   }
 
-  const chipFullLabel = settings.enabled ? formatReasoningEffort(settings.effort) : "Thinking off";
+  const chipFullLabel = formatThinkingStatus(settings);
   const chipLabel = formatThinkingChipLabel(settings);
 
   return (
@@ -62,19 +70,19 @@ export function ThinkingModeControls({ disabledReason, onChange, settings, varia
       <button
         className="mode-chip mode-chip-thinking"
         type="button"
-        aria-label={`Thinking mode: ${chipFullLabel}`}
+        aria-label={`Reasoning: ${chipFullLabel}`}
         aria-haspopup="menu"
         aria-expanded={open}
         data-active={open || settings.enabled}
         title={chipFullLabel}
         onClick={() => setOpen((current) => !current)}
       >
-        <Brain size={16} aria-hidden="true" />
+        <BrainCircuit size={16} aria-hidden="true" />
         <span>{chipLabel}</span>
         <ChevronDown size={15} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="composer-popover thinking-popover" role="menu" aria-label="Thinking mode">
+        <div className="composer-popover thinking-popover" role="menu" aria-label="Reasoning">
           <ThinkingOptions
             disabledReason={disabledReason}
             onChange={(nextSettings) => {
@@ -96,37 +104,30 @@ interface ThinkingOptionsProps {
 
 function ThinkingOptions({ disabledReason, onChange, settings }: ThinkingOptionsProps) {
   const disabled = Boolean(disabledReason);
+  const status = disabledReason ?? formatThinkingStatus(settings);
 
   return (
-    <div className="thinking-options">
+    <div className="thinking-options" data-disabled={disabled || undefined} data-enabled={settings.enabled ? "true" : "false"}>
       <div className="thinking-popover-header">
-        <span className="thinking-popover-orb" aria-hidden="true">
-          <Brain size={18} />
+        <span className="thinking-popover-orb" data-on={settings.enabled && !disabled ? "true" : undefined} aria-hidden="true">
+          <BrainCircuit size={17} />
         </span>
         <span>
-          <strong>Thinking</strong>
-          <small>{settings.enabled ? `${formatReasoningEffort(settings.effort)} depth` : "Off"}</small>
+          <strong>Reasoning</strong>
+          <small>{status}</small>
         </span>
         <button
           className="thinking-power"
           type="button"
           role="switch"
           aria-checked={settings.enabled}
-          aria-label={disabledReason ?? (settings.enabled ? "Turn thinking off" : "Turn thinking on")}
+          aria-label={disabledReason ?? (settings.enabled ? "Turn reasoning off" : "Turn reasoning on")}
           data-on={settings.enabled && !disabled}
           disabled={disabled}
           onClick={() => onChange({ enabled: !settings.enabled })}
         >
-          <Power size={15} aria-hidden="true" />
+          <span>{settings.enabled ? "On" : "Off"}</span>
         </button>
-      </div>
-
-      <div className="thinking-field-row">
-        <span>
-          <Gauge size={14} aria-hidden="true" />
-          Depth
-        </span>
-        <small>{disabledReason ?? (settings.enabled ? formatReasoningEffort(settings.effort) : "Paused")}</small>
       </div>
 
       <div className="thinking-effort-grid" role="radiogroup" aria-label="Reasoning effort">
@@ -143,8 +144,11 @@ function ThinkingOptions({ disabledReason, onChange, settings }: ThinkingOptions
               disabled={disabled}
               onClick={() => onChange({ enabled: true, effort: option.value })}
             >
-              <strong>{option.label}</strong>
-              <small>{option.detail}</small>
+              <span>
+                <strong>{option.label}</strong>
+                <small>{option.detail}</small>
+              </span>
+              {selected ? <Check size={14} aria-hidden="true" /> : null}
             </button>
           );
         })}

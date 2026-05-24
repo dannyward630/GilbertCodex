@@ -52,11 +52,23 @@ export interface ThinkingSettings {
 
 export function formatReasoningEffort(effort: ReasoningEffort | string) {
   if (effort === "xhigh") {
-    return "High";
+    return "Heavy";
   }
 
   if (effort === "minimal") {
-    return "Low";
+    return "Light";
+  }
+
+  if (effort === "low") {
+    return "Light";
+  }
+
+  if (effort === "medium") {
+    return "Standard";
+  }
+
+  if (effort === "high") {
+    return "Extended";
   }
 
   return effort.charAt(0).toUpperCase() + effort.slice(1);

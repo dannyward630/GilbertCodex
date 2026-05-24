@@ -30,8 +30,8 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 ## Platform Support
 
 - Treat Windows x64 as the currently verified alpha target.
-- Treat macOS and Linux as port-ready but unverified until someone on those operating systems completes the native checklist in [platform/README.md](platform/README.md).
-- Do not publish macOS or Linux release artifacts as official unless the packaged app has been launched and tested on that OS.
+- Treat macOS and Linux as release-workflow-ready but launch-unverified until someone on those operating systems completes the native checklist in [platform/README.md](platform/README.md).
+- Do not describe macOS or Linux release artifacts as fully verified unless the packaged app has been launched and tested on that OS.
 - When accepting platform fixes, require the OS version, architecture, command output, and remaining limitations in the pull request notes.
 
 ## Source Organization

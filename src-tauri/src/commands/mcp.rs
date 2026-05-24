@@ -8,12 +8,16 @@ use reqwest::{header, Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
+    collections::HashSet,
+    env,
     io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{mpsc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tauri::ipc::Channel;
 use uuid::Uuid;
 
 const MCP_DATABASE_STORAGE_KEY: &str = "mcp-servers.v1";
@@ -23,15 +27,18 @@ const MCP_TRANSPORT_HTTP: &str = "http";
 const MCP_TRANSPORT_STDIO: &str = "stdio";
 const MCP_HTTP_CONNECT_TIMEOUT_SECS: u64 = 8;
 const MCP_HTTP_TIMEOUT_SECS: u64 = 30;
-const MCP_STDIO_TIMEOUT_SECS: u64 = 30;
+const MCP_STDIO_TIMEOUT_SECS: u64 = 90;
 const MCP_STDIO_SHUTDOWN_TIMEOUT_MS: u64 = 1_200;
-const MCP_MAX_SERVERS: usize = 20;
+const MCP_MAX_SERVERS: usize = 50;
 const MCP_MAX_TOOL_LIST_PAGES: usize = 8;
 const MCP_MAX_TOOLS_PER_SERVER: usize = 200;
 const MCP_MAX_ARGUMENT_BYTES: usize = 256_000;
 const MCP_MAX_RESULT_CHARS: usize = 80_000;
 const MCP_MAX_STDIO_ARGS: usize = 80;
 const MCP_MAX_STDIO_ENV: usize = 80;
+const MCP_REGISTRY_BASE_URL: &str = "https://registry.modelcontextprotocol.io/v0.1/servers";
+const MCP_REGISTRY_DEFAULT_RESULTS: usize = 12;
+const MCP_REGISTRY_MAX_RESULTS: usize = 24;
 const USER_AGENT: &str = "GilbertCodex/0.5 (desktop MCP)";
 
 #[derive(Default)]
@@ -215,6 +222,70 @@ pub struct McpToolCallResponse {
     pub tool_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistrySearchRequest {
+    pub limit: Option<usize>,
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistrySearchResponse {
+    pub count: usize,
+    pub next_cursor: Option<String>,
+    pub query: String,
+    pub servers: Vec<McpRegistryServerSummary>,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistryServerSummary {
+    pub description: Option<String>,
+    pub install: Option<McpRegistryInstallHint>,
+    pub name: String,
+    pub official: bool,
+    pub packages: Vec<McpRegistryPackageHint>,
+    pub remotes: Vec<McpRegistryRemoteHint>,
+    pub repository_url: Option<String>,
+    pub status: Option<String>,
+    pub title: Option<String>,
+    pub updated_at: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistryPackageHint {
+    pub args: Vec<String>,
+    pub command: Option<String>,
+    pub identifier: Option<String>,
+    pub registry_type: Option<String>,
+    pub runtime_hint: Option<String>,
+    pub transport: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistryRemoteHint {
+    pub endpoint: Option<String>,
+    pub transport: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRegistryInstallHint {
+    pub args: Vec<String>,
+    pub command: Option<String>,
+    pub endpoint: Option<String>,
+    pub note: Option<String>,
+    pub package_id: Option<String>,
+    pub package_manager: Option<String>,
+    pub transport: String,
+}
+
 struct McpProbeResult {
     protocol_version: Option<String>,
     server_name: Option<String>,
@@ -234,6 +305,16 @@ struct McpRpcResponse {
     session_id: Option<String>,
 }
 
+type McpProgressSender = Arc<Channel<McpServerProgressEvent>>;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerProgressEvent {
+    pub kind: String,
+    pub message: String,
+    pub stream: Option<String>,
+}
+
 struct NormalizedMcpServerInput {
     args: Vec<String>,
     authorization_token: Option<String>,
@@ -249,6 +330,12 @@ struct StdioMcpSession {
     stderr_rx: mpsc::Receiver<String>,
     stdin: ChildStdin,
     stdout_rx: mpsc::Receiver<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ResolvedStdioCommand {
+    executable: String,
+    extra_path_dirs: Vec<PathBuf>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -272,11 +359,26 @@ pub fn mcp_save_server(
     let name = normalize_server_name(&request.name)?;
     let input = normalize_server_input(&request)?;
     let requested_id = request.id.as_ref().and_then(|id| normalize_optional_id(id));
+    let target_hint = normalized_server_target_hint(&input);
+    let generated_server_id = requested_id
+        .clone()
+        .unwrap_or_else(|| create_server_id(&name, &target_hint));
     let existing_index = requested_id
         .as_ref()
-        .and_then(|id| database.servers.iter().position(|server| server.id == *id));
-    let target_hint = normalized_server_target_hint(&input);
-    let server_id = requested_id.unwrap_or_else(|| create_server_id(&name, &target_hint));
+        .and_then(|id| database.servers.iter().position(|server| server.id == *id))
+        .or_else(|| {
+            if requested_id.is_some() {
+                None
+            } else {
+                database
+                    .servers
+                    .iter()
+                    .position(|server| server_matches_normalized_input(server, &input))
+            }
+        });
+    let server_id = existing_index
+        .and_then(|index| database.servers.get(index).map(|server| server.id.clone()))
+        .unwrap_or(generated_server_id);
 
     if let Some(index) = existing_index {
         let existing = &mut database.servers[index];
@@ -386,21 +488,47 @@ pub async fn mcp_test_server(
     state: tauri::State<'_, McpState>,
     request: McpTestServerRequest,
 ) -> Result<McpServerTestResponse, String> {
+    run_mcp_test_server(&app, state.inner(), request, None).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mcp_test_server_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, McpState>,
+    request: McpTestServerRequest,
+    on_event: Channel<McpServerProgressEvent>,
+) -> Result<McpServerTestResponse, String> {
+    run_mcp_test_server(&app, state.inner(), request, Some(Arc::new(on_event))).await
+}
+
+async fn run_mcp_test_server(
+    app: &tauri::AppHandle,
+    state: &McpState,
+    request: McpTestServerRequest,
+    progress: Option<McpProgressSender>,
+) -> Result<McpServerTestResponse, String> {
     let id = request.id.as_ref().and_then(|id| normalize_optional_id(id));
     let record = match id.as_ref() {
-        Some(server_id) => find_server_record(&app, server_id)?,
+        Some(server_id) => find_server_record(app, server_id)?,
         None => create_probe_record(&request)?,
     };
 
-    let probe = probe_server(&record).await;
+    send_mcp_progress(
+        progress.as_ref(),
+        "started",
+        format!("Testing {}.", record.name.trim()),
+        None,
+    );
+
+    let probe = probe_server(&record, progress.clone()).await;
 
     match probe {
         Ok(probe) => {
             if let Some(server_id) = id.as_ref() {
                 let (state_response, server) =
-                    update_server_after_probe(&app, &state, server_id, &probe, None)?;
+                    update_server_after_probe(app, state, server_id, &probe, None)?;
 
-                Ok(McpServerTestResponse {
+                let response = McpServerTestResponse {
                     message: format!(
                         "Connected to {}. Discovered {} tool{}.",
                         server.name,
@@ -414,9 +542,16 @@ pub async fn mcp_test_server(
                     server_version: probe.server_version,
                     state: Some(state_response),
                     tools: probe.tools,
-                })
+                };
+                send_mcp_progress(
+                    progress.as_ref(),
+                    "finished",
+                    response.message.clone(),
+                    None,
+                );
+                Ok(response)
             } else {
-                Ok(McpServerTestResponse {
+                let response = McpServerTestResponse {
                     message: format!(
                         "Connected to MCP server. Discovered {} tool{}.",
                         probe.tools.len(),
@@ -429,15 +564,22 @@ pub async fn mcp_test_server(
                     server_version: probe.server_version,
                     state: None,
                     tools: probe.tools,
-                })
+                };
+                send_mcp_progress(
+                    progress.as_ref(),
+                    "finished",
+                    response.message.clone(),
+                    None,
+                );
+                Ok(response)
             }
         }
         Err(error) => {
             if let Some(server_id) = id.as_ref() {
                 let (state_response, server) =
-                    update_server_after_error(&app, &state, server_id, &error)?;
+                    update_server_after_error(app, state, server_id, &error)?;
 
-                Ok(McpServerTestResponse {
+                let response = McpServerTestResponse {
                     message: error,
                     ok: false,
                     protocol_version: None,
@@ -446,9 +588,11 @@ pub async fn mcp_test_server(
                     server_version: None,
                     state: Some(state_response),
                     tools: Vec::new(),
-                })
+                };
+                send_mcp_progress(progress.as_ref(), "error", response.message.clone(), None);
+                Ok(response)
             } else {
-                Ok(McpServerTestResponse {
+                let response = McpServerTestResponse {
                     message: error,
                     ok: false,
                     protocol_version: None,
@@ -457,7 +601,9 @@ pub async fn mcp_test_server(
                     server_version: None,
                     state: None,
                     tools: Vec::new(),
-                })
+                };
+                send_mcp_progress(progress.as_ref(), "error", response.message.clone(), None);
+                Ok(response)
             }
         }
     }
@@ -471,12 +617,12 @@ pub async fn mcp_list_tools(
 ) -> Result<McpListToolsResponse, String> {
     let server_id = normalize_id(&request.server_id, "MCP server id")?;
     let record = find_server_record(&app, &server_id)?;
-    let probe = probe_server(&record)
+    let probe = probe_server(&record, None)
         .await
         .map_err(|error| format!("Could not list tools for {}: {error}", record.name.trim()))?;
     let tools = probe.tools.clone();
     let (state_response, server) =
-        update_server_after_probe(&app, &state, &server_id, &probe, None)?;
+        update_server_after_probe(&app, state.inner(), &server_id, &probe, None)?;
 
     Ok(McpListToolsResponse {
         server,
@@ -501,12 +647,13 @@ pub async fn mcp_call_tool(
     }
 
     let raw_result = call_server_tool(&record, &tool_name, arguments).await?;
-    let structured_content = raw_result.get("structuredContent").cloned();
-    let is_error = raw_result
+    let visible_result = sanitize_mcp_visible_value(&raw_result);
+    let structured_content = visible_result.get("structuredContent").cloned();
+    let is_error = visible_result
         .get("isError")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let content = format_mcp_tool_result_content(&raw_result);
+    let content = format_mcp_tool_result_content(&visible_result);
     let probe = McpProbeResult {
         protocol_version: record.protocol_version.clone(),
         server_name: record.server_name.clone(),
@@ -514,17 +661,326 @@ pub async fn mcp_call_tool(
         tools: record.tools.clone(),
     };
     let (_state_response, server) =
-        update_server_after_probe(&app, &state, &server_id, &probe, None)?;
+        update_server_after_probe(&app, state.inner(), &server_id, &probe, None)?;
 
     Ok(McpToolCallResponse {
         content,
         is_error,
         ok: !is_error,
-        raw_result,
+        raw_result: visible_result,
         server,
         structured_content,
         tool_name,
     })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mcp_search_registry(
+    request: McpRegistrySearchRequest,
+) -> Result<McpRegistrySearchResponse, String> {
+    let query = request
+        .query
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(120)
+        .collect::<String>();
+    let limit = request
+        .limit
+        .unwrap_or(MCP_REGISTRY_DEFAULT_RESULTS)
+        .clamp(1, MCP_REGISTRY_MAX_RESULTS);
+    let mut url = Url::parse(MCP_REGISTRY_BASE_URL)
+        .map_err(|error| format!("Could not prepare MCP Registry URL: {error}"))?;
+
+    {
+        let mut query_pairs = url.query_pairs_mut();
+        query_pairs.append_pair("limit", &limit.to_string());
+
+        if !query.is_empty() {
+            query_pairs.append_pair("search", &query);
+        }
+    }
+
+    let client = mcp_client()?;
+    let response = client
+        .get(url)
+        .header(header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach the MCP Registry: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read the MCP Registry response: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "MCP Registry search failed with HTTP {}: {}",
+            status.as_u16(),
+            summarize_response_text(&text)
+        ));
+    }
+
+    let payload = serde_json::from_str::<Value>(&text)
+        .map_err(|error| format!("MCP Registry returned invalid JSON: {error}"))?;
+
+    Ok(normalize_registry_search_response(payload, query))
+}
+
+fn normalize_registry_search_response(payload: Value, query: String) -> McpRegistrySearchResponse {
+    let servers = payload
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(normalize_registry_server_entry)
+                .take(MCP_REGISTRY_MAX_RESULTS)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let count = payload
+        .pointer("/metadata/count")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(servers.len());
+    let next_cursor = registry_string(payload.pointer("/metadata/nextCursor"));
+
+    McpRegistrySearchResponse {
+        count,
+        next_cursor,
+        query,
+        servers,
+        source: MCP_REGISTRY_BASE_URL.to_string(),
+    }
+}
+
+fn normalize_registry_server_entry(entry: &Value) -> Option<McpRegistryServerSummary> {
+    let server = entry.get("server").unwrap_or(entry);
+    let name = registry_string(server.get("name"))?;
+    let packages = normalize_registry_packages(server);
+    let remotes = normalize_registry_remotes(server);
+    let install = choose_registry_install_hint(&packages, &remotes);
+    let official_meta = entry
+        .get("_meta")
+        .and_then(|meta| meta.get("io.modelcontextprotocol.registry/official"));
+    let status = registry_string(server.get("status"))
+        .or_else(|| official_meta.and_then(|meta| registry_string(meta.get("status"))));
+    let updated_at = registry_string(server.get("updatedAt"))
+        .or_else(|| official_meta.and_then(|meta| registry_string(meta.get("updatedAt"))));
+
+    Some(McpRegistryServerSummary {
+        description: registry_string(server.get("description")),
+        install,
+        name,
+        official: official_meta.is_some(),
+        packages,
+        remotes,
+        repository_url: server
+            .get("repository")
+            .and_then(|repository| registry_string(repository.get("url"))),
+        status,
+        title: registry_string(server.get("title")),
+        updated_at,
+        version: registry_string(server.get("version")),
+    })
+}
+
+fn normalize_registry_packages(server: &Value) -> Vec<McpRegistryPackageHint> {
+    let Some(packages) = server.get("packages").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    packages
+        .iter()
+        .take(12)
+        .map(|package| McpRegistryPackageHint {
+            args: registry_runtime_arguments(package.get("runtimeArguments")),
+            command: registry_string(package.get("command")),
+            identifier: registry_string(package.get("identifier")),
+            registry_type: registry_string(package.get("registryType")),
+            runtime_hint: registry_string(package.get("runtimeHint")),
+            transport: package
+                .get("transport")
+                .and_then(|transport| registry_string(transport.get("type")))
+                .or_else(|| registry_string(package.get("transport"))),
+            version: registry_string(package.get("version")),
+        })
+        .collect()
+}
+
+fn normalize_registry_remotes(server: &Value) -> Vec<McpRegistryRemoteHint> {
+    let Some(remotes) = server.get("remotes").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    remotes
+        .iter()
+        .take(12)
+        .map(|remote| McpRegistryRemoteHint {
+            endpoint: registry_string(remote.get("url"))
+                .or_else(|| registry_string(remote.get("endpoint"))),
+            transport: registry_string(remote.get("type")).or_else(|| {
+                remote
+                    .get("transport")
+                    .and_then(|transport| registry_string(transport.get("type")))
+            }),
+        })
+        .collect()
+}
+
+fn choose_registry_install_hint(
+    packages: &[McpRegistryPackageHint],
+    remotes: &[McpRegistryRemoteHint],
+) -> Option<McpRegistryInstallHint> {
+    if let Some(remote) = remotes.iter().find(|remote| {
+        remote
+            .endpoint
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        let endpoint = remote.endpoint.clone()?;
+        return Some(McpRegistryInstallHint {
+            args: vec![
+                "-y".to_string(),
+                "mcp-remote@latest".to_string(),
+                endpoint.clone(),
+            ],
+            command: Some("npx".to_string()),
+            endpoint: Some(endpoint),
+            note: Some("Remote MCP servers are configured through the mcp-remote stdio bridge so provider OAuth flows can open in the browser when needed. On Windows, Gilbert resolves npm/npx shims automatically.".to_string()),
+            package_id: Some("mcp-remote@latest".to_string()),
+            package_manager: Some("npm".to_string()),
+            transport: MCP_TRANSPORT_STDIO.to_string(),
+            ..Default::default()
+        });
+    }
+
+    packages
+        .iter()
+        .filter(|package| {
+            package
+                .transport
+                .as_deref()
+                .map(|transport| transport.eq_ignore_ascii_case("stdio"))
+                .unwrap_or(true)
+        })
+        .find_map(package_install_hint)
+}
+
+fn package_install_hint(package: &McpRegistryPackageHint) -> Option<McpRegistryInstallHint> {
+    let registry_type = package
+        .registry_type
+        .as_deref()?
+        .trim()
+        .to_ascii_lowercase();
+    let identifier = package.identifier.as_deref()?.trim();
+
+    if identifier.is_empty() {
+        return None;
+    }
+
+    match registry_type.as_str() {
+        "npm" => {
+            let package_id =
+                package_identifier_with_version(identifier, package.version.as_deref());
+            let mut args = vec!["-y".to_string(), package_id.clone()];
+            args.extend(package.args.clone());
+
+            Some(McpRegistryInstallHint {
+                args,
+                command: Some(
+                    package
+                        .runtime_hint
+                        .clone()
+                        .filter(|hint| !hint.trim().is_empty())
+                        .unwrap_or_else(|| "npx".to_string()),
+                ),
+                note: Some("This stdio MCP server will be launched as a local subprocess when Gilbert lists or calls its tools. On Windows, Gilbert resolves npm/npx shims automatically.".to_string()),
+                package_id: Some(package_id),
+                package_manager: Some("npm".to_string()),
+                transport: MCP_TRANSPORT_STDIO.to_string(),
+                ..Default::default()
+            })
+        }
+        "pypi" => {
+            let package_id =
+                pypi_package_identifier_with_version(identifier, package.version.as_deref());
+            let mut args = vec![package_id.clone()];
+            args.extend(package.args.clone());
+
+            Some(McpRegistryInstallHint {
+                args,
+                command: Some(
+                    package
+                        .runtime_hint
+                        .clone()
+                        .filter(|hint| !hint.trim().is_empty())
+                        .unwrap_or_else(|| "uvx".to_string()),
+                ),
+                note: Some("This Python MCP server needs uv/uvx available on PATH before Gilbert can test it.".to_string()),
+                package_id: Some(package_id),
+                package_manager: Some("pypi".to_string()),
+                transport: MCP_TRANSPORT_STDIO.to_string(),
+                ..Default::default()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn package_identifier_with_version(identifier: &str, version: Option<&str>) -> String {
+    let Some(version) = version.map(str::trim).filter(|value| !value.is_empty()) else {
+        return identifier.to_string();
+    };
+
+    if identifier.contains('@') && !identifier.starts_with('@') {
+        identifier.to_string()
+    } else {
+        format!("{identifier}@{version}")
+    }
+}
+
+fn pypi_package_identifier_with_version(identifier: &str, version: Option<&str>) -> String {
+    let Some(version) = version.map(str::trim).filter(|value| !value.is_empty()) else {
+        return identifier.to_string();
+    };
+
+    if identifier.contains("==")
+        || identifier.contains(">=")
+        || identifier.contains("<=")
+        || identifier.contains('~')
+    {
+        identifier.to_string()
+    } else {
+        format!("{identifier}=={version}")
+    }
+}
+
+fn registry_runtime_arguments(value: Option<&Value>) -> Vec<String> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::to_string)
+                .or_else(|| registry_string(item.get("value")))
+        })
+        .filter(|value| !value.trim().is_empty())
+        .take(24)
+        .collect()
+}
+
+fn registry_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn load_database(app: &tauri::AppHandle) -> Result<McpDatabase, String> {
@@ -606,6 +1062,7 @@ fn normalize_database(database: &mut McpDatabase) {
     }
 
     database.servers.retain(has_valid_record_target);
+    dedupe_servers_by_target(database);
 }
 
 fn create_connection_state(database: &McpDatabase) -> McpConnectionState {
@@ -703,7 +1160,7 @@ fn create_probe_record(request: &McpTestServerRequest) -> Result<McpServerRecord
 
 fn update_server_after_probe(
     app: &tauri::AppHandle,
-    state: &tauri::State<'_, McpState>,
+    state: &McpState,
     server_id: &str,
     probe: &McpProbeResult,
     last_error: Option<String>,
@@ -742,7 +1199,7 @@ fn update_server_after_probe(
 
 fn update_server_after_error(
     app: &tauri::AppHandle,
-    state: &tauri::State<'_, McpState>,
+    state: &McpState,
     server_id: &str,
     error: &str,
 ) -> Result<(McpConnectionState, McpServerState), String> {
@@ -773,16 +1230,34 @@ fn update_server_after_error(
     Ok((state_response, server_response))
 }
 
-async fn probe_server(record: &McpServerRecord) -> Result<McpProbeResult, String> {
+async fn probe_server(
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+) -> Result<McpProbeResult, String> {
     if is_stdio_transport(record) {
         let record = record.clone();
-        return tauri::async_runtime::spawn_blocking(move || probe_stdio_server(&record))
+        return tauri::async_runtime::spawn_blocking(move || probe_stdio_server(&record, progress))
             .await
             .map_err(|error| format!("MCP stdio task failed: {error}"))?;
     }
 
+    send_mcp_progress(
+        progress.as_ref(),
+        "step",
+        format!(
+            "Connecting to {}.",
+            record.endpoint.as_deref().unwrap_or("MCP endpoint")
+        ),
+        None,
+    );
     let client = mcp_client()?;
     let initialized = initialize_server(&client, record).await?;
+    send_mcp_progress(
+        progress.as_ref(),
+        "step",
+        "Server initialized. Loading tools.".to_string(),
+        None,
+    );
     let tools = list_server_tools(&client, record, initialized.session_id.as_deref()).await?;
 
     Ok(McpProbeResult {
@@ -884,7 +1359,7 @@ async fn list_server_tools(
         }
     }
 
-    Ok(tools)
+    Ok(filter_mcp_tools_for_server(record, tools))
 }
 
 async fn call_server_tool(
@@ -892,6 +1367,10 @@ async fn call_server_tool(
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
+    if is_firebase_mcp_server(record) && is_firebase_mcp_login_tool(tool_name) {
+        return Ok(firebase_mcp_login_guidance());
+    }
+
     if is_stdio_transport(record) {
         let record = record.clone();
         let tool_name = tool_name.to_string();
@@ -1026,12 +1505,27 @@ fn create_rpc_request(
     Ok(request)
 }
 
-fn probe_stdio_server(record: &McpServerRecord) -> Result<McpProbeResult, String> {
-    let mut session = open_stdio_session(record)?;
+fn probe_stdio_server(
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+) -> Result<McpProbeResult, String> {
+    let mut session = open_stdio_session(record, progress.clone())?;
     let result = (|| {
+        send_mcp_progress(
+            progress.as_ref(),
+            "step",
+            "Process started. Waiting for MCP initialize.".to_string(),
+            None,
+        );
         let initialized = initialize_stdio_server(&mut session)?;
         let _ = stdio_rpc_notification(&mut session, "notifications/initialized", Some(json!({})));
-        let tools = list_stdio_server_tools(&mut session)?;
+        send_mcp_progress(
+            progress.as_ref(),
+            "step",
+            "Server initialized. Loading tools.".to_string(),
+            None,
+        );
+        let tools = filter_mcp_tools_for_server(record, list_stdio_server_tools(&mut session)?);
 
         Ok(McpProbeResult {
             protocol_version: initialized.protocol_version,
@@ -1050,7 +1544,11 @@ fn call_stdio_server_tool(
     tool_name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
-    let mut session = open_stdio_session(record)?;
+    if is_firebase_mcp_server(record) && is_firebase_mcp_login_tool(tool_name) {
+        return Ok(firebase_mcp_login_guidance());
+    }
+
+    let mut session = open_stdio_session(record, None)?;
     let result = (|| {
         let _initialized = initialize_stdio_server(&mut session)?;
         let _ = stdio_rpc_notification(&mut session, "notifications/initialized", Some(json!({})));
@@ -1126,20 +1624,333 @@ fn list_stdio_server_tools(session: &mut StdioMcpSession) -> Result<Vec<McpToolS
     Ok(tools)
 }
 
-fn open_stdio_session(record: &McpServerRecord) -> Result<StdioMcpSession, String> {
+fn resolve_stdio_command(command: &str) -> Result<ResolvedStdioCommand, String> {
+    let command = command.trim();
+
+    if command.is_empty() {
+        return Err("This MCP stdio server does not have a command configured.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        return resolve_stdio_command_windows(command);
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(ResolvedStdioCommand {
+            executable: command.to_string(),
+            extra_path_dirs: Vec::new(),
+        })
+    }
+}
+
+#[cfg(windows)]
+fn resolve_stdio_command_windows(command: &str) -> Result<ResolvedStdioCommand, String> {
+    if command_looks_like_path(command) {
+        let path = PathBuf::from(command);
+        let resolved = resolve_path_like_windows_command(&path).unwrap_or(path);
+        return Ok(resolved_stdio_command_from_path(resolved));
+    }
+
+    if let Some(path) = find_windows_stdio_command(command) {
+        return Ok(resolved_stdio_command_from_path(path));
+    }
+
+    if is_windows_runtime_shim(command) {
+        return Err(format!(
+            "`{command}` was not found on PATH or in common runtime folders. Gilbert can auto-resolve npm/Node shims such as `npx.cmd` when Node.js is installed, but no matching executable was found."
+        ));
+    }
+
+    Ok(ResolvedStdioCommand {
+        executable: command.to_string(),
+        extra_path_dirs: Vec::new(),
+    })
+}
+
+#[cfg(windows)]
+fn command_looks_like_path(command: &str) -> bool {
+    command.contains('\\') || command.contains('/') || Path::new(command).is_absolute()
+}
+
+#[cfg(windows)]
+fn resolve_path_like_windows_command(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+
+    if path.extension().is_some() {
+        return None;
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let name = path.file_name()?.to_string_lossy();
+
+    windows_stdio_command_candidates(&name)
+        .into_iter()
+        .map(|candidate| parent.join(candidate))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+fn resolved_stdio_command_from_path(path: PathBuf) -> ResolvedStdioCommand {
+    let extra_path_dirs = path
+        .parent()
+        .map(|parent| vec![parent.to_path_buf()])
+        .unwrap_or_default();
+
+    ResolvedStdioCommand {
+        executable: path.to_string_lossy().to_string(),
+        extra_path_dirs,
+    }
+}
+
+#[cfg(windows)]
+fn find_windows_stdio_command(command: &str) -> Option<PathBuf> {
+    find_windows_stdio_command_in_dirs(command, &windows_stdio_search_dirs())
+}
+
+#[cfg(windows)]
+fn find_windows_stdio_command_in_dirs(command: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let name = Path::new(command)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| command.to_string());
+    let candidates = windows_stdio_command_candidates(&name);
+
+    for dir in dirs {
+        for candidate in &candidates {
+            let path = dir.join(candidate);
+
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn windows_stdio_command_candidates(command: &str) -> Vec<String> {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    if Path::new(trimmed).extension().is_some() {
+        return vec![trimmed.to_string()];
+    }
+
+    let mut candidates = match lower.as_str() {
+        "node" => vec![
+            "node.exe".to_string(),
+            "node.cmd".to_string(),
+            "node.bat".to_string(),
+        ],
+        "npm" | "npx" | "pnpm" | "yarn" => vec![
+            format!("{trimmed}.cmd"),
+            format!("{trimmed}.exe"),
+            format!("{trimmed}.bat"),
+        ],
+        "uv" | "uvx" => vec![
+            format!("{trimmed}.exe"),
+            format!("{trimmed}.cmd"),
+            format!("{trimmed}.bat"),
+        ],
+        _ => vec![
+            format!("{trimmed}.exe"),
+            format!("{trimmed}.cmd"),
+            format!("{trimmed}.bat"),
+        ],
+    };
+    candidates.push(trimmed.to_string());
+    candidates
+}
+
+#[cfg(windows)]
+fn windows_stdio_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(path) = env::var_os("PATH") {
+        dirs.extend(env::split_paths(&path));
+    }
+
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = env::var_os(key) {
+            dirs.push(PathBuf::from(root).join("nodejs"));
+        }
+    }
+
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        dirs.push(
+            PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("nodejs"),
+        );
+    }
+
+    if let Some(app_data) = env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(app_data).join("npm"));
+    }
+
+    if let Some(user_profile) = env::var_os("USERPROFILE") {
+        let user_profile = PathBuf::from(user_profile);
+        dirs.push(user_profile.join(".local").join("bin"));
+        dirs.push(user_profile.join(".cargo").join("bin"));
+    }
+
+    dedupe_paths(dirs)
+}
+
+#[cfg(windows)]
+fn is_windows_runtime_shim(command: &str) -> bool {
+    matches!(
+        command.to_ascii_lowercase().as_str(),
+        "node" | "npm" | "npx" | "pnpm" | "yarn" | "uv" | "uvx"
+    )
+}
+
+fn prepend_stdio_path_dirs(process: &mut Command, dirs: &[PathBuf]) {
+    if dirs.is_empty() {
+        return;
+    }
+
+    let mut paths = dedupe_paths(dirs.to_vec());
+
+    if let Some(existing) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&existing));
+        paths = dedupe_paths(paths);
+    }
+
+    if let Ok(joined) = env::join_paths(paths) {
+        process.env("PATH", joined);
+    }
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut deduped: Vec<PathBuf> = Vec::new();
+
+    for path in paths {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let key = path.to_string_lossy().to_ascii_lowercase();
+        let exists = deduped
+            .iter()
+            .any(|existing| existing.to_string_lossy().to_ascii_lowercase() == key);
+
+        if !exists {
+            deduped.push(path);
+        }
+    }
+
+    deduped
+}
+
+fn command_is_package_runner(command: &str) -> bool {
+    let file_name = Path::new(command)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+
+    matches!(
+        file_name.as_str(),
+        "npm" | "npx" | "pnpm" | "yarn" | "uv" | "uvx"
+    )
+}
+
+fn send_mcp_progress(
+    progress: Option<&McpProgressSender>,
+    kind: &str,
+    message: String,
+    stream: Option<String>,
+) {
+    let Some(progress) = progress else {
+        return;
+    };
+
+    let message = truncate_chars(&sanitize_sensitive_mcp_text(message.trim()), 480);
+
+    if message.is_empty() {
+        return;
+    }
+
+    let _ = progress.send(McpServerProgressEvent {
+        kind: kind.to_string(),
+        message,
+        stream,
+    });
+}
+
+fn sanitize_stdio_progress_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.contains("token=")
+        || lowered.contains("authorization:")
+        || lowered.contains("password=")
+        || lowered.contains("secret=")
+        || lowered.contains("code=")
+        || lowered.contains("access_token=")
+        || lowered.contains("refresh_token=")
+        || lowered.contains("id_token=")
+    {
+        return Some("MCP server wrote a hidden diagnostic line.".to_string());
+    }
+
+    Some(truncate_chars(&sanitize_sensitive_mcp_text(trimmed), 480))
+}
+
+fn open_stdio_session(
+    record: &McpServerRecord,
+    progress: Option<McpProgressSender>,
+) -> Result<StdioMcpSession, String> {
     let command = record
         .command
         .as_deref()
         .map(str::trim)
         .filter(|command| !command.is_empty())
         .ok_or_else(|| "This MCP stdio server does not have a command configured.".to_string())?;
-    let mut process = Command::new(command);
+    let resolved_command = resolve_stdio_command(command)?;
+    let mut process = Command::new(&resolved_command.executable);
+    let arg_count = record.args.len();
+
+    send_mcp_progress(
+        progress.as_ref(),
+        "step",
+        format!(
+            "Starting `{}` with {} argument{}.",
+            command,
+            arg_count,
+            if arg_count == 1 { "" } else { "s" }
+        ),
+        None,
+    );
+
+    if command_is_package_runner(command) || command_is_package_runner(&resolved_command.executable)
+    {
+        send_mcp_progress(
+            progress.as_ref(),
+            "download",
+            "If this MCP package is not cached yet, the package runner is downloading it now."
+                .to_string(),
+            None,
+        );
+    }
 
     process
         .args(&record.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    prepend_stdio_path_dirs(&mut process, &resolved_command.extra_path_dirs);
 
     if let Some(working_directory) = record
         .working_directory
@@ -1158,9 +1969,16 @@ fn open_stdio_session(record: &McpServerRecord) -> Result<StdioMcpSession, Strin
         }
     }
 
-    let mut child = process
-        .spawn()
-        .map_err(|error| format!("Could not start MCP stdio server `{command}`: {error}"))?;
+    let mut child = process.spawn().map_err(|error| {
+        if resolved_command.executable == command {
+            format!("Could not start MCP stdio server `{command}`: {error}")
+        } else {
+            format!(
+                "Could not start MCP stdio server `{command}` resolved to `{}`: {error}",
+                resolved_command.executable
+            )
+        }
+    })?;
     let stdin = child
         .stdin
         .take()
@@ -1190,10 +2008,22 @@ fn open_stdio_session(record: &McpServerRecord) -> Result<StdioMcpSession, Strin
     });
 
     if let Some(stderr) = stderr {
+        let progress = progress.clone();
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
                 match line {
                     Ok(line) => {
+                        if let Some(progress) = progress.as_ref() {
+                            if let Some(message) = sanitize_stdio_progress_line(&line) {
+                                send_mcp_progress(
+                                    Some(progress),
+                                    "output",
+                                    message,
+                                    Some("stderr".to_string()),
+                                );
+                            }
+                        }
+
                         if stderr_tx.send(line).is_err() {
                             break;
                         }
@@ -1341,7 +2171,10 @@ fn format_stdio_stderr_suffix(session: &StdioMcpSession) -> String {
     if stderr.is_empty() {
         String::new()
     } else {
-        format!(" Stderr: {}", truncate_chars(&stderr.join("\n"), 900))
+        format!(
+            " Stderr: {}",
+            truncate_chars(&sanitize_sensitive_mcp_text(&stderr.join("\n")), 900)
+        )
     }
 }
 
@@ -1511,11 +2344,12 @@ fn format_json_rpc_error(error: &Value) -> String {
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("MCP server returned a JSON-RPC error");
+    let message = sanitize_sensitive_mcp_text(message);
     let code = error.get("code").and_then(Value::as_i64);
 
     match code {
         Some(code) => format!("{message} (code {code})"),
-        None => message.to_string(),
+        None => message,
     }
 }
 
@@ -1547,6 +2381,53 @@ fn extend_tool_summaries(tools: &mut Vec<McpToolSummary>, result: &Value) {
             name: name.to_string(),
         });
     }
+}
+
+fn filter_mcp_tools_for_server(
+    record: &McpServerRecord,
+    tools: Vec<McpToolSummary>,
+) -> Vec<McpToolSummary> {
+    if !is_firebase_mcp_server(record) {
+        return tools;
+    }
+
+    tools
+        .into_iter()
+        .filter(|tool| !is_firebase_mcp_login_tool(&tool.name))
+        .collect()
+}
+
+fn is_firebase_mcp_server(record: &McpServerRecord) -> bool {
+    let name = record.name.to_ascii_lowercase();
+    let server_name = record
+        .server_name
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let command = record.command.as_deref().unwrap_or("").to_ascii_lowercase();
+    let args = record.args.join(" ").to_ascii_lowercase();
+
+    name.contains("firebase")
+        || server_name.contains("firebase")
+        || args.contains("firebase-tools")
+        || command.contains("firebase")
+}
+
+fn is_firebase_mcp_login_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name.trim().to_ascii_lowercase().as_str(),
+        "firebase_login" | "login"
+    )
+}
+
+fn firebase_mcp_login_guidance() -> Value {
+    json!({
+        "isError": true,
+        "content": [{
+            "type": "text",
+            "text": "Firebase MCP's built-in firebase_login auth-proxy flow is not available in Gilbert because auth.firebase.tools can return `Unable to verify client` before login starts. Do not show the user another auth.firebase.tools URL. If terminal_run is available, run `npx.cmd -y firebase-tools@latest login --reauth` yourself in the user's workspace and tell the user only to finish the Google browser sign-in. If terminal_run is not available, show that exact npx.cmd command. After sign-in completes, retry the Firebase MCP tool. Do not use --no-localhost for this desktop setup."
+        }]
+    })
 }
 
 fn format_mcp_tool_result_content(result: &Value) -> String {
@@ -1624,6 +2505,129 @@ fn format_mcp_tool_result_content(result: &Value) -> String {
     }
 
     truncate_chars(&lines.join("\n\n"), MCP_MAX_RESULT_CHARS)
+}
+
+fn sanitize_mcp_visible_value(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(sanitize_sensitive_mcp_text(text)),
+        Value::Array(items) => Value::Array(items.iter().map(sanitize_mcp_visible_value).collect()),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), sanitize_mcp_visible_value(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn sanitize_sensitive_mcp_text(text: &str) -> String {
+    let text = normalize_known_mcp_guidance(text);
+    let mut sanitized = String::with_capacity(text.len());
+    let mut token = String::new();
+
+    for character in text.chars() {
+        if character.is_whitespace() {
+            if !token.is_empty() {
+                sanitized.push_str(&sanitize_sensitive_mcp_token(&token));
+                token.clear();
+            }
+
+            sanitized.push(character);
+        } else {
+            token.push(character);
+        }
+    }
+
+    if !token.is_empty() {
+        sanitized.push_str(&sanitize_sensitive_mcp_token(&token));
+    }
+
+    sanitized
+}
+
+fn normalize_known_mcp_guidance(text: &str) -> String {
+    text.replace(
+        "firebase login --no-localhost",
+        "npx.cmd -y firebase-tools@latest login --reauth",
+    )
+    .replace(
+        "Firebase login --no-localhost",
+        "npx.cmd -y firebase-tools@latest login --reauth",
+    )
+    .replace(
+        "npx.cmd -y firebase-tools@latest login --no-localhost",
+        "npx.cmd -y firebase-tools@latest login --reauth",
+    )
+    .replace(
+        "firebase login",
+        "npx.cmd -y firebase-tools@latest login --reauth",
+    )
+    .replace(
+        "Firebase login",
+        "npx.cmd -y firebase-tools@latest login --reauth",
+    )
+}
+
+fn sanitize_sensitive_mcp_token(token: &str) -> String {
+    let candidate = token.trim_matches(|character: char| {
+        matches!(
+            character,
+            '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    });
+
+    if candidate.is_empty() {
+        return token.to_string();
+    }
+
+    let Ok(mut url) = Url::parse(candidate) else {
+        return token.to_string();
+    };
+
+    let pairs = url
+        .query_pairs()
+        .map(|(key, value)| {
+            let key_string = key.to_string();
+            let value_string = if is_sensitive_oauth_query_key(&key_string) {
+                "[redacted]".to_string()
+            } else {
+                value.to_string()
+            };
+            (key_string, value_string)
+        })
+        .collect::<Vec<_>>();
+
+    if !pairs
+        .iter()
+        .any(|(key, value)| is_sensitive_oauth_query_key(key) && value == "[redacted]")
+    {
+        return token.to_string();
+    }
+
+    url.query_pairs_mut().clear().extend_pairs(
+        pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+
+    token.replace(candidate, url.as_str())
+}
+
+fn is_sensitive_oauth_query_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "access_token"
+            | "authuser"
+            | "code"
+            | "id_token"
+            | "prompt"
+            | "refresh_token"
+            | "state"
+            | "attest"
+            | "code_challenge"
+            | "session"
+    )
 }
 
 fn normalize_server_input(
@@ -1780,6 +2784,83 @@ fn has_valid_record_target(server: &McpServerRecord) -> bool {
         .map(str::trim)
         .filter(|endpoint| !endpoint.is_empty())
         .is_some()
+}
+
+fn server_matches_normalized_input(
+    server: &McpServerRecord,
+    input: &NormalizedMcpServerInput,
+) -> bool {
+    server_target_key(server) == normalized_input_target_key(input)
+}
+
+fn dedupe_servers_by_target(database: &mut McpDatabase) {
+    let mut seen = HashSet::new();
+
+    database.servers.reverse();
+    database
+        .servers
+        .retain(|server| seen.insert(server_target_key(server)));
+    database.servers.reverse();
+}
+
+fn server_target_key(server: &McpServerRecord) -> String {
+    if server.transport == MCP_TRANSPORT_STDIO {
+        return format!(
+            "stdio|{}|{}|{}",
+            normalize_command_key(server.command.as_deref()),
+            normalize_arg_key(&server.args),
+            normalize_optional_text_key(server.working_directory.as_deref())
+        );
+    }
+
+    format!(
+        "http|{}",
+        normalize_endpoint_key(server.endpoint.as_deref())
+    )
+}
+
+fn normalized_input_target_key(input: &NormalizedMcpServerInput) -> String {
+    if input.transport == MCP_TRANSPORT_STDIO {
+        return format!(
+            "stdio|{}|{}|{}",
+            normalize_command_key(input.command.as_deref()),
+            normalize_arg_key(&input.args),
+            normalize_optional_text_key(input.working_directory.as_deref())
+        );
+    }
+
+    format!("http|{}", normalize_endpoint_key(input.endpoint.as_deref()))
+}
+
+fn normalize_command_key(value: Option<&str>) -> String {
+    let normalized = normalize_optional_text_key(value);
+
+    normalized
+        .strip_suffix(".cmd")
+        .unwrap_or(normalized.as_str())
+        .to_string()
+}
+
+fn normalize_arg_key(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| arg.trim())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>()
+        .join("\u{1f}")
+}
+
+fn normalize_endpoint_key(value: Option<&str>) -> String {
+    normalize_optional_text_key(value)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn normalize_optional_text_key(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 fn is_stdio_transport(record: &McpServerRecord) -> bool {
@@ -2098,7 +3179,7 @@ fn summarize_response_text(text: &str) -> String {
         return "(empty response)".to_string();
     }
 
-    truncate_chars(trimmed, 900)
+    truncate_chars(&sanitize_sensitive_mcp_text(trimmed), 900)
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -2268,6 +3349,143 @@ rl.on("line", (line) => {
     }
 
     #[test]
+    fn registry_npm_package_becomes_stdio_install_hint() {
+        let entry = json!({
+            "server": {
+                "name": "io.github.firebase/firebase-mcp",
+                "description": "Firebase MCP",
+                "version": "0.3.0",
+                "packages": [{
+                    "registryType": "npm",
+                    "identifier": "firebase-tools",
+                    "version": "14.27.0",
+                    "runtimeHint": "npx",
+                    "transport": { "type": "stdio" },
+                    "runtimeArguments": [{ "type": "positional", "value": "mcp" }]
+                }]
+            },
+            "_meta": {
+                "io.modelcontextprotocol.registry/official": {
+                    "status": "active",
+                    "updatedAt": "2025-12-04T17:56:29Z"
+                }
+            }
+        });
+        let server = normalize_registry_server_entry(&entry).expect("registry server");
+        let install = server.install.expect("install hint");
+
+        assert!(server.official);
+        assert_eq!(install.transport, MCP_TRANSPORT_STDIO);
+        assert_eq!(install.command.as_deref(), Some("npx"));
+        assert_eq!(install.args, vec!["-y", "firebase-tools@14.27.0", "mcp"]);
+    }
+
+    #[test]
+    fn registry_remote_becomes_oauth_ready_stdio_install_hint() {
+        let entry = json!({
+            "server": {
+                "name": "com.figma.mcp/mcp",
+                "description": "Figma MCP",
+                "version": "1.0.3",
+                "remotes": [{
+                    "type": "streamable-http",
+                    "url": "https://mcp.figma.com/mcp"
+                }]
+            }
+        });
+        let server = normalize_registry_server_entry(&entry).expect("registry server");
+        let install = server.install.expect("install hint");
+
+        assert_eq!(install.transport, MCP_TRANSPORT_STDIO);
+        assert_eq!(install.command.as_deref(), Some("npx"));
+        assert_eq!(
+            install.args,
+            vec!["-y", "mcp-remote@latest", "https://mcp.figma.com/mcp"]
+        );
+        assert_eq!(
+            install.endpoint.as_deref(),
+            Some("https://mcp.figma.com/mcp")
+        );
+    }
+
+    #[test]
+    fn registry_pypi_package_uses_python_version_specifier() {
+        let entry = json!({
+            "server": {
+                "name": "io.github.aws/aws-api-mcp-server",
+                "description": "AWS MCP",
+                "version": "1.0.0",
+                "packages": [{
+                    "registryType": "pypi",
+                    "identifier": "mcp-proxy-for-aws",
+                    "version": "1.2.3",
+                    "runtimeHint": "uvx",
+                    "transport": { "type": "stdio" },
+                    "runtimeArguments": ["https://aws-mcp.us-east-1.api.aws/mcp"]
+                }]
+            }
+        });
+        let server = normalize_registry_server_entry(&entry).expect("registry server");
+        let install = server.install.expect("install hint");
+
+        assert_eq!(install.transport, MCP_TRANSPORT_STDIO);
+        assert_eq!(install.command.as_deref(), Some("uvx"));
+        assert_eq!(
+            install.args,
+            vec![
+                "mcp-proxy-for-aws==1.2.3",
+                "https://aws-mcp.us-east-1.api.aws/mcp"
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_database_dedupes_servers_by_target_and_keeps_latest() {
+        let mut database = McpDatabase {
+            database_generation: MCP_DATABASE_GENERATION,
+            servers: vec![
+                McpServerRecord {
+                    endpoint: Some("https://mcp.cloudflare.com/mcp".to_string()),
+                    id: "cloudflare-old".to_string(),
+                    name: "Cloudflare API".to_string(),
+                    transport: MCP_TRANSPORT_HTTP.to_string(),
+                    updated_at: Some(1),
+                    ..Default::default()
+                },
+                McpServerRecord {
+                    endpoint: Some("https://mcp.cloudflare.com/mcp".to_string()),
+                    id: "cloudflare-new".to_string(),
+                    name: "Cloudflare API".to_string(),
+                    transport: MCP_TRANSPORT_HTTP.to_string(),
+                    updated_at: Some(2),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        normalize_database(&mut database);
+
+        assert_eq!(database.servers.len(), 1);
+        assert_eq!(database.servers[0].id, "cloudflare-new");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_stdio_resolver_prefers_cmd_shim_for_npx() {
+        let dir = env::temp_dir().join(format!("gilbert-mcp-shim-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create shim dir");
+        let shim = dir.join("npx.cmd");
+        fs::write(&shim, "@echo off\r\n").expect("write shim");
+
+        let resolved =
+            find_windows_stdio_command_in_dirs("npx", &[dir.clone()]).expect("resolve npx.cmd");
+
+        assert_eq!(resolved, shim);
+        let _ = fs::remove_file(shim);
+        let _ = fs::remove_dir(dir);
+    }
+
+    #[test]
     fn stdio_probe_lists_echo_tool() {
         if !node_available() {
             eprintln!("Skipping stdio MCP test because node is not available.");
@@ -2276,7 +3494,7 @@ rl.on("line", (line) => {
 
         let script_path = write_echo_stdio_server();
         let record = echo_stdio_record(&script_path);
-        let probe = probe_stdio_server(&record).expect("probe echo stdio server");
+        let probe = probe_stdio_server(&record, None).expect("probe echo stdio server");
 
         assert_eq!(probe.server_name.as_deref(), Some("Local Echo MCP"));
         assert_eq!(probe.tools.len(), 1);

@@ -4605,7 +4605,7 @@ fn count_text_file_lines(path: &Path) -> usize {
         return 0;
     };
 
-    if !metadata.is_file() {
+    if !metadata.is_file() || metadata.len() > MAX_GIT_UNTRACKED_DIFF_BYTES {
         return 0;
     }
 
@@ -4938,6 +4938,21 @@ mod tests {
         assert_eq!(result.end_line, 3);
         assert_eq!(result.total_lines, 4);
         assert!(result.truncated);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn count_text_file_lines_skips_large_untracked_files() {
+        let base = temp_index_root("large-untracked-lines");
+        let path = base.join("installer.exe");
+        fs::write(
+            &path,
+            vec![b'a'; (MAX_GIT_UNTRACKED_DIFF_BYTES as usize).saturating_add(1)],
+        )
+        .expect("write large file");
+
+        assert_eq!(count_text_file_lines(&path), 0);
 
         let _ = fs::remove_dir_all(base);
     }

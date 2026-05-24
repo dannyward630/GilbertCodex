@@ -1,13 +1,11 @@
 //! Settings and runtime diagnostic commands for contributor-facing app setup.
 
+use crate::core::process::{run_probe_command, spawn_detached_command};
 use serde::Serialize;
-use std::{
-    env, fs,
-    path::PathBuf,
-    process::{Command, Stdio},
-};
+use std::{env, fs, path::PathBuf, process::Command, time::Duration};
 
 const WORKSPACE_DEPENDENCY_VERSION_ENV: &str = "GILBERT_WORKSPACE_DEPENDENCY_VERSION";
+const VERSION_PROBE_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,13 +208,7 @@ fn open_file(path: &PathBuf) -> Result<(), String> {
         command
     };
 
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open config.toml: {error}"))
+    spawn_detached_command(&mut command, "Could not open config.toml")
 }
 
 fn run_version(path: &PathBuf) -> Option<String> {
@@ -224,21 +216,30 @@ fn run_version(path: &PathBuf) -> Option<String> {
         return None;
     }
 
-    run_command_version(Command::new(path).arg("--version"))
+    let mut command = Command::new(path);
+    command.arg("--version");
+    run_command_version(command)
 }
 
 fn run_program_version(program: &str) -> Option<String> {
-    run_command_version(Command::new(program).arg("--version"))
+    let mut command = Command::new(program);
+    command.arg("--version");
+    run_command_version(command)
 }
 
-fn run_command_version(command: &mut Command) -> Option<String> {
-    let output = command.stdin(Stdio::null()).output().ok()?;
+fn run_command_version(command: Command) -> Option<String> {
+    let output = run_probe_command(command, Duration::from_millis(VERSION_PROBE_TIMEOUT_MS))
+        .ok()
+        .flatten()?;
 
     if !output.status.success() {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let text = if stdout.is_empty() { stderr } else { stdout };
+
     if text.is_empty() {
         None
     } else {

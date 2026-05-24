@@ -74,6 +74,9 @@ describe("tool protocol leak guards", () => {
     expect(instruction).toContain("The original user request is the success condition");
     expect(instruction).toContain("do not substitute a recap, plan, or adjacent task");
     expect(instruction).toContain("Claim completed work only when current tool results prove it");
+    expect(instruction).toContain("Final response style: write a polished wrap-up");
+    expect(instruction).toContain("**Changed Files**");
+    expect(instruction).toContain("In **Verification**, list the exact commands/checks that ran");
   });
 
   it("detects OpenAI-style function tool_calls JSON printed as visible text", () => {

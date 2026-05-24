@@ -147,6 +147,39 @@ export interface NineRouterUsageSnapshot {
   syncedAt: string;
 }
 
+export type NineRouterComboStrategy = "fallback" | "round-robin";
+
+export interface NineRouterCoreSettings {
+  authMode?: string;
+  cavemanEnabled?: boolean;
+  cavemanLevel?: string;
+  comboStickyRoundRobinLimit?: number;
+  comboStrategies?: Record<string, {
+    fallbackStrategy?: NineRouterComboStrategy | string;
+    stickyRoundRobinLimit?: number;
+  }>;
+  comboStrategy?: NineRouterComboStrategy | string;
+  enableRequestLogs?: boolean;
+  enableTranslator?: boolean;
+  hasPassword?: boolean;
+  outboundNoProxy?: string;
+  outboundProxyEnabled?: boolean;
+  outboundProxyUrl?: string;
+  rtkEnabled?: boolean;
+  tunnelDashboardAccess?: boolean;
+}
+
+export interface NineRouterTunnelStatus {
+  alreadyRunning?: boolean;
+  enabled?: boolean;
+  error?: string;
+  publicUrl?: string;
+  running?: boolean;
+  shortId?: string;
+  tunnelUrl?: string;
+  url?: string;
+}
+
 export type NineRouterStatusMessage = {
   kind: "error" | "success" | "warning";
   text: string;
@@ -289,6 +322,22 @@ export async function loadNineRouterUsageSnapshot(dashboardUrl = NINE_ROUTER_DAS
     stats,
     syncedAt: new Date().toISOString(),
   };
+}
+
+export async function loadNineRouterCoreSettings(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK) {
+  return fetchNineRouterJson<NineRouterCoreSettings>(joinLocalUrl(dashboardUrl, "/api/settings"));
+}
+
+export async function updateNineRouterCoreSettings(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, settings: Partial<NineRouterCoreSettings>) {
+  return patchNineRouterJson<NineRouterCoreSettings>(joinLocalUrl(dashboardUrl, "/api/settings"), settings);
+}
+
+export async function loadNineRouterTunnelStatus(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK) {
+  return fetchNineRouterJson<NineRouterTunnelStatus>(joinLocalUrl(dashboardUrl, "/api/tunnel/status"));
+}
+
+export async function setNineRouterTunnelEnabled(dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, enabled: boolean) {
+  return postNineRouterJson<NineRouterTunnelStatus>(joinLocalUrl(dashboardUrl, enabled ? "/api/tunnel/enable" : "/api/tunnel/disable"), {});
 }
 
 export async function connectNineRouterAccount(provider: NineRouterAccountProvider, dashboardUrl = NINE_ROUTER_DASHBOARD_FALLBACK, options: NineRouterConnectOptions = {}) {

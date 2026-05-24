@@ -9,16 +9,17 @@ Last updated: May 24, 2026.
 | Platform | Status | Notes |
 | --- | --- | --- |
 | Windows x64 | Verified alpha | The current public release and local verification were done on Windows with a Tauri NSIS customer installer. |
-| macOS arm64 | Port-ready, pending native verification | Frontend platform detection, Mac shortcut labels, left-side traffic-light window controls, Keychain-backed secure storage, ad-hoc test signing, and app/DMG build scripts are in place. A maintainer on Apple Silicon still needs to run the packaged app and complete the native QA checklist before this becomes verified support. |
-| Linux x64 | Port-ready, pending native verification | Tauri, terminal shell selection, npm scripts, Secret Service-backed secure storage, ngrok path handling, and deb/AppImage packaging config are in place. The desktop app still needs someone on Linux to run, package, and finish native QA before this becomes verified support. |
+| macOS arm64/x64 | Release workflow ready, pending native launch verification | Frontend platform detection, Mac shortcut labels, left-side traffic-light window controls, Keychain-backed secure storage, app/DMG build scripts, and GitHub Actions release jobs are in place. A maintainer still needs to run the packaged app and complete the native QA checklist before this becomes verified support. |
+| Linux x64 | Release workflow ready, pending native launch verification | Tauri, terminal shell selection, npm scripts, Secret Service-backed secure storage, ngrok path handling, deb/AppImage packaging config, and GitHub Actions release jobs are in place. The desktop app still needs someone on Linux to run the package and finish native QA before this becomes verified support. |
 
-The macOS and Linux port is intentionally marked unverified. The codebase should no longer be Windows-locked, but native desktop behavior needs real OS coverage before the project should promise official support.
+The macOS and Linux port is intentionally marked launch-unverified. The codebase and release workflow should no longer be Windows-locked, but native desktop behavior needs real OS coverage before the project should promise fully verified support.
 
 ## What Has Been Ported
 
 - Windows installer configuration now includes branded NSIS artwork, installer/uninstaller icons, WebView2 runtime checks, install-scope selection, Start menu grouping, license metadata, and downgrade blocking.
 - Tauri build hooks use cross-platform `npm run ...` commands instead of Windows-only `npm.cmd`.
 - Tauri bundle scripts are platform-specific: Windows uses NSIS, macOS uses the `app` and `dmg` targets with `src-tauri/tauri.macos.conf.json`, and Linux uses the `deb` and `appimage` targets with `src-tauri/tauri.linux.conf.json`.
+- The GitHub `Release` workflow builds Windows first, then macOS Apple Silicon/Intel, then Linux x64 so updater metadata is merged without parallel upload races.
 - Main and detached chat windows use Tauri window-state persistence so the next launch restores the user's last size, screen position, maximized state, and fullscreen state instead of forcing a fresh maximize.
 - First-launch window defaults are centered, resizable, constrained to the working area, and sized to fit common laptop and snapped-window layouts.
 - The desktop terminal host code supports PowerShell/cmd on Windows and Bash/Zsh/sh on macOS and Linux.
@@ -49,6 +50,7 @@ Someone with access to macOS and Linux should verify:
 - `npm run app:dev:macos`
 - `npm run check`
 - `npm run app:build:macos`
+- `npm run app:release:macos`
 - First launch, local account creation, sign-in, and local app storage.
 - File picker, selected workspace roots, file indexing, read/write/delete safeguards, and full-computer scope behavior.
 - Terminal execution, browser preview, local Git, GitHub, and source-context behavior.
@@ -81,7 +83,7 @@ npm run app:build:macos
 Potential follow-up work:
 
 - Confirm the custom traffic-light window chrome works correctly in dev and packaged app windows.
-- Add signing/notarization before any public macOS release.
+- Add Apple Developer signing and notarization before presenting macOS as a fully trusted public download.
 - Verify whether `zsh`, `bash`, and `sh` shells should all remain visible in the terminal selector.
 - Validate app data paths, Keychain prompts, file picker permissions, notifications, and security prompts.
 
@@ -101,6 +103,7 @@ npm install
 npm run app:dev
 npm run check
 npm run app:build:linux
+npm run app:release:linux
 ./scripts/linux-verify.sh
 ```
 

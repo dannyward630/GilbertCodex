@@ -31,3 +31,26 @@ export function scheduleIdleTask(callback: () => void, timeoutMs = 1_000) {
     window.clearTimeout(handle);
   };
 }
+
+export function scheduleDelayedIdleTask(callback: () => void, delayMs: number, idleTimeoutMs = 1_000) {
+  if (typeof window === "undefined") {
+    callback();
+    return () => undefined;
+  }
+
+  let cancelIdleTask: (() => void) | null = null;
+  let cancelled = false;
+  const handle = window.setTimeout(() => {
+    if (cancelled) {
+      return;
+    }
+
+    cancelIdleTask = scheduleIdleTask(callback, idleTimeoutMs);
+  }, Math.max(0, delayMs));
+
+  return () => {
+    cancelled = true;
+    window.clearTimeout(handle);
+    cancelIdleTask?.();
+  };
+}

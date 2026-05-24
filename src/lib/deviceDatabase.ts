@@ -158,6 +158,17 @@ export async function loadDeviceDatabaseNamespace(namespace: string, seeds: Devi
   });
 }
 
+export async function loadDeviceDatabaseChat(namespace: string, chatId: string) {
+  if (!isDeviceDatabaseAvailable()) {
+    return null;
+  }
+
+  return invoke<string | null>("gilbert_database_load_chat", {
+    chatId,
+    namespace,
+  });
+}
+
 export async function saveDeviceDatabaseValue(namespace: string, key: string, value: string) {
   if (!isDeviceDatabaseAvailable()) {
     return;

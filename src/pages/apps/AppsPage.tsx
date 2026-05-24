@@ -26,7 +26,8 @@ import {
   mcpDesktopAvailable,
   removeMcpServer,
   saveMcpServer,
-  testMcpServer,
+  searchMcpRegistry,
+  testMcpServerWithProgress,
 } from "../../app/mcpClient";
 import {
   getGithubState,
@@ -35,10 +36,21 @@ import {
   listGithubRepositories,
 } from "../../app/githubClient";
 import { DialogShell } from "../../components/dialogs/AppDialog";
+import { SkillsManagerPanel } from "./SkillsManagerPanel";
+import {
+  getOpenAiPluginDescription,
+  getOpenAiPluginRouteLabel,
+  importOpenAiPluginSkills,
+  isOpenAiNativePlugin,
+  loadOpenAiCodexMarketplace,
+  type OpenAiCodexPluginListing,
+} from "../../features/plugins/openAiCodexMarketplace";
+import { loadSkillRegistry, subscribeSkillRegistry } from "../../services/skillRegistry";
 import type { GithubConnectionState, GithubRepository } from "../../types/github";
 import type { CalendarAccountState, CalendarConnectionState } from "../../types/googleCalendar";
 import type { GmailAccountState, GmailConnectionState } from "../../types/gmail";
-import type { McpConnectionState, McpSaveServerRequest, McpServerState, McpTestServerRequest, McpTransport } from "../../types/mcp";
+import type { McpConnectionState, McpRegistryInstallHint, McpRegistryServerSummary, McpSaveServerRequest, McpServerProgressEvent, McpServerState, McpTestServerRequest, McpTransport } from "../../types/mcp";
+import type { SkillRegistryState } from "../../types/skills";
 import "../../styles/apps.css";
 
 interface AppsPageProps {
@@ -53,19 +65,23 @@ interface AppsPageProps {
 type GmailActionState = "connect" | "disconnect" | "idle" | "install" | "refresh";
 type CalendarActionState = "connect" | "disconnect" | "idle" | "install" | "refresh";
 type GithubActionState = "idle" | "install" | "refresh";
-type McpActionState = "idle" | "refresh" | "remove" | "save" | "test";
+type McpActionState = "idle" | "refresh" | "remove" | "save" | "test" | "test-all";
 type AppsStatusMessage = { kind: "error" | "success" | "warning"; text: string };
 type AppsCatalogSection = "all" | "mcp" | "plugins" | "skills";
+type MarketplaceStatusKind = "connected" | "installed" | "ready" | "setup";
 const GMAIL_ACCOUNT_LIMIT = 6;
 const GOOGLE_CALENDAR_ACCOUNT_LIMIT = 6;
-const MCP_SERVER_LIMIT = 20;
+const MCP_SERVER_LIMIT = 50;
+const MCP_PRESET_PAGE_SIZE = 6;
+const MCP_REGISTRY_PAGE_SIZE = 5;
+const MCP_REGISTRY_RESULT_LIMIT = 18;
+const OPENAI_PLUGIN_PAGE_SIZE = 12;
 
 const APP_ICON_URLS = {
   gmail: "https://cdn.simpleicons.org/gmail/EA4335",
   googleCalendar: "https://cdn.simpleicons.org/googlecalendar/4285F4",
   github: "https://cdn.simpleicons.org/github/FFFFFF",
   mcp: "https://modelcontextprotocol.io/favicon.ico",
-  skills: "https://cdn.simpleicons.org/openai/FFFFFF",
 } as const;
 
 interface McpServerDraft {
@@ -81,16 +97,33 @@ interface McpServerDraft {
   workingDirectory: string;
 }
 
-const UPCOMING_APP_CARDS = [
-  {
-    id: "skills",
-    section: "skills",
-    title: "Skills",
-    eyebrow: "Reusable intelligence",
-    description: "Curated task playbooks, project workflows, and app-specific instructions that can be installed and searched from here.",
-    tags: ["Prompt packs", "Workflows", "Team presets"],
-  },
-] as const;
+interface McpProviderPreset {
+  args?: string[];
+  command?: string;
+  description: string;
+  endpoint?: string;
+  environmentText?: string;
+  id: string;
+  name: string;
+  note: string;
+  publisher: string;
+  tags: string[];
+  transport: McpTransport;
+}
+
+interface MarketplacePluginRuntimeState {
+  description: string;
+  mcpServer?: McpServerState;
+  primaryActionLabel: string;
+  primaryDisabled: boolean;
+  routeLabel: string;
+  secondaryActionLabel?: string;
+  secondaryDisabled?: boolean;
+  skillCount: number;
+  statusKind: MarketplaceStatusKind;
+  statusLabel: string;
+  tags: string[];
+}
 
 const APP_SECTION_FILTERS: Array<{ id: AppsCatalogSection; label: string }> = [
   { id: "all", label: "All" },
@@ -114,6 +147,227 @@ const EMPTY_MCP_DRAFT: McpServerDraft = {
 
 const EMPTY_MCP_SERVERS: McpServerState[] = [];
 
+const mcpRemoteArgs = (endpoint: string) => ["-y", "mcp-remote@latest", endpoint];
+
+const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
+  {
+    args: ["-y", "firebase-tools@latest", "mcp"],
+    command: "npx",
+    description: "Official Firebase MCP for projects, Auth, Firestore, Data Connect, rules, docs, and Cloud Messaging.",
+    id: "firebase",
+    name: "Firebase",
+    note: "Gilbert auto-resolves npm/npx shims on Windows. If the MCP login link fails with a Google code-challenge error, close that tab and run `npx.cmd -y firebase-tools@latest login --reauth` in a terminal, then Save and test again.",
+    publisher: "Firebase",
+    tags: ["Auth", "Firestore", "Hosting"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.figma.com/mcp"),
+    command: "npx",
+    description: "Preferred Figma remote MCP for design context, components, variables, Make resources, and design-to-code work.",
+    id: "figma-remote",
+    name: "Figma Remote",
+    note: "Uses mcp-remote so Figma OAuth can open in the browser. If your org requires desktop-only access, use the Figma Desktop preset instead.",
+    publisher: "Figma",
+    tags: ["Design", "OAuth", "Dev Mode"],
+    transport: "stdio",
+  },
+  {
+    description: "Figma desktop MCP for selected design context, variables, code guidance, and design-to-code work.",
+    endpoint: "http://127.0.0.1:3845/mcp",
+    id: "figma-desktop",
+    name: "Figma Desktop",
+    note: "Open Figma Desktop, switch a file to Dev Mode, and enable the desktop MCP server before testing this localhost endpoint.",
+    publisher: "Figma",
+    tags: ["Design", "Dev Mode", "Local"],
+    transport: "http",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.supabase.com/mcp?read_only=true"),
+    command: "npx",
+    description: "Official Supabase MCP for database, logs, docs, Edge Functions, storage, and project management.",
+    id: "supabase",
+    name: "Supabase",
+    note: "Starts in read-only mode and uses mcp-remote for the Supabase OAuth flow. For CI-style PAT auth, switch this draft to HTTP and paste the PAT in the bearer token field.",
+    publisher: "Supabase",
+    tags: ["Postgres", "Auth", "Storage"],
+    transport: "stdio",
+  },
+  {
+    args: ["mcp-proxy-for-aws@latest", "https://aws-mcp.us-east-1.api.aws/mcp", "--metadata", "AWS_REGION=us-east-1"],
+    command: "uvx",
+    description: "AWS MCP Server through the official SigV4 proxy for current AWS docs, skills, and AWS API operations.",
+    id: "aws",
+    name: "AWS MCP",
+    note: "Requires uv/uvx plus valid AWS CLI credentials on the machine. Change AWS_REGION in Arguments if your default operating region differs.",
+    publisher: "AWS",
+    tags: ["IAM", "Docs", "Cloud"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://gitlab.com/api/v4/mcp"),
+    command: "npx",
+    description: "Official GitLab MCP for projects, issues, merge requests, repository context, and Duo workflows.",
+    id: "gitlab",
+    name: "GitLab",
+    note: "Uses mcp-remote for GitLab OAuth. For self-managed GitLab, replace gitlab.com in the argument URL with your instance host.",
+    publisher: "GitLab",
+    tags: ["Repos", "Issues", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    description: "Official GitHub MCP for repositories, issues, pull requests, Actions, code search, and security context.",
+    endpoint: "https://api.githubcopilot.com/mcp/",
+    id: "github-mcp",
+    name: "GitHub MCP",
+    note: "Paste a GitHub PAT in the HTTP bearer token field for the remote MCP server. Gilbert's native GitHub connector remains available for app-managed GitHub workflows.",
+    publisher: "GitHub",
+    tags: ["Repos", "PRs", "Bearer"],
+    transport: "http",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.linear.app/mcp"),
+    command: "npx",
+    description: "Official Linear MCP for issues, projects, comments, and product planning workflows.",
+    id: "linear",
+    name: "Linear",
+    note: "Uses mcp-remote for Linear OAuth. If authentication gets stuck, clear mcp-remote auth for Linear and test again.",
+    publisher: "Linear",
+    tags: ["Issues", "Projects", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@stripe/mcp@latest"],
+    command: "npx",
+    description: "Official local Stripe MCP for customers, payment links, billing, docs, and API-backed commerce work.",
+    environmentText: "STRIPE_SECRET_KEY=",
+    id: "stripe",
+    name: "Stripe",
+    note: "Paste a restricted Stripe secret key into Environment as STRIPE_SECRET_KEY. Gilbert stores stdio env values in secure storage.",
+    publisher: "Stripe",
+    tags: ["Payments", "Billing", "Secure env"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.atlassian.com/v1/mcp/authv2"),
+    command: "npx",
+    description: "Official Atlassian Rovo MCP for Jira, Confluence, Compass, and work-management context.",
+    id: "atlassian",
+    name: "Atlassian",
+    note: "Uses Atlassian's current /mcp/authv2 endpoint through mcp-remote so OAuth can complete in the browser.",
+    publisher: "Atlassian",
+    tags: ["Jira", "Confluence", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.vercel.com"),
+    command: "npx",
+    description: "Official Vercel MCP for projects, deployments, domains, logs, teams, and platform operations.",
+    id: "vercel",
+    name: "Vercel",
+    note: "Uses mcp-remote for Vercel OAuth. Provider sign-in opens on first test or first tool listing.",
+    publisher: "Vercel",
+    tags: ["Deployments", "Logs", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.notion.com/mcp"),
+    command: "npx",
+    description: "Official Notion MCP for pages, databases, workspace search, docs, tasks, and planning content.",
+    id: "notion",
+    name: "Notion",
+    note: "Uses mcp-remote because Notion requires user OAuth and does not support bearer-token auth for its hosted MCP.",
+    publisher: "Notion",
+    tags: ["Docs", "Tasks", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    description: "Cloudflare's API MCP exposes Cloudflare account operations with a compact code-mode tool surface.",
+    endpoint: "https://mcp.cloudflare.com/mcp",
+    id: "cloudflare-api",
+    name: "Cloudflare API",
+    note: "Paste a Cloudflare API token in the HTTP bearer token field, or switch to mcp-remote if you want browser OAuth instead.",
+    publisher: "Cloudflare",
+    tags: ["Workers", "DNS", "Bearer"],
+    transport: "http",
+  },
+  {
+    description: "Cloudflare Docs MCP gives agents current Cloudflare reference material without account access.",
+    endpoint: "https://docs.mcp.cloudflare.com/mcp",
+    id: "cloudflare-docs",
+    name: "Cloudflare Docs",
+    note: "Public docs-focused endpoint. Save and test directly; no account token should be needed for documentation search.",
+    publisher: "Cloudflare",
+    tags: ["Docs", "Workers", "Public"],
+    transport: "http",
+  },
+  {
+    description: "Cloudflare Browser MCP fetches pages, converts web content to markdown, and can capture screenshots.",
+    endpoint: "https://browser.mcp.cloudflare.com/mcp",
+    id: "cloudflare-browser",
+    name: "Cloudflare Browser",
+    note: "Useful for web inspection flows. If Cloudflare asks for account auth, add a bearer token or use mcp-remote for OAuth.",
+    publisher: "Cloudflare",
+    tags: ["Browser", "Markdown", "Screenshots"],
+    transport: "http",
+  },
+  {
+    args: ["-y", "@upstash/context7-mcp@latest"],
+    command: "npx",
+    description: "Context7 MCP pulls current library and API documentation into coding prompts.",
+    id: "context7",
+    name: "Context7",
+    note: "Runs locally through npm. A Context7 API key is optional for higher limits; add it only if your account requires it.",
+    publisher: "Upstash",
+    tags: ["Docs", "Libraries", "Coding"],
+    transport: "stdio",
+  },
+  {
+    args: ["--from", "redis-mcp-server@latest", "redis-mcp-server", "--url", "redis://localhost:6379/0"],
+    command: "uvx",
+    description: "Official Redis MCP for reading, writing, querying, and managing Redis data during development.",
+    id: "redis",
+    name: "Redis",
+    note: "Defaults to local Redis. Replace the --url argument with your Redis or Redis Cloud URL before testing.",
+    publisher: "Redis",
+    tags: ["Cache", "Data", "uvx"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "mongodb-mcp-server@latest"],
+    command: "npx",
+    description: "Official MongoDB MCP for Atlas or self-hosted MongoDB schema, queries, and database management.",
+    id: "mongodb",
+    name: "MongoDB",
+    note: "MongoDB recommends running `npx mongodb-mcp-server@latest setup` once to create the connection config before testing this server.",
+    publisher: "MongoDB",
+    tags: ["Atlas", "Database", "Setup"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@sentry/mcp-server@latest"],
+    command: "npx",
+    description: "Sentry MCP for issues, traces, docs, and production debugging workflows.",
+    id: "sentry",
+    name: "Sentry",
+    note: "Uses Sentry's npm MCP server. Complete Sentry auth when prompted, or add provider-specific env values if your Sentry setup requires them.",
+    publisher: "Sentry",
+    tags: ["Errors", "Traces", "Debugging"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "kubernetes-mcp-server@latest"],
+    command: "npx",
+    description: "Kubernetes MCP for cluster inspection and kubectl-backed development workflows.",
+    id: "kubernetes",
+    name: "Kubernetes",
+    note: "Requires a working kubeconfig on the machine. Keep write-capable clusters carefully permission-reviewed.",
+    publisher: "Containers",
+    tags: ["K8s", "Cluster", "kubectl"],
+    transport: "stdio",
+  },
+];
+
 export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSettings }: AppsPageProps) {
   const [activeCatalogSection, setActiveCatalogSection] = useState<AppsCatalogSection>("all");
   const [appSearchQuery, setAppSearchQuery] = useState("");
@@ -134,7 +388,20 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
   const [mcpConnection, setMcpConnection] = useState<McpConnectionState>({ connected: false, enabledServerCount: 0, maxServers: MCP_SERVER_LIMIT, servers: [] });
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [mcpDraft, setMcpDraft] = useState<McpServerDraft>(EMPTY_MCP_DRAFT);
+  const [mcpPresetPage, setMcpPresetPage] = useState(0);
+  const [mcpRegistryBusy, setMcpRegistryBusy] = useState(false);
+  const [mcpRegistryPage, setMcpRegistryPage] = useState(0);
+  const [mcpRegistryQuery, setMcpRegistryQuery] = useState("firebase");
+  const [mcpRegistryResults, setMcpRegistryResults] = useState<McpRegistryServerSummary[]>([]);
+  const [mcpRegistryStatus, setMcpRegistryStatus] = useState<AppsStatusMessage | null>(null);
+  const [mcpProgressEvents, setMcpProgressEvents] = useState<McpServerProgressEvent[]>([]);
   const [mcpStatus, setMcpStatus] = useState<AppsStatusMessage | null>(null);
+  const [openAiPlugins, setOpenAiPlugins] = useState<OpenAiCodexPluginListing[]>([]);
+  const [openAiPluginActionId, setOpenAiPluginActionId] = useState<string | null>(null);
+  const [openAiPluginBusy, setOpenAiPluginBusy] = useState(false);
+  const [openAiPluginPage, setOpenAiPluginPage] = useState(0);
+  const [openAiPluginStatus, setOpenAiPluginStatus] = useState<AppsStatusMessage | null>(null);
+  const [skillRegistry, setSkillRegistry] = useState<SkillRegistryState>(() => loadSkillRegistry());
   const deferredSearchQuery = useDeferredValue(appSearchQuery);
   const googleTestingHint = import.meta.env.DEV ? " If Google shows access_denied because the app is in testing, add this Google account as a test user in Google Auth Platform > Audience." : "";
   const googleOAuthClientId = getDefaultGoogleOAuthClientId();
@@ -217,6 +484,29 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       toolCount,
     };
   }, [mcpServers]);
+  const mcpPresetSearchText = useMemo(
+    () => MCP_FEATURED_PRESETS.map((preset) => [preset.name, preset.publisher, preset.description, ...preset.tags].join(" ")).join(" "),
+    [],
+  );
+  const mcpPresetPageCount = Math.max(1, Math.ceil(MCP_FEATURED_PRESETS.length / MCP_PRESET_PAGE_SIZE));
+  const mcpPresetCurrentPage = Math.min(mcpPresetPage, mcpPresetPageCount - 1);
+  const mcpPresetPageStart = mcpPresetCurrentPage * MCP_PRESET_PAGE_SIZE;
+  const mcpVisiblePresets = MCP_FEATURED_PRESETS.slice(mcpPresetPageStart, mcpPresetPageStart + MCP_PRESET_PAGE_SIZE);
+  const mcpRegistrySearchText = useMemo(
+    () => mcpRegistryResults.map((server) => [
+      server.name,
+      server.title,
+      server.description,
+      server.repositoryUrl,
+      server.install?.packageId,
+      server.install?.endpoint,
+    ].filter(Boolean).join(" ")).join(" "),
+    [mcpRegistryResults],
+  );
+  const mcpRegistryPageCount = Math.max(1, Math.ceil(mcpRegistryResults.length / MCP_REGISTRY_PAGE_SIZE));
+  const mcpRegistryCurrentPage = Math.min(mcpRegistryPage, mcpRegistryPageCount - 1);
+  const mcpRegistryPageStart = mcpRegistryCurrentPage * MCP_REGISTRY_PAGE_SIZE;
+  const mcpVisibleRegistryResults = mcpRegistryResults.slice(mcpRegistryPageStart, mcpRegistryPageStart + MCP_REGISTRY_PAGE_SIZE);
   const githubRepoSearchText = useMemo(
     () => githubRepos.map((repo) => [repo.fullName, repo.description, repo.defaultBranch].filter(Boolean).join(" ")).join(" "),
     [githubRepos],
@@ -234,6 +524,47 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       ? "Add a Streamable HTTP or stdio MCP server"
       : "Open the desktop app to connect MCP servers";
   const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
+  const openAiCatalogPlugins = useMemo(
+    () => openAiPlugins.filter((plugin) => !isOpenAiNativePlugin(plugin.id)),
+    [openAiPlugins],
+  );
+  const marketplacePluginStates = useMemo(() => {
+    const states = new Map<string, MarketplacePluginRuntimeState>();
+
+    for (const plugin of openAiCatalogPlugins) {
+      states.set(plugin.id, getMarketplacePluginRuntimeState(plugin, mcpServers, skillRegistry));
+    }
+
+    return states;
+  }, [mcpServers, openAiCatalogPlugins, skillRegistry]);
+  const openAiFilteredPlugins = useMemo(
+    () => openAiCatalogPlugins.filter((plugin) => {
+      const state = marketplacePluginStates.get(plugin.id);
+
+      return matchesAppsSearch(normalizedSearchQuery, [
+        plugin.displayName,
+        plugin.id,
+        plugin.category,
+        plugin.marketplace,
+        plugin.sourcePath,
+        state?.routeLabel ?? getOpenAiPluginRouteLabel(plugin),
+        state?.statusLabel,
+        state?.description ?? getOpenAiPluginDescription(plugin),
+        ...(state?.tags ?? []),
+        plugin.hasBundledSkills ? "skills SKILL.md bundled" : "",
+        plugin.mcpPresetId ? "mcp preset tools" : "",
+      ]);
+    }),
+    [normalizedSearchQuery, openAiCatalogPlugins, marketplacePluginStates],
+  );
+  const openAiPluginPageCount = Math.max(1, Math.ceil(openAiFilteredPlugins.length / OPENAI_PLUGIN_PAGE_SIZE));
+  const openAiPluginCurrentPage = Math.min(openAiPluginPage, openAiPluginPageCount - 1);
+  const openAiPluginPageStart = openAiPluginCurrentPage * OPENAI_PLUGIN_PAGE_SIZE;
+  const openAiVisiblePlugins = openAiFilteredPlugins.slice(openAiPluginPageStart, openAiPluginPageStart + OPENAI_PLUGIN_PAGE_SIZE);
+  const openAiPluginMatchesSearch =
+    sectionMatches(activeCatalogSection, "plugins") &&
+    (openAiPluginBusy || openAiFilteredPlugins.length > 0 || Boolean(openAiPluginStatus));
+  const pluginCatalogCount = 3 + openAiCatalogPlugins.length;
   const gmailMatchesSearch =
     sectionMatches(activeCatalogSection, "plugins") &&
     matchesAppsSearch(normalizedSearchQuery, [
@@ -306,33 +637,78 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       "bearer token",
       "secure storage",
       "permissions",
+      "registry",
+      "marketplace",
+      "Supabase",
+      "Firebase",
+      "AWS",
+      "Figma",
       mcpStatusLabel,
       mcpAccountLabel,
       mcpSummary.searchText,
+      mcpPresetSearchText,
+      mcpRegistrySearchText,
     ]);
-  const visibleUpcomingCards = useMemo(
-    () =>
-      UPCOMING_APP_CARDS.filter((card) => {
-        if (!sectionMatches(activeCatalogSection, card.section)) {
-          return false;
-        }
-
-        return matchesAppsSearch(normalizedSearchQuery, [
-          card.title,
-          card.section,
-          card.eyebrow,
-          card.description,
-          "coming soon",
-          ...card.tags,
-        ]);
-      }),
-    [activeCatalogSection, normalizedSearchQuery],
-  );
-  const visibleCardCount = (gmailMatchesSearch ? 1 : 0) + (calendarMatchesSearch ? 1 : 0) + (githubMatchesSearch ? 1 : 0) + (mcpMatchesSearch ? 1 : 0) + visibleUpcomingCards.length;
+  const skillsMatchesSearch =
+    sectionMatches(activeCatalogSection, "skills") &&
+    matchesAppsSearch(normalizedSearchQuery, [
+      "Skills",
+      "SKILL.md",
+      "installed",
+      "custom",
+      "premade",
+      "prompt packs",
+      "workflows",
+      "triggers",
+      "team presets",
+      "reusable instructions",
+      "coding",
+      "review",
+      "research",
+      "frontend",
+    ]);
+  const visibleCardCount = (gmailMatchesSearch ? 1 : 0) + (calendarMatchesSearch ? 1 : 0) + (githubMatchesSearch ? 1 : 0) + (openAiPluginMatchesSearch ? 1 : 0) + (mcpMatchesSearch ? 1 : 0) + (skillsMatchesSearch ? 1 : 0);
+  const readyCapabilityCount = 4 + MCP_FEATURED_PRESETS.length + openAiCatalogPlugins.length;
   const gmailExpanded = expandedAppCardIds.has("gmail");
   const calendarExpanded = expandedAppCardIds.has("google-calendar");
   const githubExpanded = expandedAppCardIds.has("github");
-  const mcpExpanded = expandedAppCardIds.has("mcp");
+
+  useEffect(() => subscribeSkillRegistry(setSkillRegistry), []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    setOpenAiPluginBusy(true);
+    void loadOpenAiCodexMarketplace()
+      .then((plugins) => {
+        if (disposed) {
+          return;
+        }
+
+        setOpenAiPlugins(plugins);
+        setOpenAiPluginStatus(plugins[0]?.marketplace.toLowerCase().includes("fallback")
+          ? { kind: "warning", text: `Loaded ${plugins.length} fallback plugin entries. The live plugin catalog could not be reached.` }
+          : { kind: "success", text: `Loaded ${plugins.length} Gilbert marketplace plugins.` });
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setOpenAiPluginStatus({ kind: "error", text: error instanceof Error ? error.message : "Could not load the Gilbert plugin marketplace." });
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setOpenAiPluginBusy(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setOpenAiPluginPage(0);
+  }, [normalizedSearchQuery, activeCatalogSection]);
 
   useEffect(() => {
     if (!gmailAvailable) {
@@ -812,7 +1188,157 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
     setMcpStatus(server?.hasAuthorizationToken || (server?.environment ?? []).some((item) => item.hasValue)
       ? { kind: "success", text: "Saved secrets are hidden. Leave HTTP bearer token blank to keep it; stdio env lines with blank values keep their saved values." }
       : null);
+    setMcpProgressEvents([]);
     setMcpDialogOpen(true);
+  }
+
+  function configureMcpPreset(preset: McpProviderPreset, existingServer?: McpServerState) {
+    const installedServer = existingServer ?? findMcpServerForPreset(mcpServers, preset);
+
+    if (installedServer) {
+      openMcpServerDialog(installedServer);
+      setMcpStatus({ kind: "success", text: `${installedServer.name} is already installed. Review it here, refresh tools, or update the saved configuration.` });
+      return;
+    }
+
+    setMcpDraft({
+      ...EMPTY_MCP_DRAFT,
+      argsText: (preset.args ?? []).join("\n"),
+      command: preset.command ?? "",
+      endpoint: preset.endpoint ?? "",
+      environmentText: preset.environmentText ?? "",
+      name: preset.name,
+      transport: preset.transport,
+    });
+    setMcpStatus({ kind: "warning", text: preset.note });
+    setMcpProgressEvents([]);
+    setMcpDialogOpen(true);
+  }
+
+  function configureMcpRegistryServer(server: McpRegistryServerSummary) {
+    const install = server.install;
+
+    if (!install) {
+      setMcpRegistryStatus({ kind: "warning", text: `${formatMcpRegistryServerName(server)} does not publish a supported npm, PyPI, or remote install hint yet.` });
+      return;
+    }
+
+    setMcpDraft(createDraftFromRegistryInstall(server, install));
+    setMcpStatus({ kind: "warning", text: install.note ?? "Review this generated MCP configuration, then save and test it." });
+    setMcpProgressEvents([]);
+    setMcpDialogOpen(true);
+  }
+
+  async function handleOpenAiPluginPrimaryAction(plugin: OpenAiCodexPluginListing) {
+    const runtimeState = marketplacePluginStates.get(plugin.id) ?? getMarketplacePluginRuntimeState(plugin, mcpServers, skillRegistry);
+
+    setOpenAiPluginActionId(plugin.id);
+    setOpenAiPluginStatus(null);
+
+    try {
+      if (plugin.installRoute === "native") {
+        if (plugin.id === "gmail") {
+          handleGmailPrimaryAction();
+        } else if (plugin.id === "google-calendar") {
+          handleCalendarPrimaryAction();
+        } else if (plugin.id === "github") {
+          await installOrOpenGithub();
+        }
+        return;
+      }
+
+      if (plugin.installRoute === "mcp-preset") {
+        const preset = MCP_FEATURED_PRESETS.find((candidate) => candidate.id === plugin.mcpPresetId);
+
+        if (!preset) {
+          setOpenAiPluginStatus({ kind: "error", text: `${plugin.displayName} has no matching MCP preset in this build.` });
+          return;
+        }
+
+        configureMcpPreset(preset, runtimeState.mcpServer);
+        setOpenAiPluginStatus(runtimeState.mcpServer
+          ? { kind: "success", text: `${plugin.displayName} is already installed as ${runtimeState.mcpServer.name}. Manage it in MCP settings.` }
+          : { kind: "success", text: `${plugin.displayName} is ready to review as an MCP server. Save and test it before chat can use the tools.` });
+        return;
+      }
+
+      if (plugin.installRoute === "skill-import") {
+        if (runtimeState.skillCount > 0) {
+          viewPluginSkills(plugin);
+          return;
+        }
+
+        await installOpenAiPluginSkills(plugin);
+        return;
+      }
+
+      setActiveCatalogSection("mcp");
+      setMcpRegistryQuery(plugin.displayName);
+      setOpenAiPluginStatus({ kind: "warning", text: `Searching the MCP Registry for a runnable ${plugin.displayName} server. Hosted connector IDs are not directly callable without a native Gilbert or MCP path.` });
+      await searchMcpRegistryCatalog(plugin.displayName);
+    } finally {
+      setOpenAiPluginActionId(null);
+    }
+  }
+
+  async function installOpenAiPluginSkills(plugin: OpenAiCodexPluginListing) {
+    const runtimeState = marketplacePluginStates.get(plugin.id) ?? getMarketplacePluginRuntimeState(plugin, mcpServers, skillRegistry);
+
+    if (runtimeState.skillCount > 0) {
+      viewPluginSkills(plugin);
+      return;
+    }
+
+    setOpenAiPluginActionId(plugin.id);
+    setOpenAiPluginStatus(null);
+
+    try {
+      const result = await importOpenAiPluginSkills(plugin);
+
+      if (result.importedCount === 0) {
+        setOpenAiPluginStatus({ kind: "warning", text: `${plugin.displayName} does not publish bundled skills in the plugin catalog. Try MCP Registry search for a runnable tool server.` });
+        return;
+      }
+
+      const preview = result.skillNames.slice(0, 3).join(", ");
+      const remaining = result.importedCount > 3 ? `, +${result.importedCount - 3} more` : "";
+      setOpenAiPluginStatus({ kind: "success", text: `Installed ${result.importedCount} ${plugin.displayName} skill${result.importedCount === 1 ? "" : "s"} locally${preview ? `: ${preview}${remaining}` : "."}` });
+      setSkillRegistry(loadSkillRegistry());
+    } catch (error) {
+      setOpenAiPluginStatus({ kind: "error", text: error instanceof Error ? error.message : `Could not install ${plugin.displayName} skills.` });
+    } finally {
+      setOpenAiPluginActionId(null);
+    }
+  }
+
+  function viewPluginSkills(plugin: OpenAiCodexPluginListing) {
+    setActiveCatalogSection("skills");
+    setAppSearchQuery(plugin.displayName);
+    setOpenAiPluginStatus({ kind: "success", text: `${plugin.displayName} skills are already installed. Showing them in Skills.` });
+  }
+
+  async function searchMcpRegistryCatalog(query = mcpRegistryQuery) {
+    if (!mcpAvailable) {
+      setMcpRegistryStatus({ kind: "error", text: "MCP Registry search is available in the desktop app." });
+      return;
+    }
+
+    setMcpRegistryBusy(true);
+    setMcpRegistryStatus(null);
+
+    try {
+      const response = await searchMcpRegistry({ limit: MCP_REGISTRY_RESULT_LIMIT, query });
+
+      setMcpRegistryResults(response.servers);
+      setMcpRegistryPage(0);
+      setMcpRegistryStatus(response.servers.length > 0
+        ? { kind: "success", text: `Found ${response.servers.length} MCP server${response.servers.length === 1 ? "" : "s"}${response.count > response.servers.length ? ` from ${response.count} registry matches` : ""}.` }
+        : { kind: "warning", text: "No registry servers matched that search." });
+    } catch (error) {
+      setMcpRegistryStatus({ kind: "error", text: error instanceof Error ? error.message : "Could not search the MCP Registry." });
+    } finally {
+      setMcpRegistryBusy(false);
+    }
   }
 
   async function refreshMcpConnections() {
@@ -836,6 +1362,16 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
     }
   }
 
+  function resetMcpProgress(message?: string) {
+    setMcpProgressEvents(message
+      ? [{ kind: "step", message }]
+      : []);
+  }
+
+  function appendMcpProgressEvent(event: McpServerProgressEvent) {
+    setMcpProgressEvents((events) => [...events.slice(-7), event]);
+  }
+
   async function saveAndTestMcpServer() {
     if (!mcpAvailable) {
       setMcpStatus({ kind: "error", text: "MCP setup is available in the desktop app." });
@@ -851,6 +1387,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
 
     setMcpActionState("save");
     setMcpStatus(null);
+    resetMcpProgress("Saving MCP server configuration.");
 
     try {
       const saved = await saveMcpServer(request.value);
@@ -858,8 +1395,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       setMcpConnection(saved.state);
       setMcpDraft((draft) => ({ ...draft, authorizationToken: "", id: saved.server.id }));
       setMcpActionState("test");
+      appendMcpProgressEvent({ kind: "step", message: "Saved. Testing connection and loading tools." });
 
-      const tested = await testMcpServer({ id: saved.server.id });
+      const tested = await testMcpServerWithProgress({ id: saved.server.id }, appendMcpProgressEvent);
 
       if (tested.state) {
         setMcpConnection(tested.state);
@@ -884,6 +1422,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
 
     setMcpActionState("test");
     setMcpStatus(null);
+    resetMcpProgress("Testing MCP connection.");
 
     try {
       const request = createMcpTestRequest(mcpDraft);
@@ -893,9 +1432,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
         return;
       }
 
-      const response = await testMcpServer(mcpDraft.id
+      const response = await testMcpServerWithProgress(mcpDraft.id
         ? { id: mcpDraft.id }
-        : request.value);
+        : request.value, appendMcpProgressEvent);
 
       if (response.state) {
         setMcpConnection(response.state);
@@ -920,6 +1459,62 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       setMcpStatus({ kind: "success", text: `${response.server.name} refreshed with ${response.tools.length} tool${response.tools.length === 1 ? "" : "s"}.` });
     } catch (error) {
       setMcpStatus({ kind: "error", text: error instanceof Error ? error.message : "Could not refresh MCP tools." });
+    } finally {
+      setMcpActionState("idle");
+    }
+  }
+
+  async function testAllMcpServers() {
+    if (!mcpAvailable) {
+      setMcpStatus({ kind: "error", text: "MCP tool tests are available in the desktop app." });
+      return;
+    }
+
+    const enabledServers = mcpServers.filter((server) => server.enabled);
+
+    if (enabledServers.length === 0) {
+      setMcpStatus({ kind: "warning", text: "Enable at least one MCP server before running a tool test." });
+      return;
+    }
+
+    setMcpActionState("test-all");
+    setMcpStatus(null);
+    resetMcpProgress(`Testing ${enabledServers.length} enabled MCP server${enabledServers.length === 1 ? "" : "s"}.`);
+
+    let passedCount = 0;
+    const failures: string[] = [];
+
+    try {
+      for (const server of enabledServers) {
+        appendMcpProgressEvent({ kind: "step", message: `Listing tools from ${server.name}.` });
+
+        try {
+          const response = await listMcpServerTools({ serverId: server.id });
+
+          passedCount += 1;
+          setMcpConnection(response.state);
+          appendMcpProgressEvent({
+            kind: "finished",
+            message: `${response.server.name}: ${response.tools.length} tool${response.tools.length === 1 ? "" : "s"} ready.`,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not list tools.";
+          failures.push(`${server.name}: ${message}`);
+          appendMcpProgressEvent({ kind: "error", message: `${server.name}: ${message}` });
+        }
+      }
+
+      if (failures.length > 0) {
+        setMcpStatus({
+          kind: passedCount > 0 ? "warning" : "error",
+          text: `${passedCount}/${enabledServers.length} MCP server${enabledServers.length === 1 ? "" : "s"} passed tool discovery. ${failures.slice(0, 2).join(" | ")}`,
+        });
+      } else {
+        setMcpStatus({
+          kind: "success",
+          text: `All ${passedCount} enabled MCP server${passedCount === 1 ? "" : "s"} listed tools successfully.`,
+        });
+      }
     } finally {
       setMcpActionState("idle");
     }
@@ -989,7 +1584,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
           </span>
           <div>
             <h2 id="apps-library-title">Connected apps, plugins, and skills</h2>
-            <p>Install trusted capability cards as they become available. Gmail, Google Calendar, GitHub, and MCP server connections are live, with Skills staged as the next surface.</p>
+            <p>Install trusted capability cards as they become available. Gmail, Google Calendar, GitHub, MCP servers, and Skills are available from this workspace.</p>
           </div>
         </section>
 
@@ -1010,12 +1605,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
               Connected
             </span>
             <span>
-              <strong>4</strong>
+              <strong>{readyCapabilityCount}</strong>
               Ready
             </span>
             <span>
               <strong>1</strong>
-              Soon
+              Skills
             </span>
           </div>
         </section>
@@ -1028,7 +1623,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
               <button key={section.id} type="button" data-active={activeCatalogSection === section.id} onClick={() => setActiveCatalogSection(section.id)}>
                 <SectionIcon size={15} aria-hidden="true" />
                 <span>{section.label}</span>
-                <small>{getAppsSectionMeta(section.id, { mcpEnabledCount })}</small>
+                <small>{getAppsSectionMeta(section.id, { mcpEnabledCount, pluginCatalogCount })}</small>
               </button>
             );
           })}
@@ -1269,128 +1864,325 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
             </article>
           ) : null}
 
-          {mcpMatchesSearch ? (
-            <article className="apps-plugin-card apps-plugin-card-featured apps-plugin-card-mcp" data-expanded={mcpExpanded}>
-              <div className="apps-plugin-card-header">
-                <WebAppLogo className="apps-plugin-logo-mcp" fallback={<Server size={20} aria-hidden="true" />} src={APP_ICON_URLS.mcp} />
-                <div>
-                  <div className="apps-plugin-title-row">
-                    <h3>MCP Servers</h3>
-                    <span className="apps-plugin-status" data-kind={mcpStatusKind}>
-                      {mcpConnected ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
-                      {mcpStatusLabel}
-                    </span>
-                  </div>
-                  <span className="apps-plugin-maker">
-                    <BadgeCheck size={14} aria-hidden="true" />
-                    Model Context Protocol
+          {openAiPluginMatchesSearch ? (
+            <section className="apps-plugin-marketplace-board" aria-label="Gilbert Codex plugin marketplace">
+              <div className="apps-mcp-board-head">
+                <div className="apps-mcp-heading">
+                  <span className="apps-plugin-logo apps-plugin-logo-marketplace">
+                    <PlugZap size={20} aria-hidden="true" />
+                  </span>
+                  <span>
+                    <strong>Gilbert Plugin Marketplace</strong>
+                    <small>Curated plugin catalog mapped to Gilbert install paths</small>
+                  </span>
+                  <span className="apps-plugin-status" data-kind={openAiPluginBusy ? "setup" : "ready"}>
+                    {openAiPluginBusy ? <RefreshCw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
+                    {openAiPluginBusy ? "Loading" : `${openAiCatalogPlugins.length} plugins`}
                   </span>
                 </div>
               </div>
 
-              <p className="apps-plugin-description">Add external tool servers, test them, then let chat use approved tools.</p>
-
-              <div className="apps-plugin-account" data-connected={mcpConfigured}>
-                <Server size={15} aria-hidden="true" />
-                <span>{mcpAccountLabel}</span>
+              <div className="apps-plugin-marketplace-summary" aria-label="Plugin marketplace summary">
+                <span>
+                  <strong>Native</strong>
+                  Gmail, Calendar, GitHub
+                </span>
+                <span>
+                  <strong>MCP</strong>
+                  Save and test runnable servers
+                </span>
+                <span>
+                  <strong>Skills</strong>
+                  Import bundled workflows
+                </span>
+                <span>
+                  <strong>Registry</strong>
+                  Find public tool servers
+                </span>
               </div>
 
-              <div className="apps-plugin-top-actions">
-                <button className="apps-plugin-primary" type="button" disabled={mcpBusy && mcpActionState !== "refresh"} onClick={() => openMcpServerDialog()}>
-                  {mcpConfigured ? "Manage" : "Add server"}
-                </button>
+              {openAiPluginStatus ? (
+                <div className="apps-plugin-message" data-kind={openAiPluginStatus.kind}>
+                  {openAiPluginStatus.text}
+                </div>
+              ) : null}
+
+              {openAiPluginBusy ? (
+                <div className="apps-plugin-marketplace-loading">
+                  <RefreshCw size={16} aria-hidden="true" />
+                  <span>Loading plugin metadata...</span>
+                </div>
+              ) : openAiVisiblePlugins.length > 0 ? (
+                <div className="apps-plugin-marketplace-grid">
+                  {openAiVisiblePlugins.map((plugin) => {
+                    const pluginBusy = openAiPluginActionId === plugin.id;
+                    const runtimeState = marketplacePluginStates.get(plugin.id) ?? getMarketplacePluginRuntimeState(plugin, mcpServers, skillRegistry);
+
+                    return (
+                      <article key={plugin.id} className="apps-plugin-marketplace-card" data-status={runtimeState.statusKind}>
+                        <div className="apps-plugin-marketplace-card-top">
+                          <span className="apps-mcp-card-avatar" aria-hidden="true">{getPluginInitials(plugin.displayName)}</span>
+                          <span>
+                            <strong>{plugin.displayName}</strong>
+                            <small>{plugin.category} | {runtimeState.statusLabel}</small>
+                          </span>
+                          <em>{runtimeState.routeLabel}</em>
+                        </div>
+                        <p>{runtimeState.description}</p>
+                        <div className="apps-mcp-preset-tags" aria-label={`${plugin.displayName} tags`}>
+                          {runtimeState.tags.map((tag) => <em key={tag}>{tag}</em>)}
+                        </div>
+                        <div className="apps-plugin-marketplace-actions">
+                          <button
+                            className="apps-plugin-primary"
+                            type="button"
+                            disabled={pluginBusy || runtimeState.primaryDisabled || (plugin.installRoute === "mcp-preset" && mcpBusy)}
+                            onClick={() => void handleOpenAiPluginPrimaryAction(plugin)}
+                          >
+                            {pluginBusy ? "Working" : runtimeState.primaryActionLabel}
+                          </button>
+                          {plugin.hasBundledSkills && plugin.installRoute !== "skill-import" ? (
+                            <button className="apps-plugin-secondary" type="button" disabled={pluginBusy || runtimeState.secondaryDisabled} onClick={() => runtimeState.skillCount > 0 ? viewPluginSkills(plugin) : void installOpenAiPluginSkills(plugin)}>
+                              {runtimeState.secondaryActionLabel ?? "Skills"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="apps-empty-state">
+                  <Puzzle size={20} aria-hidden="true" />
+                  <span>
+                    <strong>No marketplace plugins match</strong>
+                    <small>Try Figma, Slack, Notion, Vercel, Stripe, Supabase, or Developer Docs.</small>
+                  </span>
+                </div>
+              )}
+
+              {openAiFilteredPlugins.length > OPENAI_PLUGIN_PAGE_SIZE ? (
+                <div className="apps-mcp-pagination" aria-label="Gilbert plugin marketplace pagination">
+                  <span>{openAiPluginPageStart + 1}-{Math.min(openAiPluginPageStart + OPENAI_PLUGIN_PAGE_SIZE, openAiFilteredPlugins.length)} of {openAiFilteredPlugins.length}</span>
+                  <button type="button" disabled={openAiPluginCurrentPage === 0} onClick={() => setOpenAiPluginPage((page) => Math.max(0, page - 1))}>Previous</button>
+                  <button type="button" disabled={openAiPluginCurrentPage >= openAiPluginPageCount - 1} onClick={() => setOpenAiPluginPage((page) => Math.min(openAiPluginPageCount - 1, page + 1))}>Next</button>
+                </div>
+              ) : null}
+
+              <div className="apps-plugin-safety">
+                <ShieldCheck size={16} aria-hidden="true" />
+                <span>Hosted connector IDs are not treated as live Gilbert tools. Gilbert only marks a plugin usable after native install, MCP test, or local skill import succeeds.</span>
+              </div>
+            </section>
+          ) : null}
+
+          {mcpMatchesSearch ? (
+            <section className="apps-mcp-board" aria-label="MCP servers and catalog">
+              <div className="apps-mcp-board-head">
+                <div className="apps-mcp-heading">
+                  <WebAppLogo className="apps-plugin-logo-mcp" fallback={<Server size={20} aria-hidden="true" />} src={APP_ICON_URLS.mcp} />
+                  <span>
+                    <strong>MCP Servers</strong>
+                    <small>External tools, app servers, and command-line MCPs</small>
+                  </span>
+                  <span className="apps-plugin-status" data-kind={mcpStatusKind}>
+                    {mcpConnected ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
+                    {mcpStatusLabel}
+                  </span>
+                </div>
+
+                <div className="apps-mcp-board-actions">
+                  <button className="apps-plugin-primary" type="button" disabled={mcpBusy && mcpActionState !== "refresh"} onClick={() => openMcpServerDialog()}>
+                    <Plus size={15} aria-hidden="true" />
+                    Add MCP
+                  </button>
+                  <button className="apps-plugin-secondary" type="button" disabled={mcpBusy || !mcpConfigured} onClick={() => void testAllMcpServers()}>
+                    <RefreshCw size={14} aria-hidden="true" />
+                    {mcpActionState === "test-all" ? "Testing" : "Test all"}
+                  </button>
+                  <button className="apps-plugin-secondary apps-plugin-icon-action" type="button" aria-label="Refresh MCP servers" title="Refresh MCP servers" disabled={mcpBusy || !mcpAvailable} onClick={() => void refreshMcpConnections()}>
+                    <RefreshCw size={14} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
 
-              {mcpStatus && (!mcpConnected || mcpStatus.kind !== "success" || mcpExpanded) ? (
+              {mcpStatus ? (
                 <div className="apps-plugin-message" data-kind={mcpStatus.kind}>
                   {mcpStatus.text}
                 </div>
               ) : null}
 
-              {!mcpConfigured || mcpExpanded ? (
-                <div className="apps-mcp-steps" aria-label="MCP setup steps">
-                  <span>Add server</span>
-                  <span>Test tools</span>
-                  <span>Use in chat</span>
-                </div>
-              ) : null}
-
-              {mcpExpanded ? (
-                <div className="apps-plugin-expanded" aria-label="MCP tools">
-                  <div className="apps-plugin-expanded-head">
-                    <strong>Connected servers</strong>
-                    <small>External tools discovered through MCP</small>
-                  </div>
-
-                  <div className="apps-plugin-smart-strip" aria-label="MCP smart actions">
-                    <span>Streamable HTTP</span>
-                    <span>Stdio</span>
-                    <span>{mcpMaxServers} servers</span>
-                  </div>
-
-                  <div className="apps-plugin-capabilities" aria-label="MCP capabilities">
-                    <span>Server inventory</span>
-                    <span>Tool discovery</span>
-                    <span>Tool calls</span>
-                    <span>Bearer auth</span>
-                    <span>Secure tokens</span>
-                    <span>Approval gates</span>
-                  </div>
-
-                  {mcpServers.length > 0 ? (
-                    <div className="apps-mcp-server-preview" aria-label="Configured MCP servers">
-                      {mcpServers.slice(0, 3).map((server) => (
-                        <span key={server.id} data-enabled={server.enabled}>
-                          <strong>{server.name}</strong>
-                          <small>{server.enabled ? "Enabled" : "Disabled"} | {server.tools?.length ?? 0} tools</small>
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="apps-plugin-safety">
-                    <ShieldCheck size={16} aria-hidden="true" />
-                    <span>Bearer tokens stay in OS-backed secure storage; tool calls stay permission reviewed.</span>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="apps-plugin-actions">
-                <button className="apps-plugin-secondary apps-plugin-details-button" type="button" aria-expanded={mcpExpanded} onClick={() => toggleAppCardExpanded("mcp")}>
-                  <ChevronDown size={14} aria-hidden="true" />
-                  {mcpExpanded ? "Collapse" : "Expand"}
-                </button>
+              <div className="apps-mcp-summary-grid" aria-label="MCP status">
+                <span>
+                  <strong>{mcpEnabledCount}/{mcpMaxServers}</strong>
+                  Enabled servers
+                </span>
+                <span>
+                  <strong>{mcpToolCount}</strong>
+                  Cached tools
+                </span>
+                <span>
+                  <strong>HTTP</strong>
+                  Streamable endpoints
+                </span>
+                <span>
+                  <strong>stdio</strong>
+                  Local commands
+                </span>
               </div>
-            </article>
-          ) : null}
 
-          {visibleUpcomingCards.map((card) => {
-            const Icon = card.id === "skills" ? Sparkles : Globe2;
-
-            return (
-              <article key={card.id} className="apps-plugin-card apps-plugin-card-soon">
-                <div className="apps-plugin-card-header">
-                  <WebAppLogo className="apps-plugin-logo-soon" fallback={<Icon size={20} aria-hidden="true" />} src={APP_ICON_URLS.skills} />
-                  <div>
-                    <div className="apps-plugin-title-row">
-                      <h3>{card.title}</h3>
-                      <span className="apps-plugin-status" data-kind="soon">
-                        Coming soon
-                      </span>
-                    </div>
-                    <p className="apps-plugin-description">{card.description}</p>
+              <section className="apps-mcp-section" aria-label="Configured MCP servers">
+                <div className="apps-mcp-panel-head">
+                  <div className="apps-plugin-expanded-head">
+                    <strong>Configured MCPs</strong>
+                    <small>{mcpConfigured ? mcpAccountLabel : "Add a server card, test tools, then use it in chat."}</small>
+                  </div>
+                  <div className="apps-mcp-steps" aria-label="MCP setup steps">
+                    <span>Add</span>
+                    <span>Test</span>
+                    <span>Chat</span>
                   </div>
                 </div>
 
-                <div className="apps-plugin-soon-meta">
-                  <span>{card.eyebrow}</span>
-                  {card.tags.slice(0, 2).map((tag) => (
-                    <span key={tag}>{tag}</span>
+                <div className="apps-mcp-server-card-grid">
+                  {mcpServers.map((server) => {
+                    const tools = server.tools ?? [];
+
+                    return (
+                      <article key={server.id} className="apps-mcp-server-card" data-enabled={server.enabled} data-error={Boolean(server.lastError)}>
+                        <div className="apps-mcp-card-top">
+                          <span className="apps-mcp-card-avatar" aria-hidden="true">
+                            <Server size={17} aria-hidden="true" />
+                          </span>
+                          <span>
+                            <strong>{server.name}</strong>
+                            <small>{formatMcpServerTarget(server)}</small>
+                          </span>
+                          <em>{server.transport === "stdio" ? "stdio" : "HTTP"}</em>
+                        </div>
+                        <p>{formatMcpServerDetail(server)}</p>
+                        <div className="apps-mcp-tool-chip-list" aria-label={`${server.name} cached tools`}>
+                          {tools.length > 0 ? tools.slice(0, 5).map((tool) => (
+                            <em key={tool.name}>{tool.name}</em>
+                          )) : <em>No cached tools</em>}
+                          {tools.length > 5 ? <em>+{tools.length - 5}</em> : null}
+                        </div>
+                        <div className="apps-mcp-card-actions">
+                          <button type="button" disabled={mcpBusy} onClick={() => openMcpServerDialog(server)}>
+                            <Wrench size={14} aria-hidden="true" />
+                            Edit
+                          </button>
+                          <button type="button" disabled={mcpBusy || !server.enabled} onClick={() => void refreshMcpServerTools(server.id)}>
+                            <RefreshCw size={14} aria-hidden="true" />
+                            Tools
+                          </button>
+                          <button className="mcp-server-remove-button" type="button" disabled={mcpBusy} onClick={() => void removeConfiguredMcpServer(server)}>
+                            <Trash2 size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+
+                  <button className="apps-mcp-add-server-card" type="button" disabled={mcpBusy || !mcpAvailable} onClick={() => openMcpServerDialog()}>
+                    <span className="apps-mcp-card-avatar" aria-hidden="true">
+                      <Plus size={18} aria-hidden="true" />
+                    </span>
+                    <strong>Add custom MCP</strong>
+                    <small>Remote HTTPS, localhost development, or command-line stdio server.</small>
+                  </button>
+                </div>
+              </section>
+
+              <section className="apps-mcp-section" aria-label="Featured MCP connectors">
+                <div className="apps-mcp-panel-head">
+                  <div className="apps-plugin-expanded-head">
+                    <strong>Featured MCPs</strong>
+                    <small>{MCP_FEATURED_PRESETS.length} curated app, cloud, database, design, and docs servers</small>
+                  </div>
+                  <div className="apps-mcp-pagination" aria-label="Featured MCP pagination">
+                    <span>{mcpPresetPageStart + 1}-{Math.min(mcpPresetPageStart + MCP_PRESET_PAGE_SIZE, MCP_FEATURED_PRESETS.length)} of {MCP_FEATURED_PRESETS.length}</span>
+                    <button type="button" disabled={mcpPresetCurrentPage === 0} onClick={() => setMcpPresetPage((page) => Math.max(0, page - 1))}>Previous</button>
+                    <button type="button" disabled={mcpPresetCurrentPage >= mcpPresetPageCount - 1} onClick={() => setMcpPresetPage((page) => Math.min(mcpPresetPageCount - 1, page + 1))}>Next</button>
+                  </div>
+                </div>
+                <div className="apps-mcp-preset-grid">
+                  {mcpVisiblePresets.map((preset) => (
+                    <button key={preset.id} className="apps-mcp-preset-card" type="button" disabled={mcpBusy} onClick={() => configureMcpPreset(preset)}>
+                      <span className="apps-mcp-card-top">
+                        <span className="apps-mcp-card-avatar" aria-hidden="true">{getMcpPresetInitials(preset)}</span>
+                        <span>
+                          <strong>{preset.name}</strong>
+                          <small>{preset.publisher}</small>
+                        </span>
+                        <em>{preset.transport === "stdio" ? "stdio" : "HTTP"}</em>
+                      </span>
+                      <small>{preset.description}</small>
+                      <span className="apps-mcp-preset-tags">
+                        {preset.tags.slice(0, 3).map((tag) => (
+                          <em key={tag}>{tag}</em>
+                        ))}
+                      </span>
+                    </button>
                   ))}
                 </div>
-              </article>
-            );
-          })}
+              </section>
+
+              <section className="apps-mcp-section" aria-label="MCP Registry search">
+                <div className="apps-plugin-expanded-head">
+                  <strong>MCP Registry</strong>
+                  <small>Search public MCP servers and generate a Gilbert configuration</small>
+                </div>
+                <form className="apps-mcp-registry-search" onSubmit={(event) => {
+                  event.preventDefault();
+                  void searchMcpRegistryCatalog();
+                }}>
+                  <Search size={15} aria-hidden="true" />
+                  <input value={mcpRegistryQuery} placeholder="Search supabase, firebase, aws, figma..." onChange={(event) => setMcpRegistryQuery(event.target.value)} />
+                  <button type="submit" disabled={mcpRegistryBusy || !mcpAvailable}>
+                    {mcpRegistryBusy ? "Searching" : "Search"}
+                  </button>
+                </form>
+                {mcpRegistryStatus ? (
+                  <div className="apps-plugin-message" data-kind={mcpRegistryStatus.kind}>
+                    {mcpRegistryStatus.text}
+                  </div>
+                ) : null}
+                {mcpRegistryResults.length > 0 ? (
+                  <div className="apps-mcp-registry-results" aria-label="MCP Registry results">
+                    {mcpVisibleRegistryResults.map((server) => (
+                      <article key={`${server.name}-${server.version ?? "latest"}`}>
+                        <span>
+                          <strong>{formatMcpRegistryServerName(server)}</strong>
+                          <small>{formatMcpRegistryServerMeta(server)}</small>
+                        </span>
+                        <p>{server.description ?? "No description published for this MCP server."}</p>
+                        <button type="button" disabled={!server.install || mcpBusy} onClick={() => configureMcpRegistryServer(server)}>
+                          {server.install ? "Configure" : "No install hint"}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+                {mcpRegistryResults.length > MCP_REGISTRY_PAGE_SIZE ? (
+                  <div className="apps-mcp-pagination" aria-label="MCP Registry pagination">
+                    <span>{mcpRegistryPageStart + 1}-{Math.min(mcpRegistryPageStart + MCP_REGISTRY_PAGE_SIZE, mcpRegistryResults.length)} of {mcpRegistryResults.length}</span>
+                    <button type="button" disabled={mcpRegistryCurrentPage === 0} onClick={() => setMcpRegistryPage((page) => Math.max(0, page - 1))}>Previous</button>
+                    <button type="button" disabled={mcpRegistryCurrentPage >= mcpRegistryPageCount - 1} onClick={() => setMcpRegistryPage((page) => Math.min(mcpRegistryPageCount - 1, page + 1))}>Next</button>
+                  </div>
+                ) : null}
+              </section>
+
+              <div className="apps-plugin-safety">
+                <ShieldCheck size={16} aria-hidden="true" />
+                <span>Bearer tokens and stdio environment values stay in OS-backed secure storage; chat gets server inventory, tool discovery, and gated tool calls.</span>
+              </div>
+            </section>
+          ) : null}
+
+          {skillsMatchesSearch ? (
+            <SkillsManagerPanel searchQuery={normalizedSearchQuery} />
+          ) : null}
 
           {visibleCardCount === 0 ? (
             <div className="apps-empty-state">
@@ -1695,6 +2487,23 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
             </div>
           </section>
 
+          {mcpProgressEvents.length > 0 ? (
+            <div className="mcp-progress-panel" aria-live="polite" aria-label="MCP startup progress">
+              <div className="mcp-progress-heading">
+                <RefreshCw size={14} aria-hidden="true" />
+                <span>{mcpActionState === "test" || mcpActionState === "save" ? "Starting MCP" : "Last MCP startup"}</span>
+              </div>
+              <div className="mcp-progress-list">
+                {mcpProgressEvents.map((event, index) => (
+                  <span key={`${event.kind}-${index}`} data-kind={event.kind}>
+                    <strong>{formatMcpProgressKind(event.kind)}</strong>
+                    <small>{event.message}</small>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {mcpStatus ? (
             <div className="gmail-connect-status" data-kind={mcpStatus.kind}>
               {mcpStatus.text}
@@ -1795,6 +2604,247 @@ function formatConnectedGithubStatus(connection: GithubConnectionState, reposito
     : "no repository preview loaded";
 
   return `GitHub connected as ${login}; ${repositorySummary}.`;
+}
+
+function getMcpPresetInitials(preset: McpProviderPreset) {
+  return getPluginInitials(preset.name);
+}
+
+function getPluginInitials(name: string) {
+  return name
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function getMarketplacePluginRuntimeState(
+  plugin: OpenAiCodexPluginListing,
+  mcpServers: McpServerState[],
+  skillRegistry: SkillRegistryState,
+): MarketplacePluginRuntimeState {
+  const importedSkills = getImportedSkillsForPlugin(plugin, skillRegistry);
+  const skillCount = importedSkills.length;
+  const enabledSkillCount = importedSkills.filter((skill) => skill.enabled).length;
+  const mcpPreset = plugin.mcpPresetId
+    ? MCP_FEATURED_PRESETS.find((preset) => preset.id === plugin.mcpPresetId)
+    : undefined;
+  const mcpServer = mcpPreset ? findMcpServerForPreset(mcpServers, mcpPreset) : undefined;
+  const authTag = plugin.authPolicy === "ON_INSTALL" ? "Auth required" : "Auth on use";
+
+  if (plugin.installRoute === "mcp-preset") {
+    if (mcpServer) {
+      const toolCount = mcpServer.tools?.length ?? 0;
+      const connected = Boolean(mcpServer.enabled && !mcpServer.lastError && (toolCount > 0 || mcpServer.lastConnectedAt));
+      const tags = [
+        connected ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : mcpServer.lastError ? "Needs fix" : "Needs test",
+        mcpServer.enabled ? "Enabled" : "Disabled",
+        mcpServer.hasAuthorizationToken || (mcpServer.environment ?? []).some((item) => item.hasValue) ? "Auth saved" : authTag,
+        skillCount > 0 ? `${skillCount} skill${skillCount === 1 ? "" : "s"} installed` : plugin.hasBundledSkills ? "Skills available" : undefined,
+      ].filter(Boolean) as string[];
+
+      return {
+        description: connected
+          ? "Installed MCP server with discovered tools available to chat when MCP tools are enabled."
+          : "Installed as an MCP server. Test or refresh it before relying on chat tool calls.",
+        mcpServer,
+        primaryActionLabel: "Manage",
+        primaryDisabled: false,
+        routeLabel: connected ? "Connected" : "Installed",
+        secondaryActionLabel: skillCount > 0 ? "Skills installed" : "Install skills",
+        skillCount,
+        statusKind: connected ? "connected" : "installed",
+        statusLabel: connected ? "Connected" : "Installed",
+        tags,
+      };
+    }
+
+    return {
+      description: "Maps to a curated MCP setup that Gilbert can save, test, and expose to chat.",
+      primaryActionLabel: "Configure MCP",
+      primaryDisabled: false,
+      routeLabel: "MCP",
+      secondaryActionLabel: skillCount > 0 ? "Skills installed" : "Install skills",
+      skillCount,
+      statusKind: "ready",
+      statusLabel: "Ready",
+      tags: [
+        "MCP preset",
+        "Needs install",
+        authTag,
+        skillCount > 0 ? `${skillCount} skill${skillCount === 1 ? "" : "s"} installed` : plugin.hasBundledSkills ? "Skills available" : undefined,
+      ].filter(Boolean) as string[],
+    };
+  }
+
+  if (plugin.installRoute === "skill-import") {
+    if (skillCount > 0) {
+      return {
+        description: "Installed local skill workflows are enabled for prompts and skill mentions.",
+        primaryActionLabel: "View skills",
+        primaryDisabled: false,
+        routeLabel: "Installed",
+        skillCount,
+        statusKind: enabledSkillCount > 0 ? "connected" : "installed",
+        statusLabel: "Installed",
+        tags: [
+          `${skillCount} skill${skillCount === 1 ? "" : "s"} installed`,
+          enabledSkillCount > 0 ? `${enabledSkillCount} enabled` : "Disabled",
+          authTag,
+        ],
+      };
+    }
+
+    return {
+      description: "Imports bundled skills into Gilbert's local skill registry.",
+      primaryActionLabel: "Install skills",
+      primaryDisabled: false,
+      routeLabel: "Skills",
+      skillCount,
+      statusKind: "ready",
+      statusLabel: "Ready",
+      tags: ["Bundled skills", authTag],
+    };
+  }
+
+  if (plugin.installRoute === "native") {
+    return {
+      description: "Built into Gilbert with app-owned auth, local state, and approval-gated tools.",
+      primaryActionLabel: "Install",
+      primaryDisabled: false,
+      routeLabel: "Native",
+      skillCount,
+      statusKind: "ready",
+      statusLabel: "Ready",
+      tags: ["Native", authTag],
+    };
+  }
+
+  return {
+    description: "Searches the public MCP Registry for a runnable server or hosted replacement.",
+    primaryActionLabel: "Find MCP",
+    primaryDisabled: false,
+    routeLabel: "Registry",
+    skillCount,
+    statusKind: "ready",
+    statusLabel: "Ready",
+    tags: ["Registry search", "Connector metadata", authTag],
+  };
+}
+
+function getImportedSkillsForPlugin(plugin: OpenAiCodexPluginListing, skillRegistry: SkillRegistryState) {
+  const idPrefix = `${plugin.id}-`;
+  const displayNamePrefix = `${plugin.displayName.toLowerCase()}:`;
+
+  return skillRegistry.skills.filter((skill) =>
+    skill.installed &&
+    skill.source === "imported" &&
+    (
+      skill.id.startsWith(idPrefix) ||
+      skill.tags.includes(plugin.id) ||
+      skill.name.toLowerCase().startsWith(displayNamePrefix)
+    ),
+  );
+}
+
+function findMcpServerForPreset(servers: McpServerState[], preset: McpProviderPreset) {
+  return servers.find((server) => serverMatchesMcpPreset(server, preset));
+}
+
+function serverMatchesMcpPreset(server: McpServerState, preset: McpProviderPreset) {
+  if (server.transport !== preset.transport) {
+    return false;
+  }
+
+  if (preset.transport === "http") {
+    return normalizeMcpEndpoint(server.endpoint) === normalizeMcpEndpoint(preset.endpoint);
+  }
+
+  return normalizeMcpCommand(server.command) === normalizeMcpCommand(preset.command) &&
+    normalizeMcpArgs(server.args).join("\n") === normalizeMcpArgs(preset.args).join("\n");
+}
+
+function normalizeMcpEndpoint(value?: string) {
+  return (value ?? "").trim().replace(/\/+$/g, "").toLowerCase();
+}
+
+function normalizeMcpCommand(value?: string) {
+  return (value ?? "").trim().replace(/\.cmd$/i, "").toLowerCase();
+}
+
+function normalizeMcpArgs(value?: string[]) {
+  return (value ?? []).map((item) => item.trim()).filter(Boolean);
+}
+
+function formatMcpProgressKind(kind: string) {
+  switch (kind) {
+    case "download":
+      return "Download";
+    case "error":
+      return "Error";
+    case "finished":
+      return "Ready";
+    case "output":
+      return "Output";
+    case "started":
+      return "Start";
+    default:
+      return "Step";
+  }
+}
+
+function createDraftFromRegistryInstall(server: McpRegistryServerSummary, install: McpRegistryInstallHint): McpServerDraft {
+  const name = formatMcpRegistryServerName(server);
+
+  if (install.transport === "stdio") {
+    return {
+      ...EMPTY_MCP_DRAFT,
+      argsText: install.args.join("\n"),
+      command: install.command ?? "",
+      name,
+      transport: "stdio",
+    };
+  }
+
+  return {
+    ...EMPTY_MCP_DRAFT,
+    endpoint: install.endpoint ?? "",
+    name,
+    transport: "http",
+  };
+}
+
+function formatMcpRegistryServerName(server: McpRegistryServerSummary) {
+  if (server.title?.trim()) {
+    return server.title.trim();
+  }
+
+  const rawName = server.name.split("/").pop() ?? server.name;
+
+  return rawName
+    .replace(/^mcp[-_]/i, "")
+    .replace(/[-_]?mcp[-_]?server$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .trim() || server.name;
+}
+
+function formatMcpRegistryServerMeta(server: McpRegistryServerSummary) {
+  const install = server.install;
+  const installLabel = install
+    ? install.transport === "stdio"
+      ? [install.command, ...(install.args ?? [])].filter(Boolean).join(" ")
+      : install.endpoint
+    : "manual setup";
+  const parts = [
+    server.official ? "Official registry" : "Registry",
+    server.status,
+    server.version ? `v${server.version}` : undefined,
+    installLabel,
+  ].filter(Boolean);
+
+  return parts.join(" | ");
 }
 
 function normalizeCalendarAccountRows(connection: CalendarConnectionState): CalendarAccountState[] {
@@ -2012,13 +3062,13 @@ function getAppsSectionIcon(section: AppsCatalogSection) {
   return Puzzle;
 }
 
-function getAppsSectionMeta(section: AppsCatalogSection, metrics: { mcpEnabledCount: number }) {
+function getAppsSectionMeta(section: AppsCatalogSection, metrics: { mcpEnabledCount: number; pluginCatalogCount: number }) {
   if (section === "plugins") {
-    return "3";
+    return String(metrics.pluginCatalogCount);
   }
 
   if (section === "skills") {
-    return "Soon";
+    return "Ready";
   }
 
   if (section === "mcp") {

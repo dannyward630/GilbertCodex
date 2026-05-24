@@ -15,6 +15,7 @@ import {
 import {
   AlertTriangle,
   ArrowUp,
+  BrainCircuit,
   Check,
   ChevronDown,
   CloudOff,
@@ -45,7 +46,6 @@ import { createChatAttachmentFromFile, formatAttachmentSize, isImageAttachment, 
 import { DEFAULT_PROJECT, formatChatAge, isNoProjectName, isPlainResearchChat, normalizeProjectName, sortChatsByUpdatedAt } from "../../lib/chatUtils";
 import { matchesHotkey } from "../../lib/hotkeys";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
-import { scheduleIdleTask } from "../../lib/idleTask";
 import {
   AUTO_COMPACT_CONTEXT_THRESHOLD,
   formatTokenCount,
@@ -136,6 +136,7 @@ interface ChatComposerProps {
   chats: ChatSummary[];
   contextWindowSource: "estimate" | "openrouter" | "provider";
   contextWindowTokens: number;
+  disabled?: boolean;
   dictationDictionary?: string;
   dictationHoldHotkey?: string;
   dictationToggleHotkey?: string;
@@ -285,6 +286,20 @@ function formatComposerRouteTitle(option: ChatModelOption) {
   return `${source.sourceLabel}: ${option.value}`;
 }
 
+function formatComposerReasoningLabel(settings: ThinkingSettings) {
+  if (!settings.enabled) {
+    return "Reasoning off";
+  }
+
+  const effortLabel =
+    settings.effort === "low" ? "Low" :
+    settings.effort === "medium" ? "Medium" :
+    settings.effort === "high" ? "High" :
+    settings.effort;
+
+  return `${effortLabel} reasoning`;
+}
+
 function shouldRequireSubmitChord(content: string) {
   return content.includes("\n") || content.length >= 240;
 }
@@ -327,6 +342,14 @@ export function shouldShowComposerWorkspaceControl(projectName: string | undefin
   void workspace;
 
   return !isNoProjectName(projectName);
+}
+
+export function shouldRefreshComposerGitStatus(root: string, _scope: LocalWorkspaceSettings["scope"]) {
+  return Boolean(root.trim());
+}
+
+export function shouldShowComposerGitStatusLoading(status: ComputerGitStatus | null, loading: boolean, root: string) {
+  return loading || (Boolean(root.trim()) && status === null);
 }
 
 function createLiveModelCatalogProviderRequestKey(provider: ModelProviderDefinition, settings: ProviderSettings) {
@@ -375,6 +398,7 @@ function ChatComposerComponent({
   chats,
   contextWindowSource,
   contextWindowTokens,
+  disabled = false,
   dictationDictionary = "",
   dictationHoldHotkey = "",
   dictationToggleHotkey = "",
@@ -468,7 +492,7 @@ function ChatComposerComponent({
   const readyAttachments = useMemo(() => attachments.flatMap((attachment) => (attachment.attachment ? [attachment.attachment] : [])), [attachments]);
   const hasPendingAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "loading"), [attachments]);
   const hasFailedAttachments = useMemo(() => attachments.some((attachment) => attachment.status === "error"), [attachments]);
-  const canSend = (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments && !voiceActive;
+  const canSend = !disabled && (Boolean(message.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments && !voiceActive;
   const selectedModel = useMemo(
     () => modelFromValue(model, providerSettings.provider, liveModelCatalogs[providerSettings.provider]),
     [liveModelCatalogs, model, providerSettings.provider],
@@ -531,7 +555,8 @@ function ChatComposerComponent({
   const gitBranchLabel = gitStatus?.available ? gitStatus.branch || "Git" : gitStatusLoading ? "Checking Git" : "No Git";
   const hasGitChangeSummary = Boolean(gitStatus?.available && gitStatus.changedFiles > 0);
   const composerModelLabel = formatComposerRouteLabel(selectedModel);
-  const composerModelTitle = formatComposerRouteTitle(selectedModel);
+  const composerThinkingLabel = formatComposerReasoningLabel(thinking);
+  const composerModelTitle = `${formatComposerRouteTitle(selectedModel)}. ${composerThinkingLabel}.`;
   const workspaceMetaLabel = gitStatus?.available
     ? hasGitChangeSummary
       ? `${gitBranchLabel} · ${gitStatus.changedFiles}`
@@ -540,7 +565,7 @@ function ChatComposerComponent({
       ? localPermissionModeLabel(localWorkspace.permissionMode)
       : "Local off";
   const workspaceButtonLabel = `${isProjectChat || activeRoot ? "Workspace" : "Computer access"}: ${projectLabel}. ${workspaceMetaLabel}.`;
-  const activeModeCount = (webSearch.enabled ? 1 : 0) + (imageGenerationEnabled ? 1 : 0) + (planMode.enabled ? 1 : 0);
+  const activeModeCount = (thinking.enabled ? 1 : 0) + (webSearch.enabled ? 1 : 0) + (imageGenerationEnabled ? 1 : 0) + (planMode.enabled ? 1 : 0);
   const heldQueuedMessageIdSet = useMemo(() => new Set(heldQueuedMessageIds), [heldQueuedMessageIds]);
   const researchChatOptions = useMemo(() => sortChatsByUpdatedAt(chats.filter((candidate) => isPlainResearchChat(candidate, chat.id))), [chat.id, chats]);
   const selectedResearchChats = useMemo(
@@ -609,7 +634,7 @@ function ChatComposerComponent({
   }
 
   function canSubmitDraft(content: string) {
-    return (Boolean(content.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
+    return !disabled && (Boolean(content.trim()) || readyAttachments.length > 0) && !hasPendingAttachments && !hasFailedAttachments;
   }
 
   function emitDraftChange(content: string, attachmentDrafts: ComposerAttachmentDraft[], options: { immediate?: boolean } = {}) {
@@ -902,7 +927,7 @@ function ChatComposerComponent({
       return;
     }
 
-    if (!activeRoot || localWorkspace.scope === "full-computer") {
+    if (!shouldRefreshComposerGitStatus(activeRoot, localWorkspace.scope)) {
       setGitStatus(null);
       setGitStatusLoading(false);
       setGitInitNotice(null);
@@ -933,9 +958,7 @@ function ChatComposerComponent({
       }
     }
 
-    const cancelInitialRefresh = scheduleIdleTask(() => {
-      void refreshGitStatus(true);
-    }, 900);
+    void refreshGitStatus(true);
 
     const refreshTimer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -954,7 +977,6 @@ function ChatComposerComponent({
 
     return () => {
       disposed = true;
-      cancelInitialRefresh();
       window.clearInterval(refreshTimer);
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
@@ -2003,6 +2025,7 @@ function ChatComposerComponent({
           placeholder=""
           rows={2}
           defaultValue=""
+          disabled={disabled}
           onChange={handleMessageChange}
           onBlur={() => flushPendingDraftChange()}
           onClick={handleTextSelection}
@@ -2028,6 +2051,11 @@ function ChatComposerComponent({
             {planMode.enabled ? (
               <span title="Plan mode on" aria-label="Plan mode on">
                 <Wand2 size={13} aria-hidden="true" />
+              </span>
+            ) : null}
+            {thinking.enabled ? (
+              <span title={composerThinkingLabel} aria-label={composerThinkingLabel}>
+                <BrainCircuit size={13} aria-hidden="true" />
               </span>
             ) : null}
           </div>
@@ -2336,10 +2364,11 @@ export const ChatComposer = memo(ChatComposerComponent, areChatComposerPropsEqua
 function areChatComposerPropsEqual(previous: ChatComposerProps, next: ChatComposerProps) {
   return (
     previous.active === next.active &&
-    previous.chat === next.chat &&
-    previous.chats === next.chats &&
+    areComposerChatPropsEqual(previous.chat, next.chat) &&
+    areComposerResearchChatsEqual(previous.chats, next.chats) &&
     previous.contextWindowSource === next.contextWindowSource &&
     previous.contextWindowTokens === next.contextWindowTokens &&
+    previous.disabled === next.disabled &&
     previous.dictationDictionary === next.dictationDictionary &&
     previous.dictationHoldHotkey === next.dictationHoldHotkey &&
     previous.dictationToggleHotkey === next.dictationToggleHotkey &&
@@ -2363,6 +2392,60 @@ function areChatComposerPropsEqual(previous: ChatComposerProps, next: ChatCompos
     previous.thinking === next.thinking &&
     previous.webSearch === next.webSearch
   );
+}
+
+function areComposerChatPropsEqual(previous: ChatSummary, next: ChatSummary) {
+  if (previous === next) {
+    return true;
+  }
+
+  const previousLastMessage = previous.messages[previous.messages.length - 1];
+  const nextLastMessage = next.messages[next.messages.length - 1];
+
+  return (
+    previous.id === next.id &&
+    previous.archived === next.archived &&
+    previous.messagesLoaded === next.messagesLoaded &&
+    previous.project === next.project &&
+    previous.messages.length === next.messages.length &&
+    previousLastMessage?.id === nextLastMessage?.id &&
+    previousLastMessage?.isStreaming === nextLastMessage?.isStreaming &&
+    previousLastMessage?.mode === nextLastMessage?.mode &&
+    Boolean(previousLastMessage?.planning) === Boolean(nextLastMessage?.planning)
+  );
+}
+
+function areComposerResearchChatsEqual(previous: ChatSummary[], next: ChatSummary[]) {
+  if (previous === next) {
+    return true;
+  }
+
+  if (previous.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.length; index += 1) {
+    const previousChat = previous[index];
+    const nextChat = next[index];
+
+    if (!previousChat || !nextChat) {
+      return false;
+    }
+
+    if (
+      previousChat.id !== nextChat.id ||
+      previousChat.archived !== nextChat.archived ||
+      previousChat.messagesLoaded !== nextChat.messagesLoaded ||
+      previousChat.messages.length !== nextChat.messages.length ||
+      previousChat.project !== nextChat.project ||
+      previousChat.title !== nextChat.title ||
+      previousChat.updatedAt !== nextChat.updatedAt
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function WorkspacePopover({
@@ -2425,7 +2508,8 @@ function WorkspacePopover({
   workspaceKind: "computer" | "project";
 }) {
   const rootLabel = root ? formatCompactPath(root) : "No local folder";
-  const gitSummary = loading ? "Checking Git" : status?.available ? status.branch || "Git repository" : "Git not ready";
+  const gitStatusLoading = shouldShowComposerGitStatusLoading(status, loading, root);
+  const gitSummary = gitStatusLoading ? "Checking Git" : status?.available ? status.branch || "Git repository" : "Git not ready";
   const showGitSection = workspaceKind === "project";
   const HeaderIcon = workspaceKind === "computer" ? ShieldCheck : FolderGit2;
 
@@ -2699,7 +2783,7 @@ function GitStatusPopover({
   root: string;
   status: ComputerGitStatus | null;
 }) {
-  if (loading) {
+  if (shouldShowComposerGitStatusLoading(status, loading, root)) {
     return (
       <div className="composer-popover composer-popover-branch" role="dialog" aria-label="Git status" data-compact={compact || undefined}>
         <div className="git-status-loading">

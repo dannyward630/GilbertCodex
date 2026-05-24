@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Check, ChevronDown, ChevronRight, ExternalLink, Globe2, Hash, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Globe2, Hash, LoaderCircle, X } from "lucide-react";
 import { AssistantWorkTrace, createAssistantActivitySnapshot } from "./AssistantActivityIndicator";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageArtifacts, MessageAttachments } from "./MessageAttachments";
@@ -31,6 +31,7 @@ interface ChatThreadProps {
   chat: ChatSummary;
   chats: ChatSummary[];
   hasApiKey: boolean;
+  loading?: boolean;
   onForkFromMessage?: (messageId: string) => void | Promise<void>;
   onMessageFeedback?: (messageId: string, feedback: ChatMessage["feedback"]) => void;
   onOpenPlanReview?: (messageId: string) => void;
@@ -47,6 +48,7 @@ function ChatThreadComponent({
   chat,
   chats,
   hasApiKey,
+  loading = false,
   onEditUserMessage,
   onForkFromMessage,
   onMessageFeedback,
@@ -365,6 +367,21 @@ function ChatThreadComponent({
     void onEditUserMessage(message.id, nextContent);
   }
 
+  if (loading || chat.messagesLoaded === false) {
+    return (
+      <div className="chat-thread-shell">
+        <div ref={threadRef} className="chat-thread" onScroll={handleThreadScroll}>
+          <div ref={threadContentRef} className="chat-thread-content">
+            <div className="chat-loading-state" role="status" aria-live="polite">
+              <LoaderCircle size={34} aria-hidden="true" />
+              <span className="sr-only">Loading chat</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (chat.messages.length === 0) {
     return (
       <div className="chat-thread-shell">
@@ -428,7 +445,8 @@ function areChatThreadPropsEqual(previous: ChatThreadProps, next: ChatThreadProp
     previous.appInfo.name === next.appInfo.name &&
     previous.chat === next.chat &&
     previous.chats === next.chats &&
-    previous.hasApiKey === next.hasApiKey
+    previous.hasApiKey === next.hasApiKey &&
+    previous.loading === next.loading
   );
 }
 
@@ -487,7 +505,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
     ? createAssistantActivitySnapshot(message, { responseStarted: hasVisibleContent })
     : null;
   const hasWorkTrace = message.role === "assistant" && (Boolean(message.workTrace?.length) || Boolean(message.responseThinking?.trim()));
-  const showAssistantWorkTrace = message.role === "assistant" && (activitySnapshot || hasWorkTrace || Boolean(message.isStreaming && !hasVisibleContent));
+  const hasRunActivity = message.role === "assistant" && hasAssistantRunActivity(message);
+  const showAssistantWorkTrace = message.role === "assistant" && (activitySnapshot || hasWorkTrace || hasRunActivity || Boolean(message.isStreaming && !hasVisibleContent));
   const visibleContextCompactions = message.role === "assistant" ? getVisibleContextCompactions(message.contextCompactions) : [];
   const showMessageBlock = message.role !== "assistant" || hasVisibleContent || hasVisibleAttachment || hasVisibleArtifact || showPlanReview || showAssistantWorkTrace;
 
@@ -512,6 +531,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
             <AssistantWorkTrace
               activitySnapshot={activitySnapshot}
               createdAt={message.createdAt}
+              message={message}
+              onResolveToolApproval={onResolveToolApproval}
               responseStarted={hasVisibleContent}
               thinking={message.role === "assistant" ? message.thinking : undefined}
               thinkingContent={message.role === "assistant" ? message.responseThinking ?? "" : ""}
@@ -925,6 +946,19 @@ function shouldShowPlanReviewCard(message: ChatSummary["messages"][number]) {
   }
 
   return Boolean(getSavedPlanContent(message) || message.approvals?.some((approval) => approval.tool === "planning_handoff"));
+}
+
+function hasAssistantRunActivity(message: ChatMessage) {
+  return Boolean(
+    message.agentRunId ||
+      message.agentRunStatus ||
+      message.toolCalls?.length ||
+      message.approvals?.length ||
+      message.progress?.length ||
+      message.webSearch?.searchedAt ||
+      message.webSearch?.status ||
+      typeof message.webSearch?.resultCount === "number",
+  );
 }
 
 function ContextCompactionDivider({ compaction }: { compaction: ChatContextCompaction }) {

@@ -1,4 +1,4 @@
-use crate::commands::auth;
+use crate::{commands::auth, core::process::run_probe_command};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,6 +29,8 @@ const NINE_ROUTER_HTTP_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const NINE_ROUTER_HTTP_TIMEOUT_MS: u64 = 180_000;
 const NINE_ROUTER_HTTP_MAX_TIMEOUT_MS: u64 = 600_000;
 const NINE_ROUTER_OAUTH_CALLBACK_TIMEOUT_MS: u64 = 300_000;
+const NINE_ROUTER_PROCESS_STOP_WAIT_MS: u64 = 2_500;
+const NINE_ROUTER_TOOL_VERSION_TIMEOUT_MS: u64 = 5_000;
 const NINE_ROUTER_REPO_URL: &str = "https://github.com/decolua/9router.git";
 const NINE_ROUTER_CLI_TOKEN_HEADER: &str = "x-9r-cli-token";
 const NINE_ROUTER_CLI_TOKEN_SALT: &str = "9r-cli-auth";
@@ -994,6 +996,8 @@ fn install_nine_router_blocking(
         &on_event,
     )?;
 
+    write_preferences(&app, &NineRouterLocalPreferences { auto_start: true })?;
+
     let status = create_status(
         &app,
         state,
@@ -1761,8 +1765,24 @@ fn stop_child(mut child: Child) {
     let pid = child.id();
 
     let _ = stop_process_tree(pid);
+    let _ = wait_for_child_exit(
+        &mut child,
+        Duration::from_millis(NINE_ROUTER_PROCESS_STOP_WAIT_MS),
+    );
+}
 
-    let _ = child.wait();
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let started_at = Instant::now();
+
+    while started_at.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+        }
+    }
+
+    let _ = child.kill();
+    false
 }
 
 fn stop_process_tree(pid: u32) -> bool {
@@ -1880,16 +1900,14 @@ fn program_name(name: &str) -> &'static str {
 
 fn program_version(name: &str) -> Option<String> {
     let mut command = Command::new(program_name(name));
-    command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.arg("--version");
 
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let output = command.output().ok()?;
+    let output = run_probe_command(
+        command,
+        Duration::from_millis(NINE_ROUTER_TOOL_VERSION_TIMEOUT_MS),
+    )
+    .ok()
+    .flatten()?;
 
     if !output.status.success() {
         return None;

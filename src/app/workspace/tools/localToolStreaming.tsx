@@ -1935,8 +1935,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               looksLikeFabricatedToolProgress(sanitizedContent, allToolCalls) ||
               looksLikeToolProtocolNarration(sanitizedContent);
             const visibleContent = shouldHideVisibleContent ? "" : sanitizedContent;
-            const workThinkingContent = shouldHideVisibleContent && rawSanitizedContent.trim() ? rawSanitizedContent : "";
-            const hostThinkingContent = workThinkingContent || createVisibleToolPlanThinking([...streamingToolCalls, ...streamingBridgeToolCalls]);
+            const hiddenWorkStatus = shouldHideVisibleContent
+              ? streamingLocalProgress?.label || (privateThinkingNarration || inFlightToolPlanning || promisedToolAction ? "Preparing tool action" : "Preparing response")
+              : "";
+            const hostThinkingContent = createVisibleToolPlanThinking([...streamingToolCalls, ...streamingBridgeToolCalls]) || hiddenWorkStatus;
             const streamTiming = markFirstVisibleStreamToken(snapshot.streamTiming, visibleContent);
 
             updateGeneratedMessage(chatId, messageId, (message) => ({

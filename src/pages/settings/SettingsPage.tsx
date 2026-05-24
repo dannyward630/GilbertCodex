@@ -927,7 +927,7 @@ function SettingsPageComponent({
     if (displaySection === "model") {
       return (
         <>
-          <SettingsSectionHeading detail="Provider credentials, model catalog, system prompt, generation, and thinking controls." icon={ServerCog} title="AI & Providers" />
+          <SettingsSectionHeading detail="Provider credentials, model catalog, system prompt, generation, and reasoning controls." icon={ServerCog} title="AI & Providers" />
           <ProvidersSettingsPage
             activeProvider={activeProvider}
             activeProviderApiKey={activeProviderApiKey}
@@ -988,7 +988,7 @@ function SettingsPageComponent({
 
       <ConfirmDialog
         confirmLabel="Reset settings"
-        description="This restores provider, model, generation, and thinking settings to the defaults."
+        description="This restores provider, model, generation, and reasoning settings to the defaults."
         icon={RotateCcw}
         open={resetConfirmOpen}
         title="Reset settings?"

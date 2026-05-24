@@ -4,7 +4,19 @@ node_modules/
 
 # Private local tool/runtime code
 .agents/plugins/
-plugins/
+!.agents/plugins/
+.agents/plugins/*
+!.agents/plugins/marketplace.json
+/plugins/
+!/plugins/
+/plugins/*
+!/plugins/README.md
+!/plugins/gmail/
+!/plugins/gmail/**
+!/plugins/google-calendar/
+!/plugins/google-calendar/**
+!/plugins/github/
+!/plugins/github/**
 src/toolBridge/
 src/toolBridge/tools/
 src/toolBridge/memory/
@@ -27,6 +39,7 @@ target/
 src-tauri/target/
 src-tauri/.tauri/
 .cargo/*-target/
+/releases/
 
 # Claude / Cursor local agent settings (may contain machine-specific paths)
 .claude/

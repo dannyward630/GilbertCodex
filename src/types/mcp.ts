@@ -88,6 +88,12 @@ export interface McpServerTestResponse {
   tools: McpToolSummary[];
 }
 
+export interface McpServerProgressEvent {
+  kind: "download" | "error" | "finished" | "output" | "started" | "step" | string;
+  message: string;
+  stream?: string;
+}
+
 export interface McpListToolsRequest {
   serverId: string;
 }
@@ -112,4 +118,56 @@ export interface McpToolCallResponse {
   server: McpServerState;
   structuredContent?: unknown;
   toolName: string;
+}
+
+export interface McpRegistrySearchRequest {
+  limit?: number;
+  query?: string;
+}
+
+export interface McpRegistrySearchResponse {
+  count: number;
+  nextCursor?: string;
+  query: string;
+  servers: McpRegistryServerSummary[];
+  source: string;
+}
+
+export interface McpRegistryServerSummary {
+  description?: string;
+  install?: McpRegistryInstallHint;
+  name: string;
+  official: boolean;
+  packages: McpRegistryPackageHint[];
+  remotes: McpRegistryRemoteHint[];
+  repositoryUrl?: string;
+  status?: string;
+  title?: string;
+  updatedAt?: string;
+  version?: string;
+}
+
+export interface McpRegistryPackageHint {
+  args: string[];
+  command?: string;
+  identifier?: string;
+  registryType?: string;
+  runtimeHint?: string;
+  transport?: string;
+  version?: string;
+}
+
+export interface McpRegistryRemoteHint {
+  endpoint?: string;
+  transport?: string;
+}
+
+export interface McpRegistryInstallHint {
+  args: string[];
+  command?: string;
+  endpoint?: string;
+  note?: string;
+  packageId?: string;
+  packageManager?: string;
+  transport: McpTransport;
 }

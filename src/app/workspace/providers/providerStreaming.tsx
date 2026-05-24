@@ -51,6 +51,7 @@ export interface ProviderStreamingDeps {
   runProviderRetryWithTimeout: <T>(parentSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   sendProviderMessage: typeof sendProviderMessage;
   setChats: (action: SetStateAction<ChatSummary[]>) => void;
+  setChatsLive?: (action: SetStateAction<ChatSummary[]>) => void;
   sortChatsByUpdatedAt: (chats: ChatSummary[]) => ChatSummary[];
   STEERING_PROGRESS_ID: string;
   streamProviderMessage: typeof streamProviderMessage;
@@ -277,23 +278,53 @@ export function createEmptyResponseRetrySettings(deps: ProviderStreamingDeps, se
   }
 
 export function updateGeneratedMessage(deps: ProviderStreamingDeps, chatId: string, messageId: string, updateMessage: (message: ChatMessage) => ChatMessage, sortByUpdatedAt = false) {
-  const { pendingChatsRef, preserveVisibleResponseThinking, setChats, sortChatsByUpdatedAt } = deps;
+  const { pendingChatsRef, preserveVisibleResponseThinking, setChats, setChatsLive, sortChatsByUpdatedAt } = deps;
 
-    setChats((currentChats) => {
-      const nextChats = currentChats.map((chat) =>
-        chat.id === chatId
-          ? {
-              ...chat,
-              messages: chat.messages.map((message) => (message.id === messageId ? preserveVisibleResponseThinking(message, updateMessage(message)) : message)),
-              updatedAt: sortByUpdatedAt ? new Date().toISOString() : chat.updatedAt,
-            }
-          : chat,
-      );
+    let changed = false;
+    let targetMessageStillStreaming = false;
+    const currentChats = pendingChatsRef.current;
+    const updatedAt = sortByUpdatedAt ? new Date().toISOString() : "";
+    const nextChats = currentChats.map((chat) => {
+      if (chat.id !== chatId) {
+        return chat;
+      }
 
-      const committedChats = sortByUpdatedAt ? sortChatsByUpdatedAt(nextChats) : nextChats;
-      pendingChatsRef.current = committedChats;
-      return committedChats;
+      let chatChanged = false;
+      const nextMessages = chat.messages.map((message) => {
+        if (message.id !== messageId) {
+          return message;
+        }
+
+        const nextMessage = preserveVisibleResponseThinking(message, updateMessage(message));
+
+        if (nextMessage === message) {
+          return message;
+        }
+
+        changed = true;
+        chatChanged = true;
+        targetMessageStillStreaming = nextMessage.isStreaming !== false;
+        return nextMessage;
+      });
+
+      if (!chatChanged) {
+        return chat;
+      }
+
+      return {
+        ...chat,
+        messages: nextMessages,
+        updatedAt: sortByUpdatedAt ? updatedAt : chat.updatedAt,
+      };
     });
+
+    if (!changed) {
+      return;
+    }
+
+    const committedChats = sortByUpdatedAt ? sortChatsByUpdatedAt(nextChats) : nextChats;
+    const applyChats = !sortByUpdatedAt && targetMessageStillStreaming && setChatsLive ? setChatsLive : setChats;
+    applyChats(committedChats);
   }
 
 export function preserveVisibleResponseThinking(deps: ProviderStreamingDeps, previousMessage: ChatMessage, nextMessage: ChatMessage): ChatMessage {

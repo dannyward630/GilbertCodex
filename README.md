@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.7.md">v0.5.7 release notes</a>
+  <a href="docs/releases/v0.8.0.md">v0.8.0 release notes</a>
   |
-  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.7">Windows alpha download</a>
+  <a href="https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.0">Desktop alpha download</a>
   |
   <a href="docs/ROADMAP.md">Roadmap</a>
   |
@@ -21,33 +21,31 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.5.7.md"><img alt="Version 0.5.7" src="https://img.shields.io/badge/version-0.5.7-d8b36c"></a>
+  <a href="docs/releases/v0.8.0.md"><img alt="Version 0.8.0" src="https://img.shields.io/badge/version-0.8.0-d8b36c"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
   <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178c6"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
-## v0.5.7 Desktop Reliability Update
+## v0.8.0 Cross-Platform Release Prep
 
-Gilbert Codex v0.5.7 is a desktop reliability update for the Windows public alpha. It focuses on subscription setup clarity, route/source labels, full-computer workspace handling, safer local file tooling, automation cleanup, review activity visibility, and support/funding polish.
+Gilbert Codex v0.8.0 prepares the desktop alpha for Windows, macOS, and Linux release builds through GitHub Actions. It keeps the recent reliability work while adding a guarded multi-platform packaging path for Windows NSIS, macOS app/DMG, and Linux deb/AppImage artifacts.
 
-This is still alpha software. Windows x64 is the verified packaged target. macOS and Linux are port-ready but still need native packaged-app QA before they should be treated as official downloads. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
+This is still alpha software. Windows x64 is the locally verified packaged target; macOS and Linux now have release workflow jobs, but the generated packages should still be launched and smoke-tested on real machines before the project calls those platforms fully verified. High-impact local actions, destructive operations, credential access, publishing, and outside-scope paths are still guarded by explicit review/permission flows.
 
 Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace work. It can inspect files, but write/edit tool calls are not completing reliably on that route yet. Use the other available Codex/ChatGPT, OpenRouter, or local routes for file changes until this is fixed.
 
-The repository is kept open-source ready by default
+The repository is kept open-source ready by default: dependencies, build output, local logs, generated targets, local databases, private local automation sources, and secrets stay out of Git.
 
 ## Highlights
 
-| Area | What changed in v0.5.7 |
+| Area | What changed in v0.8.0 |
 | --- | --- |
-| Subscription setup | The provider dialog and Settings now explain install, sign-in, route selection, usage/quota, and fallback states with clearer labels and fewer confusing sandbox terms. |
-| Model picker | Subscription, API-key, local, and OpenRouter routes now carry source-aware labels so users can see whether a model is coming from Codex, Copilot, Claude, Gemini, OpenRouter, or a direct API path. |
-| Workspace tools | Full-computer mode resolves host roots lazily, the composer hides project-only Git controls when no project is selected, file-copy tooling was added, and batch writes are faster. |
-| Agent reliability | Tool prompts now push better discovery/read/edit behavior, stale-edit retry guidance, binary asset copying, and less protocol leakage in final answers. |
-| Context and automation | Embedded media data URLs are omitted from text context/token estimates, automation inbox summaries are cleaner, and web sources are shown only when a web-search tool actually ran. |
-| Review and support | Coding review shows tool activity/coverage, the local support page has a public Cash App default, and release docs now describe the v0.5.7 test build. |
+| Platform release | The Release workflow now builds Windows x64, macOS Apple Silicon/Intel, and Linux x64 artifacts with updater signatures and SHA-256 checksum files. |
+| Packaging safety | Release jobs still require the private tool-bridge overlay and Tauri updater signing key before publishing, so the public shim is not shipped as the desktop app. |
+| Desktop reliability | The recent subscription setup, model route labeling, full-computer workspace, file tooling, automation cleanup, and review activity improvements remain part of this build. |
+| Port readiness | macOS uses Keychain-backed secure storage and app/DMG packaging; Linux uses Secret Service-backed secure storage plus deb/AppImage packaging. |
 
 ## Screenshots
 
@@ -86,13 +84,13 @@ The repository is kept open-source ready by default
 
 ## Download
 
-The v0.5.7 Windows public alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.5.7) after local installer validation.
+The v0.8.0 desktop alpha is prepared for [GitHub Releases](https://github.com/UrbanWafflezz/GilbertCodex/releases/tag/v0.8.0) after review and release workflow validation.
 
-Download the Windows x64 setup executable, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. The customer installer uses Tauri's NSIS packaging, branded light/dark-safe setup artwork, a license page, Start menu metadata, and a WebView2 runtime check. This alpha is unsigned, so Windows SmartScreen may show an extra confirmation prompt.
+Download the artifact for your platform, run it, and configure provider keys, local endpoints, or subscription accounts in Settings. Windows uses Tauri's NSIS setup executable with branded installer artwork and a WebView2 runtime check. macOS publishes app/DMG artifacts. Linux publishes deb/AppImage artifacts.
 
-macOS and Linux release artifacts are not official yet. The codebase has app/DMG and deb/AppImage build paths, but native testing is still needed before the project promises packaged downloads.
+The macOS and Linux artifacts are produced by GitHub-hosted runners, but they still need real-device launch smoke tests before being described as fully verified. macOS builds are not notarized unless Apple signing and notarization credentials are added to the release path.
 
-See [v0.5.7 release notes](docs/releases/v0.5.7.md) for update notes, setup notes, known limitations, and validation commands.
+See [v0.8.0 release notes](docs/releases/v0.8.0.md) for update notes, setup notes, known limitations, and validation commands.
 
 ## Support
 

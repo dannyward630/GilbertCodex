@@ -1,4 +1,5 @@
 import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
+import { FINAL_RESPONSE_STYLE_GUIDANCE } from "../prompts/agent/finalResponseStyle";
 import type { ChatMessage, ChatPlanningInputAnswer, ChatPlanningInputRequest, ChatPlanningQuestion, ChatPlanningQuestionOption, ChatProgressItem } from "../types/chat";
 import type { ProviderSettings } from "../types/settings";
 import { streamProviderMessage, sendProviderMessage, type ProviderUsage } from "./modelProviderClient";
@@ -304,7 +305,8 @@ function createFinalAnswerSystemPrompt(basePrompt: string) {
     "Before writing the visible Markdown, think through the user's goal, constraints, evidence, ordering, risks, and verification. Do not expose hidden chain-of-thought; only surface the resulting plan and concise rationale.",
     "TOOL CALLS ARE DISABLED for this turn. Do NOT emit native tool calls, strict tool envelopes, or raw protocol JSON. Any tool-call markup is malformed.",
     "Reference only files, symbols, functions, snippets, and sources that appear in the research evidence. Do not invent files or functions that were not provided.",
-    "Length: write as much plan as the task warrants. For a bug fix in one file, a short plan is fine. For a multi-file refactor, the plan should be long and detailed — name every file touched, every helper extracted, every test added. Do NOT artificially shorten.",
+    "Length: write enough plan for the user to act, but keep it scannable. For a bug fix in one file, keep it short. For a multi-file refactor, name each relevant file and the important change, but consolidate repetitive details. Go exhaustive only when the user explicitly asks for a full report or complete detail.",
+    FINAL_RESPONSE_STYLE_GUIDANCE,
     "If the user is asking for a bug fix, name each bug, the file and approximate line, and the exact change. If the user is asking for a feature, name the files to create or edit and the structure.",
     "Format workspace/code plans as Markdown with these sections, in order:",
     "## Goal\nOne or two sentences naming the outcome.\n## Files to change\nA bullet list of specific paths from research findings with a short reason each. Cite line numbers when known.\n## Step-by-step plan\nNumbered list of concrete implementation steps in the safest order. Each step names the file and the change. Group related steps under sub-headings if the plan is long.\n## Risks and edge cases\nBullet list. Be specific about which risk applies to which file/step.\n## Verification\nHow to confirm it works (tests to run, manual checks, commands).\n## Suggested PR breakdown\nOnly include this section if the plan spans more than one logical chunk. Otherwise omit.",
@@ -336,7 +338,7 @@ function createFinalAnswerMessages(messages: ChatMessage[], researchFindings: st
     createSyntheticMessage(
       "user",
       [
-        "Write the complete plan now in a single Markdown response.",
+        "Write a complete but concise plan now in a single Markdown response.",
         researchFindings
           ? "Use the RESEARCH FINDINGS above as the attached context for the plan."
           : "No host-provided research findings were available. Build the best plan you can from the conversation and workspace context already in the messages.",

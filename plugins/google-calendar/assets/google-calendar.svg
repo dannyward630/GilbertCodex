@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Google Calendar">
+  <rect width="48" height="48" rx="10" fill="#fff"/>
+  <path fill="#1a73e8" d="M10 15h28v23a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4V15Z"/>
+  <path fill="#185abc" d="M10 14a4 4 0 0 1 4-4h20a4 4 0 0 1 4 4v5H10v-5Z"/>
+  <path fill="#fff" d="M16 24h16v4H16v-4Zm0 7h11v4H16v-4Z"/>
+  <path fill="#34a853" d="M14 6h4v8h-4V6Zm16 0h4v8h-4V6Z"/>
+  <path fill="#fbbc04" d="M10 18h28v4H10v-4Z"/>
+</svg>

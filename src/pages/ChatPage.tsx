@@ -31,6 +31,7 @@ interface ChatPageProps {
   browserPreviewRequestId?: number;
   browserPreviewUrl?: string | null;
   chat: ChatSummary;
+  chatLoading?: boolean;
   chats: ChatSummary[];
   codeReviewBehavior?: AppCodeReviewBehavior;
   composerDraft?: ChatComposerDraft | null;
@@ -106,6 +107,7 @@ function ChatPageComponent({
   browserPreviewRequestId = 0,
   browserPreviewUrl,
   chat,
+  chatLoading = false,
   chats,
   codeReviewBehavior = "inline",
   composerDraft,
@@ -194,7 +196,7 @@ function ChatPageComponent({
     [activePlanReviewMessageId, chat],
   );
   const queuedMessages = useMemo(() => mergeQueuedMessages(getQueuedMessages(chat.messages), queuedMessageDetails), [chat.messages, queuedMessageDetails]);
-  const emptyChat = chat.messages.length === 0;
+  const emptyChat = !chatLoading && chat.messages.length === 0;
   const projectOpenVisible = !isNoProjectName(chat.project);
   const projectOpenEnabled = projectOpenVisible && Boolean(localWorkspace.enabled && localWorkspace.roots[0]);
   const recommendedProjectOpenTarget = useMemo(
@@ -700,6 +702,7 @@ function ChatPageComponent({
       dictationHoldHotkey={dictationHoldHotkey}
       dictationToggleHotkey={dictationToggleHotkey}
       draft={composerDraft}
+      disabled={chatLoading}
       restoreDraft={composerRestoreDraft}
       restoreDraftId={composerRestoreDraftId}
       isGenerating={isSending}
@@ -817,6 +820,7 @@ function ChatPageComponent({
                 chats={chats}
                 active={active}
                 hasApiKey={hasApiKey}
+                loading={chatLoading}
                 onEditUserMessage={onEditUserMessage}
                 onForkFromMessage={onForkChatFromMessage}
                 onMessageFeedback={onMessageFeedback}
@@ -900,6 +904,7 @@ function areChatPagePropsEqual(previous: ChatPageProps, next: ChatPageProps) {
     previous.browserPreviewRequestId === next.browserPreviewRequestId &&
     previous.browserPreviewUrl === next.browserPreviewUrl &&
     previous.chat === next.chat &&
+    previous.chatLoading === next.chatLoading &&
     previous.chats === next.chats &&
     previous.codeReviewBehavior === next.codeReviewBehavior &&
     previous.composerDraft === next.composerDraft &&

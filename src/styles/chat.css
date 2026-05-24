@@ -28,6 +28,29 @@
   min-width: 0;
 }
 
+.chat-loading-state {
+  display: grid;
+  place-items: center;
+  justify-self: stretch;
+  align-self: stretch;
+  min-height: clamp(160px, calc(100vh - var(--composer-clearance, 244px) - var(--conversation-header-height, 54px) - 56px), 420px);
+  width: 100%;
+  color: var(--accent);
+}
+
+.chat-loading-state svg {
+  width: 34px;
+  height: 34px;
+  animation: chat-loading-spin 900ms linear infinite;
+  filter: drop-shadow(0 6px 16px color-mix(in srgb, var(--accent) 22%, transparent));
+}
+
+@keyframes chat-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .chat-thread::-webkit-scrollbar {
   display: none;
   width: 0;
@@ -258,7 +281,7 @@ button.message-research-chip:focus-visible {
 }
 
 .assistant-thinking[data-live="true"] .assistant-thinking-icon {
-  animation: response-work-pulse 1.4s ease-in-out infinite;
+  animation: assistant-thinking-spin 1s linear infinite;
 }
 
 .assistant-thinking-title {
@@ -274,16 +297,6 @@ button.message-research-chip:focus-visible {
   color: inherit;
   font-size: 13.5px;
   font-weight: 740;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assistant-thinking-title small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-dim);
-  font-size: 11.5px;
-  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -347,7 +360,40 @@ button.message-research-chip:focus-visible {
 
 .assistant-thinking-note {
   display: grid;
+  position: relative;
   min-width: 0;
+  padding-left: 13px;
+}
+
+.assistant-thinking-note::before {
+  content: "";
+  position: absolute;
+  top: 0.42em;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-dim) 56%, transparent);
+}
+
+.assistant-thinking-note[data-tone="evidence"]::before {
+  background: color-mix(in srgb, var(--blue) 78%, white 5%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-soft) 32%, transparent);
+}
+
+.assistant-thinking-note[data-tone="action"]::before {
+  background: color-mix(in srgb, var(--green) 78%, white 5%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 13%, transparent);
+}
+
+.assistant-thinking-note[data-tone="review"]::before {
+  background: color-mix(in srgb, var(--gold) 82%, white 5%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 14%, transparent);
+}
+
+.assistant-thinking-note[data-tone="check"]::before {
+  background: color-mix(in srgb, var(--violet) 70%, white 5%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet-soft) 18%, transparent);
 }
 
 .assistant-thinking-markdown {
@@ -441,11 +487,16 @@ button.message-research-chip:focus-visible {
 }
 
 .assistant-thinking-markdown :not(pre) > code {
-  padding: 1px 4px;
-  color: color-mix(in srgb, var(--text-muted) 92%, var(--text));
-  border-color: color-mix(in srgb, var(--line) 72%, transparent);
-  background: color-mix(in srgb, var(--surface-soft) 48%, transparent);
-  font-size: 0.92em;
+  padding: 1px 5px 2px;
+  color: color-mix(in srgb, var(--blue) 74%, var(--text) 18%);
+  border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--line));
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 34%, transparent), transparent),
+    color-mix(in srgb, var(--surface-soft) 62%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-weight: 650;
 }
 
 .assistant-thinking-markdown .markdown-table-scroll,
@@ -680,10 +731,35 @@ button.message-research-chip:focus-visible {
   display: grid;
   gap: 4px;
   min-width: 0;
-  padding: 2px 0;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 52%, transparent);
+  border-radius: 7px;
   color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-soft) 34%, transparent);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.assistant-thinking-tool-file[data-kind="create"],
+.assistant-thinking-tool-file[data-kind="write"] {
+  border-color: color-mix(in srgb, var(--green) 28%, var(--line));
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.assistant-thinking-tool-file[data-kind="update"],
+.assistant-thinking-tool-file[data-kind="edit"] {
+  border-color: color-mix(in srgb, var(--blue) 25%, var(--line));
+  background: color-mix(in srgb, var(--blue-soft) 28%, transparent);
+}
+
+.assistant-thinking-tool-file[data-kind="delete"] {
+  border-color: color-mix(in srgb, var(--red) 28%, var(--line));
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+}
+
+.assistant-thinking-tool-file[data-kind="move"] {
+  border-color: color-mix(in srgb, var(--violet) 28%, var(--line));
+  background: color-mix(in srgb, var(--violet-soft) 18%, transparent);
 }
 
 .assistant-thinking-tool-file > summary {
@@ -740,8 +816,10 @@ button.message-research-chip:focus-visible {
 .assistant-thinking-tool-file-row strong {
   min-width: 0;
   overflow: hidden;
-  color: inherit;
-  font-weight: 620;
+  color: color-mix(in srgb, var(--text) 80%, var(--blue) 20%);
+  font-family: var(--font-mono);
+  font-size: 11.7px;
+  font-weight: 660;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1341,6 +1419,12 @@ button.message-research-chip:focus-visible {
   gap: 8px;
   min-width: 0;
   white-space: normal;
+}
+
+@keyframes assistant-thinking-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .context-compaction-divider-content strong {

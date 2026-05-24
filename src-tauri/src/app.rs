@@ -10,6 +10,14 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         | tauri_plugin_window_state::StateFlags::VISIBLE;
 
     tauri::Builder::default()
+        // Keep first so secondary launches are rejected before other plugin setup runs.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags)
@@ -82,6 +90,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::database::gilbert_database_finalize_migration,
             commands::database::gilbert_database_get_overview,
             commands::database::gilbert_database_load,
+            commands::database::gilbert_database_load_chat,
             commands::database::gilbert_database_reset,
             commands::database::gilbert_database_set_value,
             commands::database::gilbert_database_set_values,
@@ -161,7 +170,9 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             commands::mcp::mcp_list_tools,
             commands::mcp::mcp_remove_server,
             commands::mcp::mcp_save_server,
+            commands::mcp::mcp_search_registry,
             commands::mcp::mcp_test_server,
+            commands::mcp::mcp_test_server_stream,
             commands::nine_router::nine_router_local_http,
             commands::nine_router::nine_router_local_install,
             commands::nine_router::nine_router_local_ensure,

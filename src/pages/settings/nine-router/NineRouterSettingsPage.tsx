@@ -1,4 +1,4 @@
-import { CheckCircle2, Download, ExternalLink, KeyRound, LogOut, Play, RefreshCcw, Route, ServerCog, Trash2, UserCheck } from "lucide-react";
+import { CheckCircle2, Cloud, Download, ExternalLink, Gauge, KeyRound, LogOut, Play, RefreshCcw, Route, ServerCog, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2, UserCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ensureNineRouterLocal,
@@ -8,6 +8,7 @@ import {
   isTauriDesktopRuntime,
   nineRouterLocalHttp,
   openExternalUrl,
+  setNineRouterLocalAutoStart,
   startNineRouterOAuthCallback,
   uninstallNineRouterLocal,
   type NineRouterInstallEvent,
@@ -31,6 +32,8 @@ import {
   choosePreferredConnection,
   formatConnectionExpiry,
   formatConnectionIdentity,
+  loadNineRouterCoreSettings,
+  loadNineRouterTunnelStatus,
   isConnectionActive,
   NINE_ROUTER_ACCOUNT_PROVIDERS,
   NINE_ROUTER_CODEX_MAX_POLL_ATTEMPTS,
@@ -40,17 +43,22 @@ import {
   NINE_ROUTER_DASHBOARD_FALLBACK,
   NINE_ROUTER_DEVICE_POLL_MAX_ATTEMPTS,
   NINE_ROUTER_PROVIDER_ID,
+  setNineRouterTunnelEnabled,
   shouldShowNineRouterCodexContextSettings,
+  updateNineRouterCoreSettings,
   type NineRouterAccountProvider,
   type NineRouterAuthorizeResponse,
   type NineRouterCodexPollResponse,
   type NineRouterCodexProxyResponse,
   type NineRouterConnection,
+  type NineRouterComboStrategy,
+  type NineRouterCoreSettings,
   type NineRouterDeviceCodeResponse,
   type NineRouterExchangeResponse,
   type NineRouterOAuthPollResponse,
+  type NineRouterTunnelStatus,
 } from "../../../services/nineRouterClient";
-import type { ProviderSettings, SubscriptionCodexContextWindow, SubscriptionTokenSaverLevel } from "../../../types/settings";
+import type { ProviderSettings, SubscriptionCodexContextWindow, SubscriptionFallbackMode, SubscriptionTokenSaverLevel } from "../../../types/settings";
 import { ConfirmDialog } from "../../../components/dialogs/AppDialog";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
@@ -62,7 +70,7 @@ interface NineRouterSettingsPageProps {
   settings: ProviderSettings;
 }
 
-type NineRouterBusyState = `account:${string}` | `disconnect:${string}` | "install" | "settings" | "start" | "status" | "tokenSaver" | "uninstall" | null;
+type NineRouterBusyState = `account:${string}` | `disconnect:${string}` | "advanced" | "comboStrategy" | "fallback" | "install" | "settings" | "start" | "status" | "tokenSaver" | "tunnel" | "uninstall" | null;
 type NineRouterModelCatalogState = {
   message: string;
   models: string[];
@@ -78,6 +86,12 @@ type NineRouterComboCatalogState = {
   message: string;
   status: "idle" | "loading" | "ready" | "error";
 };
+type NineRouterAdvancedSettingsState = {
+  message: string;
+  settings?: NineRouterCoreSettings;
+  status: "idle" | "loading" | "ready" | "error";
+  tunnel?: NineRouterTunnelStatus;
+};
 
 interface NineRouterCombo {
   id?: string;
@@ -85,11 +99,6 @@ interface NineRouterCombo {
   modelIds?: string[];
   models?: string[];
   name?: string;
-}
-
-interface NineRouterSettingsPayload {
-  error?: { message?: string } | string;
-  rtkEnabled?: boolean;
 }
 
 interface NineRouterUsageQuota {
@@ -137,6 +146,30 @@ const CODEX_CONTEXT_WINDOW_OPTIONS: Array<{ detail: string; label: string; mode:
   { detail: "Default 262k context for lower normal subscription usage.", label: "262k", mode: "standard" },
   { detail: "Allow 1M context for higher-cost long-context Codex runs.", label: "1M", mode: "extended" },
 ];
+const TOKEN_SAVER_LEVEL_OPTIONS: Array<{ detail: string; label: string; level: SubscriptionTokenSaverLevel }> = [
+  { detail: "RTK helper off. Gilbert keeps the normal tool-result budget.", label: "Off", level: "off" },
+  { detail: "RTK on with the normal Gilbert tool-result budget.", label: "Low", level: "low" },
+  { detail: "Trims large tool results earlier while keeping broad evidence.", label: "Medium", level: "medium" },
+  { detail: "Keeps only tighter tool evidence for cheaper long tool runs.", label: "High", level: "high" },
+  { detail: "Most aggressive compression for max token savings.", label: "Max", level: "max" },
+];
+const FALLBACK_MODE_OPTIONS: Array<{ detail: string; label: string; mode: SubscriptionFallbackMode }> = [
+  { detail: "Choose models manually from the picker.", label: "Manual", mode: "off" },
+  { detail: "Stay on docs-backed OpenCode Free routes when the local catalog has them.", label: "Free Auto", mode: "always-free" },
+];
+const COMBO_STRATEGY_OPTIONS: Array<{ detail: string; label: string; strategy: NineRouterComboStrategy }> = [
+  { detail: "Try routes in order and fall through when a route fails.", label: "Fallback", strategy: "fallback" },
+  { detail: "Rotate across eligible routes for repeated requests.", label: "Round robin", strategy: "round-robin" },
+];
+const COMBO_STICKY_LIMIT_OPTIONS = [1, 2, 3, 5] as const;
+const NINE_ROUTER_DASHBOARD_SHORTCUTS = [
+  { icon: Gauge, label: "Usage", path: "/dashboard/usage" },
+  { icon: KeyRound, label: "API keys", path: "/dashboard/endpoint" },
+  { icon: ServerCog, label: "Combos", path: "/dashboard/combos" },
+  { icon: TerminalSquare, label: "CLI tools", path: "/dashboard/cli-tools" },
+  { icon: SlidersHorizontal, label: "Providers", path: "/dashboard/providers" },
+  { icon: ShieldCheck, label: "MITM", path: "/dashboard/mitm" },
+] as const;
 
 const NINE_ROUTER_MODEL_TEST_MESSAGE = "Reply with OK only.";
 const NINE_ROUTER_INSTALL_PROGRESS_IDLE: NineRouterInstallProgressState = {
@@ -164,6 +197,10 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
   });
   const [, setComboCatalog] = useState<NineRouterComboCatalogState>({
     combos: [],
+    message: "Not checked",
+    status: "idle",
+  });
+  const [advancedSettings, setAdvancedSettings] = useState<NineRouterAdvancedSettingsState>({
     message: "Not checked",
     status: "idle",
   });
@@ -221,6 +258,13 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
   const helperStatusPill = getSubscriptionSetupStatusPill(status, busy, installProgress, desktopRuntime);
   const helperActionLabel = helperInstalled ? "Start subscriptions" : "Install subscriptions";
   const helperActionBusyLabel = helperStarting ? "Starting subscriptions" : "Installing subscriptions";
+  const optimizerEnabled = tokenSaverLevel !== "off";
+  const optimizerRuntimeEnabled = advancedSettings.settings?.rtkEnabled ?? optimizerEnabled;
+  const comboStrategy = normalizeNineRouterComboStrategy(advancedSettings.settings?.comboStrategy);
+  const comboStickyLimit = clampRoundRobinLimit(advancedSettings.settings?.comboStickyRoundRobinLimit ?? 1);
+  const tunnelUrl = getNineRouterTunnelUrl(advancedSettings.tunnel);
+  const tunnelEnabled = Boolean(advancedSettings.tunnel?.enabled || advancedSettings.tunnel?.running || tunnelUrl);
+  const cavemanEnabled = advancedSettings.settings?.cavemanEnabled === true;
   const hasRecoverableSubscriptionFootprint = !helperInstalled && Boolean(status?.dataDir || status?.installDir);
   const showInstalledRuntimeRemoval = helperInstalled && !helperInstalling && !helperStarting;
   const showInstallProgress = busy === "install" || installProgress.status === "running" || installProgress.status === "error";
@@ -263,6 +307,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
       void refreshProviderConnections({ quiet: true });
       void refreshModelCatalog({ quiet: true });
       void refreshSubscriptionOptimizer({ quiet: true });
+      void refreshAdvancedSettings({ quiet: true });
       void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
     }
   }, [nineRouterBaseUrl, status?.running, tokenSaverLevel]);
@@ -285,6 +330,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
         void refreshSubscriptionOptimizer({ quiet: true });
+        void refreshAdvancedSettings({ quiet: true });
         void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
@@ -303,7 +349,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
     }
 
     try {
-      const nextStatus = await ensureNineRouterLocal();
+      const nextStatus = await setNineRouterLocalAutoStart(true).catch(() => ensureNineRouterLocal());
       setStatus(nextStatus);
       if (!options.quiet) {
         setStatusMessage({ kind: nextStatus.running ? "success" : "warning", text: nextStatus.message });
@@ -312,6 +358,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
         void refreshSubscriptionOptimizer({ quiet: true });
+        void refreshAdvancedSettings({ quiet: true });
         void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
@@ -345,7 +392,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
         percent: 96,
         status: "running",
       });
-      const startedStatus = await ensureNineRouterLocal();
+      const startedStatus = await setNineRouterLocalAutoStart(true).catch(() => ensureNineRouterLocal());
       setStatus(startedStatus);
       setStatusMessage({ kind: startedStatus.running ? "success" : "warning", text: startedStatus.message });
       setInstallProgress({
@@ -358,6 +405,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
         void refreshProviderConnections({ quiet: true });
         void refreshModelCatalog({ quiet: true });
         void refreshSubscriptionOptimizer({ quiet: true });
+        void refreshAdvancedSettings({ quiet: true });
         void syncTokenSaverToHelper(tokenSaverLevel, { quiet: true });
       }
     } catch (error) {
@@ -613,6 +661,171 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
       const ok = comboResult.status === "fulfilled";
       setStatusMessage({ kind: ok ? "success" : "warning", text: ok ? "Fallback routes are up to date." : "Some fallback route details could not be refreshed." });
       setBusy((current) => (current === "settings" ? null : current));
+    }
+  }
+
+  async function refreshAdvancedSettings(options: { quiet?: boolean } = {}) {
+    if (!status?.running) {
+      setAdvancedSettings((current) => ({
+        ...current,
+        message: "Start subscriptions to sync runtime controls.",
+        status: "idle",
+      }));
+      return;
+    }
+
+    if (!options.quiet) {
+      setBusy("advanced");
+      setStatusMessage(null);
+    }
+
+    setAdvancedSettings((current) => ({
+      ...current,
+      message: current.status === "ready" ? current.message : "Syncing controls",
+      status: "loading",
+    }));
+
+    const [settingsResult, tunnelResult] = await Promise.allSettled([
+      loadNineRouterCoreSettings(nineRouterDashboardUrl),
+      loadNineRouterTunnelStatus(nineRouterDashboardUrl),
+    ]);
+    const settingsOk = settingsResult.status === "fulfilled";
+    const tunnelOk = tunnelResult.status === "fulfilled";
+
+    setAdvancedSettings((current) => ({
+      message: settingsOk || tunnelOk ? "Runtime controls synced" : readErrorMessage(settingsResult.status === "rejected" ? settingsResult.reason : tunnelResult.status === "rejected" ? tunnelResult.reason : null, "Could not sync runtime controls."),
+      settings: settingsOk ? settingsResult.value : current.settings,
+      status: settingsOk || tunnelOk ? "ready" : "error",
+      tunnel: tunnelOk ? tunnelResult.value : current.tunnel,
+    }));
+
+    if (!options.quiet) {
+      setStatusMessage({
+        kind: settingsOk || tunnelOk ? "success" : "warning",
+        text: settingsOk || tunnelOk ? "Subscription runtime controls are synced." : "Some subscription runtime controls could not be loaded.",
+      });
+      setBusy((current) => (current === "advanced" ? null : current));
+    }
+  }
+
+  async function patchAdvancedSettings(
+    patch: Partial<NineRouterCoreSettings>,
+    busyKey: Exclude<NineRouterBusyState, null>,
+    successText: string,
+  ) {
+    if (!status?.running) {
+      setStatusMessage({ kind: "warning", text: "Start subscriptions before changing runtime controls." });
+      return null;
+    }
+
+    setBusy(busyKey);
+    setStatusMessage(null);
+
+    try {
+      const nextSettings = await updateNineRouterCoreSettings(nineRouterDashboardUrl, patch);
+      setAdvancedSettings((current) => ({
+        ...current,
+        message: "Runtime controls synced",
+        settings: {
+          ...current.settings,
+          ...patch,
+          ...nextSettings,
+        },
+        status: "ready",
+      }));
+      setStatusMessage({ kind: "success", text: successText });
+      return nextSettings;
+    } catch (error) {
+      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not update subscription runtime controls." });
+      return null;
+    } finally {
+      setBusy((current) => (current === busyKey ? null : current));
+    }
+  }
+
+  async function setTokenSaverLevel(level: SubscriptionTokenSaverLevel) {
+    updateSubscriptionOptimization({ tokenSaverLevel: level });
+    await syncTokenSaverToHelper(level);
+  }
+
+  async function activateFallbackMode(mode: SubscriptionFallbackMode) {
+    const effectiveMode: SubscriptionFallbackMode = mode === "smart-saver" ? "always-free" : mode;
+    updateSubscriptionOptimization({ fallbackMode: effectiveMode });
+
+    if (effectiveMode === "off") {
+      setStatusMessage({ kind: "success", text: "Savings routing is set to manual model selection." });
+      return;
+    }
+
+    if (!status?.running) {
+      setStatusMessage({ kind: "warning", text: "Free Auto is queued. Start subscriptions to create the fallback route." });
+      return;
+    }
+
+    setBusy("fallback");
+    setStatusMessage(null);
+
+    try {
+      const liveModels = modelCatalog.status === "ready" && modelCatalog.models.length > 0 ? modelCatalog.models : await refreshModelCatalog({ quiet: true });
+      const models = buildNineRouterFallbackModels(effectiveMode, selectedNineRouterModel, liveModels);
+      if (models.length === 0) {
+        throw new Error("No OpenCode Free routes were reported yet. Refresh the live catalog and try again.");
+      }
+
+      await upsertNineRouterCombo(nineRouterDashboardUrl, NINE_ROUTER_ALWAYS_FREE_COMBO_NAME, models, "fallback");
+      const combos = await loadNineRouterCombos(nineRouterDashboardUrl);
+      setComboCatalog({
+        combos,
+        message: `${combos.length} fallback ${combos.length === 1 ? "route" : "routes"}`,
+        status: "ready",
+      });
+      useNineRouterProvider(NINE_ROUTER_ALWAYS_FREE_MODEL, { fallbackMode: effectiveMode }, {
+        statusText: `Free Auto is active with ${models.length} fallback ${models.length === 1 ? "route" : "routes"}.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not create Free Auto fallback route.";
+      setStatusMessage({ kind: "error", text: formatSubscriptionHelperText(message) });
+      updateSubscriptionOptimization({ fallbackMode: settings.subscriptionOptimization?.fallbackMode ?? "off" });
+    } finally {
+      setBusy((current) => (current === "fallback" ? null : current));
+    }
+  }
+
+  async function setComboStrategy(strategy: NineRouterComboStrategy) {
+    await patchAdvancedSettings({ comboStrategy: strategy }, "comboStrategy", `Combo strategy is now ${strategy === "round-robin" ? "Round robin" : "Fallback"}.`);
+  }
+
+  async function setComboStickyLimit(limit: number) {
+    await patchAdvancedSettings({ comboStickyRoundRobinLimit: clampRoundRobinLimit(limit) }, "comboStrategy", "Round-robin stickiness is updated.");
+  }
+
+  async function setCavemanEnabled(enabled: boolean) {
+    await patchAdvancedSettings({ cavemanEnabled: enabled, cavemanLevel: advancedSettings.settings?.cavemanLevel || "full" }, "advanced", enabled ? "Extra compression is on." : "Extra compression is off.");
+  }
+
+  async function toggleTunnel() {
+    if (!status?.running) {
+      setStatusMessage({ kind: "warning", text: "Start subscriptions before changing tunnel access." });
+      return;
+    }
+
+    setBusy("tunnel");
+    setStatusMessage(null);
+
+    try {
+      const nextTunnel = await setNineRouterTunnelEnabled(nineRouterDashboardUrl, !tunnelEnabled);
+      setAdvancedSettings((current) => ({
+        ...current,
+        message: "Tunnel status synced",
+        status: "ready",
+        tunnel: nextTunnel,
+      }));
+      setStatusMessage({ kind: "success", text: !tunnelEnabled ? "Secure tunnel is enabled." : "Secure tunnel is disabled." });
+      void refreshAdvancedSettings({ quiet: true });
+    } catch (error) {
+      setStatusMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not update secure tunnel." });
+    } finally {
+      setBusy((current) => (current === "tunnel" ? null : current));
     }
   }
 
@@ -1038,9 +1251,19 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
     }
 
     try {
-      await patchNineRouterJson<NineRouterSettingsPayload>(joinLocalUrl(nineRouterDashboardUrl, "/api/settings"), {
+      const nextSettings = await updateNineRouterCoreSettings(nineRouterDashboardUrl, {
         rtkEnabled: level !== "off",
       });
+      setAdvancedSettings((current) => ({
+        ...current,
+        message: "Runtime controls synced",
+        settings: {
+          ...current.settings,
+          rtkEnabled: level !== "off",
+          ...nextSettings,
+        },
+        status: "ready",
+      }));
 
       if (!options.quiet) {
         setStatusMessage({
@@ -1097,14 +1320,28 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
     setStatusMessage({ kind: "success", text: statusText });
   }
 
-  function updateCodexContextWindow(mode: SubscriptionCodexContextWindow) {
+  function updateSubscriptionOptimization(partial: Partial<ProviderSettings["subscriptionOptimization"]>) {
     onSettingsChange({
       ...settings,
       subscriptionOptimization: {
         ...(settings.subscriptionOptimization ?? SUBSCRIPTION_OPTIMIZATION_DEFAULT),
-        codexContextWindow: mode,
+        ...partial,
       },
     });
+  }
+
+  function updateCodexContextWindow(mode: SubscriptionCodexContextWindow) {
+    updateSubscriptionOptimization({ codexContextWindow: mode });
+  }
+
+  function openDashboardPath(path: string) {
+    void openExternalUrl(joinLocalUrl(nineRouterDashboardUrl, path));
+  }
+
+  function openTunnelUrl() {
+    if (tunnelUrl) {
+      void openExternalUrl(tunnelUrl);
+    }
   }
 
   return (
@@ -1351,6 +1588,203 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
               </article>
             ) : null}
 
+            <article className="settings-card settings-card-wide nine-router-advanced-card" aria-busy={busy === "advanced" || busy === "comboStrategy" || busy === "fallback" || busy === "tokenSaver" || busy === "tunnel"}>
+              <div className="settings-card-heading">
+                <SlidersHorizontal size={19} aria-hidden="true" />
+                <div>
+                  <h2>Runtime controls</h2>
+                  <p>Manage optimizer, fallback, tunnel, and local dashboard features.</p>
+                </div>
+              </div>
+
+              <div className="settings-row-list">
+                <div className="settings-row">
+                  <span>Runtime</span>
+                  <strong>{advancedSettings.status === "ready" ? "Controls synced" : advancedSettings.status === "loading" ? "Syncing controls" : advancedSettings.message}</strong>
+                  <span className="settings-row-static-pill">{advancedSettings.status === "error" ? "Check" : advancedSettings.status === "ready" ? "Ready" : "Local"}</span>
+                </div>
+                <div className="settings-row">
+                  <span>RTK helper</span>
+                  <strong>{optimizerRuntimeEnabled ? `${formatTokenSaverLevel(tokenSaverLevel)} token saver` : "Off"}</strong>
+                  <span className="settings-row-static-pill">{optimizerRuntimeEnabled ? "On" : "Off"}</span>
+                </div>
+                <div className="settings-row">
+                  <span>Fallback routing</span>
+                  <strong>{effectiveFallbackMode === "off" ? "Manual model selection" : "Free Auto"}</strong>
+                  <span className="settings-row-static-pill">{effectiveFallbackMode === "off" ? "Manual" : "Active"}</span>
+                </div>
+                <div className="settings-row">
+                  <span>Secure tunnel</span>
+                  <strong title={tunnelUrl || undefined}>{tunnelEnabled ? tunnelUrl || "Enabled" : "Disabled"}</strong>
+                  <button
+                    className="settings-switch"
+                    type="button"
+                    role="switch"
+                    aria-checked={tunnelEnabled}
+                    data-on={tunnelEnabled}
+                    disabled={busy !== null}
+                    onClick={() => void toggleTunnel()}
+                  >
+                    <span />
+                  </button>
+                </div>
+              </div>
+
+              <div className="nine-router-advanced-grid">
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <Gauge size={16} aria-hidden="true" />
+                    <strong>Token saver</strong>
+                    <span>{optimizerRuntimeEnabled ? "On" : "Off"}</span>
+                  </div>
+                  <div className="settings-segmented-control settings-segmented-control-compact nine-router-token-saver-control" aria-label="Token saver level">
+                    {TOKEN_SAVER_LEVEL_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.level}
+                        data-selected={tokenSaverLevel === option.level}
+                        aria-pressed={tokenSaverLevel === option.level}
+                        disabled={busy !== null}
+                        title={option.detail}
+                        onClick={() => void setTokenSaverLevel(option.level)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <Route size={16} aria-hidden="true" />
+                    <strong>Savings routing</strong>
+                    <span>{effectiveFallbackMode === "off" ? "Manual" : "Free Auto"}</span>
+                  </div>
+                  <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Fallback routing mode">
+                    {FALLBACK_MODE_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.mode}
+                        data-selected={effectiveFallbackMode === option.mode}
+                        aria-pressed={effectiveFallbackMode === option.mode}
+                        disabled={busy !== null}
+                        title={option.detail}
+                        onClick={() => void activateFallbackMode(option.mode)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <ServerCog size={16} aria-hidden="true" />
+                    <strong>Combo strategy</strong>
+                    <span>{comboStrategy === "round-robin" ? "Round robin" : "Fallback"}</span>
+                  </div>
+                  <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Combo strategy">
+                    {COMBO_STRATEGY_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.strategy}
+                        data-selected={comboStrategy === option.strategy}
+                        aria-pressed={comboStrategy === option.strategy}
+                        disabled={busy !== null}
+                        title={option.detail}
+                        onClick={() => void setComboStrategy(option.strategy)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {comboStrategy === "round-robin" ? (
+                    <div className="settings-segmented-control settings-segmented-control-compact" aria-label="Round-robin stickiness">
+                      {COMBO_STICKY_LIMIT_OPTIONS.map((limit) => (
+                        <button
+                          type="button"
+                          key={limit}
+                          data-selected={comboStickyLimit === limit}
+                          aria-pressed={comboStickyLimit === limit}
+                          disabled={busy !== null}
+                          onClick={() => void setComboStickyLimit(limit)}
+                        >
+                          {limit}x
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <ShieldCheck size={16} aria-hidden="true" />
+                    <strong>Extra compression</strong>
+                    <span>{cavemanEnabled ? "On" : "Off"}</span>
+                  </div>
+                  <button
+                    className="settings-switch"
+                    type="button"
+                    role="switch"
+                    aria-checked={cavemanEnabled}
+                    data-on={cavemanEnabled}
+                    disabled={busy !== null}
+                    onClick={() => void setCavemanEnabled(!cavemanEnabled)}
+                  >
+                    <span />
+                  </button>
+                </section>
+
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <Cloud size={16} aria-hidden="true" />
+                    <strong>Tunnel</strong>
+                    <span>{tunnelEnabled ? "Enabled" : "Off"}</span>
+                  </div>
+                  <div className="settings-actions-row">
+                    <button className="settings-ghost-button" type="button" disabled={busy !== null} onClick={() => void toggleTunnel()}>
+                      <Cloud size={16} aria-hidden="true" />
+                      {busy === "tunnel" ? "Updating" : tunnelEnabled ? "Disable" : "Enable"}
+                    </button>
+                    {tunnelUrl ? (
+                      <button className="settings-ghost-button" type="button" onClick={openTunnelUrl}>
+                        <ExternalLink size={16} aria-hidden="true" />
+                        Open
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="nine-router-advanced-panel">
+                  <div className="nine-router-advanced-panel-heading">
+                    <ExternalLink size={16} aria-hidden="true" />
+                    <strong>Dashboard</strong>
+                    <span>Local</span>
+                  </div>
+                  <button className="settings-ghost-button settings-full-width-button" type="button" onClick={() => openDashboardPath("/dashboard")}>
+                    <ExternalLink size={16} aria-hidden="true" />
+                    Open dashboard
+                  </button>
+                </section>
+              </div>
+
+              <div className="nine-router-shortcut-grid" aria-label="Subscription dashboard shortcuts">
+                {NINE_ROUTER_DASHBOARD_SHORTCUTS.map((shortcut) => {
+                  const ShortcutIcon = shortcut.icon;
+                  return (
+                    <button className="settings-ghost-button" type="button" key={shortcut.path} onClick={() => openDashboardPath(shortcut.path)}>
+                      <ShortcutIcon size={15} aria-hidden="true" />
+                      {shortcut.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button className="settings-ghost-button settings-full-width-button" type="button" disabled={advancedSettings.status === "loading"} onClick={() => refreshAdvancedSettings()}>
+                <RefreshCcw size={16} aria-hidden="true" />
+                {advancedSettings.status === "loading" ? "Syncing controls" : "Refresh runtime controls"}
+              </button>
+            </article>
+
           </>
         )}
 
@@ -1413,6 +1847,42 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
       />
     </>
   );
+}
+
+function normalizeNineRouterComboStrategy(value: unknown): NineRouterComboStrategy {
+  return value === "round-robin" ? "round-robin" : "fallback";
+}
+
+function clampRoundRobinLimit(value: unknown) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return 1;
+  }
+
+  return Math.min(25, Math.max(1, Math.round(numericValue)));
+}
+
+function getNineRouterTunnelUrl(tunnel: NineRouterTunnelStatus | undefined) {
+  return tunnel?.publicUrl || tunnel?.tunnelUrl || tunnel?.url || "";
+}
+
+function formatTokenSaverLevel(level: SubscriptionTokenSaverLevel) {
+  switch (level) {
+    case "max":
+      return "Max";
+    case "high":
+      return "High";
+    case "medium":
+      return "Medium";
+    case "low":
+      return "Low";
+    default:
+      return "Off";
+  }
+}
+
+function readErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function getSubscriptionSetupStatusLabel(
@@ -1962,24 +2432,6 @@ async function postNineRouterJson<T>(url: string, body: unknown) {
       "Content-Type": "application/json",
     },
     method: "POST",
-  });
-  const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
-
-  if (!response.ok) {
-    const error = payload.error;
-    throw new Error(typeof error === "string" ? error : error?.message || `Subscription request failed with HTTP ${response.status}.`);
-  }
-
-  return payload;
-}
-
-async function patchNineRouterJson<T>(url: string, body: unknown) {
-  const response = await fetchWithTimeout(url, {
-    body: JSON.stringify(body),
-    headers: {
-      "Content-Type": "application/json",
-    },
-    method: "PATCH",
   });
   const payload = await readJsonResponse<T & { error?: { message?: string } | string }>(response);
 

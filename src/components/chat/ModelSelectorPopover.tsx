@@ -601,7 +601,7 @@ function createModelSearchTags(entry: ModelSelectorEntry) {
   ];
 
   if (isThinkingModel(entry.option, text)) {
-    tags.push("Thinking");
+    tags.push("Reasoning");
   }
 
   if (isToolModel(entry.option, text)) {

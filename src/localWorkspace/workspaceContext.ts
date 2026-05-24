@@ -49,6 +49,8 @@ export interface WorkspaceContextSnapshot {
 let cachedSnapshot: WorkspaceContextSnapshot | null = null;
 let lastInputSignature: string | null = null;
 let pendingRefresh: Promise<void> | null = null;
+let pendingRefreshSignature: string | null = null;
+let refreshGeneration = 0;
 
 const CACHE_TTL_MS = 30_000;
 const DETECTION_TIMEOUT_MS = 1_500;
@@ -62,12 +64,18 @@ export function getWorkspaceContextSnapshot(): WorkspaceContextSnapshot | null {
 }
 
 export function clearWorkspaceContextCache() {
+  refreshGeneration += 1;
   cachedSnapshot = null;
   lastInputSignature = null;
+  pendingRefresh = null;
+  pendingRefreshSignature = null;
 }
 
 export async function refreshWorkspaceContext(settings: LocalWorkspaceSettings): Promise<void> {
   if (!settings || settings.roots.length === 0) {
+    refreshGeneration += 1;
+    pendingRefresh = null;
+    pendingRefreshSignature = null;
     cachedSnapshot = {
       capturedAt: Date.now(),
       gitBranches: [],
@@ -92,18 +100,24 @@ export async function refreshWorkspaceContext(settings: LocalWorkspaceSettings):
     return;
   }
 
-  if (pendingRefresh) {
+  if (pendingRefresh && pendingRefreshSignature === signature) {
     return pendingRefresh;
   }
 
-  pendingRefresh = runDetection(settings, signature).finally(() => {
-    pendingRefresh = null;
+  const generation = ++refreshGeneration;
+  const refresh = runDetection(settings, signature, generation).finally(() => {
+    if (pendingRefresh === refresh) {
+      pendingRefresh = null;
+      pendingRefreshSignature = null;
+    }
   });
+  pendingRefresh = refresh;
+  pendingRefreshSignature = signature;
 
   return pendingRefresh;
 }
 
-async function runDetection(settings: LocalWorkspaceSettings, signature: string): Promise<void> {
+async function runDetection(settings: LocalWorkspaceSettings, signature: string, generation: number): Promise<void> {
   const roots = settings.roots;
 
   try {
@@ -111,6 +125,10 @@ async function runDetection(settings: LocalWorkspaceSettings, signature: string)
       Promise.all(roots.map((root) => withTimeout(detectProjectAtRoot(root), DETECTION_TIMEOUT_MS, null))),
       Promise.all(roots.map((root) => withTimeout(getComputerGitStatus(root), DETECTION_TIMEOUT_MS, null).catch(() => null))),
     ]);
+
+    if (generation !== refreshGeneration) {
+      return;
+    }
 
     cachedSnapshot = {
       capturedAt: Date.now(),

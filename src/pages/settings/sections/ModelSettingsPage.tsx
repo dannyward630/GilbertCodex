@@ -97,7 +97,7 @@ export function ModelSettingsPage({
 
   return (
     <>
-      {showHeading ? <SettingsSectionHeading detail="Model identity, system prompt, generation, and thinking controls." icon={ServerCog} title="Model" /> : null}
+      {showHeading ? <SettingsSectionHeading detail="Model identity, system prompt, generation, and reasoning controls." icon={ServerCog} title="Model" /> : null}
       <div className="settings-section-grid">
         <article className="settings-card settings-card-wide model-settings-card">
           <div className="settings-card-heading">
@@ -333,8 +333,8 @@ export function ModelSettingsPage({
           <div className="settings-card-heading">
             <SlidersHorizontal size={19} aria-hidden="true" />
             <div>
-              <h2>Thinking</h2>
-              <p>{activeModelSupportsThinking ? "Provider reasoning controls." : "This model does not expose a compatible thinking control."}</p>
+              <h2>Reasoning</h2>
+              <p>{activeModelSupportsThinking ? "Codex-style effort for harder tasks." : "This model does not expose compatible reasoning controls."}</p>
             </div>
           </div>
           <ThinkingModeControls

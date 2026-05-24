@@ -137,10 +137,10 @@ body > .composer-popover-model.model-selector-popover {
 
 .model-selector-thinking-panel {
   min-width: 0;
-  padding: 7px;
+  padding: 6px;
   border: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-raised) 34%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 28%, transparent);
 }
 
 .model-selector-thinking-panel .thinking-panel,
@@ -149,12 +149,11 @@ body > .composer-popover-model.model-selector-popover {
 }
 
 .model-selector-thinking-panel .thinking-popover-header {
-  grid-template-columns: 28px minmax(0, 1fr) 28px;
-  min-height: 40px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  min-height: 38px;
   gap: 8px;
-  padding: 5px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--surface-raised) 46%, transparent);
+  padding: 3px;
+  border-radius: 8px;
 }
 
 .model-selector-thinking-panel .thinking-popover-orb {
@@ -166,16 +165,13 @@ body > .composer-popover-model.model-selector-popover {
   font-size: 12.5px;
 }
 
-.model-selector-thinking-panel .thinking-popover-header small,
-.model-selector-thinking-panel .thinking-field-row,
-.model-selector-thinking-panel .thinking-field-row small {
+.model-selector-thinking-panel .thinking-popover-header small {
   font-size: 10.5px;
 }
 
 .model-selector-thinking-panel .thinking-power {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  min-width: 40px;
+  min-height: 25px;
 }
 
 .model-selector-thinking-panel .thinking-effort-grid {

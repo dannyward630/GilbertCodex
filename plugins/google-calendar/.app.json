@@ -1,0 +1,29 @@
+{
+  "apps": {
+    "google-calendar": {
+      "id": "gilbert.google-calendar",
+      "provider": "google",
+      "auth": "oauth2",
+      "clientIdEnv": "VITE_GOOGLE_OAUTH_CLIENT_ID",
+      "clientSecretEnv": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "maxAccounts": 6,
+      "redirect": "loopback",
+      "safety": {
+        "deleteApproval": true,
+        "eventWriteApproval": true,
+        "freeBusyMetadataOnly": true,
+        "timezoneAwareReview": true
+      },
+      "scopes": [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.freebusy",
+        "https://www.googleapis.com/auth/tasks"
+      ]
+    }
+  }
+}

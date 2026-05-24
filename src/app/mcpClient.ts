@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriDesktopRuntime } from "./tauriClient";
 import type {
   McpCallToolRequest,
@@ -8,7 +8,10 @@ import type {
   McpSaveServerRequest,
   McpSaveServerResponse,
   McpServerIdRequest,
+  McpServerProgressEvent,
   McpServerTestResponse,
+  McpRegistrySearchRequest,
+  McpRegistrySearchResponse,
   McpTestServerRequest,
   McpToolCallResponse,
 } from "../types/mcp";
@@ -37,6 +40,12 @@ export async function testMcpServer(request: McpTestServerRequest): Promise<McpS
   return invoke<McpServerTestResponse>("mcp_test_server", { request });
 }
 
+export async function testMcpServerWithProgress(request: McpTestServerRequest, onEvent: (event: McpServerProgressEvent) => void): Promise<McpServerTestResponse> {
+  assertMcpDesktop();
+  const onEventChannel = new Channel<McpServerProgressEvent>(onEvent);
+  return invoke<McpServerTestResponse>("mcp_test_server_stream", { onEvent: onEventChannel, request });
+}
+
 export async function listMcpServerTools(request: McpListToolsRequest): Promise<McpListToolsResponse> {
   assertMcpDesktop();
   return invoke<McpListToolsResponse>("mcp_list_tools", { request });
@@ -45,6 +54,11 @@ export async function listMcpServerTools(request: McpListToolsRequest): Promise<
 export async function callMcpTool(request: McpCallToolRequest): Promise<McpToolCallResponse> {
   assertMcpDesktop();
   return invoke<McpToolCallResponse>("mcp_call_tool", { request });
+}
+
+export async function searchMcpRegistry(request: McpRegistrySearchRequest): Promise<McpRegistrySearchResponse> {
+  assertMcpDesktop();
+  return invoke<McpRegistrySearchResponse>("mcp_search_registry", { request });
 }
 
 function assertMcpDesktop() {

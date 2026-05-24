@@ -1,0 +1,47 @@
+{
+  "name": "gmail",
+  "version": "0.1.0",
+  "description": "Gmail workflows for semantic mail search, metadata-first reading, full-read approvals, organization, drafts, and reviewed sending.",
+  "author": {
+    "name": "Gilbert Codex",
+    "email": "support@gilbertcodex.local",
+    "url": "https://github.com/UrbanWafflezz/GilbertCodex"
+  },
+  "homepage": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "repository": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "license": "MIT",
+  "keywords": [
+    "gmail",
+    "email",
+    "inbox",
+    "drafts",
+    "google"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "Gmail",
+    "shortDescription": "Search, read, organize, draft, and send Gmail work with confirmation safeguards.",
+    "longDescription": "Gmail gives Gilbert Codex an organized plugin surface for email workflows with up to six connected accounts, metadata-first reads, approval-gated full message access, local semantic ranking, batch label changes, separate-recipient sends, and reviewed destructive actions.",
+    "developerName": "Gilbert Codex",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://mail.google.com/",
+    "privacyPolicyURL": "https://policies.google.com/privacy",
+    "termsOfServiceURL": "https://policies.google.com/terms",
+    "defaultPrompt": [
+      "Summarize important unread Gmail threads from today.",
+      "Draft a reply to this Gmail thread and let me review it before sending.",
+      "Find Gmail messages that need follow-up and group them by priority."
+    ],
+    "brandColor": "#EA4335",
+    "composerIcon": "./assets/gmail.svg",
+    "logo": "./assets/gmail.svg",
+    "screenshots": []
+  }
+}

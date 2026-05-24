@@ -1,0 +1,37 @@
+{
+  "apps": {
+    "github": {
+      "id": "gilbert.github",
+      "provider": "github",
+      "auth": "oauth2-device",
+      "clientIdEnv": "VITE_GITHUB_OAUTH_CLIENT_ID",
+      "redirect": "device-flow",
+      "safety": {
+        "accountCheckBeforeUse": true,
+        "approvalForMutations": true,
+        "dryRunPreviews": true,
+        "localVectorRanking": true
+      },
+      "scopes": [
+        "repo",
+        "workflow",
+        "delete_repo",
+        "admin:repo_hook",
+        "admin:org",
+        "admin:public_key",
+        "admin:org_hook",
+        "gist",
+        "notifications",
+        "user",
+        "project",
+        "write:packages",
+        "read:packages",
+        "delete:packages",
+        "admin:gpg_key",
+        "codespace",
+        "read:audit_log",
+        "security_events"
+      ]
+    }
+  }
+}

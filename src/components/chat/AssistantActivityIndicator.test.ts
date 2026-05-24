@@ -15,7 +15,7 @@ function assistantMessage(overrides: Partial<ChatMessage>): ChatMessage {
 }
 
 describe("assistant activity indicator", () => {
-  it("renders streamed work thinking inside the assistant work trace", () => {
+  it("keeps raw provider scratchpad out of the assistant work trace", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
@@ -23,31 +23,30 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: true,
     }));
 
-    expect(html).toContain("Thinking");
-    expect(html).toContain("Let me read the current state");
-    expect(html).toContain("assistant-thinking-markdown");
+    expect(html).toContain("Working");
+    expect(html).toContain("assistant-thinking-bars");
+    expect(html).not.toContain("Let me read the current state");
     expect(html).not.toContain("assistant-work");
   });
 
-  it("renders Markdown inside thinking entries", () => {
+  it("renders Markdown inside safe work-progress entries", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
-      thinkingContent: "**Inspect** the render path.\n\n- Replace the old UI\n- Keep tools ordered",
+      thinkingContent: "Applied file changes to **2 files**.",
       thinkingStreaming: true,
     }));
 
     expect(html).toContain("assistant-thinking-markdown");
-    expect(html).toContain("<strong>Inspect</strong>");
-    expect(html).toContain("<li>Replace the old UI</li>");
+    expect(html).toContain("<strong>2 files</strong>");
   });
 
-  it("renders GFM tables, task lists, links, and code blocks inside thinking entries", () => {
+  it("drops arbitrary provider reasoning markdown from thinking entries", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
       thinkingContent: [
-        "### Evidence",
+        "### Reasoning",
         "",
         "| File | State |",
         "| --- | --- |",
@@ -62,13 +61,11 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: true,
     }));
 
-    expect(html).toContain("assistant-thinking-markdown");
-    expect(html).toContain("markdown-table-scroll");
-    expect(html).toContain("<table>");
-    expect(html).toContain("type=\"checkbox\"");
-    expect(html).toContain("href=\"https://example.com/\"");
-    expect(html).toContain("code-block");
-    expect(html).toContain("language-ts");
+    expect(html).toContain("Working");
+    expect(html).toContain("assistant-thinking-bars");
+    expect(html).not.toContain("markdown-table-scroll");
+    expect(html).not.toContain("<table>");
+    expect(html).not.toContain("const ready");
   });
 
   it("leaves blank streaming thinking to the combined work trace", () => {
@@ -223,6 +220,46 @@ describe("assistant activity indicator", () => {
     expect(html).toContain("+2");
     expect(html).toContain("assistant-thinking-tool-file-deletions");
     expect(html).toContain("-1");
+  });
+
+  it("keeps the collapsed header timer-only while expanded details show file edits", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      isStreaming: true,
+      toolCalls: [
+        {
+          id: "tool-1",
+          input: JSON.stringify({
+            edits: [
+              {
+                newText: "const next = true;\nexport { next };\n",
+                oldText: "const next = false;\n",
+                path: "src/App.tsx",
+              },
+            ],
+          }),
+          label: "Edit many workspace files",
+          status: "active",
+          toolId: "files_edit_many",
+        },
+      ],
+    }));
+
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: snapshot,
+      responseStarted: false,
+      thinking: {
+        effort: "medium",
+        startedAt: new Date(Date.now() - 12_000).toISOString(),
+      },
+      thinkingContent: "",
+      thinkingStreaming: true,
+    }));
+
+    expect(html).toMatch(/<span class="assistant-thinking-title"><strong>Working for [^<]+<\/strong><\/span>/);
+    expect(html).toContain("Batch editing 1 file");
+    expect(html).toContain("src/App.tsx");
+    expect(html).toContain("assistant-thinking-tool-file-additions");
+    expect(html).toContain("assistant-thinking-tool-file-deletions");
   });
 
   it("shows partial batch completions as per-file rows while still running", () => {
@@ -811,6 +848,19 @@ describe("assistant activity indicator", () => {
     expect(snapshot).toBeNull();
   });
 
+  it("hides empty generic tool progress labels", () => {
+    const snapshot = createAssistantActivitySnapshot(assistantMessage({
+      isStreaming: true,
+      progress: [{
+        id: "tool-progress",
+        label: "Tool progress",
+        status: "active",
+      }],
+    }));
+
+    expect(snapshot).toBeNull();
+  });
+
   it("keeps completed provider thinking available after the answer starts", () => {
     const startedAt = new Date("2026-05-14T12:00:00.000Z").toISOString();
     const completedAt = new Date("2026-05-14T12:00:12.000Z").toISOString();
@@ -823,16 +873,15 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: false,
     }));
 
-    expect(html).toContain("Thinking");
-    expect(html).toContain("Medium");
-    expect(html).toContain("worked 12s");
+    expect(html).toContain("Worked for 12s");
     expect(html).not.toContain("1 note");
+    expect(html).not.toContain("Considering the user");
     expect(html).toContain("data-expanded=\"false\"");
     expect(html).toContain("data-effort=\"medium\"");
     expect(html).toContain("inert=\"\"");
   });
 
-  it("renders full provider thinking when the trace is open", () => {
+  it("does not render full provider thinking when the trace is open", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
@@ -840,11 +889,32 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: false,
     }));
 
-    expect(html).toContain("data-expanded=\"true\"");
-    expect(html).toContain("Considering the user&#x27;s request before answering.");
+    expect(html).toBe("");
   });
 
-  it("renders 'Thinking…' while the model is still actively thinking", () => {
+  it("drops explicit private reasoning labels and tags from the work trace", () => {
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: null,
+      responseStarted: false,
+      thinkingContent: "<analysis>secret chain of thought</analysis>",
+      thinkingStreaming: true,
+      workTrace: [
+        {
+          content: "Reasoning: private scratchpad",
+          id: "thinking-1",
+          kind: "thinking",
+          status: "active",
+        },
+      ],
+    }));
+
+    expect(html).toContain("Working");
+    expect(html).toContain("assistant-thinking-bars");
+    expect(html).not.toContain("secret chain");
+    expect(html).not.toContain("private scratchpad");
+  });
+
+  it("renders a live working state while the model is still active", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
@@ -852,7 +922,7 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: true,
     }));
 
-    expect(html).toContain("Thinking");
+    expect(html).toContain("Working");
     expect(html).toContain("assistant-thinking-bars");
   });
 
@@ -864,7 +934,7 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: true,
       workTrace: [
         {
-          content: "I should inspect the component first.",
+          content: "Reading workspace files: src/components/chat/ChatThread.tsx.",
           id: "thinking-1",
           kind: "thinking",
           status: "complete",
@@ -880,7 +950,7 @@ describe("assistant activity indicator", () => {
           },
         },
         {
-          content: "Now I can patch the render path.",
+          content: "Applying file changes.",
           id: "thinking-2",
           kind: "thinking",
           status: "active",
@@ -897,9 +967,9 @@ describe("assistant activity indicator", () => {
       ],
     }));
 
-    expect(html).toContain("I should inspect");
+    expect(html).toContain("Reading workspace files");
     expect(html).toContain("Read workspace file");
-    expect(html).toContain("Now I can patch");
+    expect(html).toContain("Applying file changes");
     expect(html).toContain("Edit file by exact replace");
     expect(html).toContain("assistant-thinking-tool");
     expect(html).toContain("assistant-thinking-markdown");
@@ -973,6 +1043,81 @@ describe("assistant activity indicator", () => {
     expect(html).not.toContain("https://www.googleapis.com/auth");
   });
 
+  it("collapses terminal work to real commands and hides terminal-session housekeeping", () => {
+    const terminalRun = {
+      id: "terminal-run",
+      input: JSON.stringify({ command: "npm.cmd test", cwd: "." }),
+      label: "Run terminal command",
+      status: "complete" as const,
+      terminal: {
+        command: "npm.cmd test",
+        exitCode: 0,
+        shell: "powershell" as const,
+      },
+      toolId: "terminal_run",
+    };
+    const listSessions = {
+      id: "terminal-list",
+      label: "List terminal sessions",
+      status: "complete" as const,
+      toolId: "terminal_list_sessions",
+    };
+    const readSession = {
+      detail: "Could not read that terminal session.",
+      id: "terminal-read",
+      label: "Read terminal session",
+      output: "Could not read that terminal session.",
+      status: "error" as const,
+      toolId: "terminal_read_session",
+    };
+    const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
+      activitySnapshot: null,
+      message: assistantMessage({
+        toolCalls: [terminalRun, listSessions, readSession],
+      }),
+      responseStarted: false,
+      thinkingContent: "",
+      thinkingStreaming: false,
+      workTrace: [
+        {
+          content: "Running commands.",
+          id: "thinking-terminal",
+          kind: "thinking",
+          status: "complete",
+        },
+        {
+          id: "tool-terminal-run",
+          kind: "tool",
+          toolCall: terminalRun,
+        },
+        {
+          id: "tool-terminal-list",
+          kind: "tool",
+          toolCall: listSessions,
+        },
+        {
+          content: "Read terminal session needs attention: Could not read that terminal session.",
+          id: "thinking-terminal-error",
+          kind: "thinking",
+          status: "complete",
+        },
+        {
+          id: "tool-terminal-read",
+          kind: "tool",
+          toolCall: readSession,
+        },
+      ],
+    }));
+
+    expect(html).toContain("Ran command");
+    expect(html).toContain("npm.cmd test");
+    expect(html).not.toContain("Running commands.");
+    expect(html).not.toContain("List terminal sessions");
+    expect(html).not.toContain("Read terminal session");
+    expect(html).not.toContain("Could not read that terminal session");
+    expect(html).not.toContain("needs attention");
+  });
+
   it("pre-renders completed thinking entries after the answer starts for instant expansion", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
@@ -981,13 +1126,13 @@ describe("assistant activity indicator", () => {
       thinkingStreaming: false,
       workTrace: [
         {
-          content: "First hidden work note should stay.",
+          content: "Reading workspace files.",
           id: "thinking-1",
           kind: "thinking",
           status: "complete",
         },
         {
-          content: "Second hidden work note should also stay.",
+          content: "Applying file changes.",
           id: "thinking-2",
           kind: "thinking",
           status: "complete",
@@ -998,9 +1143,9 @@ describe("assistant activity indicator", () => {
     expect(html).toContain("data-expanded=\"false\"");
     expect(html).toContain("aria-hidden=\"true\"");
     expect(html).toContain("inert=\"\"");
-    expect(html).toContain("Thinking");
-    expect(html).toContain("First hidden work note should stay.");
-    expect(html).toContain("Second hidden work note should also stay.");
+    expect(html).toContain("Worked");
+    expect(html).toContain("Reading workspace files.");
+    expect(html).toContain("Applying file changes.");
     expect(html).not.toContain("This live slot should not be required");
   });
 
@@ -1008,15 +1153,14 @@ describe("assistant activity indicator", () => {
     const html = renderToStaticMarkup(createElement(AssistantWorkTrace, {
       activitySnapshot: null,
       responseStarted: false,
-      thinkingContent: "First paragraph.\n\nSecond paragraph.",
+      thinkingContent: "Searching the workspace for renderer.",
       thinkingStreaming: true,
     }));
 
     expect(html).not.toContain("assistant-work");
     expect(html).not.toContain("assistant-activity");
     expect(html).toContain("assistant-thinking-markdown");
-    expect(html).toContain("First paragraph.");
-    expect(html).toContain("Second paragraph.");
+    expect(html).toContain("Searching the workspace for renderer.");
   });
 
   it("estimates multi-file patch additions and deletions while running", () => {

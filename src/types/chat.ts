@@ -338,6 +338,7 @@ export interface ChatSummary {
   id: string;
   isDraft?: boolean;
   messages: ChatMessage[];
+  messagesLoaded?: boolean;
   model?: string;
   pinned?: boolean;
   project: string;

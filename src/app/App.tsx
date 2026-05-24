@@ -1,26 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 
-import { initializeDeviceStorage, loadDiscordBridgeSettings, saveDiscordBridgeSettings, setStorageNamespace } from "../lib/appStorage";
-import { scheduleIdleTask } from "../lib/idleTask";
+import { initializeDeviceStorage, setStorageNamespace } from "../lib/appStorage";
+import { scheduleDelayedIdleTask } from "../lib/idleTask";
 import { AuthPage } from "../pages/AuthPage";
 import type { AuthSession } from "../types/auth";
 import { getAuthState, logoutLocalAccount } from "./authClient";
 import { AppStartupScreen } from "./bootstrap/AppStartupScreen";
 import { useExternalLinkRouting } from "./bootstrap/useExternalLinkRouting";
-import { createDiscordBridgeAutoStartKey, ensureDiscordBridgeAutoStarted } from "./discordBridgeAutoStart";
 import {
   ensureNineRouterLocal,
   getAppInfo,
   getNineRouterLocalStatus,
   installNineRouterLocal,
   isTauriDesktopRuntime,
+  setNineRouterLocalAutoStart,
   stopDiscordBridge,
   stopNineRouterLocal,
 } from "./tauriClient";
 import { WorkspaceApp } from "./workspace/WorkspaceApp";
 
 const NINE_ROUTER_APP_BOOTSTRAP_VERSION_PREFIX = "gilbert-codex.nine-router.bootstrap-version.v1.";
-const NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS = 1_500;
+const NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS = 8_000;
+const NINE_ROUTER_APP_BOOTSTRAP_IDLE_TIMEOUT_MS = 5_000;
 
 export function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
@@ -28,7 +29,6 @@ export function App() {
   const [authBootstrapped, setAuthBootstrapped] = useState(false);
   const [authHasAccounts, setAuthHasAccounts] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const discordAppAutoStartKeyRef = useRef<string | null>(null);
   const nineRouterAppBootstrapKeyRef = useRef<string | null>(null);
 
   useExternalLinkRouting();
@@ -74,34 +74,6 @@ export function App() {
 
   useEffect(() => {
     if (!authSession || !isTauriDesktopRuntime()) {
-      discordAppAutoStartKeyRef.current = null;
-      return;
-    }
-
-    const settings = loadDiscordBridgeSettings();
-    const autoStartKey = createDiscordBridgeAutoStartKey(settings);
-
-    if (!autoStartKey || discordAppAutoStartKeyRef.current === autoStartKey) {
-      return;
-    }
-
-    discordAppAutoStartKeyRef.current = autoStartKey;
-
-    return scheduleIdleTask(() => {
-      void ensureDiscordBridgeAutoStarted(settings)
-        .then((result) => {
-          if (result.settings !== settings) {
-            saveDiscordBridgeSettings(result.settings);
-          }
-        })
-        .catch(() => {
-          discordAppAutoStartKeyRef.current = null;
-        });
-    }, 500);
-  }, [authSession]);
-
-  useEffect(() => {
-    if (!authSession || !isTauriDesktopRuntime()) {
       nineRouterAppBootstrapKeyRef.current = null;
       return;
     }
@@ -113,11 +85,11 @@ export function App() {
 
     nineRouterAppBootstrapKeyRef.current = bootstrapKey;
 
-    return scheduleIdleTask(() => {
+    return scheduleDelayedIdleTask(() => {
       void bootstrapNineRouterForAppStart(bootstrapKey).catch((error) => {
         console.warn("Background subscription bootstrap failed", error);
       });
-    }, NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS);
+    }, NINE_ROUTER_APP_BOOTSTRAP_DELAY_MS, NINE_ROUTER_APP_BOOTSTRAP_IDLE_TIMEOUT_MS);
   }, [authSession]);
 
   async function handleLogout() {
@@ -176,6 +148,17 @@ async function bootstrapNineRouterForAppStart(userId: string) {
         return;
       }
     }
+  }
+
+  if (!status.installed) {
+    return;
+  }
+
+  if (!status.running || !status.autoStartEnabled) {
+    status = await setNineRouterLocalAutoStart(true).catch(async (error) => {
+      console.warn("Could not enable subscription auto-start", error);
+      return status.running ? status : await ensureNineRouterLocal();
+    });
   }
 
   if (!status.running) {

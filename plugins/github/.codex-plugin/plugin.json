@@ -1,0 +1,48 @@
+{
+  "name": "github",
+  "version": "0.1.0",
+  "description": "GitHub workflows for local Git state, repository metadata, branches, commits, completed issues, issue lifecycle, pull request reviews, releases, Actions, security alerts, notifications, semantic discovery, and advanced REST API work.",
+  "author": {
+    "name": "Gilbert Codex",
+    "email": "support@gilbertcodex.local",
+    "url": "https://github.com/UrbanWafflezz/GilbertCodex"
+  },
+  "homepage": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "repository": "https://github.com/UrbanWafflezz/GilbertCodex",
+  "license": "MIT",
+  "keywords": [
+    "github",
+    "git",
+    "repositories",
+    "pull-requests",
+    "issues",
+    "actions"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "GitHub",
+    "shortDescription": "Inspect and operate GitHub repositories, issues, PRs, Actions, security, notifications, releases, and local Git.",
+    "longDescription": "GitHub gives Gilbert Codex a first-party plugin surface for connected account state, local working-tree checks, branch and commit workflows, repository stats, tags, completed-issue discovery, full issue lifecycle actions, pull request reviews and reviewers, release notes, releases, workflow dispatch and run inspection, jobs, artifacts, security alerts, notifications, local vector-ranked discovery, and advanced GitHub REST API coverage.",
+    "developerName": "Gilbert Codex",
+    "category": "Development",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/",
+    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
+    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
+    "defaultPrompt": [
+      "Check this repository's GitHub issues and summarize what needs attention.",
+      "Create a branch and draft a pull request for these changes.",
+      "Show recent GitHub Actions failures and tell me what broke."
+    ],
+    "brandColor": "#24292F",
+    "composerIcon": "./assets/github.svg",
+    "logo": "./assets/github.svg",
+    "screenshots": []
+  }
+}

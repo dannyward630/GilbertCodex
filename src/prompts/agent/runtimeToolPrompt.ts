@@ -1,6 +1,7 @@
 import type { ProviderSettings } from "../../types/settings";
 import type { ProviderToolBridgeOptions, ToolCapabilityPlan, ToolDefinition, ToolBridgePermissionRequirement, ToolBridgeRisk } from "../../toolBridge/types";
 import { DEFAULT_INSTALLED_PLUGIN_IDS, PLUGIN_LISTINGS } from "../../features/plugins/pluginCatalog";
+import { FINAL_RESPONSE_STYLE_GUIDANCE } from "./finalResponseStyle";
 
 export interface RuntimeToolPromptInput {
   hasLocalComputerContext: boolean;
@@ -22,6 +23,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
   const attachedTools = getAttachedToolSummaries(toolBridge);
   const attachedToolIds = new Set(attachedTools.map((tool) => tool.id));
   const capabilityPlan = toolBridge?.capabilityPlan;
+  const promptAuditRequest = isPromptAuditRequest(latestUserPrompt);
   const hasTool = (id: string) => attachedToolIds.has(id);
   const hasToolIdPrefix = (prefix: string) => attachedTools.some((tool) => tool.id.startsWith(prefix));
   const hasAnyToolFamily = (...families: string[]) => attachedTools.some((tool) => families.includes(tool.family));
@@ -38,7 +40,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? "Use memory_search as the selective path to saved local chat/project memory and tool lessons. Do not assume memory was preloaded into the prompt; query it when prior decisions, earlier chats, project continuity, or previous tool failures could matter."
       : "",
     hasTool("terminal_run")
-      ? "Terminal commands are available only through the terminal_run tool, which runs inside the active workspace/full-computer roots with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. Use terminal_run for clone/download/package-install/build/test workflows and for binary asset copies when text-file tools are not the right fit. The app permission UI handles any required approval. For dev servers/watchers, call terminal_run only once per matching command/cwd/preview target; if startup output is quiet, poll terminal_read_session instead of starting another copy. Match the active shell dialect: on Windows/PowerShell, do not use Unix-only commands such as `mkdir -p`, `ls -la`, or `wc -l`; use files_create_directory/files_list/files_count_lines when attached, or PowerShell-native commands."
+      ? "Terminal commands are available only through the terminal_run tool, which runs inside the active workspace/full-computer roots with a cwd, timeout, captured output, and optional background session for dev servers. Put the target folder in cwd/workingDirectory; do not prefix commands with `cd ... &&`. Use terminal_run for clone/download/package-install/build/test workflows and for binary asset copies when text-file tools are not the right fit. The app permission UI handles any required approval. For dev servers/watchers, call terminal_run only once per matching command/cwd/preview target; if startup output is quiet, poll terminal_read_session instead of starting another copy. Match the active shell dialect: use PowerShell syntax for PowerShell, Command Prompt syntax for cmd, and Unix syntax only for bash/sh/zsh/WSL. Prefer files_create_directory/files_list/files_count_lines when attached instead of terminal mkdir/ls/wc commands."
       : "",
     hasTool("terminal_list_sessions") || hasTool("terminal_read_session") || hasTool("terminal_dev_server_status")
       ? "Run diagnostics are attached for this request. Before starting a dev server or watcher, call terminal_list_sessions and terminal_dev_server_status to reuse only app-owned sessions or reachable localhost servers that match the requested command/cwd/preview target. Do not open or reuse unrelated common localhost ports returned as diagnostics. Use terminal_read_session to inspect app-owned session output after startup and during verification. External Windows Terminal, PowerShell, cmd, or other non-Gilbert terminal scrollback is not readable; if full logs are needed, say that honestly and offer to restart or run the command inside Gilbert's integrated terminal."
@@ -56,7 +58,7 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
       ? formatWebSearchToolGuidance(latestUserPrompt)
       : "",
     hasAnyToolFamily("mcp")
-      ? "MCP tools are attached for this request. Use mcp_list_servers to discover configured servers, mcp_list_tools to refresh a server's available tool names and input schemas, and mcp_call_tool only after choosing the exact serverId, toolName, and JSON arguments. Treat MCP results as external tool output; do not claim an MCP action ran unless the tool call returns a result."
+      ? "MCP tools are attached for this request. Use mcp_list_servers to discover configured servers, mcp_list_tools to refresh a server's available tool names and input schemas, and mcp_call_tool only after choosing the exact serverId, toolName, and JSON arguments. Treat MCP results as external tool output; do not claim an MCP action ran unless the tool call returns a result. For Firebase MCP, do not use firebase_login/auth.firebase.tools links; those provider auth-proxy links can fail in desktop OAuth. If Firebase is not logged in and terminal_run is attached, run `npx.cmd -y firebase-tools@latest login --reauth` yourself with terminal_run in the user's workspace, then tell the user only to finish the Google browser sign-in. Ask the user to run that command manually only when terminal_run is not attached."
       : "",
     hasAnyToolFamily("gmail")
       ? "Gmail tools are attached for this request. When a Gmail draft or send depends on the current project, codebase, files, Git status/diff, uploaded attachments, MCP results, calendar details, or other available context, gather the relevant evidence with attached tools first; then compose from that evidence. Write outgoing Gmail bodies in clean Markdown by default, using real Markdown for lists, links, emphasis, and readable spacing; omit contentType unless the user explicitly asks for plain text or raw HTML. Use the connected account name from gmail_account for sender closings; never leave placeholders like [Your Name]. For new emails, omit reply-only fields such as threadId, inReplyTo, and references instead of filling them with spaces, dashes, or placeholder text. Do not invent project or mailbox details. Sending remains approval-gated, so do not claim an email was sent until the Gmail tool result proves it."
@@ -89,10 +91,20 @@ export function createRuntimeToolPrompt({ hasLocalComputerContext, hasWebContext
     hasExactToolBridge && attachedTools.length === 0 ? "No provider tools are attached. Answer from chat, attachments, and already-provided context only." : "",
     formatWorkModeGuidance(settings.workMode),
     formatAgentEnvironmentGuidance(settings.agentEnvironment),
-    "Visible answers should be direct, professional, senior-developer clear, and easy for non-experts to follow. Start with the direct answer, completed change, or most important finding; avoid filler, hedging, and process recaps before the answer. Be honest about uncertainty and limits in plain language. Use normal, valid GitHub-flavored Markdown prose. Do not wrap the whole answer in a fenced code block, and do not use code fences for ordinary summaries, plans, bullets, tables, or explanations. Use fenced code blocks only for actual code snippets, diffs, logs, terminal output, or code-only content the user explicitly requested; always close every fence. If you use a pipe table, include a complete delimiter row with the same number of columns as the header, or use bullets instead. Do not emit JSON envelopes, provider tool_calls, or raw tool-call markup as visible text. Never mention hidden tool protocols or unavailable tool syntax unless the user directly asks about tool availability.",
+    promptAuditRequest
+      ? "Prompt/tool-audit request detected. Keep the visible answer focused on prompt/tool configuration, token budget, concrete risks, and actionable optimization steps."
+      : "Visible answers should be direct, professional, senior-developer clear, and easy for non-experts to follow. Start with the direct answer, completed change, or most important finding; avoid filler, hedging, and process recaps before the answer. Be honest about uncertainty and limits in plain language.",
+    promptAuditRequest ? "" : FINAL_RESPONSE_STYLE_GUIDANCE,
+    promptAuditRequest
+      ? ""
+      : "Use normal, valid GitHub-flavored Markdown prose. Do not wrap the whole answer in a fenced code block, and do not use code fences for ordinary summaries, plans, bullets, tables, or explanations. Use fenced code blocks only for actual code snippets, diffs, logs, terminal output, or code-only content the user explicitly requested; always close every fence. If you use a pipe table, include a complete delimiter row with the same number of columns as the header, or use bullets instead. Do not emit JSON envelopes, provider tool_calls, or raw tool-call markup as visible text. Never mention hidden tool protocols or unavailable tool syntax unless the user directly asks about tool availability.",
   ];
 
   return sections.filter(Boolean).join("\n");
+}
+
+function isPromptAuditRequest(prompt: string) {
+  return /\b(?:system\s+prompt|prompt\s+(?:for|tokens?|budget|optimization)|tools?\s+(?:prompt|tokens?|budget)|token\s+(?:budget|usage|uses?))\b/i.test(prompt);
 }
 
 function formatBrowserToolGuidance(attachedToolIds: Set<string>) {

@@ -16,6 +16,7 @@ const DATABASE_FILE_NAME: &str = "Gilbert Database.sqlite3";
 const DATABASE_SCHEMA_VERSION: &str = "3";
 const DATABASE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const CHATS_STORAGE_KEY: &str = "gilbert-codex.chats.v1";
+const ACTIVE_CHAT_STORAGE_KEY: &str = "gilbert-codex.active-chat.v1";
 const PROVIDER_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.provider-settings.v1";
 const DISCORD_BRIDGE_STORAGE_KEY: &str = "gilbert-codex.discord-bridge.v1";
 const MAPBOX_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.mapbox-settings.v1";
@@ -296,9 +297,9 @@ pub struct DeviceStorageSnapshot {
     pub values: HashMap<String, String>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NamespaceProjectionMode {
-    #[cfg(test)]
     Full,
     Startup,
 }
@@ -341,7 +342,7 @@ pub fn load_namespace(
     let mut connection = open_database_at(&database_path)?;
 
     seed_missing_values(&mut connection, &namespace, seeds)?;
-    sync_namespace_projections(&connection, &namespace, NamespaceProjectionMode::Startup)?;
+    sync_startup_namespace_projections(&connection, &namespace)?;
 
     let mut statement = connection
         .prepare(
@@ -372,8 +373,13 @@ pub fn load_namespace(
 
     drop(statement);
 
-    if let Some(chats) = load_typed_chats_json(&connection, &namespace)? {
-        values.insert(CHATS_STORAGE_KEY.to_string(), chats);
+    if !values.contains_key(CHATS_STORAGE_KEY) {
+        let active_chat_id = values.get(ACTIVE_CHAT_STORAGE_KEY).map(String::as_str);
+
+        if let Some(chats) = load_startup_typed_chats_json(&connection, &namespace, active_chat_id)?
+        {
+            values.insert(CHATS_STORAGE_KEY.to_string(), chats);
+        }
     }
 
     Ok(DeviceStorageSnapshot {
@@ -418,6 +424,28 @@ pub fn read_value(
     value
         .map(|value| hydrate_storage_value(&namespace, &key, &value))
         .transpose()
+}
+
+pub fn load_chat(
+    app: &tauri::AppHandle,
+    namespace: &str,
+    chat_id: &str,
+) -> Result<Option<String>, String> {
+    let namespace = normalize_identifier(namespace, "storage namespace")?;
+    let chat_id = normalize_identifier(chat_id, "chat id")?;
+    let database_path = database_path(app)?;
+    let connection = open_database_at(&database_path)?;
+
+    if let Some(chat) = load_typed_chat_json_by_id(&connection, &namespace, &chat_id)? {
+        return Ok(Some(chat));
+    }
+
+    load_chat_json_from_app_storage(&connection, &namespace, &chat_id).map_err(|error| {
+        format!(
+            "Could not load chat from {}: {error}",
+            path_to_string(&database_path)
+        )
+    })
 }
 
 pub fn write_value(
@@ -1181,6 +1209,62 @@ fn seed_missing_values(
         .map_err(|error| format!("Could not commit local database migration: {error}"))
 }
 
+fn sync_startup_namespace_projections(
+    connection: &Connection,
+    namespace: &str,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT storage_key, storage_value
+             FROM app_storage
+             WHERE namespace = ?1
+               AND storage_key IN ('gilbert-codex.chats.v1', 'gilbert-codex.projects.v1')",
+        )
+        .map_err(|error| format!("Could not prepare startup database projection sync: {error}"))?;
+    let rows = statement
+        .query_map(params![namespace], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| format!("Could not read startup database projections: {error}"))?;
+    let mut values = Vec::new();
+
+    for row in rows {
+        let (key, value) = row.map_err(|error| {
+            format!("Could not decode startup database projection row: {error}")
+        })?;
+        values.push((key, value));
+    }
+
+    drop(statement);
+
+    for (key, value) in values {
+        if key == CHATS_STORAGE_KEY
+            && !should_sync_startup_chat_projection(connection, namespace, &value)?
+        {
+            continue;
+        }
+
+        sync_storage_projection(connection, namespace, &key, &value)?;
+    }
+
+    Ok(())
+}
+
+fn should_sync_startup_chat_projection(
+    connection: &Connection,
+    namespace: &str,
+    value: &str,
+) -> Result<bool, String> {
+    let incoming_count = json_array_count(value);
+
+    if incoming_count == 0 {
+        return Ok(false);
+    }
+
+    Ok(typed_chat_count(connection, namespace)? < incoming_count)
+}
+
+#[cfg(test)]
 fn sync_namespace_projections(
     connection: &Connection,
     namespace: &str,
@@ -1248,6 +1332,7 @@ fn sync_storage_projection(
     }
 }
 
+#[cfg(test)]
 fn is_memory_storage_key(key: &str) -> bool {
     key.starts_with(CHAT_MEMORY_STORAGE_PREFIX) || key.starts_with(PROJECT_MEMORY_STORAGE_PREFIX)
 }
@@ -1270,7 +1355,13 @@ fn sync_chat_records(
 
     for chat in chats {
         let chat_id = json_string(chat, "id", "unknown-chat");
-        let raw_json = serde_json::to_string(chat).unwrap_or_else(|_| "{}".to_string());
+        let Some(chat_to_store) =
+            resolve_chat_value_for_storage(chat, existing_chat_json.get(&chat_id))
+        else {
+            incoming_chat_ids.insert(chat_id);
+            continue;
+        };
+        let raw_json = serde_json::to_string(&chat_to_store).unwrap_or_else(|_| "{}".to_string());
         let chat_changed = existing_chat_json.get(&chat_id) != Some(&raw_json);
         incoming_chat_ids.insert(chat_id.clone());
 
@@ -1296,12 +1387,12 @@ fn sync_chat_records(
                     namespace,
                     chat_id,
                     storage_key,
-                    json_string(chat, "title", "New chat"),
-                    json_string(chat, "project", "No project"),
-                    json_string(chat, "updatedAt", ""),
-                    json_bool(chat, "archived") as i64,
-                    json_bool(chat, "pinned") as i64,
-                    json_array_len(chat, "messages") as i64,
+                    json_string(&chat_to_store, "title", "New chat"),
+                    json_string(&chat_to_store, "project", "No project"),
+                    json_string(&chat_to_store, "updatedAt", ""),
+                    json_bool(&chat_to_store, "archived") as i64,
+                    json_bool(&chat_to_store, "pinned") as i64,
+                    json_array_len(&chat_to_store, "messages") as i64,
                     raw_json.len() as i64,
                     raw_json,
                 ],
@@ -1309,7 +1400,7 @@ fn sync_chat_records(
             .map_err(|error| format!("Could not update chat database projection: {error}"))?;
 
         if chat_changed {
-            sync_chat_message_records(connection, namespace, &chat_id, chat)?;
+            sync_chat_message_records(connection, namespace, &chat_id, &chat_to_store)?;
         }
     }
 
@@ -1328,6 +1419,55 @@ fn sync_chat_records(
     }
 
     Ok(())
+}
+
+fn resolve_chat_value_for_storage(
+    chat: &Value,
+    existing_raw_json: Option<&String>,
+) -> Option<Value> {
+    if chat_messages_loaded(chat) {
+        return Some(strip_chat_storage_runtime_flags(chat.clone()));
+    }
+
+    let existing_raw_json = existing_raw_json?;
+    let mut existing_chat = serde_json::from_str::<Value>(existing_raw_json).ok()?;
+
+    if let Some(existing_object) = existing_chat.as_object_mut() {
+        for field in [
+            "archived",
+            "composerDraft",
+            "isDraft",
+            "model",
+            "pinned",
+            "project",
+            "provider",
+            "title",
+            "toolRuntimeVersion",
+            "updatedAt",
+        ] {
+            if let Some(value) = chat.get(field) {
+                existing_object.insert(field.to_string(), value.clone());
+            }
+        }
+
+        existing_object.remove("messagesLoaded");
+    }
+
+    Some(existing_chat)
+}
+
+fn chat_messages_loaded(chat: &Value) -> bool {
+    chat.get("messagesLoaded")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn strip_chat_storage_runtime_flags(mut chat: Value) -> Value {
+    if let Some(object) = chat.as_object_mut() {
+        object.remove("messagesLoaded");
+    }
+
+    chat
 }
 
 fn existing_chat_raw_json(
@@ -1385,6 +1525,168 @@ fn load_typed_chats_json(
     serde_json::to_string(&chats)
         .map(Some)
         .map_err(|error| format!("Could not serialize typed chat list: {error}"))
+}
+
+fn load_startup_typed_chats_json(
+    connection: &Connection,
+    namespace: &str,
+    active_chat_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let rows = load_typed_chat_startup_rows(connection, namespace)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let active_chat_id = active_chat_id
+        .filter(|chat_id| {
+            rows.iter()
+                .any(|row| row.chat_id == *chat_id && !row.archived)
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            rows.iter()
+                .find(|row| !row.archived)
+                .or_else(|| rows.first())
+                .map(|row| row.chat_id.clone())
+        });
+    let mut chats = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        if active_chat_id.as_deref() == Some(row.chat_id.as_str()) {
+            if let Some(chat) = load_typed_chat_json_by_id(connection, namespace, &row.chat_id)?
+                .and_then(|raw_json| serde_json::from_str::<Value>(&raw_json).ok())
+            {
+                chats.push(mark_chat_messages_loaded(chat));
+                continue;
+            }
+        }
+
+        chats.push(startup_chat_summary_value(&row));
+    }
+
+    serde_json::to_string(&chats)
+        .map(Some)
+        .map_err(|error| format!("Could not serialize startup chat list: {error}"))
+}
+
+struct StartupChatRow {
+    archived: bool,
+    chat_id: String,
+    message_count: i64,
+    pinned: bool,
+    project_name: String,
+    title: String,
+    updated_at: String,
+}
+
+fn load_typed_chat_startup_rows(
+    connection: &Connection,
+    namespace: &str,
+) -> Result<Vec<StartupChatRow>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT chat_id, title, project_name, updated_at, archived, pinned, message_count
+             FROM chat_records
+             WHERE namespace = ?1
+             ORDER BY updated_at DESC, indexed_at DESC",
+        )
+        .map_err(|error| format!("Could not prepare startup typed chat load: {error}"))?;
+    let rows = statement
+        .query_map(params![namespace], |row| {
+            Ok(StartupChatRow {
+                chat_id: row.get::<_, String>(0)?,
+                title: row.get::<_, String>(1)?,
+                project_name: row.get::<_, String>(2)?,
+                updated_at: row.get::<_, String>(3)?,
+                archived: row.get::<_, i64>(4)? != 0,
+                pinned: row.get::<_, i64>(5)? != 0,
+                message_count: row.get::<_, i64>(6)?,
+            })
+        })
+        .map_err(|error| format!("Could not read startup typed chats: {error}"))?;
+    let mut chats = Vec::new();
+
+    for row in rows {
+        chats.push(row.map_err(|error| format!("Could not decode startup typed chat: {error}"))?);
+    }
+
+    Ok(chats)
+}
+
+fn startup_chat_summary_value(row: &StartupChatRow) -> Value {
+    json!({
+        "archived": row.archived,
+        "id": row.chat_id,
+        "isDraft": row.message_count == 0,
+        "messages": [],
+        "messagesLoaded": false,
+        "pinned": row.pinned,
+        "project": row.project_name,
+        "title": if row.title.trim().is_empty() { "New chat" } else { row.title.as_str() },
+        "updatedAt": row.updated_at,
+    })
+}
+
+fn mark_chat_messages_loaded(mut chat: Value) -> Value {
+    if let Some(object) = chat.as_object_mut() {
+        object.insert("messagesLoaded".to_string(), Value::Bool(true));
+    }
+
+    chat
+}
+
+fn load_typed_chat_json_by_id(
+    connection: &Connection,
+    namespace: &str,
+    chat_id: &str,
+) -> Result<Option<String>, String> {
+    connection
+        .query_row(
+            "SELECT raw_json
+             FROM chat_records
+             WHERE namespace = ?1 AND chat_id = ?2",
+            params![namespace, chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not load typed chat: {error}"))
+}
+
+fn load_chat_json_from_app_storage(
+    connection: &Connection,
+    namespace: &str,
+    chat_id: &str,
+) -> Result<Option<String>, String> {
+    let stored_chats = connection
+        .query_row(
+            "SELECT storage_value
+             FROM app_storage
+             WHERE namespace = ?1 AND storage_key = ?2",
+            params![namespace, CHATS_STORAGE_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not read legacy chat storage: {error}"))?;
+    let Some(stored_chats) = stored_chats else {
+        return Ok(None);
+    };
+    let Ok(chats) = serde_json::from_str::<Value>(&stored_chats) else {
+        return Ok(None);
+    };
+    let Some(chats) = chats.as_array() else {
+        return Ok(None);
+    };
+
+    for chat in chats {
+        if json_string(chat, "id", "") == chat_id {
+            return serde_json::to_string(chat)
+                .map(Some)
+                .map_err(|error| format!("Could not serialize legacy chat: {error}"));
+        }
+    }
+
+    Ok(None)
 }
 
 fn typed_chat_count(connection: &Connection, namespace: &str) -> Result<u64, String> {
@@ -2512,6 +2814,114 @@ mod tests {
 
         assert_eq!(count, 1);
         assert_eq!(chunk_id, "chunk-c");
+    }
+
+    #[test]
+    fn startup_chat_projection_skips_current_typed_rows() {
+        let connection = open_test_connection();
+        let one_chat = serde_json::json!([{
+            "id": "chat-1",
+            "title": "Startup perf",
+            "project": "GilbertCodex",
+            "updatedAt": "2026-05-24T10:00:00.000Z",
+            "messages": []
+        }])
+        .to_string();
+        let two_chats = serde_json::json!([
+            {
+                "id": "chat-1",
+                "title": "Startup perf",
+                "project": "GilbertCodex",
+                "updatedAt": "2026-05-24T10:00:00.000Z",
+                "messages": []
+            },
+            {
+                "id": "chat-2",
+                "title": "Needs projection",
+                "project": "GilbertCodex",
+                "updatedAt": "2026-05-24T10:01:00.000Z",
+                "messages": []
+            }
+        ])
+        .to_string();
+
+        sync_chat_records(&connection, "user.test", CHATS_STORAGE_KEY, &one_chat).unwrap();
+
+        assert!(!should_sync_startup_chat_projection(&connection, "user.test", &one_chat).unwrap());
+        assert!(should_sync_startup_chat_projection(&connection, "user.test", &two_chats).unwrap());
+    }
+
+    #[test]
+    fn startup_typed_chat_load_hydrates_only_active_chat() {
+        let connection = open_test_connection();
+        let value = serde_json::json!([
+            {
+                "id": "chat-1",
+                "title": "Older chat",
+                "project": "GilbertCodex",
+                "updatedAt": "2026-05-24T10:00:00.000Z",
+                "messages": [{ "id": "message-1", "role": "user", "content": "older" }]
+            },
+            {
+                "id": "chat-2",
+                "title": "Active chat",
+                "project": "GilbertCodex",
+                "updatedAt": "2026-05-24T10:01:00.000Z",
+                "messages": [{ "id": "message-2", "role": "user", "content": "active" }]
+            }
+        ])
+        .to_string();
+
+        sync_chat_records(&connection, "user.test", CHATS_STORAGE_KEY, &value).unwrap();
+
+        let startup_json = load_startup_typed_chats_json(&connection, "user.test", Some("chat-2"))
+            .unwrap()
+            .unwrap();
+        let chats = serde_json::from_str::<Value>(&startup_json).unwrap();
+        let chats = chats.as_array().unwrap();
+        let older_chat = chats.iter().find(|chat| chat["id"] == "chat-1").unwrap();
+        let active_chat = chats.iter().find(|chat| chat["id"] == "chat-2").unwrap();
+
+        assert_eq!(older_chat["messages"].as_array().unwrap().len(), 0);
+        assert_eq!(older_chat["messagesLoaded"], false);
+        assert_eq!(active_chat["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(active_chat["messagesLoaded"], true);
+    }
+
+    #[test]
+    fn sync_chat_records_preserves_messages_for_unloaded_chat_summary() {
+        let connection = open_test_connection();
+        let full_value = serde_json::json!([{
+            "id": "chat-1",
+            "title": "Before",
+            "project": "GilbertCodex",
+            "updatedAt": "2026-05-24T10:00:00.000Z",
+            "messages": [{ "id": "message-1", "role": "user", "content": "keep me" }]
+        }])
+        .to_string();
+        let summary_value = serde_json::json!([{
+            "id": "chat-1",
+            "messages": [],
+            "messagesLoaded": false,
+            "pinned": true,
+            "project": "GilbertCodex",
+            "title": "After",
+            "updatedAt": "2026-05-24T10:01:00.000Z"
+        }])
+        .to_string();
+
+        sync_chat_records(&connection, "user.test", CHATS_STORAGE_KEY, &full_value).unwrap();
+        sync_chat_records(&connection, "user.test", CHATS_STORAGE_KEY, &summary_value).unwrap();
+
+        let raw_json = load_typed_chat_json_by_id(&connection, "user.test", "chat-1")
+            .unwrap()
+            .unwrap();
+        let chat = serde_json::from_str::<Value>(&raw_json).unwrap();
+
+        assert_eq!(chat["title"], "After");
+        assert_eq!(chat["pinned"], true);
+        assert_eq!(chat["messages"].as_array().unwrap().len(), 1);
+        assert!(chat.get("messagesLoaded").is_none());
     }
 
     #[test]
