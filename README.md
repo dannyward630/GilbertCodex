@@ -45,7 +45,7 @@ Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace wo
 
 | Area | v0.8.x upgrade |
 | --- | --- |
-| v0.8.1 hotfixes | MCP stdio servers now stay alive per configured server while the app is open, Firebase deploy recovery has clearer CLI fallbacks, Discord can find ngrok from local tools/PATH/common Windows installs, 9Router exposes private-LAN URLs, and CI/release runners are pinned for a steadier all-platform build. |
+| v0.8.1 hotfixes | MCP stdio servers now stay alive per configured server while the app is open, Firebase deploy recovery has clearer CLI fallbacks, Discord can find ngrok from local tools/PATH/common Windows installs, 9Router exposes private-LAN URLs, and CI/release runners are updated for a steadier all-platform build. |
 | MCP servers | Apps > MCP now supports remote HTTP, localhost HTTP, and command-line stdio servers, with secure bearer tokens/env vars, live setup testing, registry search, cached tool schemas, and chat-callable MCP tools. |
 | Skills | Skills are now app-managed reusable instruction bundles. Gilbert ships premade workflows, imports `SKILL.md` folders, supports custom skills, enables/disables skills, and can activate them by `$trigger` or prompt match. |
 | Plugins | The plugin directory is a working product surface with Discover, Installed, Create, and Marketplace views, 27 curated plugin listings, component/permission metadata, manifest previews, and supported routes into native apps, MCP presets, or skill imports. |

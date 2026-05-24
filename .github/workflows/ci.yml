@@ -23,7 +23,7 @@ concurrency:
 jobs:
   frontend-build:
     name: frontend-build
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -45,7 +45,7 @@ jobs:
 
   rust-host:
     name: rust-host
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
