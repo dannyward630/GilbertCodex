@@ -39,6 +39,7 @@
     "audit:prod": "npm audit --omit=dev",
     "check": "npm run build && npm run rust:fmt:check && npm run rust:check",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-whisper-command.ps1 tauri",
+    "tauri:direct": "tauri",
     "app:dev": "tauri dev",
     "app:dev:dictation": "npm run dictation:model && npm run dictation:vulkan-sdk && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-whisper-command.ps1 tauri dev --features offline-dictation-gpu",
     "app:dev:macos": "tauri dev --config src-tauri/tauri.macos.conf.json",

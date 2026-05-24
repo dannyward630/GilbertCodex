@@ -24,7 +24,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check private release overlay config
         shell: pwsh
@@ -41,7 +41,7 @@ jobs:
           }
 
       - name: Check out private release overlay
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
           ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
@@ -87,7 +87,7 @@ jobs:
           }
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -301,7 +301,7 @@ jobs:
             asset_arch: x64
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check private release overlay config
         shell: bash
@@ -319,7 +319,7 @@ jobs:
           fi
 
       - name: Check out private release overlay
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
           ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
@@ -361,7 +361,7 @@ jobs:
           fi
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -445,6 +445,7 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
+          tauriScript: npm run tauri:direct
           args: --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.updater.conf.json
           includeUpdaterJson: true
           assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
@@ -483,7 +484,7 @@ jobs:
     needs: macos
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check private release overlay config
         shell: bash
@@ -501,7 +502,7 @@ jobs:
           fi
 
       - name: Check out private release overlay
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY }}
           ref: ${{ vars.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || secrets.GILBERT_PRIVATE_RELEASE_OVERLAY_REF || 'main' }}
@@ -559,7 +560,7 @@ jobs:
             wget
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -642,6 +643,7 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
+          tauriScript: npm run tauri:direct
           args: --bundles deb,appimage --config src-tauri/tauri.updater.conf.json
           includeUpdaterJson: true
           assetNamePattern: Gilbert-Codex-[version]-linux-x64[ext]
