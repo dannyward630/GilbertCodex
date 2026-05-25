@@ -45,7 +45,7 @@ Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace wo
 
 | Area | v0.8.x upgrade |
 | --- | --- |
-| v0.8.2 platform depth | The app now has a shared native command resolver for packaged macOS/Linux launches, host-aware build and release dispatch, platform updater configs, CI native-path checks, and release jobs for Windows x64, macOS Apple Silicon/Intel, and Linux x64. |
+| v0.8.2 platform depth | The app now has a shared native command resolver for packaged macOS/Linux launches, host-aware build and release dispatch, platform updater configs, CI native-path checks, release jobs for Windows x64 and Linux x64, and macOS release wiring gated by Apple Developer signing/notarization secrets. |
 | MCP servers | Apps > MCP supports remote HTTP, localhost HTTP, and command-line stdio servers, with secure bearer tokens, custom secret headers, secret query params, stdio env vars, live setup testing, registry search, cached tool schemas, and chat-callable MCP tools. |
 | Skills | Skills are now app-managed reusable instruction bundles. Gilbert ships premade workflows, imports `SKILL.md` folders, supports custom skills, enables/disables skills, and can activate them by `$trigger` or prompt match. |
 | Apps, plugins, and marketplace | The Apps hub now carries Discover, Installed, MCP, Skills, Create, and Marketplace paths with many more curated plugin listings, manifest previews, setup requirements, installed-state tags, and supported routes into native apps, MCP presets, registry search, or skill import. |
@@ -55,7 +55,7 @@ Known alpha issue: ChatGPT GPT-5.3 Spark is currently read-only for workspace wo
 | Tool reliability | Local computer tools gained stronger file-change evidence, batch write/edit summaries, stale-edit protection, binary handling, approval recovery, tool-output finalization, retry guidance for malformed tool calls, and stricter recovery when a connected-app or deployment answer lacks real tool evidence. |
 | Connected apps | Gmail, Google Calendar, GitHub, Discord, web search, browser preview, terminal, files, local Git, and MCP-backed services now fit into the same app-owned permission and progress model. |
 | Provider usage | Provider requests now track cached input and cache-write tokens where providers report them, estimate cache savings, and attach provider cache metadata for supported OpenAI/Anthropic/xAI routes. |
-| Cross-platform release | The GitHub Release workflow publishes Windows x64, macOS Apple Silicon, macOS Intel, and Linux x64 artifacts with updater signatures, checksums, and `latest.json` update-feed entries. |
+| Cross-platform release | The GitHub Release workflow publishes Windows x64 and Linux x64 artifacts with updater signatures, checksums, and `latest.json` update-feed entries. macOS Apple Silicon/Intel artifacts are wired in and skipped with a notice until Apple Developer signing/notarization secrets are configured. |
 
 ## Download
 
@@ -64,14 +64,14 @@ The v0.8.2 desktop alpha is the current build on [GitHub Releases](https://githu
 | Platform | Release artifacts |
 | --- | --- |
 | Windows x64 | `Gilbert-Codex-0.8.2-x64-setup.exe`, `.sig`, `.sha256` |
-| macOS Apple Silicon | `Gilbert-Codex-0.8.2-macos-aarch64.dmg`, updater archive, `.sig`, `.sha256` |
-| macOS Intel | `Gilbert-Codex-0.8.2-macos-x64.dmg`, updater archive, `.sig`, `.sha256` |
+| macOS Apple Silicon | Planned `Gilbert-Codex-0.8.2-macos-aarch64.dmg` artifacts; skipped until Apple signing/notarization secrets are configured |
+| macOS Intel | Planned `Gilbert-Codex-0.8.2-macos-x64.dmg` artifacts; skipped until Apple signing/notarization secrets are configured |
 | Linux x64 | `Gilbert-Codex-0.8.2-linux-x64.deb`, `Gilbert-Codex-0.8.2-linux-x64.AppImage`, `.sig`, `.sha256` |
-| Updater feed | `latest.json` with Windows, macOS, and Linux entries |
+| Updater feed | `latest.json` with Windows and Linux entries; macOS entries appear after Apple signing/notarization is configured |
 
-The release workflow builds Windows, macOS arm64, macOS x64, and Linux x64 on GitHub-hosted native runners.
+The release workflow builds Windows and Linux on GitHub-hosted native runners, runs macOS native checks, and publishes trusted macOS artifacts only when Apple Developer signing/notarization secrets are present.
 
-macOS and Linux packages are built on GitHub-hosted native runners and are now part of the release workflow, but they still need real-device launch smoke tests before those platforms should be called fully verified. The workflow now requires Apple Developer signing and notarization secrets before trusted macOS artifacts are published; local macOS inspection builds remain ad-hoc signed.
+macOS and Linux runtime paths are part of CI and the release workflow, but both platforms still need real-device launch smoke tests before they should be called fully verified. The workflow skips trusted macOS artifact publication until Apple Developer signing and notarization secrets are configured; local macOS inspection builds remain ad-hoc signed.
 
 ## Screenshots
 

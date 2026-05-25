@@ -402,6 +402,7 @@ jobs:
           fi
 
       - name: Check Apple signing and notarization secrets
+        id: apple_signing
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -419,11 +420,21 @@ jobs:
           done
 
           if (( ${#missing[@]} > 0 )); then
-            echo "::error::Missing Apple signing/notarization secrets: ${missing[*]}. Add these before publishing trusted macOS release artifacts."
-            exit 1
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Skipping trusted macOS release artifacts because Apple signing/notarization secrets are missing: ${missing[*]}. Add these secrets to publish macOS DMG/app updater artifacts."
+            exit 0
           fi
 
+          echo "available=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip macOS release artifacts
+        if: steps.apple_signing.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "Trusted macOS release artifacts were skipped because Apple Developer signing/notarization secrets are not configured yet."
+
       - name: Import Apple Developer ID certificate
+        if: steps.apple_signing.outputs.available == 'true'
         id: apple_certificate
         shell: bash
         env:
@@ -456,6 +467,7 @@ jobs:
           echo "signing_identity=${signing_identity}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve release tag
+        if: steps.apple_signing.outputs.available == 'true'
         id: release_tag
         shell: bash
         run: |
@@ -472,6 +484,7 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve release notes
+        if: steps.apple_signing.outputs.available == 'true'
         id: release_notes
         shell: bash
         run: |
@@ -496,6 +509,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Build macOS updater release
+        if: steps.apple_signing.outputs.available == 'true'
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -517,6 +531,7 @@ jobs:
           assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
 
       - name: Upload macOS checksums
+        if: steps.apple_signing.outputs.available == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

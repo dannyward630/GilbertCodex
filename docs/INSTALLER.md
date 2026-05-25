@@ -39,19 +39,22 @@ npm.cmd run app:release
 
 The generic `app:release` script dispatches by host OS: Windows builds the NSIS updater release, macOS builds app/DMG updater artifacts, and Linux builds deb/AppImage updater artifacts. Windows merges `src-tauri/tauri.updater.conf.json`; macOS and Linux use `src-tauri/tauri.macos.updater.conf.json` and `src-tauri/tauri.linux.updater.conf.json` so updater artifacts keep the same platform-specific bundle settings as normal local builds.
 
-The GitHub `Release` workflow builds the Windows NSIS installer, macOS app/DMG artifacts, and Linux deb/AppImage artifacts with the updater config. It reads the release body from `docs/releases/<tag>.md` when that file exists, computes SHA-256 checksum files for the downloadable artifacts, and uploads the packages, `.sha256` files, updater signatures, and merged `latest.json` feed to GitHub Releases. Push a `v*` tag or dispatch the workflow manually with the release version to start that updater release path. Manual dispatches create a draft release for review; tag pushes publish the release. Add these repository secrets before publishing an auto-update release:
+The GitHub `Release` workflow builds the Windows NSIS installer and Linux deb/AppImage artifacts with the updater config. It also has macOS app/DMG release jobs, but those jobs publish trusted macOS artifacts only when Apple Developer signing and notarization secrets are configured; otherwise they emit a notice and skip macOS artifact upload so Windows and Linux can continue. The workflow reads the release body from `docs/releases/<tag>.md` when that file exists, computes SHA-256 checksum files for the downloadable artifacts, and uploads the packages, `.sha256` files, updater signatures, and merged `latest.json` feed to GitHub Releases. Push a `v*` tag or dispatch the workflow manually with the release version to start that updater release path. Manual dispatches create a draft release for review; tag pushes publish the release. Add these repository secrets before publishing any updater release:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key is password-protected
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY`
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN`
+- `GILBERT_PRIVATE_RELEASE_OVERLAY_REF` when the private overlay should build from a branch or tag other than `main`
+
+Add these additional repository secrets before publishing trusted macOS release artifacts:
+
 - `APPLE_CERTIFICATE`
 - `APPLE_CERTIFICATE_PASSWORD`
 - `APPLE_ID`
 - `APPLE_PASSWORD`
 - `APPLE_TEAM_ID`
 - `KEYCHAIN_PASSWORD`
-- `GILBERT_PRIVATE_RELEASE_OVERLAY_REPOSITORY`
-- `GILBERT_PRIVATE_RELEASE_OVERLAY_TOKEN`
-- `GILBERT_PRIVATE_RELEASE_OVERLAY_REF` when the private overlay should build from a branch or tag other than `main`
 
 The private release overlay is a private repository that is checked out only inside GitHub Actions. It lets the public repository stay clean while the release runner restores app-only files before packaging. The overlay can contain:
 
@@ -65,7 +68,7 @@ plugins/
 
 The release workflow does not require GitHub OAuth, Google OAuth, support-link, provider-key, or other app-user credentials. GitHub and Google OAuth setup is entered by each user in Settings, provider keys stay in local app storage, and the public Cash App funding link is source-level public metadata. Other optional funding-link overrides remain local build configuration only. Do not add app-user OAuth client secrets, tokens, downloaded Google credential JSON, provider keys, or private account data to release variables.
 
-The current macOS local bundle config uses ad-hoc signing (`signingIdentity = "-"`) so local builds can still be inspected without Apple credentials. The GitHub Release workflow requires a Developer ID Application certificate and Apple notarization secrets before publishing trusted macOS artifacts.
+The current macOS local bundle config uses ad-hoc signing (`signingIdentity = "-"`) so local builds can still be inspected without Apple credentials. The GitHub Release workflow skips macOS artifact publication until a Developer ID Application certificate and Apple notarization secrets are available.
 
 Offline dictation is prepared during the Windows release build. The workflow downloads and verifies the Whisper `ggml-base.en.bin` model, prepares pinned LLVM/libclang and Vulkan SDK assets under `.tools`, and builds with the `offline-dictation-gpu` feature so the packaged Windows app can use bundled offline voice input without committing the large model or SDK to the public repository. macOS and Linux release jobs build the standard desktop feature set and still bundle the prepared model resource through the shared Tauri build hook.
 
