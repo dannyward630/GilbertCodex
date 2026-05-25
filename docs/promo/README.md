@@ -2,7 +2,7 @@
 
 This folder contains a lightweight promotional scene for sharing Gilbert Codex as an open-source desktop agent workspace.
 
-Last reviewed for the v0.5.5 release prep on May 21, 2026. Recapture the screenshots after major composer, chat workspace, subscription, image-generation, voice, or settings UI changes so the public README does not drift behind the app.
+Last reviewed for the v0.8.2 release prep on May 25, 2026. Recapture the screenshots after major composer, chat workspace, subscription, image-generation, voice, Apps, MCP, Keys, or settings UI changes so the public README does not drift behind the app.
 
 ## Outputs
 

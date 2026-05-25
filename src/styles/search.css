@@ -37,7 +37,7 @@
   color: var(--text);
   border: 0;
   background: transparent;
-  font-size: 20px;
+  font-size: var(--font-size-20, 20px);
 }
 
 .search-input-row input::placeholder {
@@ -67,7 +67,7 @@
   margin: 0;
   padding: 0 28px;
   color: var(--text-dim);
-  font-size: 16px;
+  font-size: var(--font-size-16, 16px);
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -99,7 +99,7 @@
 .search-result span:first-child {
   min-width: 0;
   overflow: hidden;
-  font-size: 18px;
+  font-size: var(--font-size-18, 18px);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -110,7 +110,7 @@
   align-items: center;
   gap: 12px;
   color: var(--text-dim);
-  font-size: 16px;
+  font-size: var(--font-size-16, 16px);
   font-weight: 650;
 }
 
@@ -121,6 +121,6 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   text-align: center;
 }

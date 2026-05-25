@@ -1,6 +1,9 @@
 //! Local computer filesystem commands for workspace picking, indexing, Git status, and guarded file mutations.
 
-use crate::core::fs_utils::path_to_string;
+use crate::core::{
+    fs_utils::path_to_string,
+    native_path::{configure_native_path, resolve_native_executable},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -3770,10 +3773,7 @@ fn run_git_quick(path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_with_timeout(path: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut command = Command::new("git");
-
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    let mut command = git_command();
 
     let mut child = command
         .arg("-C")
@@ -3814,10 +3814,7 @@ fn run_git_owned_with_timeout(
     args: &[String],
     timeout: Duration,
 ) -> Result<String, String> {
-    let mut command = Command::new("git");
-
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    let mut command = git_command();
 
     let mut child = command
         .arg("-C")
@@ -3851,6 +3848,16 @@ fn run_git_owned_with_timeout(
             Err(error) => return Err(format!("Could not poll git: {}", error)),
         }
     }
+}
+
+fn git_command() -> Command {
+    let mut command = Command::new(resolve_native_executable("git"));
+    configure_native_path(&mut command);
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
 }
 
 fn parse_git_output(output: Output) -> Result<String, String> {

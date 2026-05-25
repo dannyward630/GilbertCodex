@@ -25,7 +25,7 @@ import {
   supportsProviderThinking,
 } from "../lib/models";
 import type { ModelPricing, ProviderModelMetadata } from "../lib/models";
-import { buildAgentSystemPrompt } from "../prompts/agent";
+import { buildAgentSystemPromptWithMetadata, type AgentSystemPromptBuild } from "../prompts/agent";
 import { ensureNineRouterLocal, isTauriDesktopRuntime, nineRouterLocalHttp, nineRouterLocalStream } from "../app/tauriClient";
 import type { NineRouterHttpStreamEvent } from "../app/tauriClient";
 import type { ChatAttachment, ChatMessage, ChatStreamTiming } from "../types/chat";
@@ -140,6 +140,8 @@ interface AnthropicMessageResponse {
     message?: string;
   };
   usage?: {
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
   };
@@ -176,6 +178,10 @@ interface ResponsesApiResponse {
   }>;
   output_text?: string;
   usage?: {
+    input_tokens_details?: {
+      cache_write_tokens?: number;
+      cached_tokens?: number;
+    };
     input_tokens?: number;
     output_tokens?: number;
     output_tokens_details?: {
@@ -232,12 +238,16 @@ interface AnthropicStreamChunk {
   index?: number;
   message?: {
     usage?: {
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
       input_tokens?: number;
       output_tokens?: number;
     };
   };
   type?: string;
   usage?: {
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
   };
@@ -312,8 +322,22 @@ interface ProviderStreamDelta {
   usage?: ProviderUsage;
 }
 
+type AnthropicSystemTextBlock = {
+  cache_control?: {
+    type: "ephemeral";
+  };
+  text: string;
+  type: "text";
+};
+
 export interface ProviderUsage {
+  cache_creation_input_tokens?: number;
+  cached_input_tokens?: number;
   completion_tokens?: number;
+  prompt_tokens_details?: {
+    cache_write_tokens?: number;
+    cached_tokens?: number;
+  };
   reasoning_tokens?: number;
   prompt_tokens?: number;
   total_tokens?: number;
@@ -995,6 +1019,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
   const apiKey = getProviderApiKey(settings);
   const preparedMessages = await prepareMessagesForMediaFallback(settings, messages, options);
   const model = modelForMessages(settings, preparedMessages);
+  const conversationCacheKey = createProviderConversationCacheKey(settings, preparedMessages, model);
 
   assertUsableSettings(settings.provider, apiKey, model);
   const nineRouterRuntimeStatus = await ensureProviderRuntimeReady(settings, options.signal);
@@ -1007,7 +1032,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
       joinUrl(getProviderBaseUrl(settings), "/messages"),
       {
         body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
-        headers: createProviderHeaders(settings.provider, apiKey),
+        headers: createProviderHeaders(settings.provider, apiKey, { conversationCacheKey }),
         method: "POST",
       },
       options.signal,
@@ -1039,7 +1064,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
       joinUrl(getProviderBaseUrl(settings), "/responses"),
       {
         body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
-        headers: createProviderHeaders(settings.provider, apiKey),
+        headers: createProviderHeaders(settings.provider, apiKey, { conversationCacheKey }),
         method: "POST",
       },
       options.signal,
@@ -1070,7 +1095,7 @@ export async function sendProviderMessage(settings: ProviderSettings, messages: 
     joinUrl(getProviderBaseUrl(settings), "/chat/completions"),
     {
       body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, false, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
-      headers: createProviderHeaders(settings.provider, apiKey),
+      headers: createProviderHeaders(settings.provider, apiKey, { conversationCacheKey }),
       method: "POST",
     },
     options.signal,
@@ -1111,6 +1136,7 @@ export async function streamProviderMessage(
   const apiKey = getProviderApiKey(settings);
   const preparedMessages = await prepareMessagesForMediaFallback(settings, messages, options);
   const model = modelForMessages(settings, preparedMessages);
+  const conversationCacheKey = createProviderConversationCacheKey(settings, preparedMessages, model);
   const useResponsesApi = usesResponsesApi(settings, model);
   const requestStartedAt = new Date().toISOString();
   const requestStartedMs = nowHighResolutionMs();
@@ -1137,7 +1163,7 @@ export async function streamProviderMessage(
       requestUrl,
       {
         body: JSON.stringify(createProviderRequestBody(settings, preparedMessages, model, true, options.toolBridge, options.contextWindowTokens, options.structuredOutput)),
-        headers: createProviderHeaders(settings.provider, apiKey),
+        headers: createProviderHeaders(settings.provider, apiKey, { conversationCacheKey }),
         method: "POST",
       },
       requestTimeout.signal,
@@ -1423,9 +1449,10 @@ export function createProviderChatRequestBody(
   contextWindowTokens?: number,
   structuredOutput?: ProviderStructuredOutputOptions,
 ) {
+  const systemPrompt = createProviderSystemPromptBuild(settings, messages, toolBridge);
   const body: Record<string, unknown> = {
     messages: [
-      { role: "system", content: createProviderSystemPrompt(settings, messages, toolBridge) },
+      { role: "system", content: systemPrompt.prompt },
       ...messages.map((message) => ({
         role: message.role,
         content: createProviderMessageContent(message, { contextWindowTokens }),
@@ -1443,7 +1470,9 @@ export function createProviderChatRequestBody(
   }
 
   applyReasoningToRequestBody(settings, body);
-  return applyToolBridgeToProviderRequest(body, "openai-compatible", toolBridge);
+  const bridgedBody = applyToolBridgeToProviderRequest(body, "openai-compatible", toolBridge);
+  applyPromptCacheMetadata(settings, bridgedBody, systemPrompt);
+  return bridgedBody;
 }
 
 export function createProviderStreamRequestBody(
@@ -1481,12 +1510,13 @@ export function createResponsesRequestBody(
   contextWindowTokens?: number,
   structuredOutput?: ProviderStructuredOutputOptions,
 ) {
+  const systemPrompt = createProviderSystemPromptBuild(settings, messages, toolBridge);
   const body: Record<string, unknown> = {
     input: messages.map((message) => ({
       content: createResponsesMessageContent(message, { contextWindowTokens }),
       role: message.role,
     })),
-    instructions: createProviderSystemPrompt(settings, messages, toolBridge),
+    instructions: systemPrompt.prompt,
     max_output_tokens: settings.maxTokens,
     model,
     stream,
@@ -1496,7 +1526,9 @@ export function createResponsesRequestBody(
   applyResponsesReasoningToRequestBody(settings, body);
   applyResponsesStructuredOutput(body, structuredOutput);
 
-  return applyToolBridgeToProviderRequest(body, "openai-responses", toolBridge);
+  const bridgedBody = applyToolBridgeToProviderRequest(body, "openai-responses", toolBridge);
+  applyPromptCacheMetadata(settings, bridgedBody, systemPrompt);
+  return bridgedBody;
 }
 
 export function createProviderRequestBody(
@@ -1764,7 +1796,7 @@ function createAnthropicRequestBody(
     })),
     model,
     stream,
-    system: createProviderSystemPrompt(settings, messages, toolBridge),
+    system: createAnthropicSystemPromptContent(settings, messages, toolBridge),
   };
 
   if (thinkingConfig.thinking) {
@@ -1814,8 +1846,105 @@ function createAnthropicMessageContent(message: ChatMessage, contextOptions: Con
   ];
 }
 
-function createProviderSystemPrompt(settings: ProviderSettings, messages: ChatMessage[], toolBridge?: ProviderToolBridgeOptions) {
-  return buildAgentSystemPrompt({ messages, settings, toolBridge });
+function createProviderSystemPromptBuild(settings: ProviderSettings, messages: ChatMessage[], toolBridge?: ProviderToolBridgeOptions) {
+  return buildAgentSystemPromptWithMetadata({ messages, settings, toolBridge });
+}
+
+function createAnthropicSystemPromptContent(settings: ProviderSettings, messages: ChatMessage[], toolBridge?: ProviderToolBridgeOptions) {
+  const systemPrompt = createProviderSystemPromptBuild(settings, messages, toolBridge);
+  const blocks = [
+    createAnthropicSystemTextBlock(systemPrompt.cacheablePrompt, true),
+    createAnthropicSystemTextBlock(systemPrompt.dynamicPrompt, false),
+  ].filter((block): block is AnthropicSystemTextBlock => Boolean(block));
+
+  return blocks.length > 0 ? blocks : systemPrompt.prompt;
+}
+
+function createAnthropicSystemTextBlock(text: string, cacheable: boolean): AnthropicSystemTextBlock | null {
+  const trimmed = text.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  return {
+    ...(cacheable ? { cache_control: { type: "ephemeral" } } : {}),
+    text: trimmed,
+    type: "text",
+  };
+}
+
+function applyPromptCacheMetadata(settings: ProviderSettings, body: Record<string, unknown>, systemPrompt: AgentSystemPromptBuild) {
+  if (settings.provider !== "openai") {
+    return;
+  }
+
+  const cacheKey = createProviderPromptCacheKey(settings, body, systemPrompt);
+
+  if (cacheKey) {
+    body.prompt_cache_key = cacheKey;
+  }
+}
+
+function createProviderPromptCacheKey(settings: ProviderSettings, body: Record<string, unknown>, systemPrompt: AgentSystemPromptBuild) {
+  const model = typeof body.model === "string" ? body.model : settings.model;
+  const toolNames = readProviderToolNames(body.tools).join(",");
+  const stablePrefix = systemPrompt.cacheablePrompt || systemPrompt.prompt.slice(0, 4096);
+  const hash = hashStableText(`${settings.provider}|${model}|${toolNames}|${stablePrefix}`);
+
+  return hash ? `gc-${hash}` : "";
+}
+
+function createProviderConversationCacheKey(settings: ProviderSettings, messages: ChatMessage[], model: string) {
+  if (settings.provider !== "xai") {
+    return undefined;
+  }
+
+  const anchorMessage = messages.find((message) => message.role === "user") ?? messages[0];
+  const anchor = [
+    anchorMessage?.id,
+    anchorMessage?.createdAt,
+    anchorMessage?.role,
+  ].filter(Boolean).join("|") || anchorMessage?.content.slice(0, 256) || model;
+  const hash = hashStableText(`${settings.provider}|${model}|${anchor}`);
+
+  return hash ? `gc-${hash}` : undefined;
+}
+
+function readProviderToolNames(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((tool) => {
+      if (!tool || typeof tool !== "object") {
+        return "";
+      }
+
+      const record = tool as Record<string, unknown>;
+      const functionValue = record.function;
+
+      if (functionValue && typeof functionValue === "object") {
+        const functionName = (functionValue as Record<string, unknown>).name;
+        return typeof functionName === "string" ? functionName : "";
+      }
+
+      const name = record.name;
+      return typeof name === "string" ? name : "";
+    })
+    .filter(Boolean)
+    .sort();
+}
+
+function hashStableText(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
 }
 
 function applyChatMaxTokens(settings: ProviderSettings, body: Record<string, unknown>) {
@@ -2078,7 +2207,7 @@ function mapReasoningEffort(providerId: ModelProviderId, effort: ReasoningEffort
   return effort;
 }
 
-function createProviderHeaders(providerId: ModelProviderId, apiKey: string) {
+function createProviderHeaders(providerId: ModelProviderId, apiKey: string, options: { conversationCacheKey?: string } = {}) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -2101,6 +2230,10 @@ function createProviderHeaders(providerId: ModelProviderId, apiKey: string) {
     headers["X-OpenRouter-Title"] = OPENROUTER_APP_TITLE;
     headers["X-OpenRouter-Categories"] = OPENROUTER_APP_CATEGORIES;
     headers["X-Title"] = OPENROUTER_APP_TITLE;
+  }
+
+  if (providerId === "xai" && options.conversationCacheKey) {
+    headers["x-grok-conv-id"] = options.conversationCacheKey;
   }
 
   return headers;
@@ -2514,16 +2647,27 @@ function normalizeProviderUsage(usage: ProviderUsage | null | undefined): Provid
     return undefined;
   }
 
+  const cacheCreationInputTokens = extractProviderCacheCreationInputTokens(usage);
+  const cachedInputTokens = extractProviderCachedInputTokens(usage);
   const promptTokens = normalizeUsageToken(usage.prompt_tokens);
   const completionTokens = normalizeUsageToken(usage.completion_tokens);
   const reasoningTokens = normalizeUsageToken(usage.reasoning_tokens);
   const totalTokens = normalizeUsageToken(usage.total_tokens);
 
-  if (promptTokens === undefined && completionTokens === undefined && reasoningTokens === undefined && totalTokens === undefined) {
+  if (
+    cacheCreationInputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    promptTokens === undefined &&
+    completionTokens === undefined &&
+    reasoningTokens === undefined &&
+    totalTokens === undefined
+  ) {
     return undefined;
   }
 
   return {
+    cache_creation_input_tokens: cacheCreationInputTokens,
+    cached_input_tokens: cachedInputTokens,
     completion_tokens: completionTokens,
     reasoning_tokens: reasoningTokens,
     prompt_tokens: promptTokens,
@@ -2532,16 +2676,27 @@ function normalizeProviderUsage(usage: ProviderUsage | null | undefined): Provid
 }
 
 function normalizeResponsesUsage(usage: ResponsesApiResponse["usage"] | undefined): ProviderUsage | undefined {
+  const cacheCreationInputTokens = normalizeUsageToken(usage?.input_tokens_details?.cache_write_tokens);
+  const cachedInputTokens = normalizeUsageToken(usage?.input_tokens_details?.cached_tokens);
   const promptTokens = normalizeUsageToken(usage?.input_tokens);
   const completionTokens = normalizeUsageToken(usage?.output_tokens);
   const reasoningTokens = normalizeUsageToken(usage?.output_tokens_details?.reasoning_tokens);
   const totalTokens = normalizeUsageToken(usage?.total_tokens) ?? (promptTokens !== undefined && completionTokens !== undefined ? promptTokens + completionTokens : undefined);
 
-  if (promptTokens === undefined && completionTokens === undefined && reasoningTokens === undefined && totalTokens === undefined) {
+  if (
+    cacheCreationInputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    promptTokens === undefined &&
+    completionTokens === undefined &&
+    reasoningTokens === undefined &&
+    totalTokens === undefined
+  ) {
     return undefined;
   }
 
   return {
+    cache_creation_input_tokens: cacheCreationInputTokens,
+    cached_input_tokens: cachedInputTokens,
     completion_tokens: completionTokens,
     reasoning_tokens: reasoningTokens,
     prompt_tokens: promptTokens,
@@ -2550,22 +2705,46 @@ function normalizeResponsesUsage(usage: ResponsesApiResponse["usage"] | undefine
 }
 
 function normalizeAnthropicUsage(usage: AnthropicMessageResponse["usage"] | AnthropicStreamChunk["usage"] | undefined): ProviderUsage | undefined {
-  const promptTokens = normalizeUsageToken(usage?.input_tokens);
+  const cacheCreationInputTokens = normalizeUsageToken(usage?.cache_creation_input_tokens);
+  const cachedInputTokens = normalizeUsageToken(usage?.cache_read_input_tokens);
+  const uncachedInputTokens = normalizeUsageToken(usage?.input_tokens);
+  const promptTokens = sumUsageTokens(uncachedInputTokens, cacheCreationInputTokens, cachedInputTokens);
   const completionTokens = normalizeUsageToken(usage?.output_tokens);
+  const totalTokens = sumUsageTokens(promptTokens, completionTokens);
 
-  if (promptTokens === undefined && completionTokens === undefined) {
+  if (promptTokens === undefined && completionTokens === undefined && cacheCreationInputTokens === undefined && cachedInputTokens === undefined) {
     return undefined;
   }
 
   return {
+    cache_creation_input_tokens: cacheCreationInputTokens,
+    cached_input_tokens: cachedInputTokens,
     completion_tokens: completionTokens,
     prompt_tokens: promptTokens,
-    total_tokens: promptTokens !== undefined && completionTokens !== undefined ? promptTokens + completionTokens : undefined,
+    total_tokens: totalTokens,
   };
 }
 
 function normalizeUsageToken(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+function extractProviderCachedInputTokens(usage: ProviderUsage) {
+  return normalizeUsageToken(usage.cached_input_tokens ?? usage.prompt_tokens_details?.cached_tokens);
+}
+
+function extractProviderCacheCreationInputTokens(usage: ProviderUsage) {
+  return normalizeUsageToken(usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_write_tokens);
+}
+
+function sumUsageTokens(...values: Array<number | undefined>) {
+  const normalized = values.filter((value): value is number => value !== undefined);
+
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  return normalized.reduce((total, value) => total + value, 0);
 }
 
 function extractProviderMessageOutput(
@@ -2704,6 +2883,7 @@ function normalizeProviderModelPricing(pricing: NonNullable<NonNullable<Provider
   }
 
   const normalizedPricing: ModelPricing = {
+    cacheWriteInputPerMillionTokens: parsePerTokenPrice(pricing.input_cache_write),
     cachedInputPerMillionTokens: parsePerTokenPrice(pricing.input_cache_read),
     imageInputUsd: parseUnitPrice(pricing.image),
     inputPerMillionTokens: parsePerTokenPrice(pricing.prompt),

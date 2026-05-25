@@ -7,8 +7,8 @@
   .desktop-root[data-runtime="web"] .conversation-body[data-right-rail-open="true"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="rail"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="rail-closing"],
-  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="review"],
-  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="review-closing"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="coding-sidecar"],
+  .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="coding-sidecar-closing"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="preview"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="preview-closing"],
   .desktop-root[data-runtime="web"] .conversation-body[data-side-layout="split"],
@@ -18,7 +18,6 @@
   }
 
   .desktop-root[data-runtime="web"] .conversation-body .right-rail,
-  .desktop-root[data-runtime="web"] .conversation-body .git-review-panel,
   .desktop-root[data-runtime="web"] .conversation-body .coding-sidecar-panel,
   .desktop-root[data-runtime="web"] .conversation-body .browser-preview-panel {
     display: none;
@@ -28,8 +27,8 @@
   .conversation-body[data-right-rail-open="true"],
   .conversation-body[data-side-layout="rail"],
   .conversation-body[data-side-layout="rail-closing"],
-  .conversation-body[data-side-layout="review"],
-  .conversation-body[data-side-layout="review-closing"],
+  .conversation-body[data-side-layout="coding-sidecar"],
+  .conversation-body[data-side-layout="coding-sidecar-closing"],
   .conversation-body[data-side-layout="preview"],
   .conversation-body[data-side-layout="preview-closing"],
   .conversation-body[data-side-layout="split"],
@@ -39,7 +38,6 @@
   }
 
   .conversation-body .right-rail,
-  .conversation-body .git-review-panel,
   .conversation-body .coding-sidecar-panel,
   .conversation-body .browser-preview-panel {
     display: none;

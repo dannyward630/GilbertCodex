@@ -93,4 +93,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.prompt).toContain("files_read_many");
     expect(prompt.prompt).toContain("budget: passes 12/12; executions 48/48");
   });
+
+  it("places stable core instructions before per-request runtime context for provider prompt caches", () => {
+    const prompt = buildAgentSystemPromptWithMetadata({
+      messages: [userMessage("run the tests")],
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [tool("terminal_run", "terminal")],
+      },
+    });
+
+    expect(prompt.cacheablePrompt).toContain("# Gilbert Codex Core");
+    expect(prompt.dynamicPrompt).toContain("# Current Runtime Context");
+    expect(prompt.prompt.indexOf("# Gilbert Codex Core")).toBeGreaterThanOrEqual(0);
+    expect(prompt.prompt.indexOf("# Gilbert Codex Core")).toBeLessThan(prompt.prompt.indexOf("# Current Runtime Context"));
+    expect(prompt.prompt.startsWith("# Current Runtime Context")).toBe(false);
+  });
 });

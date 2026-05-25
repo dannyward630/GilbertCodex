@@ -790,7 +790,7 @@ function getProviderPromptParts(
     return {
       draft: draftCount > 0 ? bodyMessages.slice(chatMessageCount, chatMessageCount + draftCount) : [],
       messages: bodyMessages.slice(0, chatMessageCount),
-      system: [requestBody.system],
+      system: Array.isArray(requestBody.system) ? requestBody.system : [requestBody.system],
     };
   }
 

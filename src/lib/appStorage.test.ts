@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendUsageHistoryRecord, clearUsageHistory, defaultProviderSettings, loadChats, loadPersistentString, loadProjects, loadProviderSettings, loadUsageHistory, saveChats, savePersistentString, saveProjects, saveProviderSettings, setStorageNamespace } from "./appStorage";
+import { appendUsageHistoryRecord, clearUsageHistory, defaultProviderSettings, deleteApiKeyRecord, loadApiKeyVault, loadChats, loadPersistentString, loadProjects, loadProviderSettings, loadUsageHistory, saveChats, savePersistentString, saveProjects, saveProviderSettings, setStorageNamespace, upsertApiKeyRecord } from "./appStorage";
 import { createEmptyChat } from "./chatUtils";
 import type { ChatSummary } from "../types/chat";
 
@@ -532,6 +532,9 @@ describe("app storage", () => {
       dateKey: "2026-05-19",
       dayKey: "2026-05-19",
       id: "usage-1",
+      cacheCreationInputTokens: 0,
+      cacheSavingsUsd: 0,
+      cachedInputTokens: 0,
       inputTokens: 900,
       model: "gpt-5.4-mini",
       monthKey: "2026-05",
@@ -544,6 +547,8 @@ describe("app storage", () => {
       totalCostUsd: 0.001125,
       totalTokens: 1000,
       unitCost: {
+        cacheCreationInputUsd: 0,
+        cachedInputUsd: 0,
         inputUsd: 0.000675,
         outputUsd: 0.00045,
         reasoningUsd: 0,
@@ -554,6 +559,8 @@ describe("app storage", () => {
     });
 
     expect(loadUsageHistory().records[0]).toMatchObject({
+      cacheCreationInputTokens: 0,
+      cachedInputTokens: 0,
       id: "usage-1",
       inputTokens: 900,
       model: "gpt-5.4-mini",
@@ -572,6 +579,9 @@ describe("app storage", () => {
       dateKey: "2026-05-19",
       dayKey: "2026-05-19",
       id: "usage-user-a-record",
+      cacheCreationInputTokens: 0,
+      cacheSavingsUsd: 0,
+      cachedInputTokens: 0,
       inputTokens: 450,
       model: "openrouter/free",
       monthKey: "2026-05",
@@ -667,5 +677,34 @@ describe("app storage", () => {
       messages: [],
       project: "Drafted project",
     });
+  });
+
+  it("persists the per-user Keys vault and allows key edits and deletes", () => {
+    const created = upsertApiKeyRecord({
+      keyName: "STRIPE SECRET KEY",
+      kind: "mcp",
+      label: "Stripe restricted key",
+      service: "Stripe",
+      value: " rk_test_123 ",
+    });
+    const savedKey = created.keys[0]!;
+
+    expect(savedKey).toMatchObject({
+      keyName: "STRIPE_SECRET_KEY",
+      kind: "mcp",
+      label: "Stripe restricted key",
+      service: "stripe",
+      value: "rk_test_123",
+    });
+    expect(loadApiKeyVault().keys).toHaveLength(1);
+
+    const edited = upsertApiKeyRecord({
+      ...savedKey,
+      value: "rk_test_456",
+    });
+
+    expect(edited.keys[0]?.id).toBe(savedKey?.id);
+    expect(edited.keys[0]?.value).toBe("rk_test_456");
+    expect(deleteApiKeyRecord(savedKey.id).keys).toEqual([]);
   });
 });

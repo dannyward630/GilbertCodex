@@ -2,9 +2,9 @@
 
 This guide explains how to prepare Discord so users can chat with Gilbert Codex from Discord.
 
-Last verified: May 14, 2026.
+Last updated: May 25, 2026 for the v0.8.2 build.
 
-Platform note: this bridge is verified on Windows. macOS and Linux are port-ready but need native testing, especially around ngrok process handling, local networking, notifications, and packaged-app behavior. See [Platform Support And Porting Notes](../platform/README.md).
+Platform note: the bridge has native command-path handling for Windows, macOS, and Linux, including common ngrok install locations. macOS and Linux still need packaged-app launch testing before the integration is marked fully verified there, especially around ngrok process handling, local networking, notifications, and desktop permission prompts. See [Platform Support And Porting Notes](../platform/README.md).
 
 ## What Works Today
 
@@ -73,15 +73,20 @@ Use this path when users should type a slash command and get a response from Gil
 
 6. Install ngrok if you want Gilbert to create the public HTTPS URL automatically.
 
-   On Windows, use one of the install methods from the ngrok quickstart, then confirm it works:
+   On Windows, use one of the install methods from the ngrok quickstart. On macOS, Homebrew installs are the smoothest path:
 
-   ```powershell
+   ```bash
+   brew install ngrok
    ngrok help
    ```
 
+   On Linux, use the ngrok quickstart package instructions for your distribution, or place the executable in a user bin directory such as `~/.local/bin`.
+
+   Packaged desktop apps do not always inherit your interactive shell `PATH`, so Gilbert also checks common macOS Homebrew and MacPorts locations, Linux user bin/Flatpak/Snap locations, and local helper folders before reporting that ngrok is missing. If ngrok is somewhere custom, paste its full executable path in Settings > Discord; the macOS/Linux verification scripts accept the same path through `GILBERT_NGROK_PATH`.
+
 7. Connect ngrok to your account once, or paste the auth token into Settings > Discord > ngrok auth token.
 
-   ```powershell
+   ```bash
    ngrok config add-authtoken YOUR_NGROK_AUTHTOKEN
    ```
 

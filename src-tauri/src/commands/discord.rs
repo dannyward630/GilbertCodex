@@ -1,3 +1,6 @@
+use crate::core::native_path::configure_native_path;
+#[cfg(not(windows))]
+use crate::core::native_path::native_runtime_path_dirs;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1132,6 +1135,7 @@ fn start_ngrok_tunnel(
     if let Some(token) = auth_token.as_deref() {
         command.arg("--authtoken").arg(token);
     }
+    configure_native_path(&mut command);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -1163,6 +1167,7 @@ fn check_ngrok_config(executable: &str) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
+    configure_native_path(&mut command);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -1215,7 +1220,7 @@ fn resolve_ngrok_executable_with_context(
         .unwrap_or("ngrok");
 
     if configured_path != "ngrok" {
-        let configured_candidate = PathBuf::from(configured_path);
+        let configured_candidate = expand_ngrok_path_value(configured_path);
 
         if let Some(executable) = resolve_ngrok_candidate(&configured_candidate) {
             return executable.to_string_lossy().to_string();
@@ -1231,24 +1236,24 @@ fn resolve_ngrok_executable_with_context(
 
             if is_bare_command_path(&configured_candidate) {
                 for executable in ngrok_command_path_candidates(path_dirs, configured_path) {
-                    if executable.is_file() {
+                    if is_ngrok_executable_file(&executable) {
                         return executable.to_string_lossy().to_string();
                     }
                 }
             }
         }
 
-        return configured_path.to_string();
+        return configured_candidate.to_string_lossy().to_string();
     }
 
     for candidate in ngrok_path_candidates(roots) {
-        if candidate.is_file() {
+        if is_ngrok_executable_file(&candidate) {
             return candidate.to_string_lossy().to_string();
         }
     }
 
     for candidate in ngrok_command_path_candidates(path_dirs, configured_path) {
-        if candidate.is_file() {
+        if is_ngrok_executable_file(&candidate) {
             return candidate.to_string_lossy().to_string();
         }
     }
@@ -1317,6 +1322,13 @@ fn ngrok_search_roots(app: &AppHandle) -> Vec<PathBuf> {
 fn ngrok_search_path_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
+    #[cfg(not(windows))]
+    {
+        for path_dir in native_runtime_path_dirs() {
+            push_ngrok_root(&mut dirs, path_dir);
+        }
+    }
+
     if let Some(path_value) = env::var_os("PATH") {
         for path_dir in env::split_paths(&path_value) {
             push_ngrok_root(&mut dirs, path_dir);
@@ -1382,8 +1394,67 @@ fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
     );
 }
 
-#[cfg(not(windows))]
-fn push_common_ngrok_dirs(_dirs: &mut Vec<PathBuf>) {}
+#[cfg(target_os = "macos")]
+fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
+    for directory in common_macos_ngrok_dirs(home_dir_for_path_expansion()) {
+        push_ngrok_root(dirs, directory);
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
+    for directory in common_unix_ngrok_dirs(home_dir_for_path_expansion()) {
+        push_ngrok_root(dirs, directory);
+    }
+}
+
+#[cfg(any(test, not(windows)))]
+fn common_unix_ngrok_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(home) = home {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join("bin"));
+        dirs.push(home.join(".cargo").join("bin"));
+        dirs.push(home.join(".npm-global").join("bin"));
+        dirs.push(home.join(".yarn").join("bin"));
+        dirs.push(home.join(".volta").join("bin"));
+        dirs.push(home.join(".asdf").join("shims"));
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(
+            home.join(".local")
+                .join("share")
+                .join("flatpak")
+                .join("exports")
+                .join("bin"),
+        );
+    }
+
+    if !cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/usr/bin"));
+        dirs.push(PathBuf::from("/bin"));
+        dirs.push(PathBuf::from("/snap/bin"));
+        dirs.push(PathBuf::from("/var/lib/flatpak/exports/bin"));
+    }
+
+    dirs
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn common_macos_ngrok_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = common_unix_ngrok_dirs(home);
+
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/opt/homebrew/sbin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs.push(PathBuf::from("/usr/local/sbin"));
+    dirs.push(PathBuf::from("/opt/local/bin"));
+    dirs.push(PathBuf::from("/usr/bin"));
+    dirs.push(PathBuf::from("/bin"));
+
+    dirs
+}
 
 fn push_ngrok_candidates(candidates: &mut Vec<PathBuf>, directory: PathBuf) {
     for executable_name in ngrok_executable_names("ngrok") {
@@ -1392,7 +1463,7 @@ fn push_ngrok_candidates(candidates: &mut Vec<PathBuf>, directory: PathBuf) {
 }
 
 fn resolve_ngrok_candidate(path: &Path) -> Option<PathBuf> {
-    if path.is_file() {
+    if is_ngrok_executable_file(path) {
         return Some(path.to_path_buf());
     }
 
@@ -1400,13 +1471,33 @@ fn resolve_ngrok_candidate(path: &Path) -> Option<PathBuf> {
         for executable_name in ngrok_executable_names("ngrok") {
             let executable = path.join(executable_name);
 
-            if executable.is_file() {
+            if is_ngrok_executable_file(&executable) {
                 return Some(executable);
             }
         }
     }
 
     None
+}
+
+fn is_ngrok_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    {
+        true
+    }
 }
 
 fn is_bare_command_path(path: &Path) -> bool {
@@ -1438,6 +1529,36 @@ fn trim_ngrok_path_value(value: &str) -> &str {
         .trim()
         .trim_matches(|character| character == '"' || character == '\'')
         .trim()
+}
+
+fn expand_ngrok_path_value(value: &str) -> PathBuf {
+    expand_home_relative_path(value, home_dir_for_path_expansion().as_deref())
+}
+
+fn expand_home_relative_path(value: &str, home: Option<&Path>) -> PathBuf {
+    let trimmed = trim_ngrok_path_value(value);
+    let Some(home) = home else {
+        return PathBuf::from(trimmed);
+    };
+
+    if trimmed == "~" {
+        return home.to_path_buf();
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        return home.join(rest);
+    }
+
+    PathBuf::from(trimmed)
+}
+
+fn home_dir_for_path_expansion() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -1770,11 +1891,61 @@ mod tests {
     }
 
     #[test]
+    fn resolves_home_relative_configured_ngrok_path() {
+        let home = temp_ngrok_root("home-relative");
+        let executable = create_ngrok_executable(&home.join("bin"));
+        let configured_path = format!("~/bin/{}", ngrok_executable_name());
+        let expanded = expand_home_relative_path(&configured_path, Some(&home));
+
+        assert_eq!(expanded, executable);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn macos_ngrok_dirs_include_homebrew_and_user_bins() {
+        let home = PathBuf::from("/Users/example");
+        let dirs = common_macos_ngrok_dirs(Some(home.clone()));
+
+        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&home.join(".local").join("bin")));
+        assert!(dirs.contains(&home.join("bin")));
+    }
+
+    #[test]
+    fn linux_ngrok_dirs_include_user_and_desktop_bins() {
+        let home = PathBuf::from("/home/example");
+        let dirs = common_unix_ngrok_dirs(Some(home.clone()));
+
+        assert!(dirs.contains(&home.join(".local").join("bin")));
+        assert!(dirs.contains(&home.join(".asdf").join("shims")));
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&PathBuf::from("/snap/bin")));
+        assert!(dirs.contains(&PathBuf::from("/var/lib/flatpak/exports/bin")));
+    }
+
+    #[test]
     fn leaves_ngrok_on_path_when_no_local_executable_exists() {
         let root = temp_ngrok_root("missing");
 
         let resolved =
             resolve_ngrok_executable_with_context(None, std::slice::from_ref(&root), &[]);
+
+        assert_eq!(resolved, "ngrok");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ignores_non_executable_ngrok_file_on_unix() {
+        let root = temp_ngrok_root("non-executable");
+        let path_dir = root.join("path-bin");
+        fs::create_dir_all(&path_dir).expect("create ngrok test path dir");
+        let non_executable = path_dir.join(ngrok_executable_name());
+        fs::write(&non_executable, b"not executable").expect("write ngrok test file");
+
+        let resolved =
+            resolve_ngrok_executable_with_context(None, &[], std::slice::from_ref(&path_dir));
 
         assert_eq!(resolved, "ngrok");
         let _ = fs::remove_dir_all(root);
@@ -1795,6 +1966,16 @@ mod tests {
         fs::create_dir_all(directory).expect("create ngrok test directory");
         let executable = directory.join(ngrok_executable_name());
         fs::write(&executable, b"test ngrok").expect("write ngrok test executable");
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&executable)
+                .expect("read ngrok test executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable, permissions)
+                .expect("mark ngrok test executable as executable");
+        }
         executable
     }
 }

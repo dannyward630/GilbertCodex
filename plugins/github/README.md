@@ -1,6 +1,10 @@
 # GitHub Plugin
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 GitHub is a first-party Gilbert Codex plugin for source-control and repository workflows. It reuses the existing Settings > GitHub connection: users install the plugin from Apps, and if GitHub is already connected, the tools are ready immediately. If GitHub is not connected, the install flow sends the user to the existing GitHub settings page for browser sign-in.
+
+Platform note: GitHub actions use the same app command layer on Windows, macOS, and Linux. Windows is verified alpha; macOS and Linux still need packaged-app launch testing for browser handoff, token persistence, local Git helper discovery, and release workflow actions.
 
 ## Product Scope
 

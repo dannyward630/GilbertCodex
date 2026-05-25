@@ -300,10 +300,13 @@ export interface AppThemeSettings {
 }
 
 export interface AppAppearanceSettings {
+  chatResponseWidth: number;
+  composerWidth: number;
   codeFontSize: number;
   dark: AppThemeSettings;
   light: AppThemeSettings;
   reduceMotion: AppearanceMotionPreference;
+  userMessageWidth: number;
   uiFontSize: number;
   usePointerCursor: boolean;
 }

@@ -21,6 +21,7 @@ const PROVIDER_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.provider-settings.v1"
 const DISCORD_BRIDGE_STORAGE_KEY: &str = "gilbert-codex.discord-bridge.v1";
 const MAPBOX_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.mapbox-settings.v1";
 const GOOGLE_OAUTH_SETTINGS_STORAGE_KEY: &str = "gilbert-codex.google-oauth-settings.v1";
+const API_KEY_VAULT_STORAGE_KEY: &str = "gilbert-codex.api-key-vault.v1";
 const GITHUB_ACCOUNT_STORAGE_KEY: &str = "github-account.v1";
 const MCP_SERVERS_STORAGE_KEY: &str = "mcp-servers.v1";
 const AGENT_RUNS_STORAGE_KEY: &str = "agent-runs.v1";
@@ -802,6 +803,7 @@ fn prepare_storage_value(
         GOOGLE_OAUTH_SETTINGS_STORAGE_KEY => {
             protect_google_oauth_settings(namespace, key, value, &mut references)?
         }
+        API_KEY_VAULT_STORAGE_KEY => protect_api_key_vault(namespace, key, value, &mut references)?,
         GITHUB_ACCOUNT_STORAGE_KEY => {
             protect_github_account(namespace, key, value, &mut references)?
         }
@@ -821,6 +823,7 @@ fn hydrate_storage_value(namespace: &str, key: &str, value: &str) -> Result<Stri
         DISCORD_BRIDGE_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         MAPBOX_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         GOOGLE_OAUTH_SETTINGS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
+        API_KEY_VAULT_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         GITHUB_ACCOUNT_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         MCP_SERVERS_STORAGE_KEY => hydrate_json_secret_fields(namespace, key, value),
         _ => Ok(value.to_string()),
@@ -941,6 +944,45 @@ fn protect_google_oauth_settings(
         .map_err(|error| format!("Could not serialize protected Google OAuth settings: {error}"))
 }
 
+fn protect_api_key_vault(
+    namespace: &str,
+    storage_key: &str,
+    value: &str,
+    references: &mut Vec<SecureSecretReference>,
+) -> Result<String, String> {
+    let Ok(mut json_value) = serde_json::from_str::<Value>(value) else {
+        return Ok(value.to_string());
+    };
+
+    if let Some(keys) = json_value.get_mut("keys").and_then(Value::as_array_mut) {
+        for (index, key) in keys.iter_mut().enumerate() {
+            let Some(key_object) = key.as_object_mut() else {
+                continue;
+            };
+            let key_id = key_object
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| index.to_string());
+
+            if let Some(secret_value) = key_object.get_mut("value") {
+                protect_json_string_secret(
+                    namespace,
+                    storage_key,
+                    &format!("keys.{key_id}.value"),
+                    secret_value,
+                    references,
+                )?;
+            }
+        }
+    }
+
+    serde_json::to_string(&json_value)
+        .map_err(|error| format!("Could not serialize protected API key vault: {error}"))
+}
+
 fn protect_github_account(
     namespace: &str,
     storage_key: &str,
@@ -1014,6 +1056,62 @@ fn protect_mcp_servers(
                             storage_key,
                             &format!("servers.{server_id}.environment.{environment_name}"),
                             environment_value,
+                            references,
+                        )?;
+                    }
+                }
+            }
+
+            if let Some(headers) = server_object
+                .get_mut("headers")
+                .and_then(Value::as_array_mut)
+            {
+                for (header_index, item) in headers.iter_mut().enumerate() {
+                    let Some(item_object) = item.as_object_mut() else {
+                        continue;
+                    };
+                    let header_name = item_object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| header_index.to_string());
+
+                    if let Some(header_value) = item_object.get_mut("value") {
+                        protect_json_string_secret(
+                            namespace,
+                            storage_key,
+                            &format!("servers.{server_id}.headers.{header_name}"),
+                            header_value,
+                            references,
+                        )?;
+                    }
+                }
+            }
+
+            if let Some(query_params) = server_object
+                .get_mut("queryParams")
+                .and_then(Value::as_array_mut)
+            {
+                for (query_index, item) in query_params.iter_mut().enumerate() {
+                    let Some(item_object) = item.as_object_mut() else {
+                        continue;
+                    };
+                    let query_name = item_object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| query_index.to_string());
+
+                    if let Some(query_value) = item_object.get_mut("value") {
+                        protect_json_string_secret(
+                            namespace,
+                            storage_key,
+                            &format!("servers.{server_id}.queryParams.{query_name}"),
+                            query_value,
                             references,
                         )?;
                     }

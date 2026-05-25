@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { sanitizeLocalToolCallsForDisplay } from "../localWorkspace/localToolRuntimeDisabled";
 import {
   createCompletedToolFallbackSummary,
+  createConnectedToolEvidenceRecoveryInstruction,
+  createDeploymentEvidenceRecoveryInstruction,
   createFreshLocalToolEvidenceInstruction,
   createLocalToolFinalInstruction,
   createNeutralToolSynthesisFailureMessage,
@@ -17,8 +19,16 @@ import {
   looksLikeUnnecessaryLocalActionConfirmation,
   looksLikeUnappliedFileEditAnswer,
   looksLikeUnexecutedToolActionPromise,
+  looksLikeUnsupportedConnectedToolActionAnswer,
+  looksLikeUnsupportedDeploymentAnswer,
   looksLikeCapabilityInventoryQuestion,
+  hasDeploymentToolAttempt,
+  hasConnectedToolEvidence,
+  hasSuccessfulDeploymentToolCall,
+  hasSuccessfulConnectedToolMutation,
   needsFreshLocalToolEvidence,
+  promptRequestsConnectedToolAction,
+  promptRequestsDeploymentAction,
   requiresWorkspaceMutationForPrompt,
   requiresWorkspaceToolCallForPrompt,
   createWebSearchProgress,
@@ -315,6 +325,87 @@ describe("tool protocol leak guards", () => {
     expect(requiresWorkspaceToolCallForPrompt("open the preview, take a screenshot, read console, and fix the UI", true)).toBe(true);
     expect(requiresWorkspaceToolCallForPrompt("run the app in terminal and inspect localhost", true)).toBe(true);
     expect(requiresWorkspaceToolCallForPrompt("open the preview, take a screenshot, read console, and fix the UI", false)).toBe(false);
+  });
+
+  it("requires deployment tool evidence before treating hosting work as done", () => {
+    const terminalDeploy = {
+      id: "deploy",
+      input: JSON.stringify({ command: "npx.cmd -y firebase-tools@latest deploy --only hosting:gilbertcodexweb" }),
+      label: "Run terminal command",
+      output: "Deploy complete!",
+      status: "complete" as const,
+      terminal: {
+        command: "npx.cmd -y firebase-tools@latest deploy --only hosting:gilbertcodexweb",
+        exitCode: 0,
+        workingDirectory: "C:\\repo",
+      },
+      toolId: "terminal_run",
+    };
+    const mcpDeploy = {
+      id: "mcp-deploy",
+      input: JSON.stringify({ serverId: "firebase", toolName: "deploy", arguments: { only: "hosting:gilbertcodexweb" } }),
+      label: "Call MCP tool",
+      output: "MCP TOOL RESULT - Firebase / deploy\nStatus: ok\nDeployment complete.",
+      status: "complete" as const,
+      toolId: "mcp_call_tool",
+    };
+
+    expect(promptRequestsDeploymentAction("update the website and deploy it to hosting")).toBe(true);
+    expect(promptRequestsDeploymentAction("deploy this service to Heroku")).toBe(true);
+    expect(promptRequestsDeploymentAction("preview and deploy the Pulumi stack")).toBe(true);
+    expect(promptRequestsDeploymentAction("update the website without deploying it")).toBe(false);
+    expect(requiresWorkspaceToolCallForPrompt("deploy the website to hosting", true)).toBe(true);
+    expect(hasDeploymentToolAttempt([mcpDeploy])).toBe(true);
+    expect(hasSuccessfulDeploymentToolCall([terminalDeploy])).toBe(true);
+    expect(hasSuccessfulDeploymentToolCall([mcpDeploy])).toBe(true);
+    expect(looksLikeUnsupportedDeploymentAnswer("Deployed successfully.", [])).toBe(true);
+    expect(looksLikeUnsupportedDeploymentAnswer("Published to Heroku successfully.", [])).toBe(true);
+    expect(looksLikeUnsupportedDeploymentAnswer("I could not deploy because I do not have terminal/deploy tools available.", [])).toBe(true);
+    expect(looksLikeUnsupportedDeploymentAnswer("Deployed successfully.", [mcpDeploy])).toBe(false);
+    expect(createDeploymentEvidenceRecoveryInstruction("deploy it", "I cannot deploy manually.")).toContain("mcp_list_servers");
+  });
+
+  it("requires connected app or MCP evidence before claiming plugin actions worked", () => {
+    const mcpInventory = {
+      id: "mcp-list",
+      label: "List MCP servers",
+      output: "MCP servers: 1 shown.\nserverId: slack",
+      status: "complete" as const,
+      toolId: "mcp_list_servers",
+    };
+    const mcpMutation = {
+      id: "mcp-call",
+      input: JSON.stringify({ arguments: { channel: "general", text: "Update shipped" }, serverId: "slack", toolName: "post_message" }),
+      label: "Call MCP tool",
+      output: "MCP TOOL RESULT - Slack / post_message\nStatus: ok\nMessage posted.",
+      status: "complete" as const,
+      toolId: "mcp_call_tool",
+    };
+    const gmailDraft = {
+      id: "gmail-draft",
+      label: "Create Gmail draft",
+      output: "Draft created.",
+      status: "complete" as const,
+      toolId: "gmail_create_draft",
+    };
+
+    expect(promptRequestsConnectedToolAction("use the Slack plugin to post a launch update")).toBe(true);
+    expect(promptRequestsConnectedToolAction("use Apify to run a web scraper actor")).toBe(true);
+    expect(promptRequestsConnectedToolAction("use Browserbase to navigate example.com")).toBe(true);
+    expect(promptRequestsConnectedToolAction("use Exa to search the current docs")).toBe(true);
+    expect(promptRequestsConnectedToolAction("use JetBrains to inspect the current project")).toBe(true);
+    expect(promptRequestsConnectedToolAction("what tools and plugins are available?")).toBe(false);
+    expect(hasConnectedToolEvidence([mcpInventory])).toBe(true);
+    expect(hasSuccessfulConnectedToolMutation([mcpMutation])).toBe(true);
+    expect(hasSuccessfulConnectedToolMutation([gmailDraft])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("I could not use Slack because no MCP tools are available.", [])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("I could not use Apify because I do not have Apify tools.", [])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("I could not use Browserbase because I do not have Browserbase tools.", [])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("I could not use Exa because I do not have Exa tools.", [])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("Updated the Pulumi stack.", [mcpInventory])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("Posted the Slack message.", [mcpInventory])).toBe(true);
+    expect(looksLikeUnsupportedConnectedToolActionAnswer("Posted the Slack message.", [mcpMutation])).toBe(false);
+    expect(createConnectedToolEvidenceRecoveryInstruction("send the Slack update", "I cannot access Slack tools.")).toContain("mcp_list_servers");
   });
 
   it("does not ask for the provider tool-call channel when capability planning found no attached tools", () => {

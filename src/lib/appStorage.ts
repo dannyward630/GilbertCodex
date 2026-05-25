@@ -50,6 +50,7 @@ import type {
   ChatWorkTraceItem,
 } from "../types/chat";
 import type { AgentApproval } from "../types/agentRun";
+import type { ApiKeyRecord, ApiKeyVaultState } from "../types/apiKeys";
 import type { LocalPermissionMode, LocalWorkspaceIndexStatus, LocalWorkspaceScope, LocalWorkspaceSettings } from "../types/localWorkspace";
 import type { ProjectSummary } from "../types/project";
 import type { DiscordBridgeSettings } from "../types/discord";
@@ -103,6 +104,7 @@ const LOCAL_WORKSPACE_KEY = "gilbert-codex.local-workspace.v1";
 const TOOL_REGISTRY_KEY = "gilbert-codex.tool-registry.v1";
 const GITHUB_OAUTH_CLIENT_ID_KEY = "gilbert-codex.github-oauth-client-id.v1";
 const GOOGLE_OAUTH_SETTINGS_KEY = "gilbert-codex.google-oauth-settings.v1";
+const API_KEY_VAULT_KEY = "gilbert-codex.api-key-vault.v1";
 const DISCORD_BRIDGE_KEY = "gilbert-codex.discord-bridge.v1";
 const BROWSER_SETTINGS_KEY = "gilbert-codex.browser-settings.v1";
 const BROWSER_HISTORY_KEY = "gilbert-codex.browser-history.v1";
@@ -129,6 +131,7 @@ const PERSISTED_STORAGE_KEYS = [
   TOOL_REGISTRY_KEY,
   GITHUB_OAUTH_CLIENT_ID_KEY,
   GOOGLE_OAUTH_SETTINGS_KEY,
+  API_KEY_VAULT_KEY,
   DISCORD_BRIDGE_KEY,
   BROWSER_SETTINGS_KEY,
   BROWSER_HISTORY_KEY,
@@ -573,6 +576,55 @@ export function clearGoogleOAuthSettings() {
   writeJson(GOOGLE_OAUTH_SETTINGS_KEY, DEFAULT_GOOGLE_OAUTH_SETTINGS);
 }
 
+export function loadApiKeyVault(): ApiKeyVaultState {
+  return normalizeApiKeyVault(readJson<Partial<ApiKeyVaultState>>(API_KEY_VAULT_KEY));
+}
+
+export function saveApiKeyVault(vault: ApiKeyVaultState) {
+  writeJson(API_KEY_VAULT_KEY, normalizeApiKeyVault(vault));
+}
+
+export function upsertApiKeyRecord(record: Omit<ApiKeyRecord, "createdAt" | "id" | "updatedAt"> & { createdAt?: string; id?: string; updatedAt?: string }) {
+  const vault = loadApiKeyVault();
+  const now = new Date().toISOString();
+  const id = normalizeApiKeyId(record.id) || createApiKeyRecordId(record.service, record.keyName, record.label);
+  const existing = vault.keys.find((key) => key.id === id);
+  const nextRecord = normalizeApiKeyRecord({
+    createdAt: existing?.createdAt ?? record.createdAt ?? now,
+    id,
+    keyName: record.keyName,
+    kind: record.kind,
+    label: record.label,
+    service: record.service,
+    updatedAt: record.updatedAt ?? now,
+    value: record.value,
+  });
+  if (!nextRecord) {
+    throw new Error("API key records need a label, service, key name, and value.");
+  }
+
+  const keys = [
+    nextRecord,
+    ...vault.keys.filter((key) => key.id !== id),
+  ].sort((left, right) => left.label.localeCompare(right.label));
+  const nextVault = normalizeApiKeyVault({ keys, version: 1 });
+
+  saveApiKeyVault(nextVault);
+  return nextVault;
+}
+
+export function deleteApiKeyRecord(id: string) {
+  const vault = loadApiKeyVault();
+  const normalizedId = normalizeApiKeyId(id);
+  const nextVault = normalizeApiKeyVault({
+    keys: vault.keys.filter((key) => key.id !== normalizedId),
+    version: 1,
+  });
+
+  saveApiKeyVault(nextVault);
+  return nextVault;
+}
+
 export function loadDiscordBridgeSettings(): DiscordBridgeSettings {
   return normalizeDiscordBridgeSettings(readJson<Partial<DiscordBridgeSettings>>(DISCORD_BRIDGE_KEY) ?? DEFAULT_DISCORD_BRIDGE_SETTINGS);
 }
@@ -649,6 +701,91 @@ function normalizeGoogleOAuthSettings(settings: Partial<GoogleOAuthSettings> | n
     clientId: typeof settings?.clientId === "string" ? settings.clientId.trim() : "",
     clientSecret: typeof settings?.clientSecret === "string" ? settings.clientSecret.trim() : "",
   };
+}
+
+function normalizeApiKeyVault(value: Partial<ApiKeyVaultState> | null | undefined): ApiKeyVaultState {
+  const records = Array.isArray(value?.keys) ? value.keys : [];
+  const deduped = new Map<string, ApiKeyRecord>();
+
+  for (const record of records) {
+    const normalized = normalizeApiKeyRecord(record as Partial<ApiKeyRecord>);
+
+    if (!normalized) {
+      continue;
+    }
+
+    deduped.set(normalized.id, normalized);
+  }
+
+  return {
+    keys: [...deduped.values()].sort((left, right) => left.label.localeCompare(right.label)),
+    version: 1,
+  };
+}
+
+function normalizeApiKeyRecord(value: Partial<ApiKeyRecord> | null | undefined): ApiKeyRecord | null {
+  const label = normalizeText(value?.label, "");
+  const service = normalizeApiKeyService(value?.service);
+  const keyName = normalizeApiKeyName(value?.keyName);
+  const secretValue = typeof value?.value === "string" ? value.value.trim() : "";
+
+  if (!label || !service || !keyName || !secretValue) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    createdAt: normalizeIsoDate(value?.createdAt, now),
+    id: normalizeApiKeyId(value?.id) || createApiKeyRecordId(service, keyName, label),
+    keyName,
+    kind: normalizeApiKeyKind(value?.kind),
+    label,
+    service,
+    updatedAt: normalizeIsoDate(value?.updatedAt, now),
+    value: secretValue,
+  };
+}
+
+function normalizeApiKeyKind(value: unknown): ApiKeyRecord["kind"] {
+  return value === "app" || value === "mcp" || value === "provider" || value === "service" || value === "skill" || value === "custom" ? value : "custom";
+}
+
+function normalizeApiKeyService(value: unknown) {
+  return normalizeText(value, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function normalizeApiKeyName(value: unknown) {
+  return normalizeText(value, "")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 96);
+}
+
+function normalizeApiKeyId(value: unknown) {
+  return normalizeText(value, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
+
+function createApiKeyRecordId(service: string, keyName: string, label: string) {
+  const base = normalizeApiKeyId(`${service}-${keyName}-${label}`) || `key-${Date.now().toString(36)}`;
+
+  return `${base}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeIsoDate(value: unknown, fallback: string) {
+  if (typeof value !== "string" || Number.isNaN(new Date(value).getTime())) {
+    return fallback;
+  }
+
+  return value;
 }
 
 function readString(key: string) {
@@ -2360,6 +2497,8 @@ function normalizeUsageRecord(value: unknown): ProviderUsageRecord {
   const createdAt = normalizeIsoTimestamp(record.createdAt);
   const provider = isModelProviderId(record.provider) ? record.provider : defaultProviderSettings.provider;
   const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : defaultProviderSettings.model;
+  const cacheCreationInputTokens = normalizeTokenCount(record.cacheCreationInputTokens);
+  const cachedInputTokens = normalizeTokenCount(record.cachedInputTokens);
   const inputTokens = normalizeTokenCount(record.inputTokens);
   const outputTokens = normalizeTokenCount(record.outputTokens ?? record.completionTokens);
   const completionTokens = normalizeTokenCount(record.completionTokens ?? outputTokens);
@@ -2376,6 +2515,9 @@ function normalizeUsageRecord(value: unknown): ProviderUsageRecord {
     dayKey: normalizeUsageDateKey(record.dayKey, createdAt),
     endpoint: normalizeOptionalText(record.endpoint),
     id: typeof record.id === "string" && record.id.trim() ? record.id.trim() : `usage-${createdAt}-${provider}-${hashStableText(model)}`,
+    cacheCreationInputTokens,
+    cacheSavingsUsd: normalizeCurrency(record.cacheSavingsUsd),
+    cachedInputTokens,
     inputTokens,
     model,
     monthKey: normalizeUsageMonthKey(record.monthKey, createdAt),
@@ -2409,6 +2551,8 @@ function normalizeUsageCostBreakdown(value: unknown): ProviderUsageRecord["unitC
   const breakdown = value as Partial<NonNullable<ProviderUsageRecord["unitCost"]>>;
 
   return {
+    cacheCreationInputUsd: normalizeCurrency(breakdown.cacheCreationInputUsd),
+    cachedInputUsd: normalizeCurrency(breakdown.cachedInputUsd),
     inputUsd: normalizeCurrency(breakdown.inputUsd),
     outputUsd: normalizeCurrency(breakdown.outputUsd),
     reasoningUsd: normalizeCurrency(breakdown.reasoningUsd),

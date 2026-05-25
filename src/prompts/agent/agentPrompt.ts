@@ -24,6 +24,8 @@ export interface AgentSystemPromptInput {
 }
 
 export interface AgentSystemPromptBuild {
+  cacheablePrompt: string;
+  dynamicPrompt: string;
   prompt: string;
   selectedChunks: SelectedPromptChunk[];
   tokenEstimate: number;
@@ -37,14 +39,15 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings, toolBri
   const retrievalContext = createAgentPromptRetrievalContext(settings, messages, toolBridge);
   const selectedChunks = selectPromptChunks(retrievalContext);
   const selectedChunkIds = new Set(selectedChunks.map((entry) => entry.chunk.id));
-  const sections = [
-    formatCurrentRuntimeContext(),
-    formatCurrentWorkspaceContext(),
-    formatBackgroundTerminalSessionsForPrompt(),
-    formatSkillsPromptSection(retrievalContext.latestUserPrompt),
-    ...selectedChunks.map((entry) => formatPromptChunk(entry)),
+  const stableChunks = selectedChunks.filter((entry) => entry.chunk.alwaysInclude);
+  const dynamicChunks = selectedChunks.filter((entry) => !entry.chunk.alwaysInclude);
+  const cacheableSections = [
+    ...stableChunks.map((entry) => formatPromptChunk(entry)),
     formatConfiguredSystemPrompt(settings.systemPrompt),
     formatUserInstructions(settings.userInstructions),
+  ].filter(Boolean);
+  const dynamicSections = [
+    ...dynamicChunks.map((entry) => formatPromptChunk(entry)),
     formatRuntimePolicySection(
       createRuntimeToolPrompt({
         hasLocalComputerContext: retrievalContext.hasLocalComputerContext,
@@ -55,15 +58,34 @@ export function buildAgentSystemPromptWithMetadata({ messages, settings, toolBri
         toolBridge,
       }),
     ),
+    formatCurrentRuntimeContext(),
+    formatCurrentWorkspaceContext(),
+    formatBackgroundTerminalSessionsForPrompt(),
+    formatSkillsPromptSection(retrievalContext.latestUserPrompt),
     formatSessionLedger(messages),
     formatPromptOptimizationSection(selectedChunks),
   ].filter(Boolean);
-  const prompt = clampPromptText(sections.join("\n\n"), MAX_TOTAL_SYSTEM_PROMPT_TOKENS);
+  const { cacheablePrompt, dynamicPrompt, prompt } = createCacheAwareSystemPrompt(cacheableSections, dynamicSections);
 
   return {
+    cacheablePrompt,
+    dynamicPrompt,
     prompt,
     selectedChunks,
     tokenEstimate: estimatePromptTokens(prompt),
+  };
+}
+
+function createCacheAwareSystemPrompt(cacheableSections: string[], dynamicSections: string[]) {
+  const cacheablePrompt = clampPromptText(cacheableSections.join("\n\n"), MAX_TOTAL_SYSTEM_PROMPT_TOKENS);
+  const remainingTokens = Math.max(MAX_TOTAL_SYSTEM_PROMPT_TOKENS - estimatePromptTokens(cacheablePrompt), 0);
+  const dynamicPrompt = clampPromptText(dynamicSections.join("\n\n"), remainingTokens);
+  const prompt = [cacheablePrompt, dynamicPrompt].filter(Boolean).join("\n\n");
+
+  return {
+    cacheablePrompt,
+    dynamicPrompt,
+    prompt,
   };
 }
 

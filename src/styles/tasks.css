@@ -54,7 +54,7 @@
 .tasks-title h1 {
   margin: 0;
   color: var(--text);
-  font-size: 28px;
+  font-size: var(--font-size-28, 28px);
   font-weight: 820;
   letter-spacing: 0;
 }
@@ -65,7 +65,7 @@
 .tasks-capability-option small,
 .tasks-radio-grid small {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 650;
 }
 
@@ -93,7 +93,7 @@
   color: var(--text-muted);
   background: var(--field-bg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 740;
   cursor: pointer;
 }
@@ -146,7 +146,7 @@
   color: #12202b;
   border-radius: 999px;
   background: var(--gold);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
 }
 
 .tasks-content {
@@ -217,7 +217,7 @@
 .tasks-run-card strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--font-size-15, 15px);
   font-weight: 780;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -230,7 +230,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -243,7 +243,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
   text-transform: capitalize;
 }
@@ -279,7 +279,7 @@
   border: 1px solid var(--line-soft);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 680;
 }
 
@@ -350,7 +350,7 @@
   gap: 6px;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 760;
 }
 
@@ -367,7 +367,7 @@
   color: var(--text);
   background: var(--field-bg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
 }
 
 .tasks-form-grid input,
@@ -447,7 +447,7 @@
 .tasks-capability-option strong,
 .tasks-radio-grid strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
 }
 
 .tasks-capability-option[data-risk="high"] {
@@ -502,7 +502,7 @@
   min-width: 0;
   margin: 0;
   color: var(--gold);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -529,14 +529,14 @@
 
 .tasks-review dt {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
 }
 
 .tasks-review dd {
   margin: 5px 0 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 720;
 }
 

@@ -75,7 +75,7 @@
 .coding-codebase-tree-toolbar small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-style: normal;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -84,7 +84,7 @@
 
 .coding-sidecar-title strong {
   overflow: hidden;
-  font-size: 15px;
+  font-size: var(--font-size-15, 15px);
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -113,7 +113,7 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   cursor: default;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -173,7 +173,7 @@
 
 .coding-review-hero h3 {
   margin: 2px 0 6px;
-  font-size: 20px;
+  font-size: var(--font-size-20, 20px);
   letter-spacing: 0;
 }
 
@@ -182,13 +182,13 @@
 .coding-codebase-code-note {
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   line-height: 1.45;
 }
 
 .coding-kicker {
   color: color-mix(in srgb, var(--accent) 72%, var(--text));
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -202,7 +202,7 @@
   min-height: 24px;
   padding: 0 9px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: capitalize;
@@ -246,7 +246,7 @@
 }
 
 .coding-section-heading strong {
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
 }
 
 .coding-file-list,
@@ -306,7 +306,7 @@
 .coding-tool-activity-row span {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -316,7 +316,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -340,7 +340,7 @@
 .coding-file-stats {
   display: inline-flex;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 .coding-file-stats b[data-kind="add"] {
@@ -384,7 +384,7 @@
 
 .coding-handoff label > span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -446,7 +446,7 @@
   outline: 0;
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 .coding-codebase-tree {
@@ -512,7 +512,7 @@
   margin-left: calc(var(--tree-depth, 0) * 14px);
   padding: 7px 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   overflow-wrap: anywhere;
 }
 
@@ -548,8 +548,8 @@
   overflow-y: auto;
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 82%, black 6%);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-12, 12px);
   line-height: 1.5;
 }
 

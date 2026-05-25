@@ -19,6 +19,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { icon: Settings2, id: "general", label: "General", meta: "Profile" },
   { icon: Palette, id: "appearance", label: "Appearance", meta: "Theme" },
   { icon: ServerCog, id: "model", label: "AI & Providers", meta: "Models" },
+  { icon: KeyRound, id: "keys", label: "Keys", meta: "Vault" },
   { icon: Route, id: "nineRouter", label: "Subscriptions", meta: "Accounts" },
   { icon: BarChart3, id: "usage", label: "Usage", meta: "Costs" },
   { icon: Compass, id: "browser", label: "Browser", meta: "Privacy" },

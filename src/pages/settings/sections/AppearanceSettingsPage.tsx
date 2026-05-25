@@ -21,6 +21,7 @@ import {
 type ThemeColorKey = "accent" | "background" | "foreground";
 type ComponentColorKey = keyof AppThemeComponentColors;
 type FontKey = "codeFont" | "uiFont";
+type AppearanceNumberKey = "chatResponseWidth" | "codeFontSize" | "composerWidth" | "uiFontSize" | "userMessageWidth";
 
 interface FontOption {
   label: string;
@@ -92,6 +93,24 @@ const codeFontOptions: FontOption[] = [
   { label: "SF Mono", value: '"SFMono-Regular", Menlo, Monaco, Consolas, monospace' },
   { label: "Menlo", value: 'Menlo, Monaco, Consolas, monospace' },
   { label: "Consolas", value: 'Consolas, "Courier New", monospace' },
+];
+
+const chatResponseWidthPresets = [
+  { label: "Compact", value: 760 },
+  { label: "Default", value: DEFAULT_APP_APPEARANCE_SETTINGS.chatResponseWidth },
+  { label: "Wide", value: 1280 },
+];
+
+const userMessageWidthPresets = [
+  { label: "Compact", value: 520 },
+  { label: "Default", value: DEFAULT_APP_APPEARANCE_SETTINGS.userMessageWidth },
+  { label: "Wide", value: 920 },
+];
+
+const composerWidthPresets = [
+  { label: "Compact", value: 680 },
+  { label: "Default", value: DEFAULT_APP_APPEARANCE_SETTINGS.composerWidth },
+  { label: "Wide", value: 1120 },
 ];
 
 const componentColorGroups: Array<{ colors: Array<{ key: ComponentColorKey; label: string }>; title: string }> = [
@@ -294,7 +313,7 @@ export function AppearanceSettingsPage({
     updateTheme(themeKey, { [fontKey]: value });
   }
 
-  function updateFontSize(key: "codeFontSize" | "uiFontSize", value: string) {
+  function updateAppearanceNumber(key: AppearanceNumberKey, value: string) {
     updateAppearanceSettings({
       ...normalizedSettings,
       [key]: Number.parseInt(value, 10),
@@ -458,7 +477,7 @@ export function AppearanceSettingsPage({
             <MousePointer2 size={19} aria-hidden="true" />
             <div>
               <h2>Interaction</h2>
-              <p>Cursor, motion, and base type sizing.</p>
+              <p>Cursor, motion, text sizing, and chat layout width.</p>
             </div>
           </div>
 
@@ -504,7 +523,7 @@ export function AppearanceSettingsPage({
               max={22}
               min={11}
               value={normalizedSettings.uiFontSize}
-              onChange={(value) => updateFontSize("uiFontSize", value)}
+              onChange={(value) => updateAppearanceNumber("uiFontSize", value)}
             />
             <SizeControl
               detail="Adjust the base size used for code across chats and diffs"
@@ -512,7 +531,34 @@ export function AppearanceSettingsPage({
               max={20}
               min={10}
               value={normalizedSettings.codeFontSize}
-              onChange={(value) => updateFontSize("codeFontSize", value)}
+              onChange={(value) => updateAppearanceNumber("codeFontSize", value)}
+            />
+            <WidthControl
+              detail="Set how wide assistant responses can read in the chat column"
+              label="Response width"
+              max={1280}
+              min={640}
+              presets={chatResponseWidthPresets}
+              value={normalizedSettings.chatResponseWidth}
+              onChange={(value) => updateAppearanceNumber("chatResponseWidth", value)}
+            />
+            <WidthControl
+              detail="Set the maximum width for your sent message bubbles"
+              label="Sent message width"
+              max={920}
+              min={360}
+              presets={userMessageWidthPresets}
+              value={normalizedSettings.userMessageWidth}
+              onChange={(value) => updateAppearanceNumber("userMessageWidth", value)}
+            />
+            <WidthControl
+              detail="Make the chat composer compact or wide"
+              label="Composer width"
+              max={1120}
+              min={560}
+              presets={composerWidthPresets}
+              value={normalizedSettings.composerWidth}
+              onChange={(value) => updateAppearanceNumber("composerWidth", value)}
             />
           </div>
 
@@ -861,6 +907,39 @@ function SizeControl({ detail, disabled = false, label, max, min, onChange, unit
     <label className="appearance-size-control" data-disabled={disabled}>
       <span>{label}</span>
       <small>{detail}</small>
+      <div>
+        <input type="range" min={min} max={max} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+        <input type="number" min={min} max={max} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+        <strong>{unit}</strong>
+      </div>
+    </label>
+  );
+}
+
+interface WidthControlProps extends SizeControlProps {
+  presets: Array<{ label: string; value: number }>;
+}
+
+function WidthControl({ detail, disabled = false, label, max, min, onChange, presets, unit = "px", value }: WidthControlProps) {
+  return (
+    <label className="appearance-size-control appearance-width-control" data-disabled={disabled}>
+      <span>{label}</span>
+      <small>{detail}</small>
+      <div className="appearance-width-presets" role="group" aria-label={`${label} presets`}>
+        {presets.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            aria-pressed={value === preset.value}
+            data-selected={value === preset.value}
+            disabled={disabled}
+            title={`${preset.label}: ${preset.value}px`}
+            onClick={() => onChange(String(preset.value))}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
       <div>
         <input type="range" min={min} max={max} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
         <input type="number" min={min} max={max} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />

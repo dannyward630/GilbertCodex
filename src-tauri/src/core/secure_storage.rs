@@ -176,6 +176,7 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
+    use crate::core::native_path::{configure_native_path, resolve_native_executable};
     use std::{
         io::Write,
         process::{Command, Stdio},
@@ -184,7 +185,8 @@ mod platform {
     const APPLICATION_ATTRIBUTE: &str = "GilbertCodex";
 
     pub fn set_secret(target: &str, value: &str) -> Result<(), String> {
-        let mut child = Command::new("secret-tool")
+        let mut command = secret_tool_command();
+        let mut child = command
             .args([
                 "store",
                 "--label=Gilbert Codex",
@@ -229,7 +231,7 @@ mod platform {
     }
 
     pub fn get_secret(target: &str) -> Result<Option<String>, String> {
-        let output = Command::new("secret-tool")
+        let output = secret_tool_command()
             .args([
                 "lookup",
                 "application",
@@ -265,7 +267,7 @@ mod platform {
     }
 
     pub fn delete_secret(target: &str) -> Result<(), String> {
-        let output = Command::new("secret-tool")
+        let output = secret_tool_command()
             .args([
                 "clear",
                 "application",
@@ -289,6 +291,12 @@ mod platform {
         }
 
         Err(secret_tool_error("delete", target, &stderr))
+    }
+
+    fn secret_tool_command() -> Command {
+        let mut command = Command::new(resolve_native_executable("secret-tool"));
+        configure_native_path(&mut command);
+        command
     }
 
     pub fn provider_name() -> &'static str {

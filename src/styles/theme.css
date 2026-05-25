@@ -589,7 +589,6 @@ body::after {
 
 .conversation-frame,
 .settings-page,
-.plugin-page,
 .weather-radar-page,
 .auth-root,
 .app-startup-root {
@@ -723,7 +722,6 @@ body::after {
 .weather-source-provider-card,
 .rail-card,
 .review-card,
-.git-review-panel,
 .coding-sidecar-window,
 .browser-preview-window,
 .terminal-panel,
@@ -1241,7 +1239,6 @@ body::after {
 
 :root[data-theme="light"] .conversation-frame,
 :root[data-theme="light"] .settings-page,
-:root[data-theme="light"] .plugin-page,
 :root[data-theme="light"] .weather-radar-page {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--line) 74%, transparent),

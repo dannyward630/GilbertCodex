@@ -1,8 +1,7 @@
 import { BookOpen, CalendarDays, Copy, ExternalLink, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { GMAIL_CORE_OAUTH_SCOPES } from "../../../app/gmailClient";
-import { GOOGLE_CALENDAR_CORE_OAUTH_SCOPES } from "../../../app/googleCalendarClient";
 import { clearGoogleOAuthSettings, loadGoogleOAuthSettings, saveGoogleOAuthSettings, type GoogleOAuthSettings } from "../../../lib/appStorage";
+import { GMAIL_CORE_OAUTH_SCOPES, GOOGLE_CALENDAR_CORE_OAUTH_SCOPES } from "../../../lib/googleOAuthScopes";
 import { SettingsSectionHeading } from "../components/SettingsSectionHeading";
 import type { SettingsStatusMessage } from "../types";
 
@@ -19,6 +18,8 @@ const GOOGLE_DOC_LINKS = [
 ] as const;
 
 const GOOGLE_API_NAMES = ["Gmail API", "Google Calendar API", "Google Tasks API"] as const;
+const GMAIL_SCOPE_TEXT = GMAIL_CORE_OAUTH_SCOPES.join("\n");
+const GOOGLE_CALENDAR_SCOPE_TEXT = GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.join("\n");
 
 export function GoogleSettingsPage() {
   const [draft, setDraft] = useState<GoogleOAuthSettings>(() => loadGoogleOAuthSettings());
@@ -194,11 +195,7 @@ export function GoogleSettingsPage() {
                   Copy
                 </button>
               </div>
-              <div className="github-scope-cloud google-scope-cloud" aria-label="Gmail OAuth scopes">
-                {GMAIL_CORE_OAUTH_SCOPES.map((scope) => (
-                  <code key={scope}>{scope}</code>
-                ))}
-              </div>
+              <textarea className="google-scope-textarea" aria-label="Gmail OAuth scopes" readOnly rows={GMAIL_CORE_OAUTH_SCOPES.length} spellCheck={false} value={GMAIL_SCOPE_TEXT} wrap="off" />
             </section>
 
             <section className="google-scope-section" aria-labelledby="google-calendar-scopes-title">
@@ -210,11 +207,7 @@ export function GoogleSettingsPage() {
                   Copy
                 </button>
               </div>
-              <div className="github-scope-cloud google-scope-cloud" aria-label="Google Calendar OAuth scopes">
-                {GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.map((scope) => (
-                  <code key={scope}>{scope}</code>
-                ))}
-              </div>
+              <textarea className="google-scope-textarea" aria-label="Google Calendar OAuth scopes" readOnly rows={GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.length} spellCheck={false} value={GOOGLE_CALENDAR_SCOPE_TEXT} wrap="off" />
             </section>
           </div>
         </article>

@@ -16,6 +16,26 @@ export interface McpEnvironmentVariableState {
   name: string;
 }
 
+export interface McpHttpHeader {
+  name: string;
+  value: string;
+}
+
+export interface McpHttpHeaderState {
+  hasValue: boolean;
+  name: string;
+}
+
+export interface McpHttpQueryParam {
+  name: string;
+  value: string;
+}
+
+export interface McpHttpQueryParamState {
+  hasValue: boolean;
+  name: string;
+}
+
 export interface McpServerState {
   args: string[];
   command?: string;
@@ -23,12 +43,14 @@ export interface McpServerState {
   enabled: boolean;
   endpoint?: string;
   environment: McpEnvironmentVariableState[];
+  headers: McpHttpHeaderState[];
   hasAuthorizationToken: boolean;
   id: string;
   lastConnectedAt?: number;
   lastError?: string;
   name: string;
   protocolVersion?: string;
+  queryParams?: McpHttpQueryParamState[];
   serverName?: string;
   serverVersion?: string;
   tools: McpToolSummary[];
@@ -51,8 +73,10 @@ export interface McpSaveServerRequest {
   enabled?: boolean;
   endpoint?: string;
   environment?: McpEnvironmentVariable[];
+  headers?: McpHttpHeader[];
   id?: string;
   name: string;
+  queryParams?: McpHttpQueryParam[];
   transport?: McpTransport;
   workingDirectory?: string;
 }
@@ -72,7 +96,9 @@ export interface McpTestServerRequest {
   command?: string;
   endpoint?: string;
   environment?: McpEnvironmentVariable[];
+  headers?: McpHttpHeader[];
   id?: string;
+  queryParams?: McpHttpQueryParam[];
   transport?: McpTransport;
   workingDirectory?: string;
 }

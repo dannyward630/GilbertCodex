@@ -1,5 +1,7 @@
 # Gmail Plugin
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 Gmail is the first Gilbert Codex plugin. This bundle defines the app-facing metadata, skill rules, and local tool bridge used by the AI runtime.
 
 ## Product Scope
@@ -23,21 +25,16 @@ Gmail is the first Gilbert Codex plugin. This bundle defines the app-facing meta
 5. Approve the Google permission screen.
 6. Return to Gilbert Codex after the browser says Gmail connected.
 
-The user should never need to paste a Google secret, token, or authorization code. Installing the plugin opens Google in the browser automatically, lets the user choose the account, and receives the approval through a local loopback callback on the same device.
+The user should never paste a Google access token, refresh token, authorization code, or downloaded credential JSON. In the current public alpha, users add their own Google Desktop OAuth Client ID and Client secret in Settings > Google, then installing the plugin opens Google in the browser and receives approval through a local loopback callback on the same device.
 
-End users do not create Google credentials. The app build should already be configured with the public OAuth client ID, the same way hosted products hide connector setup from normal users.
-
-Official releases get that public client ID from the `VITE_GOOGLE_OAUTH_CLIENT_ID` GitHub repository variable or secret during the release workflow. Local development can use `.env` with the same key.
-
-The Google desktop OAuth client secret is backend-only. Local builds read `GOOGLE_OAUTH_CLIENT_SECRET` from ignored environment files or process environment, and release builds read it from the GitHub repository secret with the same name.
+A future Gilbert-owned public Google OAuth app can hide that setup after its consent screen and restricted Gmail scopes are verified. Until then, release notes should describe Gmail as bring-your-own Google OAuth, not as a broadly verified hosted connector.
 
 ## Developer Setup
 
 - Create a Google OAuth client for a desktop app in Google Cloud.
 - Enable the Gmail API for the same Google Cloud project.
-- Put the public client ID in `VITE_GOOGLE_OAUTH_CLIENT_ID`.
-- Put the desktop client secret in `GOOGLE_OAUTH_CLIENT_SECRET`.
-- Restart the Vite or Tauri app after changing environment values.
+- Save the Desktop app Client ID and Client secret in Settings > Google for the local Gilbert user.
+- Restart the Vite or Tauri app after changing checked-in defaults or environment values.
 - Do not commit Google client secrets, refresh tokens, access tokens, or exported OAuth credentials.
 - The Gmail plugin requests full Gmail API scopes because the app exposes full mailbox control through specific tools plus generic Gmail API tools.
 

@@ -60,6 +60,7 @@ interface ChatPageProps {
   onHoldQueuedMessage: (messageId: string, held: boolean) => void;
   onAddAutomation: () => void;
   onArchiveChat: () => void;
+  onBrowserPreviewClose?: () => void;
   onCopyChatDeeplink: () => void;
   onCopyChatMarkdown: () => void;
   onCopySessionId: () => void;
@@ -136,6 +137,7 @@ function ChatPageComponent({
   onHoldQueuedMessage,
   onAddAutomation,
   onArchiveChat,
+  onBrowserPreviewClose,
   onCopyChatDeeplink,
   onCopyChatMarkdown,
   onCopySessionId,
@@ -185,10 +187,10 @@ function ChatPageComponent({
   const [browserPreviewInitialUrl, setBrowserPreviewInitialUrl] = useState<string | null>(null);
   const [browserPreviewResizing, setBrowserPreviewResizing] = useState(false);
   const [browserPreviewWidth, setBrowserPreviewWidth] = useState(DEFAULT_BROWSER_PREVIEW_WIDTH);
-  const [gitReviewOpen, setGitReviewOpen] = useState(false);
-  const [gitReviewExpanded, setGitReviewExpanded] = useState(false);
-  const [gitReviewResizing, setGitReviewResizing] = useState(false);
-  const [gitReviewWidth, setGitReviewWidth] = useState(DEFAULT_GIT_REVIEW_WIDTH);
+  const [codingSidecarOpen, setCodingSidecarOpen] = useState(false);
+  const [codingSidecarExpanded, setCodingSidecarExpanded] = useState(false);
+  const [codingSidecarResizing, setCodingSidecarResizing] = useState(false);
+  const [codingSidecarWidth, setCodingSidecarWidth] = useState(DEFAULT_CODING_SIDECAR_WIDTH);
   const [codingSidecarTab, setCodingSidecarTab] = useState<CodingSidecarTab>("codebase");
   const rightRailNeedsAction = useMemo(() => chatHasAutoOpenRightRailAction(chat), [chat]);
   const rightRailHasContent = useMemo(
@@ -217,19 +219,19 @@ function ChatPageComponent({
       }) as CSSProperties,
     [composerHeight],
   );
-  const showGitReview = active && projectOpenVisible && gitReviewOpen;
-  const showRightRail = active && !showGitReview && rightRailOpen && rightRailHasContent;
-  const showBrowserPreview = active && !showGitReview && browserPreviewOpen;
-  const gitReviewPresence = useAnimatedPresence(showGitReview, 160);
+  const showCodingSidecar = active && projectOpenVisible && codingSidecarOpen;
+  const showRightRail = active && !showCodingSidecar && rightRailOpen && rightRailHasContent;
+  const showBrowserPreview = active && !showCodingSidecar && browserPreviewOpen;
+  const codingSidecarPresence = useAnimatedPresence(showCodingSidecar, 160);
   const rightRailPresence = useAnimatedPresence(showRightRail, 160);
   const browserPreviewPresence = useAnimatedPresence(showBrowserPreview, 160);
-  const renderGitReview = gitReviewPresence.mounted;
-  const renderRightRail = !renderGitReview && rightRailPresence.mounted;
-  const renderBrowserPreview = !renderGitReview && browserPreviewPresence.mounted;
-  const sideLayout = renderGitReview
-    ? gitReviewPresence.exiting
-      ? "review-closing"
-      : "review"
+  const renderCodingSidecar = codingSidecarPresence.mounted;
+  const renderRightRail = !renderCodingSidecar && rightRailPresence.mounted;
+  const renderBrowserPreview = !renderCodingSidecar && browserPreviewPresence.mounted;
+  const sideLayout = renderCodingSidecar
+    ? codingSidecarPresence.exiting
+      ? "coding-sidecar-closing"
+      : "coding-sidecar"
     : renderRightRail && renderBrowserPreview
       ? browserPreviewPresence.exiting
         ? "split-preview-closing"
@@ -250,16 +252,16 @@ function ChatPageComponent({
     () =>
       ({
         "--browser-preview-width": `${browserPreviewWidth}px`,
-        "--git-review-width": `${gitReviewWidth}px`,
+        "--coding-sidecar-width": `${codingSidecarWidth}px`,
       }) as CSSProperties,
-    [browserPreviewWidth, gitReviewWidth],
+    [browserPreviewWidth, codingSidecarWidth],
   );
 
   useEffect(() => {
-    if (!gitReviewPresence.mounted && gitReviewExpanded) {
-      setGitReviewExpanded(false);
+    if (!codingSidecarPresence.mounted && codingSidecarExpanded) {
+      setCodingSidecarExpanded(false);
     }
-  }, [gitReviewExpanded, gitReviewPresence.mounted]);
+  }, [codingSidecarExpanded, codingSidecarPresence.mounted]);
 
   useEffect(() => {
     if (!active) {
@@ -279,11 +281,11 @@ function ChatPageComponent({
   }, [browserPreviewExpanded, browserPreviewPresence.mounted]);
 
   useEffect(() => {
-    if (!projectOpenVisible && gitReviewOpen) {
-      setGitReviewExpanded(false);
-      setGitReviewOpen(false);
+    if (!projectOpenVisible && codingSidecarOpen) {
+      setCodingSidecarExpanded(false);
+      setCodingSidecarOpen(false);
     }
-  }, [gitReviewOpen, projectOpenVisible]);
+  }, [codingSidecarOpen, projectOpenVisible]);
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(Math.round(height), 0);
@@ -300,10 +302,10 @@ function ChatPageComponent({
     [sideLayout],
   );
 
-  const clampGitReviewWidth = useCallback(
+  const clampCodingSidecarWidth = useCallback(
     (width: number) => {
       const containerWidth = conversationBodyRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-      const { maxWidth, minWidth } = getGitReviewResizeBounds(containerWidth);
+      const { maxWidth, minWidth } = getCodingSidecarResizeBounds(containerWidth);
 
       return clamp(Math.round(width), minWidth, maxWidth);
     },
@@ -315,24 +317,29 @@ function ChatPageComponent({
       return;
     }
 
-    setGitReviewOpen(false);
-    setGitReviewExpanded(false);
-    setBrowserPreviewOpen((open) => {
-      if (!open) {
-        setBrowserPreviewExpanded(false);
-        setBrowserPreviewInitialUrl(null);
-      }
+    if (browserPreviewOpen) {
+      setBrowserPreviewExpanded(false);
+      setBrowserPreviewInitialUrl(null);
+      setBrowserPreviewOpen(false);
+      onBrowserPreviewClose?.();
+      return;
+    }
 
-      return !open;
-    });
-  }, [browserPreviewEnabled]);
+    setCodingSidecarOpen(false);
+    setCodingSidecarExpanded(false);
+    setBrowserPreviewExpanded(false);
+    setBrowserPreviewInitialUrl(null);
+    setBrowserPreviewOpen(true);
+  }, [browserPreviewEnabled, browserPreviewOpen, onBrowserPreviewClose]);
 
   const handleCloseBrowserPreview = useCallback(() => {
+    setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
     setBrowserPreviewInitialUrl(null);
-  }, []);
+    onBrowserPreviewClose?.();
+  }, [onBrowserPreviewClose]);
 
-  const handleOpenGitReview = useCallback(() => {
+  const handleOpenCodeReview = useCallback(() => {
     if (!projectOpenVisible) {
       return;
     }
@@ -345,13 +352,15 @@ function ChatPageComponent({
     setCodingSidecarTab("review");
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
+    setBrowserPreviewInitialUrl(null);
+    onBrowserPreviewClose?.();
     rightRailAutoOpenedRef.current = false;
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
-    setGitReviewExpanded(false);
-    setGitReviewOpen(true);
-  }, [codeReviewBehavior, onOpenSideChat, projectOpenVisible]);
+    setCodingSidecarExpanded(false);
+    setCodingSidecarOpen(true);
+  }, [codeReviewBehavior, onBrowserPreviewClose, onOpenSideChat, projectOpenVisible]);
 
   const handleToggleCodingSidecar = useCallback(() => {
     if (!projectOpenVisible) {
@@ -361,18 +370,20 @@ function ChatPageComponent({
     setCodingSidecarTab("codebase");
     setBrowserPreviewExpanded(false);
     setBrowserPreviewOpen(false);
+    setBrowserPreviewInitialUrl(null);
+    onBrowserPreviewClose?.();
     rightRailAutoOpenedRef.current = false;
     setRightRailOpen(false);
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
-    setGitReviewOpen((open) => {
-      if (!open) setGitReviewExpanded(false);
+    setCodingSidecarOpen((open) => {
+      if (!open) setCodingSidecarExpanded(false);
       return !open;
     });
-  }, [projectOpenVisible]);
+  }, [onBrowserPreviewClose, projectOpenVisible]);
 
-  const handleCloseGitReview = useCallback(() => {
-    setGitReviewOpen(false);
+  const handleCloseCodingSidecar = useCallback(() => {
+    setCodingSidecarOpen(false);
   }, []);
 
   const handleCloseRightRail = useCallback(() => {
@@ -384,8 +395,8 @@ function ChatPageComponent({
 
   const handleOpenPlanReview = useCallback((messageId: string) => {
     rightRailAutoOpenedRef.current = false;
-    setGitReviewOpen(false);
-    setGitReviewExpanded(false);
+    setCodingSidecarOpen(false);
+    setCodingSidecarExpanded(false);
     setPlanReviewExpanded(false);
     setActivePlanReviewMessageId(messageId);
     setRightRailOpen(true);
@@ -396,7 +407,7 @@ function ChatPageComponent({
     setPlanReviewExpanded((expanded) => !expanded);
   }, []);
 
-  const handleSubmitGitReview = useCallback(
+  const handleSubmitCodeReview = useCallback(
     (prompt: string) =>
       onSendMessage({
         attachments: [],
@@ -412,9 +423,9 @@ function ChatPageComponent({
     [localWorkspace, onSendMessage, webSearch.maxResults, webSearch.provider],
   );
 
-  const handleGitReviewResizeStart = useCallback(
+  const handleCodingSidecarResizeStart = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      if (gitReviewExpanded || !showGitReview) {
+      if (codingSidecarExpanded || !showCodingSidecar) {
         return;
       }
 
@@ -426,14 +437,14 @@ function ChatPageComponent({
 
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
-      setGitReviewResizing(true);
+      setCodingSidecarResizing(true);
 
       let resizeFrame: number | null = null;
       let pendingClientX = event.clientX;
 
       const commitWidth = () => {
         const containerRect = container.getBoundingClientRect();
-        setGitReviewWidth(clampGitReviewWidth(containerRect.right - pendingClientX));
+        setCodingSidecarWidth(clampCodingSidecarWidth(containerRect.right - pendingClientX));
       };
       const updateWidth = (clientX: number) => {
         pendingClientX = clientX;
@@ -455,7 +466,7 @@ function ChatPageComponent({
           commitWidth();
         }
 
-        setGitReviewResizing(false);
+        setCodingSidecarResizing(false);
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", stopResize);
         window.removeEventListener("pointercancel", stopResize);
@@ -466,42 +477,42 @@ function ChatPageComponent({
       window.addEventListener("pointerup", stopResize, { once: true });
       window.addEventListener("pointercancel", stopResize, { once: true });
     },
-    [clampGitReviewWidth, gitReviewExpanded, showGitReview],
+    [clampCodingSidecarWidth, codingSidecarExpanded, showCodingSidecar],
   );
 
-  const handleGitReviewResizeKeyDown = useCallback(
+  const handleCodingSidecarResizeKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
-      if (gitReviewExpanded) {
+      if (codingSidecarExpanded) {
         return;
       }
 
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setGitReviewWidth((width) => clampGitReviewWidth(width + GIT_REVIEW_RESIZE_STEP));
+        setCodingSidecarWidth((width) => clampCodingSidecarWidth(width + CODING_SIDECAR_RESIZE_STEP));
       }
 
       if (event.key === "ArrowRight") {
         event.preventDefault();
-        setGitReviewWidth((width) => clampGitReviewWidth(width - GIT_REVIEW_RESIZE_STEP));
+        setCodingSidecarWidth((width) => clampCodingSidecarWidth(width - CODING_SIDECAR_RESIZE_STEP));
       }
 
       if (event.key === "Home") {
         event.preventDefault();
-        setGitReviewWidth((width) => {
+        setCodingSidecarWidth((width) => {
           const containerWidth = conversationBodyRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-          return getGitReviewResizeBounds(containerWidth).minWidth || width;
+          return getCodingSidecarResizeBounds(containerWidth).minWidth || width;
         });
       }
 
       if (event.key === "End") {
         event.preventDefault();
-        setGitReviewWidth((width) => {
+        setCodingSidecarWidth((width) => {
           const containerWidth = conversationBodyRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-          return getGitReviewResizeBounds(containerWidth).maxWidth || width;
+          return getCodingSidecarResizeBounds(containerWidth).maxWidth || width;
         });
       }
     },
-    [clampGitReviewWidth, gitReviewExpanded],
+    [clampCodingSidecarWidth, codingSidecarExpanded],
   );
 
   const handleBrowserPreviewResizeStart = useCallback(
@@ -601,8 +612,8 @@ function ChatPageComponent({
       return;
     }
 
-    setGitReviewOpen(false);
-    setGitReviewExpanded(false);
+    setCodingSidecarOpen(false);
+    setCodingSidecarExpanded(false);
     rightRailAutoOpenedRef.current = false;
     setActivePlanReviewMessageId(null);
     setPlanReviewExpanded(false);
@@ -659,16 +670,16 @@ function ChatPageComponent({
   }, [browserPreviewExpanded, clampBrowserPreviewWidth, showBrowserPreview]);
 
   useEffect(() => {
-    if (!showGitReview || gitReviewExpanded) {
+    if (!showCodingSidecar || codingSidecarExpanded) {
       return;
     }
 
-    const handleResize = () => setGitReviewWidth((width) => clampGitReviewWidth(width));
+    const handleResize = () => setCodingSidecarWidth((width) => clampCodingSidecarWidth(width));
     handleResize();
     window.addEventListener("resize", handleResize);
 
     return () => window.removeEventListener("resize", handleResize);
-  }, [clampGitReviewWidth, gitReviewExpanded, showGitReview]);
+  }, [clampCodingSidecarWidth, codingSidecarExpanded, showCodingSidecar]);
 
   useEffect(() => {
     if (!browserPreviewEnabled && browserPreviewOpen) {
@@ -687,8 +698,8 @@ function ChatPageComponent({
     setBrowserPreviewInitialUrl(browserPreviewUrl);
     setBrowserPreviewOpen(true);
     rightRailAutoOpenedRef.current = false;
-    setGitReviewOpen(false);
-    setGitReviewExpanded(false);
+    setCodingSidecarOpen(false);
+    setCodingSidecarExpanded(false);
   }, [active, browserPreviewEnabled, browserPreviewRequestId, browserPreviewUrl]);
 
   const composer = (
@@ -722,7 +733,7 @@ function ChatPageComponent({
       onLocalWorkspaceChange={onLocalWorkspaceChange}
       onModelChange={onModelChange}
       onForkWorktree={onForkChatWorktree}
-      onReviewChanges={handleOpenGitReview}
+      onReviewChanges={handleOpenCodeReview}
       onSelectProject={onSelectProject}
       onStopGeneration={onStopGeneration}
       onSteerQueuedMessage={onSteerQueuedMessage}
@@ -747,7 +758,7 @@ function ChatPageComponent({
         active={active}
         browserPreviewEnabled={browserPreviewEnabled}
         browserPreviewOpen={showBrowserPreview}
-        codingSidecarOpen={showGitReview}
+        codingSidecarOpen={showCodingSidecar}
         projectOpenEnabled={projectOpenEnabled}
         projectOpenVisible={projectOpenVisible}
         recommendedProjectOpenTarget={recommendedProjectOpenTarget}
@@ -775,9 +786,9 @@ function ChatPageComponent({
         className="conversation-body"
         data-browser-expanded={renderBrowserPreview && browserPreviewExpanded}
         data-browser-resizing={browserPreviewResizing}
-        data-git-review-expanded={renderGitReview && gitReviewExpanded}
-        data-git-review-open={renderGitReview}
-        data-git-review-resizing={gitReviewResizing}
+        data-coding-sidecar-expanded={renderCodingSidecar && codingSidecarExpanded}
+        data-coding-sidecar-open={renderCodingSidecar}
+        data-coding-sidecar-resizing={codingSidecarResizing}
         data-plan-review-expanded={planReviewActive && planReviewExpanded}
         data-plan-review-open={planReviewActive}
         data-right-rail-open={renderRightRail}
@@ -848,24 +859,24 @@ function ChatPageComponent({
             />
           </div>
         ) : null}
-        {renderGitReview ? (
-          <div className="side-panel-presence" data-panel="coding-sidecar" data-presence={gitReviewPresence.exiting ? "exit" : "enter"}>
+        {renderCodingSidecar ? (
+          <div className="side-panel-presence" data-panel="coding-sidecar" data-presence={codingSidecarPresence.exiting ? "exit" : "enter"}>
             <Suspense fallback={null}>
               <CodingSidecarPanel
                 agentRuns={agentRuns}
                 chat={chat}
-                expanded={gitReviewExpanded}
+                expanded={codingSidecarExpanded}
                 initialTab={codingSidecarTab}
                 localWorkspace={localWorkspace}
-                previewWidth={gitReviewWidth}
-                resizeMaxWidth={GIT_REVIEW_MAX_WIDTH}
-                resizeMinWidth={GIT_REVIEW_MIN_WIDTH}
+                previewWidth={codingSidecarWidth}
+                resizeMaxWidth={CODING_SIDECAR_MAX_WIDTH}
+                resizeMinWidth={CODING_SIDECAR_MIN_WIDTH}
                 root={localWorkspace.roots[0] ?? ""}
-                onClose={handleCloseGitReview}
-                onResizeKeyDown={handleGitReviewResizeKeyDown}
-                onResizeStart={handleGitReviewResizeStart}
-                onSubmitPrompt={handleSubmitGitReview}
-                onToggleExpanded={() => setGitReviewExpanded((expanded) => !expanded)}
+                onClose={handleCloseCodingSidecar}
+                onResizeKeyDown={handleCodingSidecarResizeKeyDown}
+                onResizeStart={handleCodingSidecarResizeStart}
+                onSubmitPrompt={handleSubmitCodeReview}
+                onToggleExpanded={() => setCodingSidecarExpanded((expanded) => !expanded)}
               />
             </Suspense>
           </div>
@@ -941,13 +952,13 @@ const BROWSER_PREVIEW_MIN_WIDTH = 320;
 const BROWSER_PREVIEW_MAX_WIDTH = 1120;
 const DEFAULT_BROWSER_PREVIEW_WIDTH = 560;
 const BROWSER_PREVIEW_RESIZE_STEP = 40;
-const GIT_REVIEW_MIN_WIDTH = 460;
-const GIT_REVIEW_MAX_WIDTH = 1280;
-const DEFAULT_GIT_REVIEW_WIDTH = 760;
-const GIT_REVIEW_RESIZE_STEP = 48;
+const CODING_SIDECAR_MIN_WIDTH = 460;
+const CODING_SIDECAR_MAX_WIDTH = 1280;
+const DEFAULT_CODING_SIDECAR_WIDTH = 760;
+const CODING_SIDECAR_RESIZE_STEP = 48;
 const PREVIEW_ONLY_RESERVED_WIDTH = 320;
 const SPLIT_LAYOUT_RESERVED_WIDTH = 560;
-const GIT_REVIEW_RESERVED_WIDTH = 360;
+const CODING_SIDECAR_RESERVED_WIDTH = 360;
 
 type EmptyChatTone = "access" | "creative" | "project" | "route" | "tools";
 
@@ -1170,13 +1181,13 @@ function getBrowserPreviewResizeBounds(sideLayout: string, containerWidth: numbe
   };
 }
 
-function getGitReviewResizeBounds(containerWidth: number) {
-  const availableWidth = Math.max(GIT_REVIEW_MIN_WIDTH, containerWidth - GIT_REVIEW_RESERVED_WIDTH);
-  const maxWidth = Math.min(GIT_REVIEW_MAX_WIDTH, availableWidth);
+function getCodingSidecarResizeBounds(containerWidth: number) {
+  const availableWidth = Math.max(CODING_SIDECAR_MIN_WIDTH, containerWidth - CODING_SIDECAR_RESERVED_WIDTH);
+  const maxWidth = Math.min(CODING_SIDECAR_MAX_WIDTH, availableWidth);
 
   return {
     maxWidth,
-    minWidth: Math.min(GIT_REVIEW_MIN_WIDTH, maxWidth),
+    minWidth: Math.min(CODING_SIDECAR_MIN_WIDTH, maxWidth),
   };
 }
 

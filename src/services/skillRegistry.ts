@@ -383,7 +383,7 @@ export function formatSkillsPromptSection(latestUserPrompt: string) {
   }
 
   const activeMatches = findSkillPromptMatches(latestUserPrompt, enabledSkills);
-  const shouldListSkills = /\b(?:skills?|capabilit(?:y|ies)|what\s+can\s+you\s+do|available)\b/i.test(latestUserPrompt);
+  const shouldListSkills = /\b(?:apps?|connectors?|plugins?|skills?|tools?|capabilit(?:y|ies)|what\s+can\s+you\s+do|available)\b/i.test(latestUserPrompt);
 
   if (activeMatches.length === 0 && !shouldListSkills) {
     return "";

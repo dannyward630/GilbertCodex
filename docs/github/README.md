@@ -2,9 +2,9 @@
 
 This guide explains how to connect GitHub to Gilbert Codex for the first-party GitHub plugin: repository browsing, repository stats, tags, code search, local vector-ranked discovery, branch reads, API-backed commits, issues, pull requests, releases, release notes, GitHub Actions, and advanced REST API automation.
 
-Last verified: May 20, 2026.
+Last updated: May 25, 2026 for the v0.8.2 build.
 
-Platform note: this flow is verified on Windows. macOS and Linux are port-ready but need native testing before the integration is considered officially supported there. See [Platform Support And Porting Notes](../platform/README.md).
+Platform note: GitHub OAuth and API-backed actions are implemented through the same app command layer on Windows, macOS, and Linux. macOS and Linux still need packaged-app launch testing before the integration is considered fully verified there, especially token persistence, browser handoff, local Git helpers, and release tooling. See [Platform Support And Porting Notes](../platform/README.md).
 
 ## What Gilbert Uses
 

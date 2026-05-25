@@ -341,14 +341,14 @@
 .apps-hero-title h1 {
   margin: 0;
   color: var(--text);
-  font-size: 28px;
+  font-size: var(--font-size-28, 28px);
   font-weight: 820;
   letter-spacing: 0;
 }
 
 .apps-hero-title small {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 680;
 }
 
@@ -364,7 +364,7 @@
   border: 1px solid var(--apps-border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-control-bg) 72%, transparent);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 740;
   cursor: pointer;
 }
@@ -400,7 +400,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 30%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-accent-soft) 72%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 780;
 }
 
@@ -418,7 +418,7 @@
   max-width: 760px;
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 650;
   line-height: 1.45;
 }
@@ -461,7 +461,7 @@
   outline: 0;
   background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 700;
 }
 
@@ -504,14 +504,14 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 76%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-control-bg) 60%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 720;
   white-space: nowrap;
 }
 
 .apps-catalog-metrics strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 820;
 }
 
@@ -549,7 +549,7 @@
 .apps-section-tabs span {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -557,7 +557,7 @@
 
 .apps-section-tabs small {
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 780;
   white-space: nowrap;
 }
@@ -682,7 +682,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-success) 25%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-success) 8%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 800;
   line-height: 1.1;
   text-align: center;
@@ -698,7 +698,7 @@
 .apps-plugin-card h3 {
   margin: 0;
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--font-size-15, 15px);
   font-weight: 840;
   line-height: 1.2;
   letter-spacing: 0;
@@ -707,7 +707,7 @@
 .apps-plugin-description {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 640;
   line-height: 1.42;
   display: -webkit-box;
@@ -727,7 +727,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-success) 30%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-success) 10%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 780;
   white-space: nowrap;
 }
@@ -783,7 +783,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-installed) 24%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-installed) 8%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 800;
 }
 
@@ -796,7 +796,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 20%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-accent-soft) 52%, transparent);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
 }
 
@@ -815,7 +815,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 82%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-panel-raised) 64%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 720;
 }
 
@@ -830,7 +830,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 78%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 54%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
 }
 
@@ -852,7 +852,7 @@
   color: var(--text-muted);
   border: 1px solid var(--apps-border);
   border-radius: 8px;
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   line-height: 1.45;
 }
 
@@ -884,13 +884,13 @@
 
 .apps-plugin-expanded-head strong {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 840;
 }
 
 .apps-plugin-expanded-head small {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 680;
   line-height: 1.35;
 }
@@ -924,7 +924,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 76%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 56%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 650;
   line-height: 1.4;
 }
@@ -947,7 +947,7 @@
   color: var(--text-dim);
   border: 1px solid color-mix(in srgb, var(--apps-border) 78%, transparent);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
 }
 
@@ -978,7 +978,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 78%, var(--cyan) 22%);
   border-radius: 8px;
   background: linear-gradient(135deg, var(--apps-accent), color-mix(in srgb, var(--apps-accent) 72%, var(--cyan)));
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 780;
   cursor: pointer;
 }
@@ -1005,7 +1005,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 86%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 78%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 760;
   cursor: pointer;
 }
@@ -1028,7 +1028,7 @@
   flex: 1 1 150px;
   min-width: 130px;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 720;
   line-height: 1.35;
   display: none;
@@ -1078,14 +1078,14 @@
 
 .apps-mcp-heading strong {
   color: var(--text);
-  font-size: 19px;
+  font-size: var(--font-size-19, 19px);
   font-weight: 860;
   letter-spacing: 0;
 }
 
 .apps-mcp-heading small {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
 }
 
@@ -1118,13 +1118,13 @@
 
 .apps-mcp-summary-grid strong {
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--font-size-15, 15px);
   font-weight: 860;
 }
 
 .apps-mcp-summary-grid span {
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 720;
 }
 
@@ -1158,13 +1158,13 @@
   min-height: 54px;
   padding: 9px;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 720;
 }
 
 .apps-plugin-marketplace-summary strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 860;
 }
 
@@ -1175,7 +1175,7 @@
   min-height: 44px;
   padding: 10px 12px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 750;
 }
 
@@ -1215,7 +1215,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 840;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1226,7 +1226,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 700;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -1239,7 +1239,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 76%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-panel) 54%, transparent);
-  font-size: 9.5px;
+  font-size: var(--font-size-9-5, 9.5px);
   font-style: normal;
   font-weight: 840;
   text-transform: uppercase;
@@ -1309,7 +1309,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 700;
   line-height: 1.36;
   -webkit-box-orient: vertical;
@@ -1335,7 +1335,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-installed) 22%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-installed) 8%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-style: normal;
   font-weight: 760;
   text-overflow: ellipsis;
@@ -1360,7 +1360,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 82%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-control-bg) 72%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 780;
   cursor: pointer;
 }
@@ -1404,13 +1404,13 @@
 
 .apps-mcp-add-server-card strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 840;
 }
 
 .apps-mcp-add-server-card small {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -1431,7 +1431,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 24%, var(--apps-border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-accent-soft) 42%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 800;
   text-align: center;
 }
@@ -1466,13 +1466,13 @@
 
 .apps-mcp-server-preview strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 820;
 }
 
 .apps-mcp-server-preview small {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 720;
 }
 
@@ -1546,7 +1546,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 76%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-panel) 54%, transparent);
-  font-size: 9.5px;
+  font-size: var(--font-size-9-5, 9.5px);
   font-style: normal;
   font-weight: 840;
   text-transform: uppercase;
@@ -1562,7 +1562,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 24%, var(--apps-border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-accent-soft) 42%, var(--apps-panel));
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 880;
 }
 
@@ -1571,7 +1571,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 840;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1583,7 +1583,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 700;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -1610,7 +1610,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-accent) 22%, var(--apps-border));
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-accent-soft) 38%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-style: normal;
   font-weight: 780;
 }
@@ -1627,7 +1627,7 @@
 .apps-mcp-pagination span {
   margin-right: auto;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
 }
 
@@ -1641,7 +1641,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 82%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 68%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 780;
   cursor: pointer;
 }
@@ -1678,7 +1678,7 @@
   outline: 0;
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 720;
 }
 
@@ -1693,7 +1693,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 82%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 70%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 780;
   white-space: nowrap;
   cursor: pointer;
@@ -1761,7 +1761,7 @@
 .apps-empty-state strong {
   display: block;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 820;
 }
 
@@ -1769,7 +1769,7 @@
   display: block;
   margin-top: 3px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 680;
 }
 
@@ -1803,14 +1803,14 @@
 }
 
 .app-dialog:has(.gmail-connect-dialog) .dialog-header h2 {
-  font-size: 21px;
+  font-size: var(--font-size-21, 21px);
   font-weight: 820;
 }
 
 .app-dialog:has(.gmail-connect-dialog) .dialog-header p {
   margin-top: 4px;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 650;
 }
 
@@ -1842,7 +1842,7 @@
 .gmail-connect-status {
   padding: 11px 12px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 700;
   line-height: 1.45;
 }
@@ -1888,13 +1888,13 @@
 
 .gmail-account-manager-heading strong {
   color: var(--text);
-  font-size: 17px;
+  font-size: var(--font-size-17, 17px);
   font-weight: 840;
 }
 
 .gmail-account-manager-heading small {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
 }
 
@@ -1908,7 +1908,7 @@
   min-height: 28px;
   padding: 0 9px;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 780;
   white-space: nowrap;
 }
@@ -1990,7 +1990,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 820;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1998,7 +1998,7 @@
 
 .gmail-account-details small {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
 }
 
@@ -2046,14 +2046,14 @@
 
 .gmail-account-empty strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 820;
 }
 
 .gmail-account-empty small {
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 700;
 }
 
@@ -2073,7 +2073,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 72%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-panel-raised) 45%, transparent);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -2110,19 +2110,19 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--apps-accent-soft) 74%, transparent);
   content: counter(gmail-step);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 820;
 }
 
 .gmail-connect-steps strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 800;
 }
 
 .gmail-connect-steps span {
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 630;
   line-height: 1.45;
 }
@@ -2139,7 +2139,7 @@
   align-items: center;
   gap: 9px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 800;
 }
 
@@ -2158,13 +2158,13 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 78%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--apps-panel) 72%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
 }
 
 .gmail-connect-permissions p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   line-height: 1.45;
 }
 
@@ -2175,7 +2175,7 @@
   gap: 9px;
   padding: 10px 12px;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -2191,7 +2191,7 @@
   align-items: center;
   gap: 5px;
   color: var(--apps-accent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 760;
   text-decoration: none;
   white-space: nowrap;
@@ -2258,7 +2258,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2268,7 +2268,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2294,7 +2294,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 82%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-control-bg) 72%, transparent);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 780;
   white-space: nowrap;
   cursor: pointer;
@@ -2323,6 +2323,111 @@
   border-color: color-mix(in srgb, var(--apps-installed) 24%, var(--apps-border));
 }
 
+.mcp-setup-panel {
+  display: grid;
+  gap: 9px;
+  padding: 2px 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--apps-border) 66%, transparent);
+}
+
+.mcp-setup-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-setup-heading > svg {
+  color: color-mix(in srgb, var(--apps-accent) 78%, var(--cyan) 22%);
+}
+
+.mcp-setup-heading span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mcp-setup-heading strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--font-size-12-5, 12.5px);
+  font-weight: 840;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-setup-heading small {
+  color: var(--text-muted);
+  font-size: var(--font-size-11-5, 11.5px);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.mcp-setup-heading a,
+.mcp-setup-heading button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  color: var(--apps-accent);
+  border: 1px solid color-mix(in srgb, var(--apps-accent) 26%, var(--apps-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--apps-accent-soft) 24%, transparent);
+  font-size: var(--font-size-11, 11px);
+  font-weight: 820;
+  text-decoration: none;
+}
+
+.mcp-setup-heading button {
+  cursor: pointer;
+}
+
+.mcp-setup-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mcp-setup-checks span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 25px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--apps-border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--apps-control-bg) 46%, transparent);
+  font-size: var(--font-size-11, 11px);
+  font-weight: 780;
+}
+
+.mcp-setup-checks span[data-status="ready"] {
+  color: color-mix(in srgb, var(--apps-success) 78%, var(--text) 22%);
+  border-color: color-mix(in srgb, var(--apps-success) 24%, var(--apps-border));
+  background: color-mix(in srgb, var(--apps-success) 8%, transparent);
+}
+
+.mcp-setup-checks span[data-status="missing"] {
+  color: color-mix(in srgb, var(--apps-warning) 78%, var(--text) 22%);
+  border-color: color-mix(in srgb, var(--apps-warning) 32%, var(--apps-border));
+  background: color-mix(in srgb, var(--apps-warning) 8%, transparent);
+}
+
+.mcp-setup-steps {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-size-11-5, 11.5px);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.mcp-setup-steps span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .mcp-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2346,7 +2451,7 @@
   border: 1px solid color-mix(in srgb, var(--apps-border) 78%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--apps-control-bg) 58%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 800;
   cursor: pointer;
 }
@@ -2370,11 +2475,12 @@
 .mcp-field span,
 .mcp-toggle span {
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 780;
 }
 
 .mcp-field input,
+.mcp-field select,
 .mcp-field textarea {
   width: 100%;
   min-width: 0;
@@ -2384,11 +2490,12 @@
   outline: 0;
   background: color-mix(in srgb, var(--apps-control-bg) 70%, transparent);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 700;
 }
 
-.mcp-field input {
+.mcp-field input,
+.mcp-field select {
   min-height: 34px;
   padding: 0 10px;
 }
@@ -2401,6 +2508,7 @@
 }
 
 .mcp-field input:focus,
+.mcp-field select:focus,
 .mcp-field textarea:focus {
   border-color: color-mix(in srgb, var(--apps-accent) 44%, var(--apps-border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--apps-accent) 12%, transparent);
@@ -2409,6 +2517,13 @@
 .mcp-field input::placeholder,
 .mcp-field textarea::placeholder {
   color: var(--text-dim);
+}
+
+.mcp-secret-field small {
+  color: var(--text-dim);
+  font-size: var(--font-size-11, 11px);
+  font-weight: 680;
+  line-height: 1.35;
 }
 
 .mcp-toggle {
@@ -2449,7 +2564,7 @@
   align-items: center;
   gap: 7px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 840;
 }
 
@@ -2491,20 +2606,19 @@
 
 .mcp-progress-list strong {
   color: var(--text);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 840;
   text-transform: uppercase;
 }
 
 .mcp-progress-list small {
   min-width: 0;
-  overflow: hidden;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 700;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 860px) {
@@ -2564,7 +2678,7 @@
   }
 
   .apps-hero-title h1 {
-    font-size: 24px;
+    font-size: var(--font-size-24, 24px);
   }
 
   .apps-hero-title small {

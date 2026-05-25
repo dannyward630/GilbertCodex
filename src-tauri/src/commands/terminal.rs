@@ -1,4 +1,6 @@
 use crate::core::fs_utils::path_to_string;
+#[cfg(not(windows))]
+use crate::core::native_path::native_runtime_path_dirs;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
@@ -984,7 +986,7 @@ fn create_interactive_shell_command(
             }
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = CommandBuilder::new(unix_shell_program(shell));
-                command.arg("-i");
+                configure_unix_interactive_shell_args(&mut command, shell);
                 command
             }
         };
@@ -998,7 +1000,7 @@ fn create_interactive_shell_command(
         let mut command = match shell {
             TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Sh => {
                 let mut command = CommandBuilder::new(unix_shell_program(shell));
-                command.arg("-i");
+                configure_unix_interactive_shell_args(&mut command, shell);
                 command
             }
             TerminalShell::PowerShell | TerminalShell::Cmd | TerminalShell::Wsl => {
@@ -1092,6 +1094,20 @@ fn configure_pty_command(
     }
 }
 
+fn configure_unix_interactive_shell_args(command: &mut CommandBuilder, shell: &TerminalShell) {
+    for arg in unix_interactive_shell_args(shell, cfg!(target_os = "macos")) {
+        command.arg(arg);
+    }
+}
+
+fn unix_interactive_shell_args(shell: &TerminalShell, is_macos: bool) -> &'static [&'static str] {
+    if is_macos && matches!(shell, TerminalShell::Bash | TerminalShell::Zsh) {
+        &["-il"]
+    } else {
+        &["-i"]
+    }
+}
+
 /// Env vars that must never inherit from GilbertCodex into AI-spawned tool commands.
 fn inherited_env_vars_to_scrub() -> &'static [&'static str] {
     &[
@@ -1133,54 +1149,10 @@ fn scrub_inherited_dev_env(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn unix_gui_path() -> String {
-    let mut parts: Vec<String> = std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path)
-                .map(|path| path.to_string_lossy().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        parts.push(
-            home.join(".local")
-                .join("bin")
-                .to_string_lossy()
-                .to_string(),
-        );
-        parts.push(
-            home.join(".cargo")
-                .join("bin")
-                .to_string_lossy()
-                .to_string(),
-        );
-        parts.push(
-            home.join(".npm-global")
-                .join("bin")
-                .to_string_lossy()
-                .to_string(),
-        );
-        parts.push(home.join(".yarn").join("bin").to_string_lossy().to_string());
-    }
-
-    if cfg!(target_os = "macos") {
-        parts.push("/opt/homebrew/bin".to_string());
-        parts.push("/usr/local/bin".to_string());
-    }
-
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
-
-    let mut deduped = Vec::new();
-    for part in parts {
-        if !part.trim().is_empty() && !deduped.iter().any(|existing| existing == &part) {
-            deduped.push(part);
-        }
-    }
-
-    deduped.join(":")
+    std::env::join_paths(native_runtime_path_dirs())
+        .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+        .to_string_lossy()
+        .to_string()
 }
 
 fn default_terminal_shell() -> TerminalShell {
@@ -1229,10 +1201,34 @@ fn default_unix_shell() -> TerminalShell {
 
 #[cfg(not(windows))]
 fn default_unix_shell_path() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    std::env::var("SHELL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(default_unix_shell_fallback_path)
+}
+
+#[cfg(not(windows))]
+fn default_unix_shell_fallback_path() -> String {
+    if cfg!(target_os = "macos") && Path::new("/bin/zsh").is_file() {
+        "/bin/zsh".to_string()
+    } else {
+        "/bin/sh".to_string()
+    }
 }
 
 fn unix_shell_program(shell: &TerminalShell) -> &'static str {
+    if cfg!(target_os = "macos") {
+        return match shell {
+            TerminalShell::Bash => "/bin/bash",
+            TerminalShell::Zsh => "/bin/zsh",
+            TerminalShell::Sh => "/bin/sh",
+            TerminalShell::Wsl => "/bin/sh",
+            TerminalShell::PowerShell => "pwsh",
+            TerminalShell::Cmd => "cmd",
+        };
+    }
+
     match shell {
         TerminalShell::Bash => "bash",
         TerminalShell::Zsh => "zsh",
@@ -1911,6 +1907,26 @@ mod tests {
             response.stdout.to_ascii_lowercase().contains("curl"),
             "stdout was {:?}",
             response.stdout
+        );
+    }
+
+    #[test]
+    fn macos_interactive_bash_and_zsh_use_login_shell_args() {
+        assert_eq!(
+            unix_interactive_shell_args(&TerminalShell::Zsh, true),
+            &["-il"]
+        );
+        assert_eq!(
+            unix_interactive_shell_args(&TerminalShell::Bash, true),
+            &["-il"]
+        );
+        assert_eq!(
+            unix_interactive_shell_args(&TerminalShell::Sh, true),
+            &["-i"]
+        );
+        assert_eq!(
+            unix_interactive_shell_args(&TerminalShell::Zsh, false),
+            &["-i"]
         );
     }
 

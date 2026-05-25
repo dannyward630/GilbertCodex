@@ -1,5 +1,7 @@
 # Gilbert Codex Plugins
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 This folder is the canonical home for Gilbert Codex plugin bundles. Every plugin must live in its own subfolder and keep its files scoped to that folder unless a shared registry explicitly needs an update.
 
 ## Folder Contract
@@ -31,4 +33,4 @@ This folder is the canonical home for Gilbert Codex plugin bundles. Every plugin
 
 `.agents/plugins/marketplace.json` keeps these three first-party plugins local and adds upstream public marketplace entries as `git-subdir` sources pointing at `https://github.com/openai/plugins.git`.
 
-Those remote entries make the broader Codex-style catalog discoverable without vendoring all plugin folders into this repo. Gilbert still only treats a plugin as runnable after one of its real routes is configured: native app install, MCP save/test, or local skill import.
+Those remote entries make the broader Codex-style catalog discoverable without vendoring all plugin folders into this repo. Gilbert still only treats a plugin as runnable after one of its real routes is configured: native app install, MCP save/test, registry-backed MCP setup, or local skill import.

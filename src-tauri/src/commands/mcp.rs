@@ -1,10 +1,17 @@
 //! MCP desktop commands for Streamable HTTP and stdio server connections and tool calls.
 
+#[cfg(not(windows))]
+use crate::core::native_path::{
+    expand_home_path, native_runtime_path_dirs, resolve_native_executable,
+};
 use crate::{
     commands::auth,
     core::{process::hide_command_window, secure_storage, storage},
 };
-use reqwest::{header, Method, Url};
+use reqwest::{
+    header::{self, HeaderName, HeaderValue},
+    Method, Url,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
@@ -34,6 +41,7 @@ const MCP_MAX_TOOL_LIST_PAGES: usize = 8;
 const MCP_MAX_TOOLS_PER_SERVER: usize = 200;
 const MCP_MAX_ARGUMENT_BYTES: usize = 256_000;
 const MCP_MAX_RESULT_CHARS: usize = 80_000;
+const MCP_MAX_HTTP_HEADERS: usize = 24;
 const MCP_MAX_STDIO_ARGS: usize = 80;
 const MCP_MAX_STDIO_ENV: usize = 80;
 const MCP_REGISTRY_BASE_URL: &str = "https://registry.modelcontextprotocol.io/v0.1/servers";
@@ -72,11 +80,13 @@ struct McpServerRecord {
     enabled: bool,
     endpoint: Option<String>,
     environment: Vec<McpEnvironmentVariable>,
+    headers: Vec<McpHttpHeader>,
     id: String,
     last_connected_at: Option<u64>,
     last_error: Option<String>,
     name: String,
     protocol_version: Option<String>,
+    query_params: Vec<McpHttpQueryParam>,
     server_name: Option<String>,
     server_version: Option<String>,
     tools: Vec<McpToolSummary>,
@@ -89,6 +99,22 @@ struct McpServerRecord {
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 pub struct McpEnvironmentVariable {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct McpHttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct McpHttpQueryParam {
     pub name: String,
     pub value: String,
 }
@@ -120,12 +146,14 @@ pub struct McpServerState {
     pub enabled: bool,
     pub endpoint: Option<String>,
     pub environment: Vec<McpEnvironmentVariableState>,
+    pub headers: Vec<McpHttpHeaderState>,
     pub has_authorization_token: bool,
     pub id: String,
     pub last_connected_at: Option<u64>,
     pub last_error: Option<String>,
     pub name: String,
     pub protocol_version: Option<String>,
+    pub query_params: Vec<McpHttpQueryParamState>,
     pub server_name: Option<String>,
     pub server_version: Option<String>,
     pub tools: Vec<McpToolSummary>,
@@ -141,6 +169,20 @@ pub struct McpEnvironmentVariableState {
     pub name: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttpHeaderState {
+    pub has_value: bool,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttpQueryParamState {
+    pub has_value: bool,
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpSaveServerRequest {
@@ -150,8 +192,10 @@ pub struct McpSaveServerRequest {
     pub enabled: Option<bool>,
     pub endpoint: Option<String>,
     pub environment: Option<Vec<McpEnvironmentVariable>>,
+    pub headers: Option<Vec<McpHttpHeader>>,
     pub id: Option<String>,
     pub name: String,
+    pub query_params: Option<Vec<McpHttpQueryParam>>,
     pub transport: Option<String>,
     pub working_directory: Option<String>,
 }
@@ -177,7 +221,9 @@ pub struct McpTestServerRequest {
     pub command: Option<String>,
     pub endpoint: Option<String>,
     pub environment: Option<Vec<McpEnvironmentVariable>>,
+    pub headers: Option<Vec<McpHttpHeader>>,
     pub id: Option<String>,
+    pub query_params: Option<Vec<McpHttpQueryParam>>,
     pub transport: Option<String>,
     pub working_directory: Option<String>,
 }
@@ -330,6 +376,8 @@ struct NormalizedMcpServerInput {
     command: Option<String>,
     endpoint: Option<String>,
     environment: Vec<McpEnvironmentVariable>,
+    headers: Vec<McpHttpHeader>,
+    query_params: Vec<McpHttpQueryParam>,
     transport: String,
     working_directory: Option<String>,
 }
@@ -402,12 +450,24 @@ pub fn mcp_save_server(
         } else {
             Vec::new()
         };
+        let merged_headers = if input.transport == MCP_TRANSPORT_HTTP {
+            merge_http_headers(input.headers.clone(), &existing.headers)
+        } else {
+            Vec::new()
+        };
+        let merged_query_params = if input.transport == MCP_TRANSPORT_HTTP {
+            merge_http_query_params(input.query_params.clone(), &existing.query_params)
+        } else {
+            Vec::new()
+        };
 
         existing.name = name;
         existing.args = input.args;
         existing.command = input.command;
         existing.endpoint = input.endpoint;
         existing.environment = merged_environment;
+        existing.headers = merged_headers;
+        existing.query_params = merged_query_params;
         existing.enabled = request.enabled.unwrap_or(existing.enabled);
         existing.authorization_token = if input.transport == MCP_TRANSPORT_HTTP {
             input
@@ -439,6 +499,8 @@ pub fn mcp_save_server(
             enabled: request.enabled.unwrap_or(true),
             endpoint: input.endpoint,
             environment: input.environment,
+            headers: input.headers,
+            query_params: input.query_params,
             id: server_id.clone(),
             last_connected_at: None,
             last_error: None,
@@ -884,7 +946,7 @@ fn choose_registry_install_hint(
             ],
             command: Some("npx".to_string()),
             endpoint: Some(endpoint),
-            note: Some("Remote MCP servers are configured through the mcp-remote stdio bridge so provider OAuth flows can open in the browser when needed. On Windows, Gilbert resolves npm/npx shims automatically.".to_string()),
+            note: Some("Remote MCP servers are configured through the mcp-remote stdio bridge so provider OAuth flows can open in the browser when needed. Gilbert resolves common Node, Python, and package-runner paths automatically on desktop.".to_string()),
             package_id: Some("mcp-remote@latest".to_string()),
             package_manager: Some("npm".to_string()),
             transport: MCP_TRANSPORT_STDIO.to_string(),
@@ -932,7 +994,7 @@ fn package_install_hint(package: &McpRegistryPackageHint) -> Option<McpRegistryI
                         .filter(|hint| !hint.trim().is_empty())
                         .unwrap_or_else(|| "npx".to_string()),
                 ),
-                note: Some("This stdio MCP server will be launched as a local subprocess when Gilbert lists or calls its tools. On Windows, Gilbert resolves npm/npx shims automatically.".to_string()),
+                note: Some("This stdio MCP server will be launched as a local subprocess when Gilbert lists or calls its tools. Gilbert resolves common Node, Python, and package-runner paths automatically on desktop.".to_string()),
                 package_id: Some(package_id),
                 package_manager: Some("npm".to_string()),
                 transport: MCP_TRANSPORT_STDIO.to_string(),
@@ -1073,6 +1135,8 @@ fn normalize_database(database: &mut McpDatabase) {
             server.command = normalize_optional_stdio_command(server.command.as_deref());
             server.args = normalize_existing_stdio_args(&server.args);
             server.environment = normalize_existing_stdio_environment(&server.environment);
+            server.headers.clear();
+            server.query_params.clear();
             server.working_directory =
                 normalize_optional_working_directory(server.working_directory.as_deref());
         } else {
@@ -1085,6 +1149,8 @@ fn normalize_database(database: &mut McpDatabase) {
             server.command = None;
             server.args.clear();
             server.environment.clear();
+            server.headers = normalize_existing_http_headers(&server.headers);
+            server.query_params = normalize_existing_http_query_params(&server.query_params);
             server.working_directory = None;
             server.authorization_token =
                 normalize_optional_secret(server.authorization_token.as_deref());
@@ -1139,6 +1205,30 @@ fn sanitize_server(server: &McpServerRecord) -> McpServerState {
         } else {
             Vec::new()
         },
+        headers: if server.transport == MCP_TRANSPORT_HTTP {
+            server
+                .headers
+                .iter()
+                .map(|item| McpHttpHeaderState {
+                    has_value: !item.value.trim().is_empty(),
+                    name: item.name.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        query_params: if server.transport == MCP_TRANSPORT_HTTP {
+            server
+                .query_params
+                .iter()
+                .map(|item| McpHttpQueryParamState {
+                    has_value: !item.value.trim().is_empty(),
+                    name: item.name.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         has_authorization_token: server
             .authorization_token
             .as_deref()
@@ -1179,6 +1269,8 @@ fn create_probe_record(request: &McpTestServerRequest) -> Result<McpServerRecord
         enabled: true,
         endpoint: input.endpoint,
         environment: input.environment,
+        headers: input.headers,
+        query_params: input.query_params,
         id: "test".to_string(),
         last_connected_at: None,
         last_error: None,
@@ -1525,6 +1617,7 @@ fn create_rpc_request(
         .map(str::trim)
         .filter(|endpoint| !endpoint.is_empty())
         .ok_or_else(|| "This MCP server does not have an HTTP endpoint configured.".to_string())?;
+    let endpoint = endpoint_with_query_params(endpoint, &record.query_params)?;
     let mut request = client
         .request(method, endpoint)
         .header(header::ACCEPT, "application/json, text/event-stream")
@@ -1545,7 +1638,47 @@ fn create_rpc_request(
         request = request.bearer_auth(token);
     }
 
+    for item in &record.headers {
+        let name = item.name.trim();
+        let value = item.value.trim();
+
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("HTTP header `{name}` is not a valid header name."))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|_| format!("HTTP header `{name}` has an invalid value."))?;
+        request = request.header(header_name, header_value);
+    }
+
     Ok(request)
+}
+
+fn endpoint_with_query_params(
+    endpoint: &str,
+    query_params: &[McpHttpQueryParam],
+) -> Result<Url, String> {
+    let mut url = Url::parse(endpoint)
+        .map_err(|error| format!("MCP endpoint is not a valid URL: {error}"))?;
+
+    {
+        let mut pairs = url.query_pairs_mut();
+
+        for item in query_params {
+            let name = item.name.trim();
+            let value = item.value.trim();
+
+            if name.is_empty() || value.is_empty() {
+                continue;
+            }
+
+            pairs.append_pair(name, value);
+        }
+    }
+
+    Ok(url)
 }
 
 fn probe_stdio_server(
@@ -1823,10 +1956,7 @@ fn resolve_stdio_command(command: &str) -> Result<ResolvedStdioCommand, String> 
 
     #[cfg(not(windows))]
     {
-        Ok(ResolvedStdioCommand {
-            executable: command.to_string(),
-            extra_path_dirs: Vec::new(),
-        })
+        return resolve_stdio_command_unix(command);
     }
 }
 
@@ -1854,9 +1984,39 @@ fn resolve_stdio_command_windows(command: &str) -> Result<ResolvedStdioCommand, 
     })
 }
 
-#[cfg(windows)]
 fn command_looks_like_path(command: &str) -> bool {
     command.contains('\\') || command.contains('/') || Path::new(command).is_absolute()
+}
+
+#[cfg(not(windows))]
+fn resolve_stdio_command_unix(command: &str) -> Result<ResolvedStdioCommand, String> {
+    let mut extra_path_dirs = native_runtime_path_dirs();
+
+    if command_looks_like_path(command) {
+        let path = expand_home_path(PathBuf::from(command));
+
+        if let Some(parent) = path.parent() {
+            extra_path_dirs.insert(0, parent.to_path_buf());
+        }
+
+        return Ok(ResolvedStdioCommand {
+            executable: path.to_string_lossy().to_string(),
+            extra_path_dirs,
+        });
+    }
+
+    let executable = resolve_native_executable(command);
+
+    if executable.is_file() {
+        if let Some(parent) = executable.parent() {
+            extra_path_dirs.insert(0, parent.to_path_buf());
+        }
+    }
+
+    Ok(ResolvedStdioCommand {
+        executable: executable.to_string_lossy().to_string(),
+        extra_path_dirs,
+    })
 }
 
 #[cfg(windows)]
@@ -2056,7 +2216,7 @@ fn send_mcp_progress(
         return;
     };
 
-    let message = truncate_chars(&sanitize_sensitive_mcp_text(message.trim()), 480);
+    let message = truncate_chars(&sanitize_sensitive_mcp_text(message.trim()), 1_200);
 
     if message.is_empty() {
         return;
@@ -2089,7 +2249,7 @@ fn sanitize_stdio_progress_line(line: &str) -> Option<String> {
         return Some("MCP server wrote a hidden diagnostic line.".to_string());
     }
 
-    Some(truncate_chars(&sanitize_sensitive_mcp_text(trimmed), 480))
+    Some(truncate_chars(&sanitize_sensitive_mcp_text(trimmed), 1_200))
 }
 
 fn open_stdio_session(
@@ -3126,6 +3286,8 @@ fn normalize_server_input(
         request.command.as_deref(),
         request.args.as_ref(),
         request.environment.as_ref(),
+        request.headers.as_ref(),
+        request.query_params.as_ref(),
         request.working_directory.as_deref(),
     )
 }
@@ -3140,6 +3302,8 @@ fn normalize_test_server_input(
         request.command.as_deref(),
         request.args.as_ref(),
         request.environment.as_ref(),
+        request.headers.as_ref(),
+        request.query_params.as_ref(),
         request.working_directory.as_deref(),
     )
 }
@@ -3151,6 +3315,8 @@ fn normalize_server_config(
     command: Option<&str>,
     args: Option<&Vec<String>>,
     environment: Option<&Vec<McpEnvironmentVariable>>,
+    headers: Option<&Vec<McpHttpHeader>>,
+    query_params: Option<&Vec<McpHttpQueryParam>>,
     working_directory: Option<&str>,
 ) -> Result<NormalizedMcpServerInput, String> {
     let transport = normalize_transport(transport, endpoint, command)?;
@@ -3162,6 +3328,8 @@ fn normalize_server_config(
             command: Some(normalize_stdio_command(command)?),
             endpoint: None,
             environment: normalize_stdio_environment(environment)?,
+            headers: Vec::new(),
+            query_params: Vec::new(),
             transport,
             working_directory: normalize_working_directory(working_directory)?,
         });
@@ -3177,6 +3345,8 @@ fn normalize_server_config(
         command: None,
         endpoint: Some(endpoint),
         environment: Vec::new(),
+        headers: normalize_http_headers(headers)?,
+        query_params: normalize_http_query_params(query_params)?,
         transport,
         working_directory: None,
     })
@@ -3475,6 +3645,164 @@ fn merge_stdio_environment(
         .collect()
 }
 
+fn normalize_http_headers(
+    value: Option<&Vec<McpHttpHeader>>,
+) -> Result<Vec<McpHttpHeader>, String> {
+    let Some(items) = value else {
+        return Ok(Vec::new());
+    };
+
+    if items.len() > MCP_MAX_HTTP_HEADERS {
+        return Err(format!(
+            "MCP HTTP servers can have at most {MCP_MAX_HTTP_HEADERS} custom headers."
+        ));
+    }
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for item in items {
+        let name = item.name.trim();
+
+        if name.is_empty() {
+            continue;
+        }
+
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("HTTP header `{name}` is not a valid header name."))?;
+        let header_key = header_name.as_str().to_ascii_lowercase();
+
+        if is_reserved_mcp_http_header(&header_key) {
+            return Err(format!(
+                "Header `{name}` is managed by Gilbert. Use the bearer token field for Authorization."
+            ));
+        }
+
+        if item.value.contains('\0') || item.value.chars().count() > 16_000 {
+            return Err(format!("HTTP header `{name}` is invalid or too long."));
+        }
+
+        HeaderValue::from_str(item.value.trim())
+            .map_err(|_| format!("HTTP header `{name}` has an invalid value."))?;
+
+        if seen.insert(header_key) {
+            normalized.push(McpHttpHeader {
+                name: name.to_string(),
+                value: item.value.trim().to_string(),
+            });
+        }
+    }
+
+    normalized.truncate(MCP_MAX_HTTP_HEADERS);
+    Ok(normalized)
+}
+
+fn normalize_existing_http_headers(value: &[McpHttpHeader]) -> Vec<McpHttpHeader> {
+    normalize_http_headers(Some(&value.to_vec())).unwrap_or_default()
+}
+
+fn merge_http_headers(next: Vec<McpHttpHeader>, existing: &[McpHttpHeader]) -> Vec<McpHttpHeader> {
+    next.into_iter()
+        .map(|item| {
+            if !item.value.is_empty() {
+                return item;
+            }
+
+            existing
+                .iter()
+                .find(|old| old.name.eq_ignore_ascii_case(&item.name))
+                .cloned()
+                .unwrap_or(item)
+        })
+        .collect()
+}
+
+fn normalize_http_query_params(
+    value: Option<&Vec<McpHttpQueryParam>>,
+) -> Result<Vec<McpHttpQueryParam>, String> {
+    let Some(items) = value else {
+        return Ok(Vec::new());
+    };
+
+    if items.len() > MCP_MAX_HTTP_HEADERS {
+        return Err(format!(
+            "MCP HTTP servers can have at most {MCP_MAX_HTTP_HEADERS} secret query parameters."
+        ));
+    }
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for item in items {
+        let name = item.name.trim();
+
+        if name.is_empty() {
+            continue;
+        }
+
+        if name.contains('\0')
+            || name.contains('=')
+            || name.contains('&')
+            || name.contains('#')
+            || name.contains('?')
+            || name.chars().count() > 128
+        {
+            return Err(format!("Query parameter `{name}` has an invalid name."));
+        }
+
+        if item.value.contains('\0') || item.value.chars().count() > 16_000 {
+            return Err(format!("Query parameter `{name}` is invalid or too long."));
+        }
+
+        let key = name.to_ascii_lowercase();
+
+        if seen.insert(key) {
+            normalized.push(McpHttpQueryParam {
+                name: name.to_string(),
+                value: item.value.trim().to_string(),
+            });
+        }
+    }
+
+    normalized.truncate(MCP_MAX_HTTP_HEADERS);
+    Ok(normalized)
+}
+
+fn normalize_existing_http_query_params(value: &[McpHttpQueryParam]) -> Vec<McpHttpQueryParam> {
+    normalize_http_query_params(Some(&value.to_vec())).unwrap_or_default()
+}
+
+fn merge_http_query_params(
+    next: Vec<McpHttpQueryParam>,
+    existing: &[McpHttpQueryParam],
+) -> Vec<McpHttpQueryParam> {
+    next.into_iter()
+        .map(|item| {
+            if !item.value.is_empty() {
+                return item;
+            }
+
+            existing
+                .iter()
+                .find(|old| old.name.eq_ignore_ascii_case(&item.name))
+                .cloned()
+                .unwrap_or(item)
+        })
+        .collect()
+}
+
+fn is_reserved_mcp_http_header(name: &str) -> bool {
+    matches!(
+        name,
+        "accept"
+            | "authorization"
+            | "content-type"
+            | "mcp-protocol-version"
+            | "mcp-session-id"
+            | "user-agent"
+    )
+}
+
 fn normalize_working_directory(value: Option<&str>) -> Result<Option<String>, String> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -3703,6 +4031,20 @@ fn delete_mcp_server_secrets(
             delete_mcp_secret_field(
                 &namespace,
                 &format!("servers.{server_id}.environment.{}", item.name),
+            );
+        }
+
+        for item in &server.headers {
+            delete_mcp_secret_field(
+                &namespace,
+                &format!("servers.{server_id}.headers.{}", item.name),
+            );
+        }
+
+        for item in &server.query_params {
+            delete_mcp_secret_field(
+                &namespace,
+                &format!("servers.{server_id}.queryParams.{}", item.name),
             );
         }
     }
@@ -4069,6 +4411,58 @@ rl.on("line", (line) => {
 
         assert_eq!(database.servers.len(), 1);
         assert_eq!(database.servers[0].id, "cloudflare-new");
+    }
+
+    #[test]
+    fn http_query_params_are_secret_state_and_request_query() {
+        let record = McpServerRecord {
+            endpoint: Some("https://mcp.browserbase.com/mcp?keepAlive=true".to_string()),
+            id: "browserbase".to_string(),
+            name: "Browserbase".to_string(),
+            query_params: vec![McpHttpQueryParam {
+                name: "browserbaseApiKey".to_string(),
+                value: "bb_secret".to_string(),
+            }],
+            transport: MCP_TRANSPORT_HTTP.to_string(),
+            ..Default::default()
+        };
+        let state = sanitize_server(&record);
+
+        assert_eq!(state.query_params.len(), 1);
+        assert_eq!(state.query_params[0].name, "browserbaseApiKey");
+        assert!(state.query_params[0].has_value);
+
+        let client = reqwest::Client::new();
+        let request = create_rpc_request(&client, &record, Method::POST, None)
+            .expect("create browserbase request")
+            .build()
+            .expect("build request");
+        let url = request.url().as_str();
+
+        assert!(url.contains("keepAlive=true"));
+        assert!(url.contains("browserbaseApiKey=bb_secret"));
+    }
+
+    #[test]
+    fn http_query_params_reject_invalid_names_and_preserve_saved_blanks() {
+        assert!(normalize_http_query_params(Some(&vec![McpHttpQueryParam {
+            name: "bad&name".to_string(),
+            value: "secret".to_string(),
+        }]))
+        .is_err());
+
+        let merged = merge_http_query_params(
+            vec![McpHttpQueryParam {
+                name: "browserbaseApiKey".to_string(),
+                value: "".to_string(),
+            }],
+            &[McpHttpQueryParam {
+                name: "browserbaseApiKey".to_string(),
+                value: "saved".to_string(),
+            }],
+        );
+
+        assert_eq!(merged[0].value, "saved");
     }
 
     #[cfg(windows)]

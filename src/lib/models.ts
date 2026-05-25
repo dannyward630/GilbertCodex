@@ -180,6 +180,7 @@ export interface ModelCatalogCategory {
 }
 
 export interface ModelPricing {
+  cacheWriteInputPerMillionTokens?: number;
   cachedInputPerMillionTokens?: number;
   imageInputUsd?: number;
   inputPerMillionTokens?: number;
@@ -233,6 +234,7 @@ export function formatModelPricingTitle(pricing: ModelPricing | undefined, separ
   return [
     pricing.sourceLabel || (pricing.source === "openrouter" ? "OpenRouter" : "Provider"),
     typeof pricing.inputPerMillionTokens === "number" ? `input ${formatModelPricingUsd(pricing.inputPerMillionTokens)} per 1M tokens` : "",
+    typeof pricing.cacheWriteInputPerMillionTokens === "number" ? `cache write ${formatModelPricingUsd(pricing.cacheWriteInputPerMillionTokens)} per 1M tokens` : "",
     typeof pricing.cachedInputPerMillionTokens === "number" ? `cached input ${formatModelPricingUsd(pricing.cachedInputPerMillionTokens)} per 1M tokens` : "",
     typeof pricing.outputPerMillionTokens === "number" ? `output ${formatModelPricingUsd(pricing.outputPerMillionTokens)} per 1M tokens` : "",
     typeof pricing.webSearchUsd === "number" ? `web search ${formatModelPricingUsd(pricing.webSearchUsd)} per operation` : "",
@@ -813,28 +815,28 @@ export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
     capabilities: ["Reasoning", "Coding", "Vision"],
     category: "reasoning",
     maxOutputTokens: 128_000,
-    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
+    pricing: providerPricing("anthropic", { cacheWriteInputPerMillionTokens: 6.25, cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
     useCase: "Most complex agentic coding, planning, and reasoning tasks on Claude.",
   }),
   modelOption("anthropic", "anthropic-opus-46", "Claude Opus 4.6", "claude-opus-4-6", "Highly intelligent broadly available Claude model with exceptional coding and reasoning performance.", 1_000_000, {
     capabilities: ["Reasoning", "Coding", "Vision"],
     category: "reasoning",
     maxOutputTokens: 128_000,
-    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
+    pricing: providerPricing("anthropic", { cacheWriteInputPerMillionTokens: 6.25, cachedInputPerMillionTokens: 0.5, inputPerMillionTokens: 5, outputPerMillionTokens: 25 }),
     useCase: "Complex coding and reasoning when Opus depth is preferred.",
   }),
   modelOption("anthropic", "anthropic-sonnet-46", "Claude Sonnet 4.6", "claude-sonnet-4-6", "Claude model with the best combination of speed and intelligence.", 1_000_000, {
     capabilities: ["Coding", "Vision", "Balanced"],
     category: "recommended",
     maxOutputTokens: 64_000,
-    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.3, inputPerMillionTokens: 3, outputPerMillionTokens: 15 }),
+    pricing: providerPricing("anthropic", { cacheWriteInputPerMillionTokens: 3.75, cachedInputPerMillionTokens: 0.3, inputPerMillionTokens: 3, outputPerMillionTokens: 15 }),
     useCase: "Daily coding, agent runs, long-context review, and strong general reasoning.",
   }),
   modelOption("anthropic", "anthropic-haiku-45", "Claude Haiku 4.5", "claude-haiku-4-5-20251001", "Fast Claude model with near-frontier intelligence.", 200_000, {
     capabilities: ["Fast", "Vision"],
     category: "fast",
     maxOutputTokens: 64_000,
-    pricing: providerPricing("anthropic", { cachedInputPerMillionTokens: 0.1, inputPerMillionTokens: 1, outputPerMillionTokens: 5 }),
+    pricing: providerPricing("anthropic", { cacheWriteInputPerMillionTokens: 1.25, cachedInputPerMillionTokens: 0.1, inputPerMillionTokens: 1, outputPerMillionTokens: 5 }),
     useCase: "Responsive Claude-backed drafting, small edits, triage, and lighter coding tasks.",
   }),
   modelOption("google", "google-gemini-25-pro", "Gemini 2.5 Pro", "gemini-2.5-pro", "Google's state-of-the-art multipurpose model for coding and complex reasoning.", 1_048_576, {

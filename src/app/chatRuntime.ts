@@ -2,6 +2,12 @@ import { createPlanningAnswersMessage } from "../services/planningClient";
 import { FINAL_RESPONSE_COMPLETION_GUIDANCE } from "../prompts/agent/finalResponseStyle";
 import { formatWebSearchProviderLabel } from "../services/webSearchClient";
 import { createVisibleFallbackFromToolCall, shouldToolCallForceSynthesis } from "../toolBridge";
+import {
+  CONNECTED_TOOL_SERVICE_PATTERN_SOURCE,
+  CONNECTED_TOOL_SERVICE_PROMPT_PATTERN,
+  DEPLOYMENT_HOSTING_PROMPT_PATTERN,
+  DEPLOYMENT_TOOL_EVIDENCE_PATTERN,
+} from "../toolBridge/mcpServicePatterns";
 import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../localWorkspace/localToolRuntimeDisabled";
 import type { LocalComputerToolExecutionPolicy } from "../localWorkspace/localToolRuntimeDisabled";
 import type {
@@ -285,6 +291,29 @@ const LOCAL_EVIDENCE_VERIFICATION_PATTERN =
   /\b(?:check|confirm|inspect|look(?:\s+at)?|read|search|verify)\b[\s\S]{0,180}\b(?:code|codebase|files?|project|repo|repository|source|workspace|config(?:uration)?|provider|settings?|tool|runtime)\b/i;
 const LOCAL_GIT_CHANGE_REVIEW_PATTERN =
   /\b(?:what(?:'s| is| all)?|which|show|list|summari[sz]e|explain|review|audit|check|tell(?: me)?)\b[\s\S]{0,180}\b(?:changed|changes|modified|uncommitted|dirty\s+tree|working[-\s]?tree|worktree|diff|status|done\s+so\s+far|files?\s+changed)\b/i;
+const DEPLOYMENT_ACTION_PROMPT_PATTERN = DEPLOYMENT_HOSTING_PROMPT_PATTERN;
+const DEPLOYMENT_ACTION_NEGATION_PATTERN =
+  /\b(?:do\s+not|don't|dont|without|no)\s+(?:actually\s+)?(?:deploy(?:ing)?|publish(?:ing)?|push(?:ing)?\s+live|make\s+it\s+live|go\s+live)\b|\b(?:deploy(?:ing)?|publish(?:ing)?|push(?:ing)?\s+live|make\s+it\s+live|go\s+live)\b[\s\S]{0,40}\b(?:not\s+needed|isn't\s+needed|is\s+not\s+needed)\b/i;
+const DEPLOYMENT_SUCCESS_CLAIM_PATTERN =
+  /\b(?:deploy(?:ed|ment)\s+(?:completed|succeeded|successful|finished)|deployed\s+(?:successfully|to|on)|hosting\s+(?:updated|deployed)|published\s+(?:successfully|to|on)|site\s+(?:is\s+)?live|went\s+live)\b/i;
+const DEPLOYMENT_NO_TOOL_BLOCKER_PATTERN =
+  /\b(?:can(?:not|'t)|could\s+not|don't\s+have|do\s+not\s+have|no)\b[\s\S]{0,180}\b(?:deploy(?:ment)?\s+tools?|firebase\s+mcp|mcp\s+tools?|terminal(?:\s+tools?)?|tools?\s+(?:available|exposed|attached))\b|\b(?:from\s+your\s+terminal|run\s+(?:this|the)\s+command\s+(?:yourself|manually)|you\s+can\s+(?:deploy|run)|to\s+deploy\s+it\s+manually)\b/i;
+const CONNECTED_TOOL_ACTION_PROMPT_PATTERN =
+  /\b(?:archive|book|call|cancel|check|close|comment|configure|connect|create|deploy|draft|fetch|find|get|inspect|install|label|list|manage|merge|modify|open|post|publish|read|refresh|reply|reschedule|run|schedule|search|send|sync|test|triage|update|use|verify)\b/i;
+const CONNECTED_TOOL_READ_TARGET_PATTERN_SOURCE = `mcp|server|tool|plugin|connector|app|${CONNECTED_TOOL_SERVICE_PATTERN_SOURCE}`;
+const CONNECTED_TOOL_MUTATION_TARGET_PATTERN_SOURCE = `mcp|server|tool|plugin|connector|app|email|calendar|event|issue|pull\\s+request|pr|message|customer|payment|hosting|${CONNECTED_TOOL_SERVICE_PATTERN_SOURCE}`;
+const CONNECTED_TOOL_READ_SUCCESS_CLAIM_PATTERN = new RegExp(
+  `\\b(?:checked|fetched|found|got|inspected|listed|looked\\s+up|read|refreshed|searched|verified)\\b[\\s\\S]{0,180}\\b(?:${CONNECTED_TOOL_READ_TARGET_PATTERN_SOURCE})\\b`,
+  "i",
+);
+const CONNECTED_TOOL_MUTATION_SUCCESS_CLAIM_PATTERN = new RegExp(
+  `\\b(?:archived|booked|cancelled|canceled|closed|commented|configured|connected|created|deployed|drafted|installed|labeled|merged|modified|posted|published|replied|rescheduled|scheduled|sent|synced|updated)\\b[\\s\\S]{0,220}\\b(?:${CONNECTED_TOOL_MUTATION_TARGET_PATTERN_SOURCE})\\b`,
+  "i",
+);
+const CONNECTED_TOOL_NO_TOOL_BLOCKER_PATTERN = new RegExp(
+  `\\b(?:can(?:not|'t)|could\\s+not|don't\\s+have|do\\s+not\\s+have|no)\\b[\\s\\S]{0,180}\\b(?:mcp|server|tool|plugin|connector|connected\\s+app|${CONNECTED_TOOL_SERVICE_PATTERN_SOURCE})(?:\\s+tools?)?\\b|\\b(?:from\\s+your\\s+(?:browser|dashboard|terminal)|run\\s+(?:this|the)\\s+command\\s+(?:yourself|manually)|you\\s+can\\s+(?:connect|configure|deploy|send|run|install|update)|to\\s+(?:connect|configure|deploy|send|install|update)\\s+it\\s+manually)\\b`,
+  "i",
+);
 
 function referencesAppToolName(content: string) {
   return APP_TOOL_NAME_PATTERN.test(content);
@@ -298,6 +327,171 @@ export function looksLikeCapabilityInventoryQuestion(prompt: string) {
   }
 
   return CAPABILITY_INVENTORY_QUESTION_PATTERN.test(trimmed);
+}
+
+export function promptRequestsDeploymentAction(prompt: string) {
+  const trimmed = prompt.trim();
+
+  return Boolean(trimmed && DEPLOYMENT_ACTION_PROMPT_PATTERN.test(trimmed) && !DEPLOYMENT_ACTION_NEGATION_PATTERN.test(trimmed));
+}
+
+export function promptRequestsConnectedToolAction(prompt: string) {
+  const trimmed = prompt.trim();
+
+  if (!trimmed || trimmed.length > 4_000 || CONVERSATION_ONLY_PROMPT_PATTERN.test(trimmed)) {
+    return false;
+  }
+
+  if (looksLikeCapabilityInventoryQuestion(trimmed) && !looksLikeLocalToolingImplementationQuestion(trimmed)) {
+    return false;
+  }
+
+  return CONNECTED_TOOL_SERVICE_PROMPT_PATTERN.test(trimmed) && CONNECTED_TOOL_ACTION_PROMPT_PATTERN.test(trimmed);
+}
+
+export function hasSuccessfulDeploymentToolCall(toolCalls: ChatToolCall[] = []) {
+  return toolCalls.some((toolCall) => {
+    if (!isDeploymentToolAttempt(toolCall) || toolCall.status !== "complete") {
+      return false;
+    }
+
+    const toolId = toolCall.toolId ?? "";
+    const text = deploymentToolCallText(toolCall);
+
+    if (toolId === "terminal_run") {
+      return isSuccessfulTerminalToolCall(toolCall);
+    }
+
+    if (toolId === "mcp_call_tool") {
+      return !/\bstatus:\s*(?:tool\s+reported\s+error|error)|\b(?:failed|failure|errored)\b/i.test(text);
+    }
+
+    return false;
+  });
+}
+
+export function hasDeploymentToolAttempt(toolCalls: ChatToolCall[] = []) {
+  return toolCalls.some(isDeploymentToolAttempt);
+}
+
+export function looksLikeUnsupportedDeploymentAnswer(content: string, toolCalls: ChatToolCall[] = []) {
+  const trimmed = content.trim();
+
+  if (!trimmed || hasSuccessfulDeploymentToolCall(toolCalls)) {
+    return false;
+  }
+
+  return DEPLOYMENT_SUCCESS_CLAIM_PATTERN.test(trimmed) || DEPLOYMENT_NO_TOOL_BLOCKER_PATTERN.test(trimmed);
+}
+
+export function hasConnectedToolEvidence(toolCalls: ChatToolCall[] = []) {
+  return toolCalls.some((toolCall) =>
+    isConnectedToolCall(toolCall) &&
+    (toolCall.status === "complete" || toolCall.status === "error" || toolCall.status === "skipped")
+  );
+}
+
+export function hasSuccessfulConnectedToolMutation(toolCalls: ChatToolCall[] = []) {
+  return toolCalls.some((toolCall) =>
+    isConnectedToolMutationCall(toolCall) &&
+    toolCall.status === "complete" &&
+    !/\bstatus:\s*(?:tool\s+reported\s+error|error)|\b(?:failed|failure|errored)\b/i.test(connectedToolCallText(toolCall))
+  );
+}
+
+export function looksLikeUnsupportedConnectedToolActionAnswer(content: string, toolCalls: ChatToolCall[] = []) {
+  const trimmed = content.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  const hasEvidence = hasConnectedToolEvidence(toolCalls);
+  const hasMutation = hasSuccessfulConnectedToolMutation(toolCalls);
+
+  return (
+    (!hasEvidence && (CONNECTED_TOOL_NO_TOOL_BLOCKER_PATTERN.test(trimmed) || CONNECTED_TOOL_READ_SUCCESS_CLAIM_PATTERN.test(trimmed))) ||
+    (!hasMutation && CONNECTED_TOOL_MUTATION_SUCCESS_CLAIM_PATTERN.test(trimmed))
+  );
+}
+
+export function createDeploymentEvidenceRecoveryInstruction(prompt: string, unsupportedAnswer: string, options: { canUseProviderTools?: boolean } = {}) {
+  const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
+  const canUseProviderTools = options.canUseProviderTools !== false;
+
+  return [
+    "DEPLOYMENT EVIDENCE REQUIRED",
+    `Original user request: ${prompt}`,
+    "The previous response handled the request without a successful deploy/publish tool result.",
+    canUseProviderTools
+      ? "Use the real provider tool-call channel now. If MCP tools are attached, call mcp_list_servers first, then mcp_list_tools for the matching server, then mcp_call_tool with the exact deploy/hosting tool and required target/site arguments. If terminal_run is attached and MCP cannot complete the deploy, run the build/deploy command from the correct project directory and report the real result."
+      : "No provider deployment tools are attached for this retry. Do not claim a deploy ran; state the exact deployment-tool blocker plainly.",
+    "Do not tell the user to run the deploy manually while an attached MCP or terminal tool can do it. Do not claim deployed, published, live, or verified until a current tool result proves it.",
+    excerpt ? `Rejected deployment answer excerpt: ${excerpt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+export function createConnectedToolEvidenceRecoveryInstruction(prompt: string, unsupportedAnswer: string, options: { canUseProviderTools?: boolean } = {}) {
+  const excerpt = unsupportedAnswer.replace(/\s+/g, " ").trim().slice(0, 700);
+  const canUseProviderTools = options.canUseProviderTools !== false;
+
+  return [
+    "CONNECTED TOOL EVIDENCE REQUIRED",
+    `Original user request: ${prompt}`,
+    "The previous response handled a connected app, plugin, connector, or MCP request without a matching current tool result.",
+    canUseProviderTools
+      ? "Use the real provider tool-call channel now. For MCP-backed services, call mcp_list_servers, then mcp_list_tools for the matching server, then mcp_call_tool only with the exact serverId, toolName, and JSON arguments. For native app tools such as Gmail, Google Calendar, or GitHub, call the account/list/search/read tool before answering, and call the mutating tool only when the user requested an action."
+      : "No matching provider connected-app or MCP tools are attached for this retry. Do not claim the external action ran; state the exact setup or tool-availability blocker plainly.",
+    "Do not claim a message, calendar event, issue, pull request, payment object, deployment, MCP action, or connector update happened until a current tool result proves it. If only catalog metadata is available, call it catalog/setup information.",
+    excerpt ? `Rejected connected-tool answer excerpt: ${excerpt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function isDeploymentToolAttempt(toolCall: ChatToolCall) {
+  const toolId = toolCall.toolId ?? "";
+
+  if (toolId !== "terminal_run" && toolId !== "mcp_call_tool") {
+    return false;
+  }
+
+  return DEPLOYMENT_TOOL_EVIDENCE_PATTERN.test(deploymentToolCallText(toolCall));
+}
+
+function deploymentToolCallText(toolCall: ChatToolCall) {
+  return [
+    toolCall.toolId ?? "",
+    toolCall.label,
+    toolCall.detail ?? "",
+    toolCall.input ?? "",
+    toolCall.output ?? "",
+    toolCall.terminal?.command ?? "",
+    toolCall.terminal?.workingDirectory ?? "",
+  ].join("\n");
+}
+
+function isConnectedToolCall(toolCall: ChatToolCall) {
+  const toolId = toolCall.toolId ?? "";
+
+  return /^(?:mcp|github|gmail|calendar)_/i.test(toolId);
+}
+
+function isConnectedToolMutationCall(toolCall: ChatToolCall) {
+  const toolId = toolCall.toolId ?? "";
+
+  return (
+    toolId === "mcp_call_tool" ||
+    /^(?:gmail_(?:api_write|api_delete|batch_modify_messages|create_draft|create_label|delete_draft|modify_message_labels|send_|trash_message|untrash_message)|calendar_(?:api_write|api_delete|clear_completed_tasks|create_|delete_|move_task|update_)|github_(?:api_write|api_delete|add_issue_labels|approve_workflow_run|assign_issue|cancel_workflow_run|clear_issue_labels|close_issue|comment_issue|commit_files|create_|delete_|dispatch_workflow|force_cancel_workflow_run|lock_issue|mark_|merge_pull_request|pin_issue|remove_|reopen_issue|request_pull_request_reviewers|rerun_workflow_run|review_pending_deployments|set_issue_labels|star_repository|transfer_issue|unassign_issue|unlock_issue|unpin_issue|unstar_repository|unwatch_repository|update_|watch_repository))/i.test(toolId)
+  );
+}
+
+function connectedToolCallText(toolCall: ChatToolCall) {
+  return [
+    toolCall.toolId ?? "",
+    toolCall.label,
+    toolCall.detail ?? "",
+    toolCall.input ?? "",
+    toolCall.output ?? "",
+  ].join("\n");
 }
 
 function looksLikeLocalToolingImplementationQuestion(prompt: string) {
@@ -745,7 +939,8 @@ export function requiresWorkspaceToolCallForPrompt(prompt: string, hasWorkspaceR
   const asksForInspection =
     /\b(?:check|inspect|look(?:\s+at)?|read|review|search|verify)\b[\s\S]{0,180}\b(?:app|code|codebase|files?|project|repo|repository|source|workspace)\b/i.test(trimmed);
   const asksForTerminalExecution =
-    /\b(?:run|execute|start|serve|build|compile|test|launch)\b[\s\S]{0,180}\b(?:app|project|dev server|server|tests?|build|command|terminal|npm|pnpm|yarn|vite|cargo)\b/i.test(trimmed) ||
+    /\b(?:run|execute|start|serve|build|compile|test|launch|deploy|publish)\b[\s\S]{0,180}\b(?:app|project|dev server|server|tests?|build|command|terminal|npm|pnpm|yarn|vite|cargo|website|site|hosting|firebase|vercel|netlify)\b/i.test(trimmed) ||
+    /\b(?:deploy|publish|go\s+live|push\s+live|make\s+it\s+live)\b[\s\S]{0,180}\b(?:app|project|website|site|hosting|firebase|vercel|netlify)\b/i.test(trimmed) ||
     /\b(?:terminal|dev server|localhost)\b[\s\S]{0,140}\b(?:run|start|read|inspect|check|debug|verify|status)\b/i.test(trimmed);
   const asksForBrowserEvidence =
     /\b(?:open|preview|capture|take|read|inspect|debug|verify|check|look(?:\s+at)?|use)\b[\s\S]{0,180}\b(?:browser|preview|screenshot|console|devtools|localhost|local site|webview|website|visual|ui)\b/i.test(trimmed) ||

@@ -29,4 +29,15 @@ describe("skillRegistry", () => {
     expect(section).toContain("## Code Review ($review)");
     expect(section).toContain("Match: explicit.");
   });
+
+  it("lists installed skills for plugin and tool inventory prompts without leaking catalog-only skills", () => {
+    const mentions = getInstalledSkillMentionOptions().map((skill) => skill.mention);
+    const section = formatSkillsPromptSection("what plugins, tools, and skills are available?");
+
+    expect(section).toContain("Available enabled skills:");
+    expect(section).toContain("$coding");
+    expect(section).toContain("$review");
+    expect(mentions).not.toContain("$slack");
+    expect(mentions).not.toContain("$supabase");
+  });
 });

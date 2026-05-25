@@ -4,6 +4,7 @@ use crate::{
     commands::{app_info, auth},
     core::{
         fs_utils::{delete_legacy_file_and_empty_parent as delete_legacy_file, path_to_string},
+        native_path::{configure_native_path, resolve_native_executable},
         storage::{self, SYSTEM_NAMESPACE},
     },
 };
@@ -2408,7 +2409,7 @@ fn post_github_form_with_curl(
     context: &str,
 ) -> Result<(u16, String), String> {
     let timeout = timeout_secs.clamp(1, 60).to_string();
-    let mut command = Command::new(curl_binary());
+    let mut command = Command::new(resolve_native_executable(curl_binary()));
     command
         .args([
             "--silent",
@@ -2431,6 +2432,7 @@ fn post_github_form_with_curl(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_native_path(&mut command);
 
     let mut child = command
         .spawn()

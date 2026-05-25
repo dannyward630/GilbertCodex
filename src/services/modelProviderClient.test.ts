@@ -14,6 +14,7 @@ import {
 } from "../lib/models";
 import type { ChatMessage } from "../types/chat";
 import type { ProviderSettings, ReasoningEffort } from "../types/settings";
+import type { ToolDefinition } from "../toolBridge/types";
 import { createProviderRequestBody, fetchProviderModelContextLengths, fetchProviderModels, sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
 
 const TITLE_STRUCTURED_OUTPUT = {
@@ -95,6 +96,23 @@ function createImageMessage(): ChatMessage {
   };
 }
 
+function providerTool(id: string, family: NonNullable<ToolDefinition["executorMetadata"]>["family"] = "files"): ToolDefinition {
+  return {
+    description: `${id} test tool`,
+    execute: () => ({ content: "ok", ok: true }),
+    executorMetadata: { family, version: 1 },
+    id,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {},
+      type: "object",
+    },
+    permission: family === "terminal" ? "terminal" : "read-only",
+    risk: family === "terminal" ? "terminal" : "read",
+    title: id,
+  };
+}
+
 function streamResponse(lines: string[]) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -131,6 +149,105 @@ function openAiToolCallChunk(argumentsDelta: string, options: { id?: string; nam
 }
 
 describe("provider context surface budget", () => {
+  it("adds a stable OpenAI prompt cache key that ignores changing user message text", () => {
+    const firstBody = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+    ) as Record<string, unknown>;
+    const secondBody = createProviderRequestBody(
+      createSettings(),
+      [{
+        ...createMessage(),
+        content: "summarize the latest test failures",
+        id: "message-2",
+      }],
+      undefined,
+      false,
+    ) as Record<string, unknown>;
+
+    expect(firstBody.prompt_cache_key).toMatch(/^gc-/);
+    expect(secondBody.prompt_cache_key).toBe(firstBody.prompt_cache_key);
+  });
+
+  it("keeps OpenAI cache keys stable across turns but changes them when the visible tool manifest changes", () => {
+    const terminalTool = providerTool("terminal_run", "terminal");
+    const firstBody = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      { tools: [terminalTool] },
+    ) as Record<string, unknown>;
+    const followupBody = createProviderRequestBody(
+      createSettings(),
+      [{
+        ...createMessage(),
+        content: "now inspect the test output",
+        id: "message-2",
+      }],
+      undefined,
+      false,
+      { tools: [terminalTool] },
+    ) as Record<string, unknown>;
+    const changedToolsBody = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      { tools: [terminalTool, providerTool("files_read")] },
+    ) as Record<string, unknown>;
+
+    expect(followupBody.prompt_cache_key).toBe(firstBody.prompt_cache_key);
+    expect(changedToolsBody.prompt_cache_key).not.toBe(firstBody.prompt_cache_key);
+  });
+
+  it("adds a stable xAI conversation cache header for Chat Completions requests", async () => {
+    let requestInit: RequestInit | undefined;
+
+    vi.stubGlobal("fetch", async (_url: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: "cached route",
+          },
+        }],
+        usage: {
+          completion_tokens: 1,
+          prompt_tokens: 10,
+          prompt_tokens_details: {
+            cached_tokens: 8,
+          },
+          total_tokens: 11,
+        },
+      }), { status: 200 });
+    });
+
+    try {
+      const response = await sendProviderMessage({
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          xai: "xai-test-key",
+        },
+        model: "grok-4.3",
+        provider: "xai",
+      }, [createMessage()]);
+      const headers = requestInit?.headers as Record<string, string> | undefined;
+
+      expect(headers?.["x-grok-conv-id"]).toMatch(/^gc-/);
+      expect(response.usage).toMatchObject({
+        cached_input_tokens: 8,
+        prompt_tokens: 10,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses the active context window when serializing saved tool output", () => {
     const toolMessage: ChatMessage = {
       content: "tool result",
@@ -269,6 +386,32 @@ describe("provider structured output request bodies", () => {
     });
     expect(body.response_format).toBeUndefined();
     expect(body.max_tokens).toBe(createSettings().maxTokens);
+  });
+
+  it("marks the stable Anthropic system prompt block as cacheable", () => {
+    const body = createProviderRequestBody(
+      {
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      },
+      [createMessage()],
+      undefined,
+      false,
+    ) as Record<string, unknown>;
+    const system = body.system as Array<{ cache_control?: unknown; text?: string; type?: string }>;
+
+    expect(Array.isArray(system)).toBe(true);
+    expect(system[0]).toMatchObject({
+      cache_control: { type: "ephemeral" },
+      type: "text",
+    });
+    expect(system[0]?.text).toContain("# Gilbert Codex Core");
+    expect(system[1]?.text).toContain("# Current Runtime Context");
   });
 
   it("keeps title helper request bodies valid across every configured provider", () => {
@@ -802,6 +945,9 @@ describe("streamProviderMessage tool call parsing", () => {
           },
         ],
         usage: {
+          input_tokens_details: {
+            cached_tokens: 1,
+          },
           input_tokens: 1,
           output_tokens: 2,
           total_tokens: 3,
@@ -816,6 +962,11 @@ describe("streamProviderMessage tool call parsing", () => {
       entries: [{ id: "rs_1", type: "reasoning" }],
       format: "openai-responses",
       provider: "openai",
+    });
+    expect(response.usage).toMatchObject({
+      cached_input_tokens: 1,
+      prompt_tokens: 1,
+      total_tokens: 3,
     });
   });
 
@@ -1134,6 +1285,8 @@ describe("Anthropic thinking budget mapping", () => {
           },
         ],
         usage: {
+          cache_creation_input_tokens: 50,
+          cache_read_input_tokens: 100,
           input_tokens: 1,
           output_tokens: 2,
         },
@@ -1146,6 +1299,12 @@ describe("Anthropic thinking budget mapping", () => {
     expect(response.reasoningState).toMatchObject({
       format: "anthropic-thinking",
       provider: "anthropic",
+    });
+    expect(response.usage).toMatchObject({
+      cache_creation_input_tokens: 50,
+      cached_input_tokens: 100,
+      prompt_tokens: 151,
+      total_tokens: 153,
     });
   });
 });

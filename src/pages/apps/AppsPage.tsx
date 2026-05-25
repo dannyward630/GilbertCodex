@@ -36,6 +36,7 @@ import {
   listGithubRepositories,
 } from "../../app/githubClient";
 import { DialogShell } from "../../components/dialogs/AppDialog";
+import { loadApiKeyVault } from "../../lib/appStorage";
 import { SkillsManagerPanel } from "./SkillsManagerPanel";
 import {
   getOpenAiPluginDescription,
@@ -47,9 +48,10 @@ import {
 } from "../../features/plugins/openAiCodexMarketplace";
 import { loadSkillRegistry, subscribeSkillRegistry } from "../../services/skillRegistry";
 import type { GithubConnectionState, GithubRepository } from "../../types/github";
+import type { ApiKeyRecord, ApiKeyVaultState } from "../../types/apiKeys";
 import type { CalendarAccountState, CalendarConnectionState } from "../../types/googleCalendar";
 import type { GmailAccountState, GmailConnectionState } from "../../types/gmail";
-import type { McpConnectionState, McpRegistryInstallHint, McpRegistryServerSummary, McpSaveServerRequest, McpServerProgressEvent, McpServerState, McpTestServerRequest, McpTransport } from "../../types/mcp";
+import type { McpConnectionState, McpHttpHeader, McpHttpQueryParam, McpRegistryInstallHint, McpRegistryServerSummary, McpSaveServerRequest, McpServerProgressEvent, McpServerState, McpTestServerRequest, McpTransport } from "../../types/mcp";
 import type { SkillRegistryState } from "../../types/skills";
 import "../../styles/apps.css";
 
@@ -58,6 +60,7 @@ interface AppsPageProps {
   onBackToChat: () => void;
   onOpenGithubSettings: () => void;
   onOpenGoogleSettings: () => void;
+  onOpenKeysSettings: () => void;
   onOpenRadar: () => void;
   onOpenSupport: () => void;
 }
@@ -84,29 +87,75 @@ const APP_ICON_URLS = {
   mcp: "https://modelcontextprotocol.io/favicon.ico",
 } as const;
 
-interface McpServerDraft {
+export interface McpServerDraft {
   argsText: string;
   authorizationToken: string;
   command: string;
   enabled: boolean;
   environmentText: string;
   endpoint: string;
+  headersText: string;
   id: string;
   name: string;
+  queryText: string;
   transport: McpTransport;
   workingDirectory: string;
 }
 
+type McpSetupLocation = "bearer" | "environment" | "header" | "query";
+type McpSetupRequirementStatus = "missing" | "optional" | "ready";
+
+interface McpSetupRequirement {
+  helper: string;
+  keyNames?: string[];
+  label: string;
+  location: McpSetupLocation;
+  name: string;
+  placeholder?: string;
+}
+
+interface McpSetupAlternative {
+  id: string;
+  label: string;
+  requirements: McpSetupRequirement[];
+}
+
+interface McpSetupRequirementView {
+  requirement: McpSetupRequirement;
+  status: McpSetupRequirementStatus;
+}
+
+interface McpSetupAlternativeView {
+  id: string;
+  label: string;
+  ready: boolean;
+  requirements: McpSetupRequirementView[];
+}
+
+interface McpDraftSetupSummary {
+  existingServer?: McpServerState;
+  issues: string[];
+  optionalRequirements: McpSetupRequirementView[];
+  preset?: McpProviderPreset;
+  requiredAlternatives: McpSetupAlternativeView[];
+}
+
 interface McpProviderPreset {
   args?: string[];
+  docsUrl?: string;
   command?: string;
   description: string;
   endpoint?: string;
   environmentText?: string;
+  headersText?: string;
   id: string;
   name: string;
   note: string;
+  optionalSetup?: McpSetupRequirement[];
   publisher: string;
+  queryText?: string;
+  requiredSetup?: McpSetupAlternative[];
+  setupSteps: string[];
   tags: string[];
   transport: McpTransport;
 }
@@ -139,25 +188,203 @@ const EMPTY_MCP_DRAFT: McpServerDraft = {
   enabled: true,
   environmentText: "",
   endpoint: "",
+  headersText: "",
   id: "",
   name: "",
+  queryText: "",
   transport: "http",
   workingDirectory: "",
 };
 
 const EMPTY_MCP_SERVERS: McpServerState[] = [];
+const EMPTY_API_KEY_VAULT: ApiKeyVaultState = { keys: [], version: 1 };
 
 const mcpRemoteArgs = (endpoint: string) => ["-y", "mcp-remote@latest", endpoint];
+
+const STRIPE_SECRET_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Use a restricted Stripe secret key. Local @stripe/mcp will not start without it.",
+  label: "Stripe secret key",
+  location: "environment",
+  name: "STRIPE_SECRET_KEY",
+  placeholder: "sk_live_... or rk_live_...",
+};
+
+const REDIS_URL_REQUIREMENT: McpSetupRequirement = {
+  helper: "Use redis://localhost:6379 for local Redis, or paste your Redis/Redis Cloud URL here so credentials stay in secure storage.",
+  label: "Redis URL",
+  location: "environment",
+  name: "REDIS_URL",
+  placeholder: "redis://localhost:6379",
+};
+
+const MONGODB_CONNECTION_STRING_REQUIREMENT: McpSetupRequirement = {
+  helper: "Use a MongoDB or Atlas connection string. MongoDB recommends environment variables for sensitive connection strings.",
+  label: "MongoDB connection string",
+  location: "environment",
+  name: "MDB_MCP_CONNECTION_STRING",
+  placeholder: "mongodb+srv://...",
+};
+
+const MONGODB_ATLAS_CLIENT_ID_REQUIREMENT: McpSetupRequirement = {
+  helper: "Use Atlas service account credentials when you want Atlas project tools instead of a direct connection string.",
+  label: "Atlas client ID",
+  location: "environment",
+  name: "MDB_MCP_API_CLIENT_ID",
+  placeholder: "Atlas service account client ID",
+};
+
+const MONGODB_ATLAS_CLIENT_SECRET_REQUIREMENT: McpSetupRequirement = {
+  helper: "Atlas client secrets are saved in secure storage and hidden after saving.",
+  label: "Atlas client secret",
+  location: "environment",
+  name: "MDB_MCP_API_CLIENT_SECRET",
+  placeholder: "Atlas service account client secret",
+};
+
+const CONTEXT7_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional. Adds higher rate limits and private repo access for Context7.",
+  label: "Context7 API key",
+  location: "header",
+  name: "CONTEXT7_API_KEY",
+  placeholder: "Context7 API key",
+};
+
+const HTTP_BEARER_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Paste a provider token for direct HTTP MCP calls. Gilbert sends it as an Authorization bearer token.",
+  label: "Bearer token",
+  location: "bearer",
+  name: "Authorization",
+  placeholder: "Provider access token",
+};
+
+const AWS_ACCESS_KEY_ID_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional fallback for AWS MCP when you do not want to rely on an existing AWS CLI/profile login.",
+  label: "AWS access key ID",
+  location: "environment",
+  name: "AWS_ACCESS_KEY_ID",
+  placeholder: "AKIA...",
+};
+
+const AWS_SECRET_ACCESS_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional fallback secret for AWS MCP. Prefer least-privilege IAM credentials.",
+  label: "AWS secret access key",
+  location: "environment",
+  name: "AWS_SECRET_ACCESS_KEY",
+  placeholder: "AWS secret access key",
+};
+
+const AWS_SESSION_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional session token for temporary AWS credentials.",
+  label: "AWS session token",
+  location: "environment",
+  name: "AWS_SESSION_TOKEN",
+  placeholder: "AWS session token",
+};
+
+const BRAVE_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required by @modelcontextprotocol/server-brave-search.",
+  label: "Brave Search API key",
+  location: "environment",
+  name: "BRAVE_API_KEY",
+  placeholder: "Brave Search API key",
+};
+
+const EXA_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required by exa-mcp-server when using the local stdio package.",
+  label: "Exa API key",
+  location: "environment",
+  name: "EXA_API_KEY",
+  placeholder: "Exa API key",
+};
+
+const FIRECRAWL_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required for Firecrawl cloud API usage. Self-hosted Firecrawl can use FIRECRAWL_API_URL instead.",
+  label: "Firecrawl API key",
+  location: "environment",
+  name: "FIRECRAWL_API_KEY",
+  placeholder: "fc-...",
+};
+
+const TAVILY_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required by tavily-mcp for local stdio search, extract, map, and crawl tools.",
+  label: "Tavily API key",
+  location: "environment",
+  name: "TAVILY_API_KEY",
+  placeholder: "tvly-...",
+};
+
+const HEROKU_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional fallback for Heroku MCP when you use the npx server path instead of an existing Heroku CLI login.",
+  label: "Heroku API key",
+  location: "environment",
+  name: "HEROKU_API_KEY",
+  placeholder: "Heroku auth token",
+};
+
+const PULUMI_ACCESS_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required for Pulumi Cloud deployment, stack output, refresh, and resource-search tools.",
+  label: "Pulumi access token",
+  location: "environment",
+  name: "PULUMI_ACCESS_TOKEN",
+  placeholder: "pul-...",
+};
+
+const NETLIFY_PERSONAL_ACCESS_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Optional troubleshooting fallback for @netlify/mcp when browser or CLI auth does not complete.",
+  label: "Netlify personal access token",
+  location: "environment",
+  name: "NETLIFY_PERSONAL_ACCESS_TOKEN",
+  placeholder: "Netlify PAT",
+};
+
+const APIFY_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required by @apify/actors-mcp-server for local Actor search, runs, datasets, and Apify platform tools.",
+  label: "Apify API token",
+  location: "environment",
+  name: "APIFY_TOKEN",
+  placeholder: "apify_api_...",
+};
+
+const BROWSERBASE_HOSTED_API_KEY_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required by Browserbase hosted MCP as the browserbaseApiKey query parameter. Store the value in Keys as BROWSERBASE_API_KEY.",
+  keyNames: ["BROWSERBASE_API_KEY"],
+  label: "Browserbase API key",
+  location: "query",
+  name: "browserbaseApiKey",
+  placeholder: "Browserbase API key",
+};
+
+const SLACK_BOT_TOKEN_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required Slack Bot User OAuth token for @modelcontextprotocol/server-slack.",
+  label: "Slack bot token",
+  location: "environment",
+  name: "SLACK_BOT_TOKEN",
+  placeholder: "xoxb-...",
+};
+
+const SLACK_TEAM_ID_REQUIREMENT: McpSetupRequirement = {
+  helper: "Required Slack workspace/team ID for @modelcontextprotocol/server-slack.",
+  label: "Slack team ID",
+  location: "environment",
+  name: "SLACK_TEAM_ID",
+  placeholder: "T01234567",
+};
 
 const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
   {
     args: ["-y", "firebase-tools@latest", "mcp"],
     command: "npx",
     description: "Official Firebase MCP for projects, Auth, Firestore, Data Connect, rules, docs, and Cloud Messaging.",
+    docsUrl: "https://firebase.google.com/docs/cli/mcp-server",
     id: "firebase",
     name: "Firebase",
     note: "Gilbert auto-resolves npm/npx shims on Windows. If the MCP login link fails with a Google code-challenge error, close that tab and run `npx.cmd -y firebase-tools@latest login --reauth` in a terminal, then Save and test again.",
     publisher: "Firebase",
+    setupSteps: [
+      "Uses the official firebase-tools MCP server.",
+      "Requires Firebase CLI Google sign-in on this machine.",
+      "Firebase Hosting deploy tools still need an explicit project and hosting target/site.",
+    ],
     tags: ["Auth", "Firestore", "Hosting"],
     transport: "stdio",
   },
@@ -165,10 +392,16 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: mcpRemoteArgs("https://mcp.figma.com/mcp"),
     command: "npx",
     description: "Preferred Figma remote MCP for design context, components, variables, Make resources, and design-to-code work.",
+    docsUrl: "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Dev-Mode-MCP-Server",
     id: "figma-remote",
     name: "Figma Remote",
     note: "Uses mcp-remote so Figma OAuth can open in the browser. If your org requires desktop-only access, use the Figma Desktop preset instead.",
     publisher: "Figma",
+    setupSteps: [
+      "Uses mcp-remote for Figma OAuth in the browser.",
+      "No API key is entered in Gilbert for the hosted Figma flow.",
+      "Use Figma Desktop instead if your organization requires localhost Dev Mode access.",
+    ],
     tags: ["Design", "OAuth", "Dev Mode"],
     transport: "stdio",
   },
@@ -179,6 +412,11 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     name: "Figma Desktop",
     note: "Open Figma Desktop, switch a file to Dev Mode, and enable the desktop MCP server before testing this localhost endpoint.",
     publisher: "Figma",
+    setupSteps: [
+      "Open Figma Desktop on this machine.",
+      "Switch a file into Dev Mode and enable the desktop MCP server.",
+      "Keep Figma running while testing this localhost endpoint.",
+    ],
     tags: ["Design", "Dev Mode", "Local"],
     transport: "http",
   },
@@ -186,10 +424,16 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: mcpRemoteArgs("https://mcp.supabase.com/mcp?read_only=true"),
     command: "npx",
     description: "Official Supabase MCP for database, logs, docs, Edge Functions, storage, and project management.",
+    docsUrl: "https://supabase.com/docs/guides/getting-started/mcp",
     id: "supabase",
     name: "Supabase",
     note: "Starts in read-only mode and uses mcp-remote for the Supabase OAuth flow. For CI-style PAT auth, switch this draft to HTTP and paste the PAT in the bearer token field.",
     publisher: "Supabase",
+    setupSteps: [
+      "Uses mcp-remote with Supabase OAuth.",
+      "Starts with read_only=true to reduce accidental writes.",
+      "For personal access token setups, use a direct HTTP endpoint and the bearer token field.",
+    ],
     tags: ["Postgres", "Auth", "Storage"],
     transport: "stdio",
   },
@@ -197,31 +441,79 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: ["mcp-proxy-for-aws@latest", "https://aws-mcp.us-east-1.api.aws/mcp", "--metadata", "AWS_REGION=us-east-1"],
     command: "uvx",
     description: "AWS MCP Server through the official SigV4 proxy for current AWS docs, skills, and AWS API operations.",
+    docsUrl: "https://awslabs.github.io/mcp/",
     id: "aws",
     name: "AWS MCP",
     note: "Requires uv/uvx plus valid AWS CLI credentials on the machine. Change AWS_REGION in Arguments if your default operating region differs.",
+    optionalSetup: [AWS_ACCESS_KEY_ID_REQUIREMENT, AWS_SECRET_ACCESS_KEY_REQUIREMENT, AWS_SESSION_TOKEN_REQUIREMENT],
     publisher: "AWS",
+    setupSteps: [
+      "Requires uv/uvx installed on this machine.",
+      "Uses AWS SigV4 credentials from your local AWS CLI/profile chain.",
+      "If you use explicit IAM keys instead, store them in Settings > Keys and apply them as secure environment values.",
+      "Change AWS_REGION in Arguments before testing if you operate outside us-east-1.",
+    ],
     tags: ["IAM", "Docs", "Cloud"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@azure/mcp@latest", "server", "start"],
+    command: "npx",
+    description: "Official Azure MCP Server for Azure resources, docs, Terraform guidance, CLI generation, and cloud operations.",
+    docsUrl: "https://learn.microsoft.com/azure/developer/azure-mcp-server/",
+    id: "azure",
+    name: "Azure MCP",
+    note: "Uses local Azure identity. Run az login or sign in through your Microsoft tooling before testing.",
+    publisher: "Microsoft",
+    setupSteps: [
+      "Requires Node.js and npx on this machine.",
+      "Uses local Azure identity through Azure CLI, Azure PowerShell, or Microsoft developer tooling.",
+      "Run az login first if no Azure account is available to the process.",
+    ],
+    tags: ["Azure", "Cloud", "Resources"],
     transport: "stdio",
   },
   {
     args: mcpRemoteArgs("https://gitlab.com/api/v4/mcp"),
     command: "npx",
     description: "Official GitLab MCP for projects, issues, merge requests, repository context, and Duo workflows.",
+    docsUrl: "https://docs.gitlab.com/user/project/remote_development/model_context_protocol/",
     id: "gitlab",
     name: "GitLab",
     note: "Uses mcp-remote for GitLab OAuth. For self-managed GitLab, replace gitlab.com in the argument URL with your instance host.",
     publisher: "GitLab",
+    setupSteps: [
+      "Uses mcp-remote for GitLab OAuth.",
+      "For self-managed GitLab, replace the endpoint host in Arguments.",
+      "No token is pasted into Gilbert for the default OAuth bridge path.",
+    ],
     tags: ["Repos", "Issues", "OAuth"],
     transport: "stdio",
   },
   {
     description: "Official GitHub MCP for repositories, issues, pull requests, Actions, code search, and security context.",
+    docsUrl: "https://docs.github.com/en/copilot/how-tos/context/model-context-protocol/using-the-github-mcp-server",
     endpoint: "https://api.githubcopilot.com/mcp/",
     id: "github-mcp",
     name: "GitHub MCP",
     note: "Paste a GitHub PAT in the HTTP bearer token field for the remote MCP server. Gilbert's native GitHub connector remains available for app-managed GitHub workflows.",
     publisher: "GitHub",
+    requiredSetup: [
+      {
+        id: "github-bearer",
+        label: "GitHub token",
+        requirements: [{
+          ...HTTP_BEARER_TOKEN_REQUIREMENT,
+          helper: "Use a GitHub personal access token for the direct HTTP MCP endpoint.",
+          placeholder: "github_pat_...",
+        }],
+      },
+    ],
+    setupSteps: [
+      "Direct HTTP MCP calls require an Authorization bearer token.",
+      "Use Gilbert's native GitHub connector for app-managed repository workflows when possible.",
+      "Refresh tools after saving so chat can see the GitHub MCP tool list.",
+    ],
     tags: ["Repos", "PRs", "Bearer"],
     transport: "http",
   },
@@ -229,10 +521,16 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: mcpRemoteArgs("https://mcp.linear.app/mcp"),
     command: "npx",
     description: "Official Linear MCP for issues, projects, comments, and product planning workflows.",
+    docsUrl: "https://linear.app/docs/mcp",
     id: "linear",
     name: "Linear",
     note: "Uses mcp-remote for Linear OAuth. If authentication gets stuck, clear mcp-remote auth for Linear and test again.",
     publisher: "Linear",
+    setupSteps: [
+      "Uses mcp-remote for Linear OAuth.",
+      "No API key is entered in Gilbert for the default hosted Linear flow.",
+      "Clear mcp-remote auth for Linear if the OAuth flow gets stuck.",
+    ],
     tags: ["Issues", "Projects", "OAuth"],
     transport: "stdio",
   },
@@ -240,11 +538,24 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: ["-y", "@stripe/mcp@latest"],
     command: "npx",
     description: "Official local Stripe MCP for customers, payment links, billing, docs, and API-backed commerce work.",
+    docsUrl: "https://docs.stripe.com/mcp",
     environmentText: "STRIPE_SECRET_KEY=",
     id: "stripe",
     name: "Stripe",
     note: "Paste a restricted Stripe secret key into Environment as STRIPE_SECRET_KEY. Gilbert stores stdio env values in secure storage.",
+    requiredSetup: [
+      {
+        id: "stripe-secret",
+        label: "Stripe restricted key",
+        requirements: [STRIPE_SECRET_KEY_REQUIREMENT],
+      },
+    ],
     publisher: "Stripe",
+    setupSteps: [
+      "The local @stripe/mcp server cannot start without STRIPE_SECRET_KEY or --api-key.",
+      "Use a restricted API key with only the Stripe permissions you want chat to have.",
+      "Gilbert stores STRIPE_SECRET_KEY in the desktop secure store and hides it after saving.",
+    ],
     tags: ["Payments", "Billing", "Secure env"],
     transport: "stdio",
   },
@@ -252,10 +563,16 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: mcpRemoteArgs("https://mcp.atlassian.com/v1/mcp/authv2"),
     command: "npx",
     description: "Official Atlassian Rovo MCP for Jira, Confluence, Compass, and work-management context.",
+    docsUrl: "https://support.atlassian.com/rovo/docs/setting-up-ides/",
     id: "atlassian",
     name: "Atlassian",
     note: "Uses Atlassian's current /mcp/authv2 endpoint through mcp-remote so OAuth can complete in the browser.",
     publisher: "Atlassian",
+    setupSteps: [
+      "Uses mcp-remote for Atlassian OAuth.",
+      "The authv2 endpoint covers Jira, Confluence, Compass, and Rovo workflows.",
+      "No token is pasted into Gilbert for the default OAuth bridge path.",
+    ],
     tags: ["Jira", "Confluence", "OAuth"],
     transport: "stdio",
   },
@@ -263,31 +580,134 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     args: mcpRemoteArgs("https://mcp.vercel.com"),
     command: "npx",
     description: "Official Vercel MCP for projects, deployments, domains, logs, teams, and platform operations.",
+    docsUrl: "https://vercel.com/docs/mcp/vercel-mcp",
     id: "vercel",
     name: "Vercel",
     note: "Uses mcp-remote for Vercel OAuth. Provider sign-in opens on first test or first tool listing.",
     publisher: "Vercel",
+    setupSteps: [
+      "Uses mcp-remote for Vercel OAuth.",
+      "Provider sign-in opens during the first connection test or tool refresh.",
+      "Refresh tools after OAuth so chat can see deployment and project operations.",
+    ],
     tags: ["Deployments", "Logs", "OAuth"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@netlify/mcp"],
+    command: "npx",
+    description: "Official Netlify MCP for sites, deploys, project setup, teams, forms, environment variables, and platform operations.",
+    docsUrl: "https://docs.netlify.com/welcome/build-with-ai/netlify-mcp-server/",
+    environmentText: "NETLIFY_PERSONAL_ACCESS_TOKEN=",
+    id: "netlify",
+    name: "Netlify",
+    note: "Runs the official @netlify/mcp package. Most setups can authenticate normally; add NETLIFY_PERSONAL_ACCESS_TOKEN only as a fallback.",
+    optionalSetup: [NETLIFY_PERSONAL_ACCESS_TOKEN_REQUIREMENT],
+    publisher: "Netlify",
+    setupSteps: [
+      "Requires Node.js 22 or newer for the best Netlify MCP experience.",
+      "Runs the official @netlify/mcp server.",
+      "If auth fails, save NETLIFY_PERSONAL_ACCESS_TOKEN in Keys and apply it as secure environment.",
+    ],
+    tags: ["Deployments", "Sites", "CLI"],
+    transport: "stdio",
+  },
+  {
+    args: ["mcp:start"],
+    command: "heroku",
+    description: "Heroku Platform MCP for apps, add-ons, config vars, releases, logs, pipeline, and platform operations.",
+    docsUrl: "https://github.com/heroku/heroku-mcp-server",
+    environmentText: "HEROKU_API_KEY=",
+    id: "heroku",
+    name: "Heroku",
+    note: "Preferred path uses `heroku mcp:start` so your existing Heroku CLI login is reused. Save HEROKU_API_KEY only as a fallback for direct npx setups.",
+    optionalSetup: [HEROKU_API_KEY_REQUIREMENT],
+    publisher: "Heroku",
+    setupSteps: [
+      "Install Heroku CLI 10.8.1 or newer.",
+      "Run heroku login before testing, or save HEROKU_API_KEY in Settings > Keys as a fallback.",
+      "Use scoped Heroku access for production app operations.",
+    ],
+    tags: ["Deployments", "Apps", "CLI"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@pulumi/mcp-server@latest", "stdio"],
+    command: "npx",
+    description: "Pulumi MCP for IaC registry docs, previews, cloud deployments, stack outputs, refresh, and resource search.",
+    docsUrl: "https://www.pulumi.com/docs/iac/using-pulumi/mcp-server/",
+    environmentText: "PULUMI_ACCESS_TOKEN=",
+    id: "pulumi",
+    name: "Pulumi",
+    note: "Registry/documentation tools can orient infrastructure work; Pulumi Cloud and deployment tools need PULUMI_ACCESS_TOKEN plus a working Pulumi CLI/project.",
+    optionalSetup: [PULUMI_ACCESS_TOKEN_REQUIREMENT],
+    publisher: "Pulumi",
+    setupSteps: [
+      "Install the Pulumi CLI for preview/deploy tools.",
+      "Save PULUMI_ACCESS_TOKEN in Settings > Keys for Pulumi Cloud, deployment, and resource-search operations.",
+      "Mount or open the intended Pulumi project before using stack-changing tools.",
+    ],
+    tags: ["IaC", "Cloud", "Deployments"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.neon.tech/mcp"),
+    command: "npx",
+    description: "Official Neon MCP for serverless Postgres projects, branches, databases, roles, and SQL workflows.",
+    docsUrl: "https://neon.tech/docs/ai/neon-mcp-server",
+    id: "neon",
+    name: "Neon",
+    note: "Uses Neon's hosted MCP endpoint through mcp-remote for OAuth. Store NEON_API_KEY in Keys for custom Neon skills or HTTP bearer setups.",
+    publisher: "Neon",
+    setupSteps: [
+      "Uses mcp-remote with Neon's hosted MCP endpoint.",
+      "No API key is pasted into Gilbert for the default OAuth bridge path.",
+      "For direct HTTP bearer setups, store NEON_API_KEY in Settings > Keys.",
+    ],
+    tags: ["Postgres", "Databases", "OAuth"],
     transport: "stdio",
   },
   {
     args: mcpRemoteArgs("https://mcp.notion.com/mcp"),
     command: "npx",
     description: "Official Notion MCP for pages, databases, workspace search, docs, tasks, and planning content.",
+    docsUrl: "https://developers.notion.com/docs/mcp",
     id: "notion",
     name: "Notion",
     note: "Uses mcp-remote because Notion requires user OAuth and does not support bearer-token auth for its hosted MCP.",
     publisher: "Notion",
+    setupSteps: [
+      "Uses mcp-remote for Notion OAuth.",
+      "No API key is entered in Gilbert for Notion's hosted MCP server.",
+      "Provider sign-in opens on test or first tool listing.",
+    ],
     tags: ["Docs", "Tasks", "OAuth"],
     transport: "stdio",
   },
   {
     description: "Cloudflare's API MCP exposes Cloudflare account operations with a compact code-mode tool surface.",
+    docsUrl: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
     endpoint: "https://mcp.cloudflare.com/mcp",
     id: "cloudflare-api",
     name: "Cloudflare API",
     note: "Paste a Cloudflare API token in the HTTP bearer token field, or switch to mcp-remote if you want browser OAuth instead.",
     publisher: "Cloudflare",
+    requiredSetup: [
+      {
+        id: "cloudflare-bearer",
+        label: "Cloudflare token",
+        requirements: [{
+          ...HTTP_BEARER_TOKEN_REQUIREMENT,
+          helper: "Use a Cloudflare API token for the direct HTTP MCP endpoint, or switch to mcp-remote for browser OAuth.",
+          placeholder: "Cloudflare API token",
+        }],
+      },
+    ],
+    setupSteps: [
+      "Direct HTTP MCP calls require a bearer token in Gilbert.",
+      "For OAuth instead of a token, change this preset to the mcp-remote stdio bridge.",
+      "Use a scoped Cloudflare API token with only the account permissions you need.",
+    ],
     tags: ["Workers", "DNS", "Bearer"],
     transport: "http",
   },
@@ -298,6 +718,11 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     name: "Cloudflare Docs",
     note: "Public docs-focused endpoint. Save and test directly; no account token should be needed for documentation search.",
     publisher: "Cloudflare",
+    setupSteps: [
+      "Public Cloudflare documentation endpoint.",
+      "No account token should be needed for docs search.",
+      "Save and test directly.",
+    ],
     tags: ["Docs", "Workers", "Public"],
     transport: "http",
   },
@@ -308,67 +733,419 @@ const MCP_FEATURED_PRESETS: McpProviderPreset[] = [
     name: "Cloudflare Browser",
     note: "Useful for web inspection flows. If Cloudflare asks for account auth, add a bearer token or use mcp-remote for OAuth.",
     publisher: "Cloudflare",
+    setupSteps: [
+      "Hosted Cloudflare browser endpoint for web inspection.",
+      "If your account policy requires auth, use the bearer token field or mcp-remote OAuth.",
+      "Refresh tools after saving so chat can see browser actions.",
+    ],
     tags: ["Browser", "Markdown", "Screenshots"],
     transport: "http",
   },
   {
-    args: ["-y", "@upstash/context7-mcp@latest"],
-    command: "npx",
     description: "Context7 MCP pulls current library and API documentation into coding prompts.",
+    docsUrl: "https://context7.com/docs/clients/cli",
+    endpoint: "https://mcp.context7.com/mcp",
+    headersText: "CONTEXT7_API_KEY=",
     id: "context7",
     name: "Context7",
-    note: "Runs locally through npm. A Context7 API key is optional for higher limits; add it only if your account requires it.",
+    note: "Uses Context7's remote HTTP MCP endpoint. A Context7 API key is optional for higher limits and private repositories; enter it as CONTEXT7_API_KEY in custom headers.",
+    optionalSetup: [CONTEXT7_API_KEY_REQUIREMENT],
     publisher: "Upstash",
+    setupSteps: [
+      "Uses Context7's remote HTTP endpoint.",
+      "Basic docs lookup works without a key.",
+      "Add CONTEXT7_API_KEY as a custom header for higher rate limits or private repositories.",
+    ],
     tags: ["Docs", "Libraries", "Coding"],
+    transport: "http",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-brave-search"],
+    command: "npx",
+    description: "Official Brave Search MCP for web and local search with freshness and pagination controls.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-brave-search",
+    environmentText: "BRAVE_API_KEY=",
+    id: "brave-search",
+    name: "Brave Search",
+    note: "Requires BRAVE_API_KEY. Save it in Settings > Keys and apply it as secure environment before testing.",
+    publisher: "Model Context Protocol",
+    requiredSetup: [
+      {
+        id: "brave-api-key",
+        label: "Brave API key",
+        requirements: [BRAVE_API_KEY_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create a Brave Search API key in the Brave developer dashboard.",
+      "Save BRAVE_API_KEY in Settings > Keys.",
+      "Apply the saved key here, then test so chat can see brave_web_search and brave_local_search.",
+    ],
+    tags: ["Search", "Web", "Local"],
     transport: "stdio",
   },
   {
-    args: ["--from", "redis-mcp-server@latest", "redis-mcp-server", "--url", "redis://localhost:6379/0"],
-    command: "uvx",
+    args: ["-y", "exa-mcp-server"],
+    command: "npx",
+    description: "Exa MCP for web search, page fetch, code search, company research, and live crawling workflows.",
+    docsUrl: "https://docs.exa.ai/reference/exa-mcp",
+    environmentText: "EXA_API_KEY=",
+    id: "exa",
+    name: "Exa",
+    note: "Uses the local npm package with EXA_API_KEY as secure environment instead of putting secrets in an MCP URL query string.",
+    publisher: "Exa",
+    requiredSetup: [
+      {
+        id: "exa-api-key",
+        label: "Exa API key",
+        requirements: [EXA_API_KEY_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create an Exa API key.",
+      "Save EXA_API_KEY in Settings > Keys.",
+      "Apply the saved key here, then test so chat can use Exa search and fetch tools.",
+    ],
+    tags: ["Search", "Research", "Web"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "firecrawl-mcp"],
+    command: "npx",
+    description: "Firecrawl MCP for search, scrape, crawl, map, structured extraction, and agentic web research.",
+    docsUrl: "https://github.com/firecrawl/firecrawl-mcp-server",
+    environmentText: "FIRECRAWL_API_KEY=",
+    id: "firecrawl",
+    name: "Firecrawl",
+    note: "Cloud Firecrawl requires FIRECRAWL_API_KEY. Gilbert stores it as secure environment; self-hosted users can add FIRECRAWL_API_URL manually.",
+    publisher: "Firecrawl",
+    requiredSetup: [
+      {
+        id: "firecrawl-api-key",
+        label: "Firecrawl API key",
+        requirements: [FIRECRAWL_API_KEY_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create a Firecrawl API key for the hosted cloud API.",
+      "Save FIRECRAWL_API_KEY in Settings > Keys.",
+      "For self-hosted Firecrawl, also add FIRECRAWL_API_URL to Environment before testing.",
+    ],
+    tags: ["Scrape", "Search", "Research"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "tavily-mcp@latest"],
+    command: "npx",
+    description: "Tavily MCP for real-time web search, extraction, site maps, and crawls.",
+    docsUrl: "https://github.com/tavily-ai/tavily-mcp",
+    environmentText: "TAVILY_API_KEY=",
+    id: "tavily",
+    name: "Tavily",
+    note: "Uses TAVILY_API_KEY as secure environment for the local MCP server instead of embedding API keys in remote MCP URLs.",
+    publisher: "Tavily",
+    requiredSetup: [
+      {
+        id: "tavily-api-key",
+        label: "Tavily API key",
+        requirements: [TAVILY_API_KEY_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create a Tavily API key.",
+      "Save TAVILY_API_KEY in Settings > Keys.",
+      "Apply the saved key here, then test so chat can use Tavily search, extract, map, and crawl tools.",
+    ],
+    tags: ["Search", "Extract", "Crawl"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@apify/actors-mcp-server"],
+    command: "npx",
+    description: "Apify MCP for Actor discovery, web scraping, browser automation, datasets, and structured extraction workflows.",
+    docsUrl: "https://docs.apify.com/platform/integrations/agent-onboarding",
+    environmentText: "APIFY_TOKEN=",
+    id: "apify",
+    name: "Apify",
+    note: "Uses the local stdio package with APIFY_TOKEN as secure environment. Apify also offers a hosted OAuth MCP endpoint for clients that support remote auth.",
+    publisher: "Apify",
+    requiredSetup: [
+      {
+        id: "apify-token",
+        label: "Apify API token",
+        requirements: [APIFY_TOKEN_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create an Apify API token from the Apify console.",
+      "Save APIFY_TOKEN in Settings > Keys.",
+      "Apply the saved key here, then test so chat can search Actors, run Actors, and read datasets through MCP.",
+      "Use cost controls such as memory, timeout, or maxTotalChargeUsd when letting agents run Actors.",
+    ],
+    tags: ["Scraping", "Actors", "Datasets"],
+    transport: "stdio",
+  },
+  {
+    description: "Browserbase hosted MCP for cloud browser automation, navigation, extraction, screenshots, and Stagehand actions.",
+    docsUrl: "https://docs.browserbase.com/integrations/mcp/setup",
+    endpoint: "https://mcp.browserbase.com/mcp",
+    id: "browserbase",
+    name: "Browserbase",
+    note: "Uses Browserbase's hosted Streamable HTTP MCP endpoint. The API key is sent as a secure query parameter instead of being stored directly in the endpoint URL.",
+    publisher: "Browserbase",
+    queryText: "browserbaseApiKey=",
+    requiredSetup: [
+      {
+        id: "browserbase-hosted-api-key",
+        label: "Browserbase hosted API key",
+        requirements: [BROWSERBASE_HOSTED_API_KEY_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create or copy a Browserbase API key from the Browserbase dashboard.",
+      "Save BROWSERBASE_API_KEY in Settings > Keys.",
+      "Apply the saved key as browserbaseApiKey, then test so chat can navigate pages, act on elements, extract data, and manage Browserbase sessions.",
+      "Keep model provider keys on the Models page; custom Browserbase modelApiKey setups can be added manually only when needed.",
+    ],
+    tags: ["Browser", "Automation", "Screenshots"],
+    transport: "http",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-redis"],
+    command: "npx",
     description: "Official Redis MCP for reading, writing, querying, and managing Redis data during development.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-redis",
+    environmentText: "REDIS_URL=redis://localhost:6379",
     id: "redis",
     name: "Redis",
-    note: "Defaults to local Redis. Replace the --url argument with your Redis or Redis Cloud URL before testing.",
+    note: "Uses the official @modelcontextprotocol/server-redis package. Keep Redis URLs in REDIS_URL so passwords are stored in secure storage instead of command arguments.",
+    requiredSetup: [
+      {
+        id: "redis-url",
+        label: "Redis URL",
+        requirements: [REDIS_URL_REQUIREMENT],
+      },
+    ],
     publisher: "Redis",
-    tags: ["Cache", "Data", "uvx"],
+    setupSteps: [
+      "Requires a reachable Redis or Redis Cloud endpoint.",
+      "REDIS_URL is stored as a secure stdio environment value.",
+      "Use redis://127.0.0.1:6379 if localhost resolution fails on Windows.",
+    ],
+    tags: ["Cache", "Data", "Secure env"],
     transport: "stdio",
   },
   {
-    args: ["-y", "mongodb-mcp-server@latest"],
+    args: ["-y", "mongodb-mcp-server@latest", "--readOnly"],
     command: "npx",
     description: "Official MongoDB MCP for Atlas or self-hosted MongoDB schema, queries, and database management.",
+    docsUrl: "https://www.npmjs.com/package/mongodb-mcp-server",
+    environmentText: "MDB_MCP_CONNECTION_STRING=\nMDB_MCP_API_CLIENT_ID=\nMDB_MCP_API_CLIENT_SECRET=",
     id: "mongodb",
     name: "MongoDB",
-    note: "MongoDB recommends running `npx mongodb-mcp-server@latest setup` once to create the connection config before testing this server.",
+    note: "MongoDB will not start unless configured. Add either MDB_MCP_CONNECTION_STRING or both Atlas service-account credentials; Gilbert stores them as secure env values.",
     publisher: "MongoDB",
-    tags: ["Atlas", "Database", "Setup"],
+    requiredSetup: [
+      {
+        id: "mongodb-connection-string",
+        label: "Connection string",
+        requirements: [MONGODB_CONNECTION_STRING_REQUIREMENT],
+      },
+      {
+        id: "mongodb-atlas-credentials",
+        label: "Atlas service account",
+        requirements: [MONGODB_ATLAS_CLIENT_ID_REQUIREMENT, MONGODB_ATLAS_CLIENT_SECRET_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Runs MongoDB MCP in read-only mode by default.",
+      "Provide a connection string, or provide both Atlas service-account client ID and secret.",
+      "MongoDB explicitly recommends environment variables for sensitive credentials.",
+    ],
+    tags: ["Atlas", "Database", "Secure env"],
     transport: "stdio",
   },
   {
-    args: ["-y", "@sentry/mcp-server@latest"],
+    args: ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+    command: "npx",
+    description: "Official read-only Postgres MCP for schema inspection and SQL query context.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-postgres",
+    id: "postgres",
+    name: "Postgres",
+    note: "Replace the final argument with your read-only Postgres connection string before testing. Avoid high-privilege database users.",
+    publisher: "Model Context Protocol",
+    setupSteps: [
+      "Replace postgresql://localhost/mydb with a reachable Postgres database URL.",
+      "Use a read-only or least-privilege database user.",
+      "Connection strings live in MCP arguments for this official server, so review them before sharing configs.",
+    ],
+    tags: ["Database", "SQL", "Read-only"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-slack"],
+    command: "npx",
+    description: "Official Slack MCP for channels, messages, threads, reactions, users, and workspace communication.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-slack",
+    environmentText: "SLACK_BOT_TOKEN=\nSLACK_TEAM_ID=\nSLACK_CHANNEL_IDS=",
+    id: "slack",
+    name: "Slack",
+    note: "Requires a Slack bot token and team ID. Optional SLACK_CHANNEL_IDS can limit channel access.",
+    publisher: "Model Context Protocol",
+    requiredSetup: [
+      {
+        id: "slack-bot-workspace",
+        label: "Slack app credentials",
+        requirements: [SLACK_BOT_TOKEN_REQUIREMENT, SLACK_TEAM_ID_REQUIREMENT],
+      },
+    ],
+    setupSteps: [
+      "Create or reuse a Slack app with the required bot scopes.",
+      "Save SLACK_BOT_TOKEN and SLACK_TEAM_ID in Settings > Keys.",
+      "Optionally set SLACK_CHANNEL_IDS to limit channel access before testing.",
+    ],
+    tags: ["Chat", "Workspace", "Secure env"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    command: "npx",
+    description: "Official filesystem MCP for reading and writing files inside explicit allowed directories.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem",
+    id: "filesystem",
+    name: "Filesystem",
+    note: "Review the allowed directory argument before saving. The default exposes the server process working directory only.",
+    publisher: "Model Context Protocol",
+    setupSteps: [
+      "Replace . with the folder you want this MCP server to access.",
+      "Keep allowed directories narrow.",
+      "Test after saving so chat can see which filesystem tools are available.",
+    ],
+    tags: ["Files", "Local", "Permissions"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-memory"],
+    command: "npx",
+    description: "Official memory MCP for local knowledge graph storage and retrieval across conversations.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-memory",
+    id: "memory",
+    name: "Memory",
+    note: "Runs locally without a provider API key. Review what you ask chat to store because memory tools are persistent.",
+    publisher: "Model Context Protocol",
+    setupSteps: [
+      "Runs the official local memory server.",
+      "No API key is required.",
+      "Use it for explicit, user-approved durable context rather than transient chat notes.",
+    ],
+    tags: ["Memory", "Local", "Knowledge"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    command: "npx",
+    description: "Official Sequential Thinking MCP for stepwise reasoning, revisions, branches, and problem solving.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-sequential-thinking",
+    id: "sequential-thinking",
+    name: "Sequential Thinking",
+    note: "Runs locally without an API key. Add DISABLE_THOUGHT_LOGGING=true to Environment if you want quieter server logs.",
+    publisher: "Model Context Protocol",
+    setupSteps: [
+      "Runs the official Sequential Thinking MCP package.",
+      "No API key is required.",
+      "Test after saving so chat can see the sequentialthinking tool.",
+    ],
+    tags: ["Reasoning", "Planning", "Local"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@playwright/mcp@latest"],
+    command: "npx",
+    description: "Official Playwright MCP for browser automation, page inspection, screenshots, and web app testing.",
+    docsUrl: "https://playwright.dev",
+    id: "playwright",
+    name: "Playwright",
+    note: "Runs browser automation locally. Install browsers with Playwright if a first test reports missing browser binaries.",
+    publisher: "Microsoft",
+    setupSteps: [
+      "Runs the official @playwright/mcp package.",
+      "No API key is required.",
+      "If browser binaries are missing, install Playwright browsers and test again.",
+    ],
+    tags: ["Browser", "Testing", "Screenshots"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@modelcontextprotocol/server-puppeteer"],
+    command: "npx",
+    description: "Official Puppeteer MCP for local browser automation, screenshots, navigation, and scripted page work.",
+    docsUrl: "https://www.npmjs.com/package/@modelcontextprotocol/server-puppeteer",
+    id: "puppeteer",
+    name: "Puppeteer",
+    note: "Runs local browser automation without a provider API key. Keep ALLOW_DANGEROUS unset unless you explicitly need broader browser permissions.",
+    publisher: "Model Context Protocol",
+    setupSteps: [
+      "Runs the official Puppeteer MCP package.",
+      "No API key is required.",
+      "If Chromium launch fails, install or configure a compatible browser before testing again.",
+    ],
+    tags: ["Browser", "Automation", "Screenshots"],
+    transport: "stdio",
+  },
+  {
+    args: ["-y", "@jetbrains/mcp-proxy"],
+    command: "npx",
+    description: "JetBrains MCP proxy for IDE context from IntelliJ IDEA, WebStorm, PyCharm, and related JetBrains IDEs.",
+    docsUrl: "https://github.com/JetBrains/mcp-jetbrains",
+    id: "jetbrains",
+    name: "JetBrains IDE",
+    note: "Requires the JetBrains MCP Server plugin running inside the IDE. No API key is entered in Gilbert.",
+    publisher: "JetBrains",
+    setupSteps: [
+      "Install and enable the JetBrains MCP Server plugin in the IDE.",
+      "Keep the target project open in the IDE while testing the proxy.",
+      "No API key is required; the proxy forwards MCP requests to the local IDE server.",
+    ],
+    tags: ["IDE", "Code", "Local"],
+    transport: "stdio",
+  },
+  {
+    args: mcpRemoteArgs("https://mcp.sentry.dev/mcp"),
     command: "npx",
     description: "Sentry MCP for issues, traces, docs, and production debugging workflows.",
+    docsUrl: "https://github.com/getsentry/sentry-mcp",
     id: "sentry",
     name: "Sentry",
-    note: "Uses Sentry's npm MCP server. Complete Sentry auth when prompted, or add provider-specific env values if your Sentry setup requires them.",
+    note: "Uses Sentry's hosted MCP endpoint through mcp-remote so OAuth can complete in the browser.",
     publisher: "Sentry",
-    tags: ["Errors", "Traces", "Debugging"],
+    setupSteps: [
+      "Uses mcp-remote for Sentry OAuth.",
+      "No API key is entered in Gilbert for the hosted Sentry flow.",
+      "Refresh tools after authentication so chat can see issues and trace tools.",
+    ],
+    tags: ["Errors", "Traces", "OAuth"],
     transport: "stdio",
   },
   {
     args: ["-y", "kubernetes-mcp-server@latest"],
     command: "npx",
     description: "Kubernetes MCP for cluster inspection and kubectl-backed development workflows.",
+    docsUrl: "https://www.npmjs.com/package/kubernetes-mcp-server",
     id: "kubernetes",
     name: "Kubernetes",
     note: "Requires a working kubeconfig on the machine. Keep write-capable clusters carefully permission-reviewed.",
     publisher: "Containers",
+    setupSteps: [
+      "Requires a working kubeconfig or kubectl context on this machine.",
+      "No API key is entered in Gilbert for the default local cluster auth path.",
+      "Use read-only cluster permissions when possible.",
+    ],
     tags: ["K8s", "Cluster", "kubectl"],
     transport: "stdio",
   },
 ];
 
-export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSettings }: AppsPageProps) {
+export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSettings, onOpenKeysSettings }: AppsPageProps) {
   const [activeCatalogSection, setActiveCatalogSection] = useState<AppsCatalogSection>("all");
   const [appSearchQuery, setAppSearchQuery] = useState("");
   const [expandedAppCardIds, setExpandedAppCardIds] = useState<Set<string>>(() => new Set());
@@ -388,6 +1165,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
   const [mcpConnection, setMcpConnection] = useState<McpConnectionState>({ connected: false, enabledServerCount: 0, maxServers: MCP_SERVER_LIMIT, servers: [] });
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [mcpDraft, setMcpDraft] = useState<McpServerDraft>(EMPTY_MCP_DRAFT);
+  const [apiKeyVault, setApiKeyVault] = useState<ApiKeyVaultState>(EMPTY_API_KEY_VAULT);
   const [mcpPresetPage, setMcpPresetPage] = useState(0);
   const [mcpRegistryBusy, setMcpRegistryBusy] = useState(false);
   const [mcpRegistryPage, setMcpRegistryPage] = useState(0);
@@ -484,14 +1262,21 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       toolCount,
     };
   }, [mcpServers]);
+  const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
   const mcpPresetSearchText = useMemo(
-    () => MCP_FEATURED_PRESETS.map((preset) => [preset.name, preset.publisher, preset.description, ...preset.tags].join(" ")).join(" "),
+    () => MCP_FEATURED_PRESETS.map((preset) => getMcpPresetSearchFields(preset).join(" ")).join(" "),
     [],
   );
-  const mcpPresetPageCount = Math.max(1, Math.ceil(MCP_FEATURED_PRESETS.length / MCP_PRESET_PAGE_SIZE));
+  const mcpFilteredPresets = useMemo(
+    () => MCP_FEATURED_PRESETS.filter((preset) => matchesAppsSearch(normalizedSearchQuery, getMcpPresetSearchFields(preset))),
+    [normalizedSearchQuery],
+  );
+  const mcpPresetPageCount = Math.max(1, Math.ceil(mcpFilteredPresets.length / MCP_PRESET_PAGE_SIZE));
   const mcpPresetCurrentPage = Math.min(mcpPresetPage, mcpPresetPageCount - 1);
   const mcpPresetPageStart = mcpPresetCurrentPage * MCP_PRESET_PAGE_SIZE;
-  const mcpVisiblePresets = MCP_FEATURED_PRESETS.slice(mcpPresetPageStart, mcpPresetPageStart + MCP_PRESET_PAGE_SIZE);
+  const mcpVisiblePresets = mcpFilteredPresets.slice(mcpPresetPageStart, mcpPresetPageStart + MCP_PRESET_PAGE_SIZE);
+  const mcpDraftSetup = useMemo(() => getMcpDraftSetupSummary(mcpDraft, mcpServers), [mcpDraft, mcpServers]);
+  const apiKeysAvailable = apiKeyVault.keys.length > 0;
   const mcpRegistrySearchText = useMemo(
     () => mcpRegistryResults.map((server) => [
       server.name,
@@ -523,7 +1308,6 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
     : mcpAvailable
       ? "Add a Streamable HTTP or stdio MCP server"
       : "Open the desktop app to connect MCP servers";
-  const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
   const openAiCatalogPlugins = useMemo(
     () => openAiPlugins.filter((plugin) => !isOpenAiNativePlugin(plugin.id)),
     [openAiPlugins],
@@ -676,6 +1460,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
   useEffect(() => subscribeSkillRegistry(setSkillRegistry), []);
 
   useEffect(() => {
+    setApiKeyVault(loadApiKeyVault());
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
 
     setOpenAiPluginBusy(true);
@@ -708,6 +1496,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
 
   useEffect(() => {
     setOpenAiPluginPage(0);
+    setMcpPresetPage(0);
   }, [normalizedSearchQuery, activeCatalogSection]);
 
   useEffect(() => {
@@ -1171,6 +1960,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
   }
 
   function openMcpServerDialog(server?: McpServerState) {
+    setApiKeyVault(loadApiKeyVault());
     setMcpDraft(server
       ? {
           argsText: (server.args ?? []).join("\n"),
@@ -1179,20 +1969,23 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
           enabled: server.enabled,
           environmentText: formatMcpEnvironmentDraft(server),
           endpoint: server.endpoint ?? "",
+          headersText: formatMcpHeaderDraft(server),
           id: server.id,
           name: server.name,
+          queryText: formatMcpQueryDraft(server),
           transport: server.transport ?? "http",
           workingDirectory: server.workingDirectory ?? "",
         }
       : EMPTY_MCP_DRAFT);
-    setMcpStatus(server?.hasAuthorizationToken || (server?.environment ?? []).some((item) => item.hasValue)
-      ? { kind: "success", text: "Saved secrets are hidden. Leave HTTP bearer token blank to keep it; stdio env lines with blank values keep their saved values." }
+    setMcpStatus(server?.hasAuthorizationToken || (server?.environment ?? []).some((item) => item.hasValue) || (server?.headers ?? []).some((item) => item.hasValue) || (server?.queryParams ?? []).some((item) => item.hasValue)
+      ? { kind: "success", text: "Saved secrets are hidden. Leave HTTP bearer token, query params, custom headers, or stdio env lines blank to keep saved values." }
       : null);
     setMcpProgressEvents([]);
     setMcpDialogOpen(true);
   }
 
   function configureMcpPreset(preset: McpProviderPreset, existingServer?: McpServerState) {
+    setApiKeyVault(loadApiKeyVault());
     const installedServer = existingServer ?? findMcpServerForPreset(mcpServers, preset);
 
     if (installedServer) {
@@ -1207,7 +2000,9 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       command: preset.command ?? "",
       endpoint: preset.endpoint ?? "",
       environmentText: preset.environmentText ?? "",
+      headersText: preset.headersText ?? "",
       name: preset.name,
+      queryText: preset.queryText ?? "",
       transport: preset.transport,
     });
     setMcpStatus({ kind: "warning", text: preset.note });
@@ -1227,6 +2022,43 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
     setMcpStatus({ kind: "warning", text: install.note ?? "Review this generated MCP configuration, then save and test it." });
     setMcpProgressEvents([]);
     setMcpDialogOpen(true);
+  }
+
+  function updateMcpDraftEnvironmentSecret(name: string, value: string) {
+    setMcpDraft((draft) => ({ ...draft, environmentText: upsertMcpKeyValueLine(draft.environmentText, name, value) }));
+  }
+
+  function updateMcpDraftHeaderSecret(name: string, value: string) {
+    setMcpDraft((draft) => ({ ...draft, headersText: upsertMcpKeyValueLine(draft.headersText, name, value) }));
+  }
+
+  function updateMcpDraftQuerySecret(name: string, value: string) {
+    setMcpDraft((draft) => ({ ...draft, queryText: upsertMcpKeyValueLine(draft.queryText, name, value) }));
+  }
+
+  function applySavedMcpKey(requirement: McpSetupRequirement, keyId: string) {
+    const key = apiKeyVault.keys.find((candidate) => candidate.id === keyId);
+
+    if (!key) {
+      return;
+    }
+
+    if (requirement.location === "bearer") {
+      setMcpDraft((draft) => ({ ...draft, authorizationToken: key.value }));
+      return;
+    }
+
+    if (requirement.location === "header") {
+      updateMcpDraftHeaderSecret(requirement.name, key.value);
+      return;
+    }
+
+    if (requirement.location === "query") {
+      updateMcpDraftQuerySecret(requirement.name, key.value);
+      return;
+    }
+
+    updateMcpDraftEnvironmentSecret(requirement.name, key.value);
   }
 
   async function handleOpenAiPluginPrimaryAction(plugin: OpenAiCodexPluginListing) {
@@ -1378,7 +2210,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       return;
     }
 
-    const request = createMcpSaveRequest(mcpDraft);
+    const request = createMcpSaveRequest(mcpDraft, mcpServers);
 
     if (!request.ok) {
       setMcpStatus({ kind: "error", text: request.error });
@@ -1420,18 +2252,18 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
       return;
     }
 
+    const request = createMcpTestRequest(mcpDraft, mcpServers);
+
+    if (!request.ok) {
+      setMcpStatus({ kind: "error", text: request.error });
+      return;
+    }
+
     setMcpActionState("test");
     setMcpStatus(null);
     resetMcpProgress("Testing MCP connection.");
 
     try {
-      const request = createMcpTestRequest(mcpDraft);
-
-      if (!request.ok) {
-        setMcpStatus({ kind: "error", text: request.error });
-        return;
-      }
-
       const response = await testMcpServerWithProgress(mcpDraft.id
         ? { id: mcpDraft.id }
         : request.value, appendMcpProgressEvent);
@@ -2098,10 +2930,10 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
                 <div className="apps-mcp-panel-head">
                   <div className="apps-plugin-expanded-head">
                     <strong>Featured MCPs</strong>
-                    <small>{MCP_FEATURED_PRESETS.length} curated app, cloud, database, design, and docs servers</small>
+                    <small>{normalizedSearchQuery ? `${mcpFilteredPresets.length} of ${MCP_FEATURED_PRESETS.length} matching curated app, cloud, database, design, and docs servers` : `${MCP_FEATURED_PRESETS.length} curated app, cloud, database, design, and docs servers`}</small>
                   </div>
                   <div className="apps-mcp-pagination" aria-label="Featured MCP pagination">
-                    <span>{mcpPresetPageStart + 1}-{Math.min(mcpPresetPageStart + MCP_PRESET_PAGE_SIZE, MCP_FEATURED_PRESETS.length)} of {MCP_FEATURED_PRESETS.length}</span>
+                    <span>{mcpFilteredPresets.length > 0 ? `${mcpPresetPageStart + 1}-${Math.min(mcpPresetPageStart + MCP_PRESET_PAGE_SIZE, mcpFilteredPresets.length)} of ${mcpFilteredPresets.length}` : "0 of 0"}</span>
                     <button type="button" disabled={mcpPresetCurrentPage === 0} onClick={() => setMcpPresetPage((page) => Math.max(0, page - 1))}>Previous</button>
                     <button type="button" disabled={mcpPresetCurrentPage >= mcpPresetPageCount - 1} onClick={() => setMcpPresetPage((page) => Math.min(mcpPresetPageCount - 1, page + 1))}>Next</button>
                   </div>
@@ -2125,6 +2957,12 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
                       </span>
                     </button>
                   ))}
+                  {mcpVisiblePresets.length === 0 ? (
+                    <div className="apps-empty-state">
+                      <strong>No featured MCPs match</strong>
+                      <small>Try AWS, Firebase, Slack, Brave, Postgres, Netlify, or Playwright.</small>
+                    </div>
+                  ) : null}
                 </div>
               </section>
 
@@ -2181,7 +3019,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
           ) : null}
 
           {skillsMatchesSearch ? (
-            <SkillsManagerPanel searchQuery={normalizedSearchQuery} />
+            <SkillsManagerPanel searchQuery={normalizedSearchQuery} onOpenKeysSettings={onOpenKeysSettings} />
           ) : null}
 
           {visibleCardCount === 0 ? (
@@ -2418,6 +3256,48 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
               <span>{mcpDraft.id ? "Edit server" : "Add server"}</span>
             </div>
 
+            <div className="mcp-setup-panel" data-ready={mcpDraftSetup.issues.length === 0}>
+              <div className="mcp-setup-heading">
+                <KeyRound size={15} aria-hidden="true" />
+                <span>
+                  <strong>{mcpDraftSetup.preset ? `${mcpDraftSetup.preset.name} setup` : "Manual setup"}</strong>
+                  <small>{formatMcpSetupSummaryLabel(mcpDraftSetup)}</small>
+                </span>
+                <button type="button" onClick={onOpenKeysSettings}>Keys</button>
+                {mcpDraftSetup.preset?.docsUrl ? (
+                  <a href={mcpDraftSetup.preset.docsUrl} target="_blank" rel="noreferrer">Docs</a>
+                ) : null}
+              </div>
+              <div className="mcp-setup-checks">
+                {mcpDraftSetup.requiredAlternatives.length > 0 ? (
+                  mcpDraftSetup.requiredAlternatives.map((alternative) => (
+                    <span key={alternative.id} data-status={alternative.ready ? "ready" : "missing"}>
+                      {alternative.ready ? <CheckCircle2 size={13} aria-hidden="true" /> : <AlertCircle size={13} aria-hidden="true" />}
+                      {alternative.label}: {alternative.requirements.map((item) => item.requirement.name).join(" + ")}
+                    </span>
+                  ))
+                ) : (
+                  <span data-status="ready">
+                    <CheckCircle2 size={13} aria-hidden="true" />
+                    No required key before testing
+                  </span>
+                )}
+                {mcpDraftSetup.optionalRequirements.map((item) => (
+                  <span key={`optional-${item.requirement.location}-${item.requirement.name}`} data-status={item.status}>
+                    {item.status === "ready" ? <CheckCircle2 size={13} aria-hidden="true" /> : <KeyRound size={13} aria-hidden="true" />}
+                    Optional: {item.requirement.name}
+                  </span>
+                ))}
+              </div>
+              {mcpDraftSetup.preset?.setupSteps.length ? (
+                <div className="mcp-setup-steps">
+                  {mcpDraftSetup.preset.setupSteps.map((step) => (
+                    <span key={step}>{step}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             <div className="mcp-form-grid">
               <div className="mcp-transport-tabs" role="group" aria-label="MCP transport">
                 <button type="button" data-active={mcpDraft.transport === "http"} onClick={() => setMcpDraft((draft) => ({ ...draft, transport: "http" }))}>
@@ -2444,9 +3324,70 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
                     <input
                       type="password"
                       value={mcpDraft.authorizationToken}
-                      placeholder={mcpDraft.id ? "Leave blank to keep saved token" : "Optional"}
+                      placeholder={getMcpBearerPlaceholder(mcpDraftSetup)}
                       onChange={(event) => setMcpDraft((draft) => ({ ...draft, authorizationToken: event.target.value }))}
                     />
+                    {getMcpBearerKeySelectorRequirements(mcpDraftSetup).map((item) => (
+                      <select key={`bearer-key-${item.requirement.name}`} value="" onChange={(event) => {
+                        applySavedMcpKey(item.requirement, event.target.value);
+                        event.currentTarget.value = "";
+                      }}>
+                        <option value="">{apiKeysAvailable ? "Use saved key..." : "No saved keys yet"}</option>
+                        {getSavedKeyOptionsForMcpRequirement(apiKeyVault.keys, item.requirement, mcpDraftSetup.preset).map((key) => (
+                          <option key={key.id} value={key.id}>{formatSavedApiKeyOption(key)}</option>
+                        ))}
+                      </select>
+                    ))}
+                  </label>
+                  {getMcpSetupRequirementsByLocation(mcpDraftSetup, "query").map((item) => (
+                    <label key={`query-${item.requirement.name}`} className="mcp-field mcp-secret-field">
+                      <span>{item.requirement.label}</span>
+                      <select value="" onChange={(event) => {
+                        applySavedMcpKey(item.requirement, event.target.value);
+                        event.currentTarget.value = "";
+                      }}>
+                        <option value="">{apiKeysAvailable ? "Use saved key..." : "No saved keys yet"}</option>
+                        {getSavedKeyOptionsForMcpRequirement(apiKeyVault.keys, item.requirement, mcpDraftSetup.preset).map((key) => (
+                          <option key={key.id} value={key.id}>{formatSavedApiKeyOption(key)}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="password"
+                        value={getMcpKeyValueDraftValue(mcpDraft.queryText, item.requirement.name)}
+                        placeholder={getMcpSecretPlaceholder(item, mcpDraftSetup)}
+                        onChange={(event) => updateMcpDraftQuerySecret(item.requirement.name, event.target.value)}
+                      />
+                      <small>{item.requirement.helper}</small>
+                    </label>
+                  ))}
+                  {getMcpSetupRequirementsByLocation(mcpDraftSetup, "header").map((item) => (
+                    <label key={`header-${item.requirement.name}`} className="mcp-field mcp-secret-field">
+                      <span>{item.requirement.label}</span>
+                      <select value="" onChange={(event) => {
+                        applySavedMcpKey(item.requirement, event.target.value);
+                        event.currentTarget.value = "";
+                      }}>
+                        <option value="">{apiKeysAvailable ? "Use saved key..." : "No saved keys yet"}</option>
+                        {getSavedKeyOptionsForMcpRequirement(apiKeyVault.keys, item.requirement, mcpDraftSetup.preset).map((key) => (
+                          <option key={key.id} value={key.id}>{formatSavedApiKeyOption(key)}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="password"
+                        value={getMcpKeyValueDraftValue(mcpDraft.headersText, item.requirement.name)}
+                        placeholder={getMcpSecretPlaceholder(item, mcpDraftSetup)}
+                        onChange={(event) => updateMcpDraftHeaderSecret(item.requirement.name, event.target.value)}
+                      />
+                      <small>{item.requirement.helper}</small>
+                    </label>
+                  ))}
+                  <label className="mcp-field mcp-field-wide">
+                    <span>Secret query params</span>
+                    <textarea value={mcpDraft.queryText} placeholder={"browserbaseApiKey=secret"} rows={2} onChange={(event) => setMcpDraft((draft) => ({ ...draft, queryText: event.target.value }))} />
+                  </label>
+                  <label className="mcp-field mcp-field-wide">
+                    <span>Custom secret headers</span>
+                    <textarea value={mcpDraft.headersText} placeholder={"HEADER_NAME=secret\nCONTEXT7_API_KEY=optional"} rows={3} onChange={(event) => setMcpDraft((draft) => ({ ...draft, headersText: event.target.value }))} />
                   </label>
                 </>
               ) : (
@@ -2463,6 +3404,27 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
                     <span>Working directory</span>
                     <input value={mcpDraft.workingDirectory} placeholder="Optional folder path" onChange={(event) => setMcpDraft((draft) => ({ ...draft, workingDirectory: event.target.value }))} />
                   </label>
+                  {getMcpSetupRequirementsByLocation(mcpDraftSetup, "environment").map((item) => (
+                    <label key={`environment-${item.requirement.name}`} className="mcp-field mcp-secret-field">
+                      <span>{item.requirement.label}</span>
+                      <select value="" onChange={(event) => {
+                        applySavedMcpKey(item.requirement, event.target.value);
+                        event.currentTarget.value = "";
+                      }}>
+                        <option value="">{apiKeysAvailable ? "Use saved key..." : "No saved keys yet"}</option>
+                        {getSavedKeyOptionsForMcpRequirement(apiKeyVault.keys, item.requirement, mcpDraftSetup.preset).map((key) => (
+                          <option key={key.id} value={key.id}>{formatSavedApiKeyOption(key)}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="password"
+                        value={getMcpKeyValueDraftValue(mcpDraft.environmentText, item.requirement.name)}
+                        placeholder={getMcpSecretPlaceholder(item, mcpDraftSetup)}
+                        onChange={(event) => updateMcpDraftEnvironmentSecret(item.requirement.name, event.target.value)}
+                      />
+                      <small>{item.requirement.helper}</small>
+                    </label>
+                  ))}
                   <label className="mcp-field mcp-field-wide">
                     <span>Environment</span>
                     <textarea value={mcpDraft.environmentText} placeholder={"API_KEY=secret\nMODEL=local"} rows={3} onChange={(event) => setMcpDraft((draft) => ({ ...draft, environmentText: event.target.value }))} />
@@ -2513,7 +3475,7 @@ export function AppsPage({ onBackToChat, onOpenGithubSettings, onOpenGoogleSetti
           <div className="gmail-connect-quick-notes" aria-label="MCP connection behavior">
             <span>
               <KeyRound size={15} aria-hidden="true" />
-              HTTP bearer tokens and stdio environment values are stored in the desktop secure store.
+              HTTP bearer tokens, custom header values, and stdio environment values are stored in the desktop secure store.
             </span>
             <span>
               <ShieldCheck size={15} aria-hidden="true" />
@@ -2610,6 +3572,27 @@ function getMcpPresetInitials(preset: McpProviderPreset) {
   return getPluginInitials(preset.name);
 }
 
+function getMcpPresetSearchFields(preset: McpProviderPreset) {
+  return [
+    preset.id,
+    preset.name,
+    preset.publisher,
+    preset.description,
+    preset.note,
+    preset.command,
+    preset.endpoint,
+    ...(preset.args ?? []),
+    ...(preset.setupSteps ?? []),
+    ...(preset.requiredSetup ?? []).flatMap((alternative) => [
+      alternative.id,
+      alternative.label,
+      ...alternative.requirements.flatMap((requirement) => [requirement.label, requirement.name, requirement.helper, ...(requirement.keyNames ?? [])]),
+    ]),
+    ...(preset.optionalSetup ?? []).flatMap((requirement) => [requirement.label, requirement.name, requirement.helper, ...(requirement.keyNames ?? [])]),
+    ...preset.tags,
+  ].filter(Boolean);
+}
+
 function getPluginInitials(name: string) {
   return name
     .split(/\s+/)
@@ -2640,7 +3623,7 @@ function getMarketplacePluginRuntimeState(
       const tags = [
         connected ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : mcpServer.lastError ? "Needs fix" : "Needs test",
         mcpServer.enabled ? "Enabled" : "Disabled",
-        mcpServer.hasAuthorizationToken || (mcpServer.environment ?? []).some((item) => item.hasValue) ? "Auth saved" : authTag,
+        mcpServer.hasAuthorizationToken || (mcpServer.environment ?? []).some((item) => item.hasValue) || (mcpServer.headers ?? []).some((item) => item.hasValue) || (mcpServer.queryParams ?? []).some((item) => item.hasValue) ? "Auth saved" : authTag,
         skillCount > 0 ? `${skillCount} skill${skillCount === 1 ? "" : "s"} installed` : plugin.hasBundledSkills ? "Skills available" : undefined,
       ].filter(Boolean) as string[];
 
@@ -2883,8 +3866,8 @@ function formatCalendarConnectionError(error: unknown) {
   return message;
 }
 
-function createMcpSaveRequest(draft: McpServerDraft): { ok: true; value: McpSaveServerRequest } | { error: string; ok: false } {
-  const base = createMcpTestRequest(draft);
+export function createMcpSaveRequest(draft: McpServerDraft, servers: McpServerState[] = EMPTY_MCP_SERVERS): { ok: true; value: McpSaveServerRequest } | { error: string; ok: false } {
+  const base = createMcpTestRequest(draft, servers);
 
   if (!base.ok) {
     return base;
@@ -2907,7 +3890,13 @@ function createMcpSaveRequest(draft: McpServerDraft): { ok: true; value: McpSave
   };
 }
 
-function createMcpTestRequest(draft: McpServerDraft): { ok: true; value: McpTestServerRequest } | { error: string; ok: false } {
+export function createMcpTestRequest(draft: McpServerDraft, servers: McpServerState[] = EMPTY_MCP_SERVERS): { ok: true; value: McpTestServerRequest } | { error: string; ok: false } {
+  const setup = getMcpDraftSetupSummary(draft, servers);
+
+  if (setup.issues.length > 0) {
+    return { error: setup.issues.join(" "), ok: false };
+  }
+
   if (draft.transport === "stdio") {
     const command = draft.command.trim();
 
@@ -2939,11 +3928,25 @@ function createMcpTestRequest(draft: McpServerDraft): { ok: true; value: McpTest
     return { error: "Add an MCP endpoint before testing this HTTP server.", ok: false };
   }
 
+  const parsedHeaders = parseMcpHeaderText(draft.headersText);
+
+  if (!parsedHeaders.ok) {
+    return parsedHeaders;
+  }
+
+  const parsedQueryParams = parseMcpQueryText(draft.queryText);
+
+  if (!parsedQueryParams.ok) {
+    return parsedQueryParams;
+  }
+
   return {
     ok: true,
     value: {
       authorizationToken: draft.authorizationToken.trim() || undefined,
       endpoint,
+      headers: parsedHeaders.value,
+      queryParams: parsedQueryParams.value,
       transport: "http",
     },
   };
@@ -2956,7 +3959,7 @@ function parseMcpLines(value: string) {
     .filter(Boolean);
 }
 
-function parseMcpEnvironmentText(value: string): { ok: true; value: Array<{ name: string; value: string }> } | { error: string; ok: false } {
+export function parseMcpEnvironmentText(value: string): { ok: true; value: Array<{ name: string; value: string }> } | { error: string; ok: false } {
   const environment: Array<{ name: string; value: string }> = [];
 
   for (const rawLine of value.split(/\r?\n/)) {
@@ -2984,8 +3987,420 @@ function parseMcpEnvironmentText(value: string): { ok: true; value: Array<{ name
   return { ok: true, value: environment };
 }
 
+export function parseMcpHeaderText(value: string): { ok: true; value: McpHttpHeader[] } | { error: string; ok: false } {
+  const headers: McpHttpHeader[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+
+    if (separator < 1) {
+      return { error: "Custom header lines must use HEADER_NAME=value format.", ok: false };
+    }
+
+    const name = line.slice(0, separator).trim();
+
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+      return { error: `Custom header \`${name || "blank"}\` is not a valid HTTP header name.`, ok: false };
+    }
+
+    const normalizedName = name.toLowerCase();
+
+    if (["accept", "authorization", "content-type", "mcp-protocol-version", "mcp-session-id", "user-agent"].includes(normalizedName)) {
+      return { error: `Header \`${name}\` is managed by Gilbert. Use the bearer token field for Authorization.`, ok: false };
+    }
+
+    if (!seen.has(normalizedName)) {
+      seen.add(normalizedName);
+      headers.push({ name, value: line.slice(separator + 1).trim() });
+    }
+  }
+
+  return { ok: true, value: headers };
+}
+
+export function parseMcpQueryText(value: string): { ok: true; value: McpHttpQueryParam[] } | { error: string; ok: false } {
+  const queryParams: McpHttpQueryParam[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+
+    if (separator < 1) {
+      return { error: "Secret query param lines must use NAME=value format.", ok: false };
+    }
+
+    const name = line.slice(0, separator).trim();
+
+    if (!/^[A-Za-z0-9_.~-]+$/.test(name)) {
+      return { error: `Query parameter \`${name || "blank"}\` can only contain letters, numbers, dot, underscore, tilde, or dash.`, ok: false };
+    }
+
+    const normalizedName = name.toLowerCase();
+
+    if (!seen.has(normalizedName)) {
+      seen.add(normalizedName);
+      queryParams.push({ name, value: line.slice(separator + 1).trim() });
+    }
+  }
+
+  return { ok: true, value: queryParams };
+}
+
+export function getMcpDraftSetupSummary(draft: McpServerDraft, servers: McpServerState[] = EMPTY_MCP_SERVERS): McpDraftSetupSummary {
+  const existingServer = draft.id ? servers.find((server) => server.id === draft.id) : undefined;
+  const preset = getMcpPresetForDraft(draft, existingServer);
+  const requiredAlternatives = (preset?.requiredSetup ?? []).map((alternative) => {
+    const requirements = alternative.requirements.map((requirement) => ({
+      requirement,
+      status: getMcpRequirementStatus(requirement, draft, existingServer),
+    }));
+
+    return {
+      id: alternative.id,
+      label: alternative.label,
+      ready: requirements.every((item) => item.status === "ready"),
+      requirements,
+    };
+  });
+  const optionalRequirements = (preset?.optionalSetup ?? []).map((requirement) => {
+    const status: McpSetupRequirementStatus = getMcpRequirementStatus(requirement, draft, existingServer) === "ready" ? "ready" : "optional";
+
+    return { requirement, status };
+  });
+  const issues: string[] = [];
+
+  if (preset && requiredAlternatives.length > 0 && !requiredAlternatives.some((alternative) => alternative.ready)) {
+    const choices = requiredAlternatives
+      .map((alternative) => alternative.requirements.map((item) => item.requirement.name).join(" + "))
+      .join(" or ");
+
+    issues.push(`${preset.name} needs ${choices} before testing or saving.`);
+  }
+
+  return {
+    existingServer,
+    issues,
+    optionalRequirements,
+    preset,
+    requiredAlternatives,
+  };
+}
+
+function getMcpPresetForDraft(draft: McpServerDraft, existingServer?: McpServerState) {
+  if (existingServer) {
+    const existingPreset = MCP_FEATURED_PRESETS.find((preset) => serverMatchesMcpPreset(existingServer, preset));
+
+    if (existingPreset) {
+      return existingPreset;
+    }
+  }
+
+  return MCP_FEATURED_PRESETS.find((preset) => draftMatchesMcpPreset(draft, preset));
+}
+
+export function getMcpFeaturedPresetIds() {
+  return MCP_FEATURED_PRESETS.map((preset) => preset.id);
+}
+
+export function getMcpFeaturedPresetSetupRequirementNames() {
+  const names = new Set<string>();
+
+  for (const preset of MCP_FEATURED_PRESETS) {
+    for (const alternative of preset.requiredSetup ?? []) {
+      for (const requirement of alternative.requirements) {
+        const keyNames = requirement.keyNames?.length ? requirement.keyNames : [requirement.name];
+
+        for (const keyName of keyNames) {
+          names.add(keyName);
+        }
+      }
+    }
+
+    for (const requirement of preset.optionalSetup ?? []) {
+      const keyNames = requirement.keyNames?.length ? requirement.keyNames : [requirement.name];
+
+      for (const keyName of keyNames) {
+        names.add(keyName);
+      }
+    }
+  }
+
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
+
+export function getMcpFeaturedPresetIdsForSearch(query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  return MCP_FEATURED_PRESETS
+    .filter((preset) => matchesAppsSearch(normalizedQuery, getMcpPresetSearchFields(preset)))
+    .map((preset) => preset.id);
+}
+
+function draftMatchesMcpPreset(draft: McpServerDraft, preset: McpProviderPreset) {
+  if (draft.transport !== preset.transport) {
+    return false;
+  }
+
+  if (preset.transport === "http") {
+    return normalizeMcpEndpoint(draft.endpoint) === normalizeMcpEndpoint(preset.endpoint);
+  }
+
+  return normalizeMcpCommand(draft.command) === normalizeMcpCommand(preset.command) &&
+    parseMcpLines(draft.argsText).join("\n") === normalizeMcpArgs(preset.args).join("\n");
+}
+
+function getMcpRequirementStatus(requirement: McpSetupRequirement, draft: McpServerDraft, existingServer?: McpServerState): McpSetupRequirementStatus {
+  if (requirement.location === "bearer") {
+    return draft.authorizationToken.trim() || existingServer?.hasAuthorizationToken ? "ready" : "missing";
+  }
+
+  if (requirement.location === "header") {
+    const draftValue = getMcpKeyValueDraftValue(draft.headersText, requirement.name);
+    const saved = existingServer?.headers?.some((item) => item.name.toLowerCase() === requirement.name.toLowerCase() && item.hasValue);
+
+    return draftValue.trim() || saved ? "ready" : "missing";
+  }
+
+  if (requirement.location === "query") {
+    const draftValue = getMcpKeyValueDraftValue(draft.queryText, requirement.name);
+    const saved = existingServer?.queryParams?.some((item) => item.name.toLowerCase() === requirement.name.toLowerCase() && item.hasValue);
+
+    return draftValue.trim() || saved ? "ready" : "missing";
+  }
+
+  const draftValue = getMcpKeyValueDraftValue(draft.environmentText, requirement.name);
+  const saved = existingServer?.environment?.some((item) => item.name.toLowerCase() === requirement.name.toLowerCase() && item.hasValue);
+
+  return draftValue.trim() || saved ? "ready" : "missing";
+}
+
+function getMcpSetupRequirementsByLocation(summary: McpDraftSetupSummary, location: McpSetupLocation) {
+  const items = new Map<string, McpSetupRequirementView>();
+
+  for (const alternative of summary.requiredAlternatives) {
+    for (const item of alternative.requirements) {
+      if (item.requirement.location === location) {
+        items.set(`${item.requirement.location}:${item.requirement.name.toLowerCase()}`, item);
+      }
+    }
+  }
+
+  for (const item of summary.optionalRequirements) {
+    if (item.requirement.location === location) {
+      items.set(`${item.requirement.location}:${item.requirement.name.toLowerCase()}`, item);
+    }
+  }
+
+  return [...items.values()];
+}
+
+function getMcpBearerKeySelectorRequirements(summary: McpDraftSetupSummary) {
+  const configuredRequirements = getMcpSetupRequirementsByLocation(summary, "bearer");
+
+  if (configuredRequirements.length > 0) {
+    return configuredRequirements;
+  }
+
+  return [{
+    requirement: HTTP_BEARER_TOKEN_REQUIREMENT,
+    status: "optional" as McpSetupRequirementStatus,
+  }];
+}
+
+export function getSavedKeyOptionsForMcpRequirement(keys: ApiKeyRecord[], requirement: McpSetupRequirement, preset?: McpProviderPreset) {
+  const normalizedRequirementNames = new Set([requirement.name, ...(requirement.keyNames ?? [])].map(normalizeApiKeySearchToken).filter(Boolean));
+  const normalizedRequirementName = normalizeApiKeySearchToken(requirement.name);
+  const normalizedRequirementLabel = normalizeApiKeySearchToken(requirement.label);
+  const presetHints = getMcpPresetKeyServiceHints(preset);
+  const usableKeys = keys.filter((key) => key.kind !== "provider");
+  const rankedKeys = usableKeys
+    .map((key) => {
+      const service = normalizeApiKeySearchToken(key.service);
+      const keyName = normalizeApiKeySearchToken(key.keyName);
+      const label = normalizeApiKeySearchToken(key.label);
+      let score = 0;
+
+      if (normalizedRequirementNames.has(keyName)) {
+        score += 60;
+      }
+
+      if (normalizedRequirementName === "authorization" && ["authorization", "bearer-token", "access-token", "api-key"].includes(keyName)) {
+        score += 34;
+      }
+
+      if (presetHints.has(service)) {
+        score += 30;
+      }
+
+      if (label.includes(normalizedRequirementName) || label.includes(normalizedRequirementLabel)) {
+        score += 12;
+      }
+
+      if (requirement.location === "bearer" && ["app", "mcp", "service", "skill"].includes(key.kind)) {
+        score += 5;
+      } else if (key.kind === "app" || key.kind === "mcp" || key.kind === "service" || key.kind === "skill") {
+        score += 5;
+      }
+
+      return { key, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.key.label.localeCompare(right.key.label));
+
+  if (rankedKeys.length > 0) {
+    return rankedKeys.map((item) => item.key);
+  }
+
+  return [...usableKeys].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function getMcpPresetKeyServiceHints(preset?: McpProviderPreset) {
+  const hints = new Set<string>();
+
+  if (!preset) {
+    return hints;
+  }
+
+  for (const value of [preset.id, preset.name, preset.publisher]) {
+    const normalized = normalizeApiKeySearchToken(value);
+
+    if (normalized) {
+      hints.add(normalized);
+    }
+  }
+
+  const aliases: Record<string, string[]> = {
+    "aws": ["amazon-web-services"],
+    "cloudflare-api": ["cloudflare"],
+    "cloudflare-browser": ["cloudflare"],
+    "cloudflare-docs": ["cloudflare"],
+    "figma-desktop": ["figma"],
+    "figma-remote": ["figma"],
+    "github-mcp": ["github"],
+  };
+
+  for (const alias of aliases[preset.id] ?? []) {
+    hints.add(normalizeApiKeySearchToken(alias));
+  }
+
+  return hints;
+}
+
+function normalizeApiKeySearchToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function formatSavedApiKeyOption(key: ApiKeyRecord) {
+  return `${key.label} (${key.service}/${key.keyName})`;
+}
+
+function formatMcpSetupSummaryLabel(summary: McpDraftSetupSummary) {
+  if (!summary.preset) {
+    return "Custom MCP server. Add the required endpoint, command, tokens, headers, or env values for this provider.";
+  }
+
+  if (summary.issues.length > 0) {
+    return summary.issues[0];
+  }
+
+  if (summary.requiredAlternatives.length > 0) {
+    return "Required setup complete.";
+  }
+
+  if (summary.preset.args?.some((arg) => arg.includes("mcp-remote"))) {
+    return "OAuth is handled by mcp-remote during test or tool refresh.";
+  }
+
+  return "No required API key before testing.";
+}
+
+function getMcpBearerPlaceholder(summary: McpDraftSetupSummary) {
+  const bearerRequired = summary.requiredAlternatives.some((alternative) =>
+    alternative.requirements.some((item) => item.requirement.location === "bearer"),
+  );
+
+  if (summary.existingServer?.hasAuthorizationToken) {
+    return "Saved token; leave blank to keep";
+  }
+
+  return bearerRequired ? "Required before test" : "Optional";
+}
+
+function getMcpSecretPlaceholder(item: McpSetupRequirementView, summary: McpDraftSetupSummary) {
+  if (item.status === "ready" && summary.existingServer) {
+    return "Saved secret; leave blank to keep";
+  }
+
+  return item.requirement.placeholder ?? "Paste secret";
+}
+
+export function getMcpKeyValueDraftValue(text: string, name: string) {
+  const normalizedName = name.trim().toLowerCase();
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const separator = rawLine.indexOf("=");
+
+    if (separator < 1) {
+      continue;
+    }
+
+    if (rawLine.slice(0, separator).trim().toLowerCase() === normalizedName) {
+      return rawLine.slice(separator + 1).trim();
+    }
+  }
+
+  return "";
+}
+
+export function upsertMcpKeyValueLine(text: string, name: string, value: string) {
+  const normalizedName = name.trim().toLowerCase();
+  const lines = text.split(/\r?\n/);
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    const separator = line.indexOf("=");
+
+    if (separator < 1 || line.slice(0, separator).trim().toLowerCase() !== normalizedName) {
+      return line;
+    }
+
+    updated = true;
+    return `${name}=${value}`;
+  });
+
+  if (!updated) {
+    nextLines.push(`${name}=${value}`);
+  }
+
+  return nextLines.filter((line, index) => line.trim() || index < nextLines.length - 1).join("\n");
+}
+
 function formatMcpEnvironmentDraft(server: McpServerState) {
   return (server.environment ?? []).map((item) => `${item.name}=`).join("\n");
+}
+
+function formatMcpHeaderDraft(server: McpServerState) {
+  return (server.headers ?? []).map((item) => `${item.name}=`).join("\n");
+}
+
+function formatMcpQueryDraft(server: McpServerState) {
+  return (server.queryParams ?? []).map((item) => `${item.name}=`).join("\n");
 }
 
 function formatMcpConnectionStatus(connection: McpConnectionState): AppsStatusMessage | null {
@@ -3022,7 +4437,11 @@ function formatMcpServerDetail(server: McpServerState) {
     `${server.tools?.length ?? 0} tool${(server.tools?.length ?? 0) === 1 ? "" : "s"}`,
     server.transport === "stdio"
       ? `${server.environment?.filter((item) => item.hasValue).length ?? 0} env secret${(server.environment?.filter((item) => item.hasValue).length ?? 0) === 1 ? "" : "s"}`
-      : server.hasAuthorizationToken ? "Bearer token saved" : "No token",
+      : [
+          server.hasAuthorizationToken ? "Bearer token saved" : "No bearer token",
+          `${server.queryParams?.filter((item) => item.hasValue).length ?? 0} query secret${(server.queryParams?.filter((item) => item.hasValue).length ?? 0) === 1 ? "" : "s"}`,
+          `${server.headers?.filter((item) => item.hasValue).length ?? 0} header secret${(server.headers?.filter((item) => item.hasValue).length ?? 0) === 1 ? "" : "s"}`,
+        ].join(" / "),
     server.serverName ? `${server.serverName}${server.serverVersion ? ` ${server.serverVersion}` : ""}` : undefined,
     server.lastError ? `Last error: ${server.lastError}` : undefined,
   ].filter(Boolean);

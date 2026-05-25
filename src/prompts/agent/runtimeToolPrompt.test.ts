@@ -271,6 +271,8 @@ describe("createRuntimeToolPrompt", () => {
 
     expect(prompt).toContain("mcp_list_servers");
     expect(prompt).toContain("setup state");
+    expect(prompt).toContain("plugin, connector, hosted service, or marketplace app");
+    expect(prompt).toContain("inspect the configured MCP servers before denying access");
     expect(prompt).toContain("If mcp_list_servers shows no enabled configured server");
     expect(prompt).toContain("same serverId and returned job/deploy id");
     expect(prompt).toContain("instead of switching servers or assuming a file edit/write is required");
@@ -297,6 +299,27 @@ describe("createRuntimeToolPrompt", () => {
     expect(prompt).toContain("structured error");
     expect(prompt).toContain("project-directory error");
     expect(prompt).toContain("npx.cmd -y firebase-tools@latest deploy --only hosting --debug --json");
+  });
+
+  it("tells the model to check MCP before denying deploy tools", () => {
+    const prompt = createRuntimeToolPrompt({
+      hasLocalComputerContext: true,
+      hasWebContext: false,
+      latestUserPrompt: "update the website and deploy it to hosting",
+      selectedChunkIds: new Set(),
+      settings: defaultProviderSettings,
+      toolBridge: {
+        tools: [
+          attachedTool("mcp_list_servers", "mcp"),
+          attachedTool("mcp_list_tools", "mcp"),
+          attachedTool("mcp_call_tool", "mcp"),
+          attachedTool("terminal_run", "terminal"),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("For deploy, publish, hosting, or go-live work");
+    expect(prompt).toContain("check MCP servers before saying no deploy tools are available");
   });
 
   it("does not name unavailable tool ids when the exact bridge has no tools", () => {

@@ -30,6 +30,8 @@ const DEFAULT_LIGHT_THEME_BASE: AppThemeBaseSettings = {
 };
 
 export const DEFAULT_APP_APPEARANCE_SETTINGS: AppAppearanceSettings = {
+  chatResponseWidth: 1040,
+  composerWidth: 920,
   codeFontSize: 12,
   dark: {
     ...DEFAULT_DARK_THEME_BASE,
@@ -40,14 +42,54 @@ export const DEFAULT_APP_APPEARANCE_SETTINGS: AppAppearanceSettings = {
     componentColors: createDefaultComponentColors("light", DEFAULT_LIGHT_THEME_BASE),
   },
   reduceMotion: "system",
+  userMessageWidth: 720,
   uiFontSize: 14,
   usePointerCursor: true,
 };
 
+const MIN_CHAT_RESPONSE_WIDTH = 640;
+const MAX_CHAT_RESPONSE_WIDTH = 1280;
+const MIN_COMPOSER_WIDTH = 560;
+const MAX_COMPOSER_WIDTH = 1120;
 const MIN_UI_FONT_SIZE = 11;
 const MAX_UI_FONT_SIZE = 22;
 const MIN_CODE_FONT_SIZE = 10;
 const MAX_CODE_FONT_SIZE = 20;
+const MIN_USER_MESSAGE_WIDTH = 360;
+const MAX_USER_MESSAGE_WIDTH = 920;
+const UI_FONT_SIZE_TOKEN_VALUES = [
+  5,
+  9,
+  9.5,
+  10,
+  10.5,
+  11,
+  11.5,
+  11.7,
+  12,
+  12.5,
+  12.8,
+  13,
+  13.4,
+  13.5,
+  14,
+  14.5,
+  15,
+  15.5,
+  16,
+  17,
+  18,
+  19,
+  20,
+  21,
+  22,
+  24,
+  28,
+  30,
+  31,
+] as const;
+const UI_FONT_SIZE_BASE = DEFAULT_APP_APPEARANCE_SETTINGS.uiFontSize;
+const UI_FONT_SIZE_CUSTOM_PROPERTIES = UI_FONT_SIZE_TOKEN_VALUES.map((size) => createFontSizeTokenName(size));
 
 const APPEARANCE_CUSTOM_PROPERTIES = [
   "--accent",
@@ -97,10 +139,13 @@ const APPEARANCE_CUSTOM_PROPERTIES = [
   "--chrome",
   "--chrome-border",
   "--chrome-text",
+  "--chat-response-max-width",
+  "--chat-user-message-max-width",
   "--code-font-size",
   "--composer-bg",
   "--composer-bg-2",
   "--composer-border",
+  "--composer-max-width",
   "--composer-control-bg",
   "--composer-control-hover",
   "--composer-focus-border",
@@ -115,6 +160,7 @@ const APPEARANCE_CUSTOM_PROPERTIES = [
   "--font-display",
   "--font-mono",
   "--font-ui",
+  ...UI_FONT_SIZE_CUSTOM_PROPERTIES,
   "--gold",
   "--green",
   "--hover",
@@ -172,6 +218,7 @@ const APPEARANCE_CUSTOM_PROPERTIES = [
   "--theme-effect-color-3",
   "--theme-effect-opacity",
   "--theme-effect-speed",
+  "--ui-font-scale",
   "--ui-font-size",
   "--violet",
   "--violet-soft",
@@ -258,10 +305,13 @@ export function normalizeAppAppearanceSettings(value: unknown): AppAppearanceSet
   const storedSettings = typeof value === "object" && value ? (value as Partial<AppAppearanceSettings>) : {};
 
   return {
+    chatResponseWidth: normalizeNumberRange(storedSettings.chatResponseWidth, DEFAULT_APP_APPEARANCE_SETTINGS.chatResponseWidth, MIN_CHAT_RESPONSE_WIDTH, MAX_CHAT_RESPONSE_WIDTH),
+    composerWidth: normalizeNumberRange(storedSettings.composerWidth, DEFAULT_APP_APPEARANCE_SETTINGS.composerWidth, MIN_COMPOSER_WIDTH, MAX_COMPOSER_WIDTH),
     codeFontSize: normalizeNumberRange(storedSettings.codeFontSize, DEFAULT_APP_APPEARANCE_SETTINGS.codeFontSize, MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
     dark: normalizeAppThemeSettings(storedSettings.dark, DEFAULT_APP_APPEARANCE_SETTINGS.dark, "dark"),
     light: normalizeAppThemeSettings(storedSettings.light, DEFAULT_APP_APPEARANCE_SETTINGS.light, "light"),
     reduceMotion: normalizeMotionPreference(storedSettings.reduceMotion),
+    userMessageWidth: normalizeNumberRange(storedSettings.userMessageWidth, DEFAULT_APP_APPEARANCE_SETTINGS.userMessageWidth, MIN_USER_MESSAGE_WIDTH, MAX_USER_MESSAGE_WIDTH),
     uiFontSize: normalizeNumberRange(storedSettings.uiFontSize, DEFAULT_APP_APPEARANCE_SETTINGS.uiFontSize, MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE),
     usePointerCursor: typeof storedSettings.usePointerCursor === "boolean" ? storedSettings.usePointerCursor : DEFAULT_APP_APPEARANCE_SETTINGS.usePointerCursor,
   };
@@ -372,6 +422,8 @@ export function createAppearanceCssVariables(themeName: ResolvedAppearanceTheme,
     "--chat-page-bg": theme.background,
     "--chat-page-bg-2": toHex(mix(background, foreground, lightTheme ? 0.015 + contrast * 0.035 : 0.03 + contrast * 0.06)),
     "--chat-page-glow": toRgba(accent, lightTheme ? 0.08 : 0.1),
+    "--chat-response-max-width": `${settings.chatResponseWidth}px`,
+    "--chat-user-message-max-width": `${settings.userMessageWidth}px`,
     "--chrome": theme.background,
     "--chrome-border": toHex(sidebarBorder),
     "--chrome-text": theme.foreground,
@@ -379,6 +431,7 @@ export function createAppearanceCssVariables(themeName: ResolvedAppearanceTheme,
     "--composer-bg": toHex(composer),
     "--composer-bg-2": toHex(mix(composer, foreground, lightTheme ? 0.025 : 0.04)),
     "--composer-border": toHex(fieldBorder),
+    "--composer-max-width": `${settings.composerWidth}px`,
     "--composer-control-bg": toRgba(foreground, lightTheme ? 0.055 + contrast * 0.035 : 0.06 + contrast * 0.05),
     "--composer-control-hover": toRgba(foreground, lightTheme ? 0.085 + contrast * 0.05 : 0.095 + contrast * 0.055),
     "--composer-focus-border": toHex(mix(accent, foreground, lightTheme ? 0.34 : 0.28)),
@@ -393,6 +446,7 @@ export function createAppearanceCssVariables(themeName: ResolvedAppearanceTheme,
     "--font-display": theme.uiFont,
     "--font-mono": theme.codeFont,
     "--font-ui": theme.uiFont,
+    "--ui-font-scale": formatCssNumber(settings.uiFontSize / UI_FONT_SIZE_BASE),
     "--gold": toHex(accent3),
     "--green": toHex(green),
     "--hover": toRgba(foreground, lightTheme ? 0.045 + contrast * 0.05 : 0.055 + contrast * 0.055),
@@ -430,9 +484,29 @@ export function createAppearanceCssVariables(themeName: ResolvedAppearanceTheme,
 
   return {
     ...baseVariables,
+    ...createScaledFontSizeVariables(settings.uiFontSize),
     ...createComponentCssVariables(themeName, theme),
     ...createThemeEffectCssVariables(themeName, theme),
   };
+}
+
+function createScaledFontSizeVariables(uiFontSize: number): Record<string, string> {
+  const scale = uiFontSize / UI_FONT_SIZE_BASE;
+
+  return Object.fromEntries(
+    UI_FONT_SIZE_TOKEN_VALUES.map((size) => [
+      createFontSizeTokenName(size),
+      `${formatCssNumber(size * scale)}px`,
+    ]),
+  );
+}
+
+function createFontSizeTokenName(size: number) {
+  return `--font-size-${String(size).replace(".", "-")}`;
+}
+
+function formatCssNumber(value: number) {
+  return Number(value.toFixed(3)).toString();
 }
 
 function createDefaultComponentColors(themeName: ResolvedAppearanceTheme, theme: AppThemeBaseSettings): AppThemeComponentColors {

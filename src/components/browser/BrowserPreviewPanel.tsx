@@ -956,6 +956,11 @@ export function BrowserPreviewPanel({
   }
 
   function closeTab(tabId: string) {
+    if (shouldCloseBrowserPreviewPanelAfterTabClose(session, tabId)) {
+      handleClosePanel();
+      return;
+    }
+
     closeNativeBrowserTab(tabId);
     setMountedIframeTabIds((currentTabIds) => {
       if (!currentTabIds.has(tabId)) {
@@ -1794,6 +1799,12 @@ export function closeBrowserPreviewSessionTab(session: BrowserPreviewSession, ta
     activeTabId: nextActiveTab.id,
     tabs: remainingTabs,
   };
+}
+
+export function shouldCloseBrowserPreviewPanelAfterTabClose(session: BrowserPreviewSession, tabId: string) {
+  const ensuredSession = ensureSession(session);
+
+  return ensuredSession.tabs.length === 1 && ensuredSession.tabs[0]?.id === tabId;
 }
 
 function loadBrowserPreviewSession(initialUrl?: string | null, incognito = false): BrowserPreviewSession {

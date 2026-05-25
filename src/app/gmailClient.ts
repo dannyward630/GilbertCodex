@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { loadGoogleOAuthSettings } from "../lib/appStorage";
+import { GMAIL_CORE_OAUTH_SCOPES } from "../lib/googleOAuthScopes";
 import { isTauriDesktopRuntime } from "./tauriClient";
 import type {
   GmailActionResponse,
@@ -29,18 +30,7 @@ import type {
   GmailThreadDetail,
 } from "../types/gmail";
 
-export const GMAIL_CORE_OAUTH_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://mail.google.com/",
-  "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/gmail.compose",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.labels",
-  "https://www.googleapis.com/auth/gmail.settings.basic",
-  "https://www.googleapis.com/auth/gmail.settings.sharing",
-] as const;
+export { GMAIL_CORE_OAUTH_SCOPES };
 
 const DEFAULT_GMAIL_OAUTH_SCOPE = GMAIL_CORE_OAUTH_SCOPES.join(" ");
 

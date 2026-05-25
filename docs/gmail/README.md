@@ -1,5 +1,7 @@
 # Gmail Plugin Setup
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 The user flow should stay simple:
 
 1. Open Apps.
@@ -12,6 +14,8 @@ The user flow should stay simple:
 If Google OAuth is not configured yet, the Apps page opens Settings > Google automatically. Users should paste only their own Desktop OAuth Client ID and Client secret there. Users should never paste Google access tokens, refresh tokens, authorization codes, or downloaded credential JSON into Gilbert Codex.
 
 Users can connect up to six Gmail accounts. Tool calls use the active account by default and can target another connected account with `accountEmail`.
+
+Platform note: Gmail OAuth, account storage, and Gmail API calls use the shared desktop command/storage layer on Windows, macOS, and Linux. Windows is verified alpha; macOS and Linux still need packaged-app launch testing before Gmail is called fully verified there. See [Platform Support And Porting Notes](../platform/README.md).
 
 ## Google Setup
 

@@ -41,6 +41,10 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
             setActiveSettingsSection("google");
             setActiveRoute("settings");
           }}
+          onOpenKeysSettings={() => {
+            setActiveSettingsSection("keys");
+            setActiveRoute("settings");
+          }}
           onOpenRadar={() => handleRouteChange("radar")}
           onOpenSupport={() => handleRouteChange("support")}
         />
@@ -128,7 +132,7 @@ export function renderUtilityPage(deps: WorkspaceRuntimeDeps) {
   }
 
 export function renderChatPage(deps: WorkspaceRuntimeDeps) {
-  const { activeChat, activeChatProviderSettings, activeRoute, activeToolAwareProviderSettings, agentRuns, appInfo, browserPreviewTarget, ChatPage, chats, composerDraftToRestore, contextWindow, generalSettings, getModelProvider, getProviderApiKey, handleActiveChatModelChange, handleAddAutomation, handleArchiveActiveChat, handleComposerDraftChange, handleCopyChatDeeplink, handleCopyChatMarkdown, handleCopySessionId, handleCopyWorkingDirectory, handleDeleteQueuedMessage, handleEditUserMessageAndRegenerate, handleForkActiveChatLocal, handleForkChatFromMessage, handleForkActiveChatWorktree, handleHoldQueuedMessage, handleLocalWorkspaceChange, handleMessageFeedback, handleNewChat, handleOpenActiveChatInNewWindow, handleOpenProjectInTool, handleOpenProjectRun, handleOpenRenameChat, handleRegenerateResponse, handleRequestPlanRevision, handleResolveToolApproval, handleSelectChat, handleSelectProject, handleSendMessage, handleSteerQueuedMessage, handleStopGeneration, handleSubmitPlanningInput, handleTogglePin, handleToggleTerminal, isChatSending, lastContextCompaction, lastProviderContextUsage, loadingChatIds, localWorkspace, modelContextWindows, openCreateProjectDialog, projects, queuedChatSends, setComposerDraftToRestore, setProviderSettings, terminalOpen, toolSettings } = deps;
+  const { activeChat, activeChatProviderSettings, activeRoute, activeToolAwareProviderSettings, agentRuns, appInfo, browserPreviewTarget, ChatPage, chats, composerDraftToRestore, contextWindow, generalSettings, getModelProvider, getProviderApiKey, handleActiveChatModelChange, handleAddAutomation, handleArchiveActiveChat, handleComposerDraftChange, handleCopyChatDeeplink, handleCopyChatMarkdown, handleCopySessionId, handleCopyWorkingDirectory, handleDeleteQueuedMessage, handleEditUserMessageAndRegenerate, handleForkActiveChatLocal, handleForkChatFromMessage, handleForkActiveChatWorktree, handleHoldQueuedMessage, handleLocalWorkspaceChange, handleMessageFeedback, handleNewChat, handleOpenActiveChatInNewWindow, handleOpenProjectInTool, handleOpenProjectRun, handleOpenRenameChat, handleRegenerateResponse, handleRequestPlanRevision, handleResolveToolApproval, handleSelectChat, handleSelectProject, handleSendMessage, handleSteerQueuedMessage, handleStopGeneration, handleSubmitPlanningInput, handleTogglePin, handleToggleTerminal, isChatSending, lastContextCompaction, lastProviderContextUsage, loadingChatIds, localWorkspace, modelContextWindows, openCreateProjectDialog, projects, queuedChatSends, setBrowserPreviewTarget, setComposerDraftToRestore, setProviderSettings, terminalOpen, toolSettings } = deps;
   const activeQueuedSends = queuedChatSends.filter((queuedSend) => queuedSend.chatId === activeChat.id);
   const activeQueuedMessages = activeQueuedSends.length === 0 ? EMPTY_CHAT_MESSAGES : activeQueuedSends.map((queuedSend) => {
     const existingMessage = activeChat.messages.find((message) => message.id === queuedSend.userMessageId);
@@ -232,6 +236,7 @@ export function renderChatPage(deps: WorkspaceRuntimeDeps) {
         webSearch={activeChatProviderSettings.webSearch}
         onTogglePin={() => activeChat && handleTogglePin(activeChat.id)}
         onToggleTerminal={handleToggleTerminal}
+        onBrowserPreviewClose={() => setBrowserPreviewTarget(null)}
         onOpenChatInNewWindow={handleOpenActiveChatInNewWindow}
         onOpenSideChat={() => handleNewChat(activeChat.project)}
         onRenameChat={() => handleOpenRenameChat(activeChat)}

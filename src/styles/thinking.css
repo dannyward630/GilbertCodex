@@ -83,7 +83,7 @@
 .thinking-summary-copy strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 690;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -93,7 +93,7 @@
 .thinking-summary-copy small {
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -110,7 +110,7 @@
   border: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
   border-radius: 999px;
   background: transparent;
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 700;
 }
 
@@ -189,13 +189,13 @@
 }
 
 .thinking-effort-grid strong {
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 700;
 }
 
 .thinking-effort-grid small {
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 500;
 }
 

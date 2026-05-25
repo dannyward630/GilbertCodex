@@ -362,7 +362,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
               <span>ngrok executable</span>
               <input autoComplete="off" placeholder="ngrok" value={settings.ngrokPath} onChange={(event) => patchSettings({ ngrokPath: event.target.value })} />
               <small className="settings-field-note">
-                If `ngrok` is not on PATH, paste the full executable path or a folder such as `.tools/ngrok`.
+                Gilbert checks PATH, Homebrew/macOS bin folders, common Windows installs, and local `.tools/ngrok`; paste a full path if needed.
               </small>
             </label>
 
@@ -563,7 +563,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
             <BookOpen size={19} aria-hidden="true" />
             <div>
               <h2>Docs</h2>
-              <p>Updated May 12, 2026 from the Discord developer docs and the repo setup guide.</p>
+              <p>Updated May 25, 2026 from the Discord developer docs and the repo setup guide.</p>
             </div>
           </div>
 
@@ -574,6 +574,7 @@ export function DiscordSettingsPage({ settings, onSettingsChange }: DiscordSetti
                 <li>Open the Discord Developer Portal, create an application, then copy its Application ID and Public Key into this page.</li>
                 <li>Keep Slash chat selected for the normal Gilbert flow. Use Bot gateway only for DMs, mentions, or approved message-content flows.</li>
                 <li>Install and authenticate ngrok, or set Tunnel provider to Local only when you are using your own public HTTPS tunnel.</li>
+                <li>On macOS, Homebrew installs under <code>/opt/homebrew/bin</code> or <code>/usr/local/bin</code>; Gilbert checks those even when launched from Finder.</li>
                 <li>Click Start bridge. Gilbert starts the local receiver, opens the tunnel, and fills the public Interactions URL.</li>
                 <li>Paste that URL into the Discord app's Interactions Endpoint URL field and save it so Discord can validate the receiver.</li>
                 <li>Paste a bot token only when registering slash commands or testing gateway mode, then click Register commands.</li>

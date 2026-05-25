@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag to publish, for example v0.8.1.
+        description: Release tag to publish, for example v0.8.2.
         required: true
         type: string
   push:
@@ -383,6 +383,14 @@ jobs:
             exit 1
           fi
 
+      - name: Test macOS native desktop paths
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml terminal
+          cargo test --manifest-path src-tauri/Cargo.toml ngrok
+          cargo test --manifest-path src-tauri/Cargo.toml nine_router
+          cargo test --manifest-path src-tauri/Cargo.toml native_path
+          cargo test --manifest-path src-tauri/Cargo.toml mcp
+
       - name: Check updater signing key
         shell: bash
         env:
@@ -392,6 +400,60 @@ jobs:
             echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY. Add the Tauri updater private key as a repository secret before publishing an auto-update release."
             exit 1
           fi
+
+      - name: Check Apple signing and notarization secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID KEYCHAIN_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing Apple signing/notarization secrets: ${missing[*]}. Add these before publishing trusted macOS release artifacts."
+            exit 1
+          fi
+
+      - name: Import Apple Developer ID certificate
+        id: apple_certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          certificate_path="${RUNNER_TEMP}/gilbert-codex-apple-certificate.p12"
+          keychain_path="${RUNNER_TEMP}/gilbert-codex-build.keychain"
+
+          if ! printf '%s' "${APPLE_CERTIFICATE}" | base64 --decode > "${certificate_path}" 2>/dev/null; then
+            printf '%s' "${APPLE_CERTIFICATE}" | base64 -D > "${certificate_path}"
+          fi
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security default-keychain -s "${keychain_path}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security import "${certificate_path}" -k "${keychain_path}" -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${keychain_path}"
+
+          signing_identity="$(security find-identity -v -p codesigning "${keychain_path}" | awk -F '"' '/Developer ID Application/ { print $2; exit }')"
+          if [[ -z "${signing_identity}" ]]; then
+            security find-identity -v -p codesigning "${keychain_path}" || true
+            echo "::error::The imported Apple certificate did not contain a Developer ID Application signing identity."
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
+          echo "signing_identity=${signing_identity}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve release tag
         id: release_tag
@@ -433,10 +495,14 @@ jobs:
             echo "GILBERT_RELEASE_NOTES"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build signed macOS updater release
+      - name: Build macOS updater release
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -446,7 +512,7 @@ jobs:
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
           tauriScript: npm run tauri:direct
-          args: --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.updater.conf.json
+          args: --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.macos.updater.conf.json
           includeUpdaterJson: true
           assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
 
@@ -551,12 +617,14 @@ jobs:
             curl \
             file \
             libayatana-appindicator3-dev \
+            libsecret-tools \
             libsecret-1-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
             librsvg2-dev \
             patchelf \
+            xdg-utils \
             wget
 
       - name: Set up Node.js
@@ -580,6 +648,14 @@ jobs:
             echo "::error::Release builds must include the private local tool bridge. Refusing to ship a public shim installer without tools."
             exit 1
           fi
+
+      - name: Test Linux native desktop paths
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml terminal
+          cargo test --manifest-path src-tauri/Cargo.toml ngrok
+          cargo test --manifest-path src-tauri/Cargo.toml nine_router
+          cargo test --manifest-path src-tauri/Cargo.toml native_path
+          cargo test --manifest-path src-tauri/Cargo.toml mcp
 
       - name: Check updater signing key
         shell: bash
@@ -631,7 +707,7 @@ jobs:
             echo "GILBERT_RELEASE_NOTES"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build signed Linux updater release
+      - name: Build Linux updater release
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -644,7 +720,7 @@ jobs:
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
           tauriScript: npm run tauri:direct
-          args: --bundles deb,appimage --config src-tauri/tauri.updater.conf.json
+          args: --bundles deb,appimage --config src-tauri/tauri.linux.updater.conf.json
           includeUpdaterJson: true
           assetNamePattern: Gilbert-Codex-[version]-linux-x64[ext]
 

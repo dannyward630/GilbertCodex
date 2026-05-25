@@ -4,6 +4,8 @@ export type UsageCostSource = "catalog" | "free" | "subscription" | "unknown";
 export type UsageRecordSource = "9router" | "estimated" | "provider";
 
 export interface UsageCostBreakdown {
+  cacheCreationInputUsd: number;
+  cachedInputUsd: number;
   inputUsd: number;
   outputUsd: number;
   reasoningUsd: number;
@@ -20,6 +22,9 @@ export interface ProviderUsageRecord {
   dayKey: string;
   endpoint?: string;
   id: string;
+  cacheCreationInputTokens: number;
+  cacheSavingsUsd: number;
+  cachedInputTokens: number;
   inputTokens: number;
   model: string;
   monthKey: string;

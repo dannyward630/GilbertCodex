@@ -1,6 +1,9 @@
 //! Settings and runtime diagnostic commands for contributor-facing app setup.
 
-use crate::core::process::{run_probe_command, spawn_detached_command};
+use crate::core::{
+    native_path::{configure_native_path, resolve_native_executable},
+    process::{run_probe_command, spawn_detached_command},
+};
 use serde::Serialize;
 use std::{env, fs, path::PathBuf, process::Command, time::Duration};
 
@@ -199,15 +202,16 @@ fn open_file(path: &PathBuf) -> Result<(), String> {
         command.arg(path);
         command
     } else if cfg!(target_os = "macos") {
-        let mut command = Command::new("open");
+        let mut command = Command::new(resolve_native_executable("open"));
         command.arg(path);
         command
     } else {
-        let mut command = Command::new("xdg-open");
+        let mut command = Command::new(resolve_native_executable("xdg-open"));
         command.arg(path);
         command
     };
 
+    configure_native_path(&mut command);
     spawn_detached_command(&mut command, "Could not open config.toml")
 }
 
@@ -222,12 +226,13 @@ fn run_version(path: &PathBuf) -> Option<String> {
 }
 
 fn run_program_version(program: &str) -> Option<String> {
-    let mut command = Command::new(program);
+    let mut command = Command::new(resolve_native_executable(program));
     command.arg("--version");
     run_command_version(command)
 }
 
-fn run_command_version(command: Command) -> Option<String> {
+fn run_command_version(mut command: Command) -> Option<String> {
+    configure_native_path(&mut command);
     let output = run_probe_command(command, Duration::from_millis(VERSION_PROBE_TIMEOUT_MS))
         .ok()
         .flatten()?;

@@ -55,8 +55,93 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       - name: Check Rust host
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  macos-rust-host:
+    name: macos-rust-host
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Check macOS Rust host
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Test macOS native desktop paths
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml terminal
+          cargo test --manifest-path src-tauri/Cargo.toml ngrok
+          cargo test --manifest-path src-tauri/Cargo.toml nine_router
+          cargo test --manifest-path src-tauri/Cargo.toml native_path
+          cargo test --manifest-path src-tauri/Cargo.toml mcp
+
+  linux-rust-host:
+    name: linux-rust-host
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libsecret-tools \
+            libsecret-1-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            wget
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Check Linux Rust host
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Test Linux native desktop paths
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml terminal
+          cargo test --manifest-path src-tauri/Cargo.toml ngrok
+          cargo test --manifest-path src-tauri/Cargo.toml nine_router
+          cargo test --manifest-path src-tauri/Cargo.toml native_path
+          cargo test --manifest-path src-tauri/Cargo.toml mcp

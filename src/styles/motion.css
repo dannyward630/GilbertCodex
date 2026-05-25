@@ -807,7 +807,6 @@
   }
 
   .side-panel-presence[data-presence="enter"] .right-rail,
-  .side-panel-presence[data-presence="enter"] .git-review-panel,
   .side-panel-presence[data-presence="enter"] .coding-sidecar-panel,
   .side-panel-presence[data-presence="enter"] .browser-preview-panel {
     animation: gil-side-panel-in 180ms var(--motion-ease-soft) both;
@@ -821,7 +820,6 @@
   }
 
   .side-panel-presence[data-presence="exit"] .right-rail,
-  .side-panel-presence[data-presence="exit"] .git-review-panel,
   .side-panel-presence[data-presence="exit"] .coding-sidecar-panel,
   .side-panel-presence[data-presence="exit"] .browser-preview-panel {
     animation: gil-side-panel-out 140ms var(--motion-ease) both;
@@ -850,8 +848,6 @@
 
   .side-panel-presence[data-presence="enter"] .browser-preview-panel[data-expanded="true"],
   .browser-preview-panel[data-expanded="true"],
-  .side-panel-presence[data-presence="enter"] .git-review-panel[data-expanded="true"],
-  .git-review-panel[data-expanded="true"],
   .side-panel-presence[data-presence="enter"] .coding-sidecar-panel[data-expanded="true"],
   .coding-sidecar-panel[data-expanded="true"],
   .conversation-body[data-plan-review-expanded="true"] .right-rail {

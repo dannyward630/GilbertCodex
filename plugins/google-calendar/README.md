@@ -1,5 +1,7 @@
 # Google Calendar Plugin
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 Google Calendar is a first-party Gilbert Codex plugin for schedule awareness, availability checks, meeting prep, Calendar management, Google Tasks, and reviewed calendar changes. It is intentionally separate from Gmail even though both use the same Google OAuth project and loopback sign-in flow.
 
 ## User Workflow
@@ -10,7 +12,7 @@ Google Calendar is a first-party Gilbert Codex plugin for schedule awareness, av
 4. Pick the Google account in the browser.
 5. Return to Gilbert Codex after the browser says Google Calendar connected.
 
-The user should never paste a Google secret, token, or authorization code. Installing the plugin opens Google account selection and receives the approval through a local loopback callback on the same device.
+The user should never paste a Google access token, refresh token, authorization code, or downloaded credential JSON. In the current public alpha, users add their own Google Desktop OAuth Client ID and Client secret in Settings > Google, then installing the plugin opens Google account selection and receives approval through a local loopback callback on the same device.
 
 ## Capabilities
 
@@ -27,7 +29,7 @@ The user should never paste a Google secret, token, or authorization code. Insta
 
 ## Google Setup
 
-The desktop app reuses the existing Google OAuth environment contract:
+The desktop app reuses the Settings > Google OAuth setup. Local developers may also use the existing environment contract while testing:
 
 - `VITE_GOOGLE_OAUTH_CLIENT_ID`
 - `GOOGLE_OAUTH_CLIENT_SECRET`

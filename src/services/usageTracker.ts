@@ -35,11 +35,15 @@ export function createProviderUsageRecord(input: ProviderUsageRecordInput): Prov
   const rawOutputTokens = normalizeTokenCount(input.rawUsage?.completion_tokens);
   const rawReasoningTokens = normalizeTokenCount(input.rawUsage?.reasoning_tokens);
   const rawTotalTokens = normalizeTokenCount(input.rawUsage?.total_tokens);
+  const rawCacheCreationInputTokens = normalizeTokenCount(input.rawUsage?.cache_creation_input_tokens);
+  const rawCachedInputTokens = normalizeTokenCount(input.rawUsage?.cached_input_tokens);
   const estimatedInputTokens = normalizeTokenCount(input.measuredUsage.inputTokens);
   const inputTokens = rawInputTokens ?? estimatedInputTokens ?? 0;
   const outputTokens = rawOutputTokens ?? normalizeTokenCount(input.measuredUsage.openRouterCompletionTokens) ?? 0;
   const reasoningTokens = rawReasoningTokens ?? 0;
   const totalTokens = rawTotalTokens ?? inputTokens + outputTokens + reasoningTokens;
+  const cachedInputTokens = clampTokenCount(rawCachedInputTokens ?? 0, inputTokens);
+  const cacheCreationInputTokens = rawCacheCreationInputTokens ?? 0;
 
   if (totalTokens <= 0) {
     return null;
@@ -48,15 +52,21 @@ export function createProviderUsageRecord(input: ProviderUsageRecordInput): Prov
   const source: UsageRecordSource = rawInputTokens !== undefined || rawOutputTokens !== undefined || rawTotalTokens !== undefined ? "provider" : provider === "9router" ? "9router" : "estimated";
   const pricing = getChatModelOption(model, provider)?.pricing;
   const cost = estimateUsageCost({
+    cacheCreationInputTokens,
     inputTokens,
     outputTokens,
     pricing,
     provider,
     reasoningTokens,
+    cachedInputTokens,
   });
   const createdAt = new Date().toISOString();
+  const cacheSavingsUsd = estimateCacheSavingsUsd(cachedInputTokens, pricing);
 
   return {
+    cacheCreationInputTokens,
+    cachedInputTokens,
+    cacheSavingsUsd,
     chatId: input.chatId,
     completionTokens: outputTokens,
     costSource: cost.source,
@@ -83,12 +93,16 @@ export function createProviderUsageRecord(input: ProviderUsageRecordInput): Prov
 }
 
 export function estimateUsageCost({
+  cacheCreationInputTokens = 0,
+  cachedInputTokens = 0,
   inputTokens,
   outputTokens,
   pricing,
   provider,
   reasoningTokens = 0,
 }: {
+  cacheCreationInputTokens?: number;
+  cachedInputTokens?: number;
   inputTokens: number;
   outputTokens: number;
   pricing?: ModelPricing;
@@ -103,6 +117,8 @@ export function estimateUsageCost({
   }
 
   const hasInputRate = typeof pricing.inputPerMillionTokens === "number";
+  const hasCacheWriteRate = typeof pricing.cacheWriteInputPerMillionTokens === "number";
+  const hasCachedInputRate = typeof pricing.cachedInputPerMillionTokens === "number";
   const hasOutputRate = typeof pricing.outputPerMillionTokens === "number";
   const hasReasoningRate = typeof pricing.internalReasoningPerMillionTokens === "number";
   const hasRequestRate = typeof pricing.requestUsd === "number";
@@ -115,21 +131,28 @@ export function estimateUsageCost({
     };
   }
 
-  if (!hasInputRate && !hasOutputRate && !hasReasoningRate && !hasRequestRate) {
+  if (!hasInputRate && !hasCacheWriteRate && !hasCachedInputRate && !hasOutputRate && !hasReasoningRate && !hasRequestRate) {
     return {
       breakdown: emptyCostBreakdown(),
       source: provider === "9router" ? "subscription" : "unknown",
     };
   }
 
-  const inputUsd = inputTokens * ((pricing.inputPerMillionTokens ?? 0) / 1_000_000);
+  const boundedCachedInputTokens = clampTokenCount(cachedInputTokens, inputTokens);
+  const boundedCacheCreationInputTokens = clampTokenCount(cacheCreationInputTokens, Math.max(inputTokens - boundedCachedInputTokens, 0));
+  const uncachedInputTokens = Math.max(inputTokens - boundedCachedInputTokens - boundedCacheCreationInputTokens, 0);
+  const inputUsd = uncachedInputTokens * ((pricing.inputPerMillionTokens ?? 0) / 1_000_000);
+  const cacheCreationInputUsd = boundedCacheCreationInputTokens * (((pricing.cacheWriteInputPerMillionTokens ?? pricing.inputPerMillionTokens) ?? 0) / 1_000_000);
+  const cachedInputUsd = boundedCachedInputTokens * (((pricing.cachedInputPerMillionTokens ?? pricing.inputPerMillionTokens) ?? 0) / 1_000_000);
   const outputUsd = outputTokens * ((pricing.outputPerMillionTokens ?? 0) / 1_000_000);
   const reasoningUsd = reasoningTokens * (((pricing.internalReasoningPerMillionTokens ?? pricing.outputPerMillionTokens) ?? 0) / 1_000_000);
   const requestUsd = pricing.requestUsd ?? 0;
-  const totalUsd = inputUsd + outputUsd + reasoningUsd + requestUsd;
+  const totalUsd = inputUsd + cacheCreationInputUsd + cachedInputUsd + outputUsd + reasoningUsd + requestUsd;
 
   return {
     breakdown: {
+      cacheCreationInputUsd: roundUsd(cacheCreationInputUsd),
+      cachedInputUsd: roundUsd(cachedInputUsd),
       inputUsd: roundUsd(inputUsd),
       outputUsd: roundUsd(outputUsd),
       reasoningUsd: roundUsd(reasoningUsd),
@@ -142,6 +165,8 @@ export function estimateUsageCost({
 
 function emptyCostBreakdown(): UsageCostBreakdown {
   return {
+    cacheCreationInputUsd: 0,
+    cachedInputUsd: 0,
     inputUsd: 0,
     outputUsd: 0,
     reasoningUsd: 0,
@@ -152,6 +177,20 @@ function emptyCostBreakdown(): UsageCostBreakdown {
 
 function normalizeTokenCount(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+function clampTokenCount(value: number, max: number) {
+  return Math.min(Math.max(Math.round(value), 0), Math.max(Math.round(max), 0));
+}
+
+function estimateCacheSavingsUsd(cachedInputTokens: number, pricing: ModelPricing | undefined) {
+  if (!pricing || typeof pricing.inputPerMillionTokens !== "number" || typeof pricing.cachedInputPerMillionTokens !== "number") {
+    return 0;
+  }
+
+  const perMillionSavings = Math.max(pricing.inputPerMillionTokens - pricing.cachedInputPerMillionTokens, 0);
+
+  return roundUsd(cachedInputTokens * (perMillionSavings / 1_000_000));
 }
 
 function roundUsd(value: number) {

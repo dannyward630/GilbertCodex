@@ -7,6 +7,7 @@ import { OnboardingDialog } from "../../components/onboarding/OnboardingDialog";
 import { ProviderConnectionDialog } from "../../components/onboarding/ProviderConnectionDialog";
 import { ProjectRunDialog } from "../../components/projectRun/ProjectRunDialog";
 import { ChatPage } from "../../pages/ChatPage";
+import { SettingsPage, preloadSettingsSection } from "../../pages/settings/SettingsPage";
 import type { SettingsSectionId } from "../../pages/settings/types";
 import { resolveSettingsNavSection } from "../../pages/settings/settingsNavigation";
 import {
@@ -321,12 +322,10 @@ import { handleRegenerateResponse as handleRegenerateResponseImpl } from "./chat
 import { renderUtilityPage as renderUtilityPageImpl, renderChatPage as renderChatPageImpl, handleSkipOnboarding as handleSkipOnboardingImpl, handleNeverShowOnboarding as handleNeverShowOnboardingImpl, handleOpenOnboardingSettings as handleOpenOnboardingSettingsImpl, handleOpenProviderConnectionNineRouterSettings as handleOpenProviderConnectionNineRouterSettingsImpl, handleOpenProviderConnectionKeySettings as handleOpenProviderConnectionKeySettingsImpl, handleRouteChange as handleRouteChangeImpl, handleSettingsSectionChange as handleSettingsSectionChangeImpl } from "./routes/renderRoutes";
 
 const loadAppsPage = () => import("../../pages/apps/AppsPage");
-const loadSettingsPage = () => import("../../pages/settings/SettingsPage");
 const loadSupportPage = () => import("../../pages/SupportPage");
 const loadTasksPage = () => import("../../pages/TasksPage");
 const loadWeatherRadarPage = () => import("../../pages/WeatherRadarPage");
 const AppsPage = lazy(() => loadAppsPage().then((module) => ({ default: module.AppsPage })));
-const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
 const SupportPage = lazy(() => loadSupportPage().then((module) => ({ default: module.SupportPage })));
 const TasksPage = lazy(() => loadTasksPage().then((module) => ({ default: module.TasksPage })));
 const WeatherRadarPage = lazy(() => loadWeatherRadarPage().then((module) => ({ default: module.WeatherRadarPage })));
@@ -753,7 +752,6 @@ function preloadRouteBundles(locationServicesEnabled: boolean) {
   const loaders = [
     loadAppsPage,
     loadTasksPage,
-    loadSettingsPage,
     loadSupportPage,
     ...(locationServicesEnabled ? [loadWeatherRadarPage] : []),
   ];
@@ -3661,16 +3659,16 @@ export function WorkspaceApp({ authSession, onLogout }: WorkspaceAppProps) {
     } else if (route === "tasks") {
       void loadTasksPage();
     } else if (route === "settings") {
-      void loadSettingsPage();
+      void preloadSettingsSection(activeSettingsSection);
     } else if (route === "support") {
       void loadSupportPage();
     } else if (route === "radar" && locationServicesEnabled) {
       void loadWeatherRadarPage();
     }
-  }, [locationServicesEnabled]);
+  }, [activeSettingsSection, locationServicesEnabled]);
 
   const handlePreloadSettingsSection = useCallback((section: SettingsSectionId) => {
-    void loadSettingsPage().then((module) => module.preloadSettingsSection(section));
+    void preloadSettingsSection(section);
   }, []);
 
   useEffect(() => {

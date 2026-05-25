@@ -95,7 +95,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--terminal-muted);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -212,14 +212,14 @@
 
 .terminal-session-copy strong {
   color: var(--terminal-text);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 740;
 }
 
 .terminal-session-copy small {
   color: var(--terminal-muted);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 620;
 }
 
@@ -266,7 +266,7 @@
 
 .terminal-title strong {
   color: var(--terminal-text);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 760;
   letter-spacing: 0;
   white-space: nowrap;
@@ -281,7 +281,7 @@
   border: 1px solid color-mix(in srgb, var(--terminal-border) 70%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--terminal-control-bg) 74%, transparent);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 720;
   white-space: nowrap;
 }
@@ -312,7 +312,7 @@
   overflow: hidden;
   color: var(--terminal-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-style: normal;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -350,7 +350,7 @@
 .terminal-cwd-button span {
   color: var(--terminal-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 740;
 }
 
@@ -359,7 +359,7 @@
   overflow: hidden;
   color: var(--terminal-text);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 620;
   letter-spacing: 0;
   text-align: left;
@@ -393,7 +393,7 @@
 
 .terminal-cwd-popover label span {
   color: var(--terminal-muted);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 740;
 }
 
@@ -407,7 +407,7 @@
   border-radius: 7px;
   background: var(--terminal-control-bg);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 .terminal-cwd-popover-actions {
@@ -429,7 +429,7 @@
   border: 1px solid color-mix(in srgb, var(--terminal-border) 70%, transparent);
   border-radius: 7px;
   background: var(--terminal-control-bg);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 680;
 }
 
@@ -452,7 +452,7 @@
   overflow: hidden;
   color: var(--terminal-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -460,7 +460,7 @@
 .terminal-cwd-popover p {
   margin: 0;
   color: var(--terminal-error);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 .terminal-shell-select {
@@ -475,7 +475,7 @@
   border: 1px solid color-mix(in srgb, var(--terminal-border) 72%, transparent);
   border-radius: 7px;
   background: var(--terminal-control-bg);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 650;
 }
 
@@ -552,7 +552,7 @@
   height: 100%;
   color: var(--terminal-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 :root[data-theme="light"] .terminal-panel {

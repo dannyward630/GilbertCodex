@@ -62,6 +62,7 @@ interface UsageSettingsPageProps {
 }
 
 interface UsageAggregateRow {
+  cachedInputTokens: number;
   costUsd: number;
   inputTokens: number;
   key: string;
@@ -562,8 +563,8 @@ export function UsageSettingsPage({ onSettingsChange, settings }: UsageSettingsP
           </div>
           <div className="usage-metric-grid">
             <UsageMetric icon={Route} label="Requests" value={formatNumber(summary.totals.requests)} detail={`${formatNumber(summary.totals.providerCount)} provider${summary.totals.providerCount === 1 ? "" : "s"}`} />
-            <UsageMetric icon={Layers3} label="Tokens" value={formatCompactTokens(summary.totals.totalTokens)} detail={`${formatCompactTokens(summary.totals.inputTokens)} in / ${formatCompactTokens(summary.totals.outputTokens)} out`} />
-            <UsageMetric icon={Coins} label="Estimated cost" value={formatUsd(summary.totals.costUsd)} detail={formatCostDetail(summary.totals.catalogCostRecords, summary.totals.unknownCostRecords)} />
+            <UsageMetric icon={Layers3} label="Tokens" value={formatCompactTokens(summary.totals.totalTokens)} detail={formatTokenDetail(summary.totals.inputTokens, summary.totals.outputTokens, summary.totals.cachedInputTokens)} />
+            <UsageMetric icon={Coins} label="Estimated cost" value={formatUsd(summary.totals.costUsd)} detail={formatCostDetail(summary.totals.catalogCostRecords, summary.totals.unknownCostRecords, summary.totals.cacheSavingsUsd)} />
             <UsageMetric icon={Database} label="Database" value={databasePath ? "SQLite" : "Local"} detail={databasePath ?? "Synced when desktop database is ready"} />
           </div>
         </article>
@@ -1028,6 +1029,8 @@ function summarizeUsageRecords(records: ProviderUsageRecord[], period: UsagePeri
   let unknownCostRecords = 0;
   const providerIds = new Set<ModelProviderId>();
   const totals = {
+    cachedInputTokens: 0,
+    cacheSavingsUsd: 0,
     catalogCostRecords: 0,
     costUsd: 0,
     inputTokens: 0,
@@ -1047,6 +1050,8 @@ function summarizeUsageRecords(records: ProviderUsageRecord[], period: UsagePeri
 
     totals.requests += record.requestCount;
     totals.inputTokens += record.inputTokens;
+    totals.cachedInputTokens += record.cachedInputTokens ?? 0;
+    totals.cacheSavingsUsd += record.cacheSavingsUsd ?? 0;
     totals.outputTokens += record.outputTokens;
     totals.totalTokens += record.totalTokens;
     totals.costUsd += record.totalCostUsd;
@@ -1093,6 +1098,7 @@ function addTimelineRow(target: Map<string, UsageTimelineRow>, key: string, labe
 
 function addAggregateRow(target: Map<string, UsageAggregateRow>, key: string, label: string, record: ProviderUsageRecord, provider?: string) {
   const current = target.get(key) ?? {
+    cachedInputTokens: 0,
     costUsd: 0,
     inputTokens: 0,
     key,
@@ -1104,6 +1110,7 @@ function addAggregateRow(target: Map<string, UsageAggregateRow>, key: string, la
   };
 
   current.costUsd += record.totalCostUsd;
+  current.cachedInputTokens += record.cachedInputTokens ?? 0;
   current.inputTokens += record.inputTokens;
   current.outputTokens += record.outputTokens;
   current.requests += record.requestCount;
@@ -1124,6 +1131,7 @@ function toAggregateRows(buckets: Record<string, NineRouterUsageBucket>): UsageA
 
       return {
         costUsd: value.cost ?? 0,
+        cachedInputTokens: 0,
         inputTokens,
         key,
         label: value.rawModel || key,
@@ -1648,12 +1656,26 @@ function formatSubscriptionHelperText(text: string) {
     .replace(/\bsubscription helper\b/gi, "subscriptions");
 }
 
-function formatCostDetail(known: number, unknown: number) {
+function formatCostDetail(known: number, unknown: number, cacheSavingsUsd = 0) {
+  if (cacheSavingsUsd > 0) {
+    return `${formatUsd(cacheSavingsUsd)} cache savings`;
+  }
+
   if (unknown === 0) {
     return `${formatNumber(known)} priced record${known === 1 ? "" : "s"}`;
   }
 
   return `${formatNumber(known)} priced / ${formatNumber(unknown)} plan or variable`;
+}
+
+function formatTokenDetail(inputTokens: number, outputTokens: number, cachedInputTokens: number) {
+  const base = `${formatCompactTokens(inputTokens)} in / ${formatCompactTokens(outputTokens)} out`;
+
+  if (cachedInputTokens <= 0) {
+    return base;
+  }
+
+  return `${base} / ${formatCompactTokens(cachedInputTokens)} cached`;
 }
 
 function formatSource(record: ProviderUsageRecord) {

@@ -1,4 +1,12 @@
-use crate::{commands::auth, core::process::run_probe_command};
+#[cfg(not(windows))]
+use crate::core::native_path::native_runtime_path_dirs;
+use crate::{
+    commands::auth,
+    core::{
+        native_path::{configure_native_path, expand_home_path, resolve_native_executable},
+        process::run_probe_command,
+    },
+};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -947,7 +955,7 @@ fn install_nine_router_blocking(
         .map_err(|error| format!("Could not create 9Router data folder: {error}"))?;
 
     require_program("git")?;
-    require_program("node")?;
+    require_node_runtime()?;
     require_program("npm")?;
 
     if install_dir.join("package.json").is_file() {
@@ -1343,7 +1351,7 @@ fn resolve_launch_spec(app: &AppHandle) -> Option<LaunchSpec> {
         return Some(LaunchSpec {
             args: parse_launch_args(env::var("GILBERT_CODEX_9ROUTER_ARGS").ok()),
             cwd: None,
-            program: PathBuf::from(program),
+            program: expand_home_path(PathBuf::from(program)),
         });
     }
 
@@ -1352,7 +1360,7 @@ fn resolve_launch_spec(app: &AppHandle) -> Option<LaunchSpec> {
         return Some(LaunchSpec {
             args: vec!["run".to_string(), "start".to_string()],
             cwd: Some(install_dir),
-            program: PathBuf::from(program_name("npm")),
+            program: resolve_program_path("npm"),
         });
     }
 
@@ -1757,7 +1765,7 @@ fn launch_env(app: &AppHandle) -> Vec<(String, String)> {
         .map(|path| path_to_string(&path))
         .unwrap_or_default();
 
-    vec![
+    let mut envs = vec![
         (
             "BASE_URL".to_string(),
             NINE_ROUTER_DASHBOARD_URL.to_string(),
@@ -1774,7 +1782,10 @@ fn launch_env(app: &AppHandle) -> Vec<(String, String)> {
         ),
         ("NODE_ENV".to_string(), "production".to_string()),
         ("PORT".to_string(), "20128".to_string()),
-    ]
+    ];
+
+    push_native_runtime_env(&mut envs);
+    envs
 }
 
 fn cached_tool_versions(state: &NineRouterLocalState) -> NineRouterToolVersions {
@@ -1854,11 +1865,14 @@ fn stop_process_tree(pid: u32) -> bool {
 
     #[cfg(not(windows))]
     {
-        Command::new("kill")
+        let mut command = Command::new(resolve_program_executable("kill"));
+        command
             .args(["-TERM", &pid.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        configure_native_program_command(&mut command);
+        command
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
@@ -1905,30 +1919,109 @@ fn listening_pids_on_port(port: u16) -> Vec<u32> {
 
     #[cfg(not(windows))]
     {
-        let output = Command::new("sh")
-            .args(["-c", &format!("lsof -ti tcp:{} -sTCP:LISTEN", port)])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output();
+        let mut pids = Vec::new();
 
-        let Ok(output) = output else {
-            return Vec::new();
-        };
+        append_unique_pids(&mut pids, listening_pids_from_lsof(port));
+        if pids.is_empty() {
+            append_unique_pids(&mut pids, listening_pids_from_fuser(port));
+        }
+        if pids.is_empty() {
+            append_unique_pids(&mut pids, listening_pids_from_ss(port));
+        }
 
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .collect()
+        pids
     }
+}
+
+#[cfg(not(windows))]
+fn listening_pids_from_lsof(port: u16) -> Vec<u32> {
+    command_output("lsof", &["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+        .filter(|output| output.status.success())
+        .map(|output| parse_pid_tokens(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn listening_pids_from_fuser(port: u16) -> Vec<u32> {
+    command_output("fuser", &["-n", "tcp", &port.to_string()])
+        .filter(|output| output.status.success())
+        .map(|output| parse_pid_tokens(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn listening_pids_from_ss(port: u16) -> Vec<u32> {
+    command_output("ss", &["-ltnp", "sport", "=", &format!(":{port}")])
+        .filter(|output| output.status.success())
+        .map(|output| parse_ss_pids(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn command_output(program: &str, args: &[&str]) -> Option<Output> {
+    let mut command = Command::new(resolve_program_executable(program));
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure_native_program_command(&mut command);
+    command.output().ok()
+}
+
+#[cfg(not(windows))]
+fn append_unique_pids(target: &mut Vec<u32>, pids: Vec<u32>) {
+    for pid in pids {
+        if pid != 0 && !target.contains(&pid) {
+            target.push(pid);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn parse_pid_tokens(output: &str) -> Vec<u32> {
+    output
+        .split_whitespace()
+        .filter_map(|token| token.trim().parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(any(test, not(windows)))]
+fn parse_ss_pids(output: &str) -> Vec<u32> {
+    output
+        .split("pid=")
+        .skip(1)
+        .filter_map(|part| {
+            part.split(|ch: char| !ch.is_ascii_digit())
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+        })
+        .collect()
 }
 
 fn require_program(name: &str) -> Result<(), String> {
     let program = program_name(name);
 
     program_version(name).map(|_| ()).ok_or_else(|| {
-        format!("{program} is required to install 9Router Local. Install {name} and try again.")
+        format!("{program} is required to install 9Router Local. Install {name}, make sure it is available on PATH, and try again.")
     })
+}
+
+fn require_node_runtime() -> Result<(), String> {
+    let version = program_version("node").ok_or_else(|| {
+        "Node.js 20 or newer is required to install 9Router Local. Install Node.js and try again."
+            .to_string()
+    })?;
+
+    match node_major_version(&version) {
+        Some(major) if major >= 20 => Ok(()),
+        Some(major) => Err(format!(
+            "Node.js 20 or newer is required to install 9Router Local. Found Node.js {major} from `{version}`."
+        )),
+        None => Err(format!(
+            "Could not determine the installed Node.js version from `{version}`. Install Node.js 20 or newer and try again."
+        )),
+    }
 }
 
 fn program_name(name: &str) -> &'static str {
@@ -1947,9 +2040,18 @@ fn program_name(name: &str) -> &'static str {
     }
 }
 
+fn resolve_program_path(name: &str) -> PathBuf {
+    resolve_program_executable(program_name(name))
+}
+
+fn resolve_program_executable(program: &str) -> PathBuf {
+    resolve_native_executable(program)
+}
+
 fn program_version(name: &str) -> Option<String> {
-    let mut command = Command::new(program_name(name));
+    let mut command = Command::new(resolve_program_path(name));
     command.arg("--version");
+    configure_native_program_command(&mut command);
 
     let output = run_probe_command(
         command,
@@ -1985,7 +2087,7 @@ fn run_command_step(
         message: label.to_string(),
     });
 
-    let mut command = Command::new(program);
+    let mut command = Command::new(resolve_program_executable(program));
     command
         .args(args)
         .current_dir(cwd)
@@ -1993,6 +2095,7 @@ fn run_command_step(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_native_program_command(&mut command);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -2049,9 +2152,40 @@ fn parse_launch_args(value: Option<String>) -> Vec<String> {
         .collect()
 }
 
+fn node_major_version(version: &str) -> Option<u32> {
+    let normalized = version.trim().trim_start_matches('v');
+    let major = normalized
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()
+        .unwrap_or_default();
+
+    major.parse().ok()
+}
+
+fn push_native_runtime_env(envs: &mut Vec<(String, String)>) {
+    #[cfg(not(windows))]
+    envs.push(("PATH".to_string(), native_runtime_path_string()));
+
+    #[cfg(windows)]
+    let _ = envs;
+}
+
+fn configure_native_program_command(command: &mut Command) {
+    configure_native_path(command);
+}
+
+#[cfg(not(windows))]
+fn native_runtime_path_string() -> String {
+    env::join_paths(native_runtime_path_dirs())
+        .unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default())
+        .to_string_lossy()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::native_path::{common_linux_runtime_dirs, common_macos_runtime_dirs};
 
     #[test]
     fn cli_token_matches_current_nine_router_formula() {
@@ -2102,6 +2236,56 @@ mod tests {
         assert!(legacy_data_dir_has_migratable_entries(&root));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn node_major_version_accepts_standard_node_output() {
+        assert_eq!(node_major_version("v20.19.0"), Some(20));
+        assert_eq!(node_major_version("22.11.0"), Some(22));
+        assert_eq!(node_major_version("node v24.0.0"), None);
+        assert_eq!(node_major_version("not node"), None);
+    }
+
+    #[test]
+    fn macos_runtime_dirs_include_gui_app_tool_locations() {
+        let home = PathBuf::from("/Users/gilbert");
+        let dirs = common_macos_runtime_dirs(Some(home.clone()));
+
+        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&PathBuf::from(
+            "/Applications/Docker.app/Contents/Resources/bin"
+        )));
+        assert!(dirs.contains(&home.join(".volta").join("bin")));
+        assert!(dirs.contains(&home.join(".asdf").join("shims")));
+    }
+
+    #[test]
+    fn linux_runtime_dirs_include_desktop_app_tool_locations() {
+        let home = PathBuf::from("/home/gilbert");
+        let dirs = common_linux_runtime_dirs(Some(home.clone()));
+
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&PathBuf::from("/usr/bin")));
+        assert!(dirs.contains(&PathBuf::from("/snap/bin")));
+        assert!(dirs.contains(&home.join(".local").join("bin")));
+        assert!(dirs.contains(
+            &home
+                .join(".local")
+                .join("share")
+                .join("flatpak")
+                .join("exports")
+                .join("bin")
+        ));
+    }
+
+    #[test]
+    fn parses_linux_ss_listener_pids() {
+        let output = r#"State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
+LISTEN 0      511          0.0.0.0:20128      0.0.0.0:*    users:(("node",pid=32145,fd=23),("npm",pid=32144,fd=19))
+"#;
+
+        assert_eq!(parse_ss_pids(output), vec![32145, 32144]);
     }
 
     fn create_test_dir(label: &str) -> PathBuf {

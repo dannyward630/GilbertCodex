@@ -1,3 +1,4 @@
+use crate::core::native_path::{configure_native_path, resolve_native_executable};
 use std::{
     io,
     process::{Command, Output, Stdio},
@@ -35,15 +36,16 @@ pub fn open_external_target(target: &str, failure_message: &str) -> Result<(), S
         command.args(["url.dll,FileProtocolHandler", target]);
         command
     } else if cfg!(target_os = "macos") {
-        let mut command = Command::new("open");
+        let mut command = Command::new(resolve_native_executable("open"));
         command.arg(target);
         command
     } else {
-        let mut command = Command::new("xdg-open");
+        let mut command = Command::new(resolve_native_executable("xdg-open"));
         command.arg(target);
         command
     };
 
+    configure_native_path(&mut command);
     spawn_detached_command(&mut command, failure_message)
 }
 

@@ -147,7 +147,7 @@ export function getProjectOpenTargetsForPlatform(platform?: HostPlatform | strin
     }
 
     if (normalizedPlatform === "linux") {
-      return target.id !== "visual-studio" && target.id !== "wsl";
+      return target.id !== "git-bash" && target.id !== "visual-studio" && target.id !== "wsl";
     }
 
     return true;
@@ -210,12 +210,22 @@ function getPlatformAdjustedProjectOpenTarget(target: ProjectOpenTarget, platfor
     }
   }
 
-  if (target.id === "terminal" && platform === "macos") {
-    return {
-      ...target,
-      detail: "Open this project folder in Terminal.",
-      downloadUrl: undefined,
-    };
+  if (target.id === "terminal") {
+    if (platform === "macos") {
+      return {
+        ...target,
+        detail: "Open this project folder in Terminal.",
+        downloadUrl: undefined,
+      };
+    }
+
+    if (platform === "linux") {
+      return {
+        ...target,
+        detail: "Open this project folder in your terminal.",
+        downloadUrl: undefined,
+      };
+    }
   }
 
   return target;

@@ -8,6 +8,7 @@ import {
   createBrowserPreviewFrameKey,
   createBrowserPreviewNavigationUrl,
   formatBrowserPreviewTitle,
+  shouldCloseBrowserPreviewPanelAfterTabClose,
   type BrowserPreviewSession,
 } from "./BrowserPreviewPanel";
 
@@ -58,6 +59,14 @@ describe("browser preview navigation", () => {
     expect(nextSession.activeTabId).toBe("tab-two");
     expect(nextSession.tabs).toHaveLength(1);
     expect(nextSession.tabs[0].id).toBe("tab-two");
+  });
+
+  it("treats closing the final tab as closing the browser panel", () => {
+    const session = makeSession();
+
+    expect(shouldCloseBrowserPreviewPanelAfterTabClose(session, "tab-one")).toBe(false);
+    expect(shouldCloseBrowserPreviewPanelAfterTabClose({ activeTabId: "tab-one", tabs: [session.tabs[0]] }, "tab-one")).toBe(true);
+    expect(shouldCloseBrowserPreviewPanelAfterTabClose({ activeTabId: "tab-one", tabs: [session.tabs[0]] }, "missing-tab")).toBe(false);
   });
 
   it("keeps iframe keys stable until an intentional reload or navigation", () => {

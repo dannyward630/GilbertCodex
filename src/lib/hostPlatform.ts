@@ -19,12 +19,12 @@ export function getHostPlatform(): HostPlatform {
 export function normalizeHostPlatform(value: string | null | undefined): HostPlatform {
   const platformSource = String(value ?? "").toLowerCase();
 
-  if (platformSource.includes("win")) {
-    return "windows";
-  }
-
   if (platformSource.includes("mac") || platformSource.includes("darwin")) {
     return "macos";
+  }
+
+  if (platformSource.includes("win")) {
+    return "windows";
   }
 
   if (platformSource.includes("linux") || platformSource.includes("x11")) {

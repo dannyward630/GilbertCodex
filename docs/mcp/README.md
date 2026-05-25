@@ -1,5 +1,7 @@
 # MCP Support
 
+Last updated: May 25, 2026 for the v0.8.2 build.
+
 Gilbert Codex supports Model Context Protocol servers through the Apps page.
 
 The desktop app currently supports both standard MCP transports:
@@ -7,10 +9,12 @@ The desktop app currently supports both standard MCP transports:
 - `https://...` remote endpoints
 - `http://localhost`, `http://127.0.0.1`, and `http://[::1]` development endpoints
 - optional bearer-token authentication stored through the app's OS-backed secure storage
+- secret HTTP query parameters for providers such as Browserbase
+- custom HTTP header secrets for providers such as Context7
 - command-line stdio servers launched as subprocesses
 - stdio command arguments, working directories, and environment variables
 
-Configured servers are saved per local Gilbert user. Bearer tokens and stdio environment values are not returned to the React UI or chat tools; the UI only sees whether a secret exists.
+Configured servers are saved per local Gilbert user. Bearer tokens, HTTP query secrets, custom header secrets, and stdio environment values are not returned to the React UI or chat tools; the UI only sees whether a secret exists. Non-model service credentials can be saved once in Settings > Keys, then applied to MCP setup fields from the Apps page. The Keys preset catalog also covers common skill, app, and service credentials such as GitHub, Google OAuth, Discord, Slack, Sentry, Mapbox, ngrok, Firebase, and browser/search services. Model-provider keys remain in the model/provider settings surfaces instead of the Keys catalog.
 
 ## Stdio Servers
 
@@ -41,7 +45,7 @@ When MCP is enabled in tool settings and the request asks for MCP or external co
 - `mcp_list_tools` to initialize one server and refresh its `tools/list` schema
 - `mcp_call_tool` to call one server tool with JSON object arguments
 
-The selector also treats well-known MCP-backed service names such as Firebase, Figma, Supabase, Linear, Stripe, Notion, Vercel, Cloudflare, AWS, GitLab, Atlassian, Context7, Redis, MongoDB, Sentry, and Kubernetes as MCP-intent prompts when MCP tools are enabled. This lets a user ask for the service naturally without having to say "MCP" first.
+The selector also treats well-known MCP-backed service names such as Firebase, Figma, Supabase, AWS, Azure, GitLab, GitHub MCP, Linear, Stripe, Atlassian, Vercel, Netlify, Heroku, Pulumi, Neon, Notion, Cloudflare, Context7, Brave Search, Exa, Firecrawl, Tavily, Apify, Browserbase, Redis, MongoDB, Postgres, Slack, Filesystem, Memory, Sequential Thinking, Playwright, Puppeteer, JetBrains, Sentry, and Kubernetes as MCP-intent prompts when MCP tools are enabled. This lets a user ask for the service naturally without having to say "MCP" first.
 
 Tool discovery is treated as a read operation so the model can list configured servers and schemas before deciding what to call. `mcp_call_tool` uses the same app-owned permission path as other external actions. The model should list servers and tools before calling a tool unless the exact server id, tool name, and input schema are already known.
 
@@ -51,7 +55,7 @@ Apps > MCP includes a registry-backed discovery surface. It searches the officia
 
 Gilbert supports up to 50 configured MCP servers. This keeps the UI and cached tool inventory manageable while allowing a serious local workspace to keep the major daily services installed.
 
-Featured presets are provided for Firebase, Figma Remote/Desktop, Supabase, AWS, GitLab, GitHub MCP, Linear, Stripe, Atlassian, Vercel, Notion, Cloudflare, Context7, Redis, MongoDB, Sentry, and Kubernetes. These presets only prefill configuration; users still review, save, and test the server before chat can call its tools.
+Featured presets are provided for Firebase, Figma Remote/Desktop, Supabase, AWS, Azure, GitLab, GitHub MCP, Linear, Stripe, Atlassian, Vercel, Netlify, Heroku, Pulumi, Neon, Notion, Cloudflare API/Docs/Browser, Context7, Brave Search, Exa, Firecrawl, Tavily, Apify, Browserbase, Redis, MongoDB, Postgres, Slack, Filesystem, Memory, Sequential Thinking, Playwright, Puppeteer, JetBrains IDE, Sentry, and Kubernetes. These presets only prefill configuration; users still review, save, and test the server before chat can call its tools.
 
 The Apps page presents MCPs as individual cards: configured server cards, a custom add-server card, featured preset cards, and registry result cards. The page also includes a Test all action that iterates through enabled servers and runs `tools/list` against each one, updating cached tool schemas and surfacing failures per server.
 
@@ -59,7 +63,7 @@ Remote Registry results are configured through the standard `mcp-remote` stdio b
 
 The featured catalog and registry results are paginated in Apps > MCP so the page can keep growing without becoming a wall of cards.
 
-On Windows, stdio command launch resolves runtime shims before spawning. For example, a saved `npx` command is resolved to `npx.cmd` from PATH or common Node.js install folders, so users do not need to paste absolute paths for npm-based MCP servers.
+For stdio MCP servers, Gilbert resolves common desktop runtime paths before spawning. On Windows, a saved `npx` command is resolved to `npx.cmd` from PATH or common Node.js install folders. On macOS and Linux, packaged-app launches include common Homebrew, MacPorts, Volta/asdf/nvm, user-bin, Flatpak/Snap, and system paths so npm- and Python-based MCP servers do not require users to paste absolute launcher paths.
 
 ## Protocol Notes
 

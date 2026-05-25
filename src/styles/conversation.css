@@ -56,7 +56,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14.5px;
+  font-size: var(--font-size-14-5, 14.5px);
   font-weight: 760;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -234,7 +234,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 650;
 }
 
@@ -245,7 +245,7 @@
   border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
-  font-size: 10px;
+  font-size: var(--font-size-10, 10px);
   font-style: normal;
   font-weight: 650;
   line-height: 1;
@@ -253,7 +253,7 @@
 
 .project-open-menu-copy small {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 450;
 }
 
@@ -380,13 +380,13 @@
 }
 
 .workspace-tools-menu-copy strong {
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 680;
 }
 
 .workspace-tools-menu-copy small {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 450;
 }
 
@@ -450,7 +450,7 @@
   border-radius: 8px;
   background: transparent;
   cursor: default;
-  font-size: 15px;
+  font-size: var(--font-size-15, 15px);
   font-weight: 400;
   letter-spacing: 0;
   text-align: left;
@@ -488,7 +488,7 @@
 
 .conversation-options-shortcut {
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: var(--font-size-14, 14px);
   font-weight: 450;
   white-space: nowrap;
 }
@@ -499,7 +499,7 @@
 
 .conversation-body {
   --browser-preview-width: 560px;
-  --git-review-width: 760px;
+  --coding-sidecar-width: 760px;
   --plan-review-width: 680px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -515,7 +515,7 @@
 
 .desktop-root[data-runtime="desktop"] .conversation-body,
 .conversation-body[data-browser-resizing="true"],
-.conversation-body[data-git-review-resizing="true"] {
+.conversation-body[data-coding-sidecar-resizing="true"] {
   transition: none;
 }
 
@@ -542,21 +542,21 @@
   grid-template-columns: minmax(360px, 1fr) minmax(520px, min(var(--plan-review-width), calc(100% - 360px)));
 }
 
-.conversation-body[data-side-layout="review"] {
-  grid-template-columns: minmax(360px, 1fr) minmax(460px, min(var(--git-review-width), calc(100% - 360px)));
+.conversation-body[data-side-layout="coding-sidecar"] {
+  grid-template-columns: minmax(360px, 1fr) minmax(460px, min(var(--coding-sidecar-width), calc(100% - 360px)));
 }
 
-.conversation-body[data-side-layout="review-closing"] {
+.conversation-body[data-side-layout="coding-sidecar-closing"] {
   grid-template-columns: minmax(0, 1fr) minmax(0, 0px);
 }
 
-.conversation-body[data-side-layout="review-closing"] .side-panel-presence[data-panel="coding-sidecar"][data-presence="exit"] {
+.conversation-body[data-side-layout="coding-sidecar-closing"] .side-panel-presence[data-panel="coding-sidecar"][data-presence="exit"] {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
   z-index: 72;
-  width: min(var(--git-review-width), calc(100% - 360px));
+  width: min(var(--coding-sidecar-width), calc(100% - 360px));
   min-width: min(460px, calc(100% - 24px));
   max-width: calc(100% - 24px);
   pointer-events: none;
@@ -618,7 +618,7 @@
 }
 
 .conversation-body[data-browser-resizing="true"],
-.conversation-body[data-git-review-resizing="true"] {
+.conversation-body[data-coding-sidecar-resizing="true"] {
   cursor: ew-resize;
   user-select: none;
 }
@@ -628,8 +628,7 @@
 }
 
 .conversation-body[data-browser-expanded="true"] .browser-preview-panel,
-.conversation-body[data-git-review-expanded="true"] .side-panel-presence[data-panel="git-review"],
-.conversation-body[data-git-review-expanded="true"] .side-panel-presence[data-panel="coding-sidecar"] {
+.conversation-body[data-coding-sidecar-expanded="true"] .side-panel-presence[data-panel="coding-sidecar"] {
   position: absolute;
   inset: calc(var(--conversation-header-height, 54px) + 10px) 10px 10px;
   z-index: 80;
@@ -638,13 +637,12 @@
 }
 
 .conversation-body[data-browser-expanded="true"] .browser-preview-panel,
-.conversation-body[data-git-review-expanded="true"] .git-review-panel,
-.conversation-body[data-git-review-expanded="true"] .coding-sidecar-panel {
+.conversation-body[data-coding-sidecar-expanded="true"] .coding-sidecar-panel {
   height: auto;
   margin: 0;
 }
 
-.conversation-body[data-git-review-expanded="true"][data-side-layout="review-closing"] .side-panel-presence[data-panel="coding-sidecar"][data-presence="exit"] {
+.conversation-body[data-coding-sidecar-expanded="true"][data-side-layout="coding-sidecar-closing"] .side-panel-presence[data-panel="coding-sidecar"][data-presence="exit"] {
   width: auto;
   min-width: 0;
   max-width: none;
@@ -658,13 +656,12 @@
   max-width: none;
 }
 
-.conversation-body[data-git-review-expanded="true"] .coding-sidecar-panel {
+.conversation-body[data-coding-sidecar-expanded="true"] .coding-sidecar-panel {
   height: 100%;
 }
 
 .conversation-body[data-browser-expanded="true"] .browser-preview-window,
-.conversation-body[data-git-review-expanded="true"] .git-review-window,
-.conversation-body[data-git-review-expanded="true"] .coding-sidecar-window {
+.conversation-body[data-coding-sidecar-expanded="true"] .coding-sidecar-window {
   box-shadow: 0 20px 52px rgba(0, 0, 0, 0.28);
 }
 
@@ -828,7 +825,7 @@
 
 .assistant-run-inline-copy strong {
   color: color-mix(in srgb, var(--text) 82%, var(--text-dim) 18%);
-  font-size: 13px;
+  font-size: var(--font-size-13, 13px);
   font-weight: 650;
 }
 
@@ -836,7 +833,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -880,7 +877,7 @@
   border-radius: 7px;
   color: var(--text-dim);
   background: color-mix(in srgb, var(--surface-soft) 38%, transparent);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-style: normal;
   text-decoration: none;
 }
@@ -918,7 +915,7 @@
   overflow: hidden;
   color: color-mix(in srgb, var(--text) 82%, var(--blue) 18%);
   font-family: var(--font-mono);
-  font-size: 11.7px;
+  font-size: var(--font-size-11-7, 11.7px);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -966,7 +963,7 @@
 
 .assistant-run-inline-approval-actions b {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
 }
 
 .assistant-run-inline-approval-actions button {
@@ -977,7 +974,7 @@
   color: var(--text);
   background: transparent;
   cursor: default;
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 650;
 }
 
@@ -1012,14 +1009,14 @@
 
 .assistant-thinking-section-heading strong {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 760;
 }
 
 .assistant-thinking-section-heading small {
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 540;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1100,13 +1097,13 @@
 }
 
 .assistant-run-card-title strong {
-  font-size: 13.5px;
+  font-size: var(--font-size-13-5, 13.5px);
   font-weight: 760;
 }
 
 .assistant-run-card-title small {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 520;
 }
 
@@ -1139,7 +1136,7 @@
   border-radius: 10px;
   color: var(--text-dim);
   background: color-mix(in srgb, var(--surface-panel) 70%, transparent);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 650;
 }
 
@@ -1205,7 +1202,7 @@
 .assistant-run-lane-heading strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: var(--font-size-12-5, 12.5px);
   font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1215,7 +1212,7 @@
   max-width: 190px;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 520;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1254,7 +1251,7 @@
   border-radius: 999px;
   color: var(--text-muted);
   background: color-mix(in srgb, var(--surface-panel) 74%, transparent);
-  font-size: 10px;
+  font-size: var(--font-size-10, 10px);
   font-weight: 760;
   text-transform: uppercase;
 }
@@ -1265,7 +1262,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1289,19 +1286,19 @@
   overflow: hidden;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .assistant-run-terminal-row small {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
 }
 
 .assistant-run-terminal-row strong {
   color: var(--red);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
 }
 
 .assistant-run-terminal-row pre {
@@ -1310,7 +1307,7 @@
   overflow: auto;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -1339,7 +1336,7 @@
 .assistant-run-approval-card strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-size-12, 12px);
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1351,7 +1348,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1374,14 +1371,14 @@
   border-radius: 999px;
   color: var(--text-muted);
   background: color-mix(in srgb, var(--surface-panel) 74%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 760;
 }
 
 .assistant-run-empty-lane {
   margin: 0;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
 }
 
 .assistant-run-approval-card {
@@ -1398,7 +1395,7 @@
   border-radius: 999px;
   color: var(--text-muted);
   background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
-  font-size: 10.5px;
+  font-size: var(--font-size-10-5, 10.5px);
   font-weight: 760;
 }
 
@@ -1428,7 +1425,7 @@
   color: var(--text);
   background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
   cursor: default;
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   font-weight: 680;
 }
 
@@ -1457,7 +1454,7 @@
 
 .assistant-run-summary dt {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-11, 11px);
   font-weight: 760;
 }
 
@@ -1465,7 +1462,7 @@
   min-width: 0;
   margin: 0;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--font-size-11-5, 11.5px);
   line-height: 1.45;
 }
 

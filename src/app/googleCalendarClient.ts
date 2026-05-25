@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getDefaultGoogleOAuthClientId } from "./gmailClient";
 import { isTauriDesktopRuntime } from "./tauriClient";
+import { GOOGLE_CALENDAR_CORE_OAUTH_SCOPES } from "../lib/googleOAuthScopes";
 import type {
   CalendarAccountEmailRequest,
   CalendarActionResponse,
@@ -20,16 +21,7 @@ import type {
   CalendarUpdateEventRequest,
 } from "../types/googleCalendar";
 
-export const GOOGLE_CALENDAR_CORE_OAUTH_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://www.googleapis.com/auth/calendar",
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/calendar.freebusy",
-  "https://www.googleapis.com/auth/tasks",
-] as const;
+export { GOOGLE_CALENDAR_CORE_OAUTH_SCOPES };
 
 const DEFAULT_GOOGLE_CALENDAR_OAUTH_SCOPE = GOOGLE_CALENDAR_CORE_OAUTH_SCOPES.join(" ");
 

@@ -278,7 +278,7 @@ export function NineRouterSettingsPage({ onActivateProvider, onSettingsChange, o
 
     const missing = [
       status.gitVersion ? "" : "Git",
-      status.nodeVersion ? "" : "Node.js",
+      getSubscriptionNodeRequirementLabel(status.nodeVersion),
       status.npmVersion ? "" : "npm",
     ].filter(Boolean);
 
@@ -2012,7 +2012,21 @@ function getSubscriptionSetupDescription(
     return "Setup did not finish. Review the status below and try again when ready.";
   }
 
-  return "Install the local subscription runtime once. Gilbert starts it automatically for subscription routing.";
+  return "Install the local subscription runtime once. Gilbert starts it automatically for subscription routing. Requires Git, Node.js 20+, and npm.";
+}
+
+function getSubscriptionNodeRequirementLabel(version: string | null | undefined) {
+  if (!version) {
+    return "Node.js 20+";
+  }
+
+  const major = parseNodeMajorVersion(version);
+  return major !== null && major >= 20 ? "" : "Node.js 20+";
+}
+
+function parseNodeMajorVersion(version: string) {
+  const match = version.trim().match(/^v?(\d+)/);
+  return match ? Number.parseInt(match[1] ?? "", 10) : null;
 }
 
 function normalizeNineRouterCombosPayload(payload: unknown) {

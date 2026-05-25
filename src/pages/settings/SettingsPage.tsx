@@ -1,5 +1,5 @@
 import { CloudSun, Database, RotateCcw, ServerCog, Settings2, Trash2 } from "lucide-react";
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/dialogs/AppDialog";
 import "../../styles/settings.css";
 import {
@@ -40,73 +40,36 @@ import { fetchProviderModels, validateProviderSettings } from "../../services/mo
 import type { GithubConnectionState, GithubDeviceLoginSession, GithubRepository } from "../../types/github";
 import type { LocalPermissionMode, LocalWorkspaceScope, LocalWorkspaceSettings } from "../../types/localWorkspace";
 import type { ModelProviderId, ProviderSettings } from "../../types/settings";
+import { BrowserSettingsPage } from "./browser/BrowserSettingsPage";
+import { BraveSearchSettingsPage } from "./brave-search/BraveSearchSettingsPage";
 import { SettingsSectionHeading } from "./components/SettingsSectionHeading";
+import { MapboxSettingsPage } from "./mapbox/MapboxSettingsPage";
+import { NineRouterSettingsPage } from "./nine-router/NineRouterSettingsPage";
+import { AppearanceSettingsPage } from "./sections/AppearanceSettingsPage";
+import { ConfigurationSettingsPage } from "./sections/ConfigurationSettingsPage";
+import { DatabaseSettingsPage } from "./sections/DatabaseSettingsPage";
+import { DiscordSettingsPage } from "./sections/DiscordSettingsPage";
+import { GeneralSettingsPage } from "./sections/GeneralSettingsPage";
+import { GithubSettingsPage } from "./sections/GithubSettingsPage";
+import { GoogleSettingsPage } from "./sections/GoogleSettingsPage";
+import { KeysSettingsPage } from "./sections/KeysSettingsPage";
+import { ModelSettingsPage } from "./sections/ModelSettingsPage";
+import { PdfSettingsPage } from "./sections/PdfSettingsPage";
+import { PersonalizationSettingsPage } from "./sections/PersonalizationSettingsPage";
+import { ProvidersSettingsPage } from "./sections/ProvidersSettingsPage";
+import { UsageSettingsPage } from "./sections/UsageSettingsPage";
 import { resolveSettingsNavSection } from "./settingsNavigation";
 import type { LiveModelCatalogStatus, SettingsPageProps, SettingsSectionId, SettingsStatusMessage } from "./types";
+import { WeatherSourcesSettingsPage } from "./weather-sources/WeatherSourcesSettingsPage";
 
 const GITHUB_FULL_ACCESS_SCOPES = getRequiredGithubOAuthScopes();
 type GithubActionState = "disconnect" | "idle" | "login" | "refresh";
 const GITHUB_DEVICE_LOGIN_START_TIMEOUT_MS = 18_000;
 const EMPTY_DISABLED_MODELS: string[] = [];
 
-const loadAppearanceSettingsPage = () => import("./sections/AppearanceSettingsPage");
-const loadBrowserSettingsPage = () => import("./browser/BrowserSettingsPage");
-const loadBraveSearchSettingsPage = () => import("./brave-search/BraveSearchSettingsPage");
-const loadConfigurationSettingsPage = () => import("./sections/ConfigurationSettingsPage");
-const loadDatabaseSettingsPage = () => import("./sections/DatabaseSettingsPage");
-const loadDiscordSettingsPage = () => import("./sections/DiscordSettingsPage");
-const loadGeneralSettingsPage = () => import("./sections/GeneralSettingsPage");
-const loadGithubSettingsPage = () => import("./sections/GithubSettingsPage");
-const loadGoogleSettingsPage = () => import("./sections/GoogleSettingsPage");
-const loadMapboxSettingsPage = () => import("./mapbox/MapboxSettingsPage");
-const loadModelSettingsPage = () => import("./sections/ModelSettingsPage");
-const loadNineRouterSettingsPage = () => import("./nine-router/NineRouterSettingsPage");
-const loadPersonalizationSettingsPage = () => import("./sections/PersonalizationSettingsPage");
-const loadPdfSettingsPage = () => import("./sections/PdfSettingsPage");
-const loadProvidersSettingsPage = () => import("./sections/ProvidersSettingsPage");
-const loadUsageSettingsPage = () => import("./sections/UsageSettingsPage");
-const loadWeatherSourcesSettingsPage = () => import("./weather-sources/WeatherSourcesSettingsPage");
-
-const AppearanceSettingsPage = lazy(() => loadAppearanceSettingsPage().then((module) => ({ default: module.AppearanceSettingsPage })));
-const BrowserSettingsPage = lazy(() => loadBrowserSettingsPage().then((module) => ({ default: module.BrowserSettingsPage })));
-const BraveSearchSettingsPage = lazy(() => loadBraveSearchSettingsPage().then((module) => ({ default: module.BraveSearchSettingsPage })));
-const ConfigurationSettingsPage = lazy(() => loadConfigurationSettingsPage().then((module) => ({ default: module.ConfigurationSettingsPage })));
-const DatabaseSettingsPage = lazy(() => loadDatabaseSettingsPage().then((module) => ({ default: module.DatabaseSettingsPage })));
-const DiscordSettingsPage = lazy(() => loadDiscordSettingsPage().then((module) => ({ default: module.DiscordSettingsPage })));
-const GeneralSettingsPage = lazy(() => loadGeneralSettingsPage().then((module) => ({ default: module.GeneralSettingsPage })));
-const GithubSettingsPage = lazy(() => loadGithubSettingsPage().then((module) => ({ default: module.GithubSettingsPage })));
-const GoogleSettingsPage = lazy(() => loadGoogleSettingsPage().then((module) => ({ default: module.GoogleSettingsPage })));
-const MapboxSettingsPage = lazy(() => loadMapboxSettingsPage().then((module) => ({ default: module.MapboxSettingsPage })));
-const ModelSettingsPage = lazy(() => loadModelSettingsPage().then((module) => ({ default: module.ModelSettingsPage })));
-const NineRouterSettingsPage = lazy(() => loadNineRouterSettingsPage().then((module) => ({ default: module.NineRouterSettingsPage })));
-const PersonalizationSettingsPage = lazy(() => loadPersonalizationSettingsPage().then((module) => ({ default: module.PersonalizationSettingsPage })));
-const PdfSettingsPage = lazy(() => loadPdfSettingsPage().then((module) => ({ default: module.PdfSettingsPage })));
-const ProvidersSettingsPage = lazy(() => loadProvidersSettingsPage().then((module) => ({ default: module.ProvidersSettingsPage })));
-const UsageSettingsPage = lazy(() => loadUsageSettingsPage().then((module) => ({ default: module.UsageSettingsPage })));
-const WeatherSourcesSettingsPage = lazy(() => loadWeatherSourcesSettingsPage().then((module) => ({ default: module.WeatherSourcesSettingsPage })));
-
-const SETTINGS_SECTION_PRELOADERS: Record<SettingsSectionId, () => Promise<unknown>> = {
-  appearance: loadAppearanceSettingsPage,
-  browser: loadBrowserSettingsPage,
-  braveSearch: loadBraveSearchSettingsPage,
-  configuration: loadConfigurationSettingsPage,
-  database: () => Promise.all([loadPdfSettingsPage(), loadDatabaseSettingsPage()]),
-  discord: loadDiscordSettingsPage,
-  general: () => Promise.all([loadGeneralSettingsPage(), loadPersonalizationSettingsPage()]),
-  github: loadGithubSettingsPage,
-  google: loadGoogleSettingsPage,
-  mapbox: () => Promise.all([loadWeatherSourcesSettingsPage(), loadMapboxSettingsPage()]),
-  model: () => Promise.all([loadProvidersSettingsPage(), loadModelSettingsPage()]),
-  nineRouter: loadNineRouterSettingsPage,
-  pdf: () => Promise.all([loadPdfSettingsPage(), loadDatabaseSettingsPage()]),
-  personalization: () => Promise.all([loadGeneralSettingsPage(), loadPersonalizationSettingsPage()]),
-  providers: () => Promise.all([loadProvidersSettingsPage(), loadModelSettingsPage()]),
-  usage: loadUsageSettingsPage,
-  weatherSources: () => Promise.all([loadWeatherSourcesSettingsPage(), loadMapboxSettingsPage()]),
-};
-
 export function preloadSettingsSection(section: SettingsSectionId) {
-  return SETTINGS_SECTION_PRELOADERS[resolveSettingsNavSection(section)]?.();
+  resolveSettingsNavSection(section);
+  return Promise.resolve();
 }
 
 function isOfflineCatalogError(error: string | null | undefined) {
@@ -228,20 +191,6 @@ function SettingsPageComponent({
       modelCatalogRunRef.current += 1;
       validationRunRef.current += 1;
     };
-  }, []);
-
-  useEffect(() => {
-    void SETTINGS_SECTION_PRELOADERS[displaySection]?.();
-  }, [displaySection]);
-
-  useEffect(() => {
-    return scheduleSettingsIdleTask(() => {
-      const uniquePreloaders = new Set(Object.values(SETTINGS_SECTION_PRELOADERS));
-
-      uniquePreloaders.forEach((preloadSection) => {
-        void preloadSection();
-      });
-    }, 650);
   }, []);
 
   useEffect(() => {
@@ -916,6 +865,10 @@ function SettingsPageComponent({
       return <GoogleSettingsPage />;
     }
 
+    if (displaySection === "keys") {
+      return <KeysSettingsPage settings={settings} onSettingsChange={onSettingsChange} />;
+    }
+
     if (displaySection === "nineRouter") {
       return <NineRouterSettingsPage settings={settings} onActivateProvider={onActivateProvider} onSettingsChange={onSettingsChange} onSubscriptionSandboxUninstalled={onSubscriptionSandboxUninstalled} />;
     }
@@ -982,7 +935,7 @@ function SettingsPageComponent({
     <div className="settings-page">
       <section className="settings-shell" aria-labelledby="settings-section-title" data-section={displaySection}>
         <div className="settings-section-panel" key={displaySection}>
-          <Suspense fallback={null}>{renderActiveSection()}</Suspense>
+          {renderActiveSection()}
         </div>
       </section>
 
@@ -1071,23 +1024,4 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
       .catch(reject)
       .finally(() => window.clearTimeout(timeoutId));
   });
-}
-
-function scheduleSettingsIdleTask(callback: () => void, timeoutMs: number) {
-  if (typeof window === "undefined") {
-    return () => {};
-  }
-
-  const idleWindow = window as Window & {
-    cancelIdleCallback?: (id: number) => void;
-    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  };
-
-  if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
-    const idleId = idleWindow.requestIdleCallback(callback, { timeout: timeoutMs });
-    return () => idleWindow.cancelIdleCallback?.(idleId);
-  }
-
-  const timeoutId = window.setTimeout(callback, timeoutMs);
-  return () => window.clearTimeout(timeoutId);
 }

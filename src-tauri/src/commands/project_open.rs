@@ -1,3 +1,6 @@
+use crate::core::native_path::configure_native_path;
+#[cfg(not(windows))]
+use crate::core::native_path::resolve_native_executable;
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -155,12 +158,13 @@ fn launch_first_available(label: &str, candidates: Vec<LaunchCandidate>) -> Resu
     let mut tried = Vec::new();
     for candidate in candidates {
         let program_label = candidate.program.to_string_lossy().to_string();
-        let mut command = Command::new(&candidate.program);
+        let mut command = Command::new(resolve_launch_program(&candidate.program));
         command
             .args(&candidate.args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        configure_native_path(&mut command);
 
         match command.spawn() {
             Ok(_) => return Ok(()),
@@ -391,10 +395,10 @@ fn terminal_candidates(path: &Path) -> Vec<LaunchCandidate> {
             "osascript",
             vec![
                 OsString::from("-e"),
-                OsString::from(format!(
-                    "tell application \"Terminal\" to do script \"cd {}\"",
+                OsString::from(terminal_applescript_command(&format!(
+                    "cd {}",
                     sh_single_quoted_path(path)
-                )),
+                ))),
                 OsString::from("-e"),
                 OsString::from("tell application \"Terminal\" to activate"),
             ],
@@ -521,10 +525,10 @@ fn claude_code_candidates(path: &Path) -> Vec<LaunchCandidate> {
             "osascript",
             vec![
                 OsString::from("-e"),
-                OsString::from(format!(
-                    "tell application \"Terminal\" to do script \"cd {} && claude\"",
+                OsString::from(terminal_applescript_command(&format!(
+                    "cd {} && claude",
                     sh_single_quoted_path(path)
-                )),
+                ))),
                 OsString::from("-e"),
                 OsString::from("tell application \"Terminal\" to activate"),
             ],
@@ -701,6 +705,18 @@ fn command_candidate(program: impl Into<OsString>, args: Vec<OsString>) -> Launc
     }
 }
 
+fn resolve_launch_program(program: &OsStr) -> OsString {
+    #[cfg(windows)]
+    {
+        return program.to_os_string();
+    }
+
+    #[cfg(not(windows))]
+    {
+        resolve_native_executable(&program.to_string_lossy()).into_os_string()
+    }
+}
+
 fn open_app_args(app_name: &str, path: &Path) -> Vec<OsString> {
     vec![
         OsString::from("-a"),
@@ -757,6 +773,17 @@ fn sh_single_quoted_raw(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
+fn terminal_applescript_command(shell_command: &str) -> String {
+    format!(
+        "tell application \"Terminal\" to do script {}",
+        applescript_string_literal(shell_command)
+    )
+}
+
+fn applescript_string_literal(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,6 +812,16 @@ mod tests {
         assert_eq!(
             sh_single_quoted_path(path),
             "'C:/Users/Example User/it'\\''s here'"
+        );
+    }
+
+    #[test]
+    fn applescript_terminal_command_escapes_embedded_double_quotes() {
+        let command = terminal_applescript_command("cd '/Users/example/a\"b'");
+
+        assert_eq!(
+            command,
+            "tell application \"Terminal\" to do script \"cd '/Users/example/a\\\"b'\""
         );
     }
 }

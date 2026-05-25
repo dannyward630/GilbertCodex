@@ -5,7 +5,7 @@ import { runTopBarEditCommand } from "./topBarEditCommands";
 import { TopBarMenus, type TopBarMenuAction, type TopBarMenuDefinition } from "./TopBarMenus";
 import { handleTopBarDoubleClick, handleTopBarMouseDown } from "./topBarWindowInteractions";
 import { WindowControls } from "./WindowControls";
-import { formatShortcutForPlatform, getHostPlatform, isMacHostPlatform } from "../../lib/hostPlatform";
+import { formatShortcutForPlatform, getHostPlatform, isMacHostPlatform, type HostPlatform } from "../../lib/hostPlatform";
 
 type AuthMenuId = "file" | "edit" | "view" | "window" | "help";
 type AuthMode = "create" | "login";
@@ -13,6 +13,7 @@ type AuthMode = "create" | "login";
 interface AuthTopBarProps {
   activeMode: AuthMode;
   hasAccounts: boolean;
+  hostPlatform?: HostPlatform;
   onModeChange: (mode: AuthMode) => void;
 }
 
@@ -24,12 +25,12 @@ const menuDefinitions: TopBarMenuDefinition<AuthMenuId>[] = [
   { id: "help", label: "Help" },
 ];
 
-export function AuthTopBar({ activeMode, hasAccounts, onModeChange }: AuthTopBarProps) {
+export function AuthTopBar({ activeMode, hasAccounts, hostPlatform, onModeChange }: AuthTopBarProps) {
   const topbarRef = useRef<HTMLElement>(null);
   const [openMenu, setOpenMenu] = useState<AuthMenuId | null>(null);
-  const hostPlatform = getHostPlatform();
-  const isMac = isMacHostPlatform(hostPlatform);
-  const shortcut = (value: string) => formatShortcutForPlatform(value, hostPlatform);
+  const resolvedHostPlatform = hostPlatform ?? getHostPlatform();
+  const isMac = isMacHostPlatform(resolvedHostPlatform);
+  const shortcut = (value: string) => formatShortcutForPlatform(value, resolvedHostPlatform);
 
   const menus = useMemo<Record<AuthMenuId, TopBarMenuAction[]>>(
     () => ({
@@ -90,14 +91,14 @@ export function AuthTopBar({ activeMode, hasAccounts, onModeChange }: AuthTopBar
   return (
     <header ref={topbarRef} className="app-topbar auth-topbar" data-tauri-drag-region onDoubleClick={handleTopBarDoubleClick} onMouseDown={handleTopBarMouseDown}>
       <div className="topbar-left">
-        {isMac ? <WindowControls hostPlatform={hostPlatform} /> : null}
+        {isMac ? <WindowControls hostPlatform={resolvedHostPlatform} /> : null}
         <TopBarMenus ariaLabel="Application menu" className="auth-topbar-menus" definitions={menuDefinitions} menus={menus} openMenu={openMenu} onOpenMenuChange={setOpenMenu} />
       </div>
       <div className="topbar-center">
         <img className="topbar-logo auth-topbar-logo" src="/gilbert-codex-logo.svg" alt="" aria-hidden="true" draggable={false} />
         <span>Gilbert Codex</span>
       </div>
-      {!isMac ? <WindowControls hostPlatform={hostPlatform} /> : null}
+      {!isMac ? <WindowControls hostPlatform={resolvedHostPlatform} /> : null}
     </header>
   );
 }

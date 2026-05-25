@@ -29,6 +29,16 @@ import {
   createPlainTextRevisionBridgeCalls as createFallbackRevisionBridgeCalls,
   formatApprovalRevisionOriginalCalls as formatFallbackRevisionOriginalCalls,
 } from "./approvalRevisionFallback";
+import {
+  createConnectedToolEvidenceRecoveryInstruction,
+  createDeploymentEvidenceRecoveryInstruction,
+  hasConnectedToolEvidence,
+  hasDeploymentToolAttempt,
+  looksLikeUnsupportedConnectedToolActionAnswer,
+  looksLikeUnsupportedDeploymentAnswer,
+  promptRequestsConnectedToolAction,
+  promptRequestsDeploymentAction,
+} from "../../chatRuntime";
 
 const CAPABILITY_INVENTORY_PROMPT_PATTERN =
   /\b(?:what|which|list|show|tell(?:\s+me)?|explain|describe)\b[\s\S]{0,180}\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b|\b(?:tools?|plugins?|apps?|skills?|capabilities?|connectors?)\b[\s\S]{0,180}\b(?:available|enabled|installed|connected|do\s+you\s+have|can\s+you\s+(?:access|call|use|do))\b/i;
@@ -213,6 +223,22 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
     function createToolCapabilityBlockedAnswer(plan: ToolCapabilityPlan) {
       if (CAPABILITY_INVENTORY_PROMPT_PATTERN.test(prompt)) {
         return createFriendlyCapabilityInventoryAnswer(baseRuntimeSettings, plan);
+      }
+
+      if (promptRequestsConnectedToolAction(prompt) || promptRequestsDeploymentAction(prompt)) {
+        const blockedReasons = plan.blockedReasons
+          .map((reason) => `${reason.code}${reason.family ? `/${reason.family}` : ""}: ${reason.detail}`)
+          .slice(0, 4);
+        const requestedFamilies = plan.requiredFamilies.length > 0
+          ? `Requested tool families: ${plan.requiredFamilies.join(", ")}.`
+          : "";
+
+        return [
+          "I could not start the required connected-tool pass because this provider request has no matching callable tools attached.",
+          blockedReasons.length > 0 ? `Blocked gates: ${blockedReasons.join(" | ")}` : "",
+          requestedFamilies,
+          "No MCP, connected-app, connector, terminal deploy, or external service action ran in this turn, so I cannot claim it worked.",
+        ].filter(Boolean).join("\n\n");
       }
 
       const blockedReasons = plan.blockedReasons
@@ -1646,6 +1672,15 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         : toolSelectionPrompt ?? prompt;
       const workspaceMutationNeeded = !approvedPlanExecution && requiresWorkspaceMutationForPrompt(bridgeSelectionPrompt, workspaceSettings.enabled);
       const workspaceMutationIncomplete = Boolean(workspaceMutationNeeded && !hasSuccessfulApprovedPlanMutation(allToolCalls) && !toolBudgetReached);
+      const deploymentActionRequested = promptRequestsDeploymentAction(bridgeSelectionPrompt);
+      const deploymentEvidenceRequiredForPass = Boolean(deploymentActionRequested && !hasDeploymentToolAttempt(allToolCalls) && !toolBudgetReached);
+      const connectedToolActionRequested = !deploymentActionRequested && promptRequestsConnectedToolAction(bridgeSelectionPrompt);
+      const connectedToolEvidenceRequiredForPass = Boolean(connectedToolActionRequested && !hasConnectedToolEvidence(allToolCalls) && !toolBudgetReached);
+      const capabilitySelectionPrompt = [
+        bridgeSelectionPrompt,
+        deploymentEvidenceRequiredForPass ? "MCP deployment/hosting tool discovery is required for this pass." : "",
+        connectedToolEvidenceRequiredForPass ? "Connected app, connector, plugin, and MCP tool discovery is required for this pass." : "",
+      ].filter(Boolean).join("\n\n");
       const latestUserPromptNeedsWebSearch = shouldAttachWebSearch(prompt);
       const freshLocalEvidenceNeeded = needsFreshLocalToolEvidence(bridgeSelectionPrompt, workspaceSettings.enabled);
       const freshLocalEvidenceRequiredForPass = freshLocalEvidenceNeeded && allToolCalls.length === 0 && !toolBudgetReached;
@@ -1665,6 +1700,8 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const mustUseToolsForPass =
         approvedPlanNeedsToolExecution ||
         workspaceMutationIncomplete ||
+        deploymentEvidenceRequiredForPass ||
+        connectedToolEvidenceRequiredForPass ||
         freshLocalEvidenceRequiredForPass ||
         workspaceToolCallRequiredForPass ||
         approvalRevisionToolCallRequiredForPass;
@@ -1698,11 +1735,15 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const requiredFamilies: ToolBridgeToolFamily[] = [
         ...(approvedPlanNeedsMutation || workspaceMutationIncomplete ? ["editing" as const] : []),
         ...(approvedPlanNeedsWorkspaceTool || workspaceMutationIncomplete || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass ? workspaceToolFamilies : []),
+        ...(deploymentEvidenceRequiredForPass ? ["mcp" as const, "terminal" as const] : []),
+        ...(connectedToolEvidenceRequiredForPass ? ["mcp" as const, "github" as const, "gmail" as const, "calendar" as const] : []),
         ...(approvalRevisionToolCallRequiredForPass ? approvalRevisionRequiredFamilies : []),
       ];
       const toolIntent: ToolIntent[] = [
         ...(approvedPlanNeedsMutation || workspaceMutationIncomplete ? ["workspace_mutation" as const] : []),
         ...(approvedPlanNeedsWorkspaceTool || workspaceMutationIncomplete || freshLocalEvidenceRequiredForPass || workspaceToolCallRequiredForPass ? ["workspace_evidence" as const] : []),
+        ...(deploymentEvidenceRequiredForPass ? ["terminal" as const] : []),
+        ...(connectedToolEvidenceRequiredForPass ? ["gmail" as const, "calendar" as const] : []),
         ...(approvalRevisionToolCallRequiredForPass && approvalRevisionRequiredFamilies.includes("gmail") ? ["gmail" as const] : []),
         ...(approvalRevisionToolCallRequiredForPass && approvalRevisionRequiredFamilies.includes("calendar") ? ["calendar" as const] : []),
         ...(latestUserPromptNeedsWebSearch ? ["web_search" as const] : []),
@@ -1736,7 +1777,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         availableTools: availableBridgeTools,
         blockedReasons: baseBlockedReasons,
         mustUseTools: mustUseToolsForPass,
-        prompt: bridgeSelectionPrompt,
+        prompt: capabilitySelectionPrompt,
         providerFormat,
         requestedToolChoice: approvalRevisionToolCallRequiredForPass ? "required" : undefined,
         requiredFamilies,
@@ -1778,7 +1819,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
           availableTools: availableBridgeTools,
           blockedReasons: baseBlockedReasons,
           mustUseTools: true,
-          prompt: bridgeSelectionPrompt,
+          prompt: capabilitySelectionPrompt,
           providerFormat,
           requiredFamilies: ["web"],
           requestedToolChoice: "required",
@@ -2258,6 +2299,8 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         const unnecessaryConfirmation = !hasSubstantiveFinalAnswer && looksLikeUnnecessaryLocalActionConfirmation(finalResponse.content, allToolCalls);
         const contradictedSuccessfulFileMutation = looksLikeContradictedSuccessfulFileMutationAnswer(finalResponse.content, allToolCalls);
         const visibleToolResultLeak = isVisibleToolResultLeak(finalResponse.content, allToolCalls);
+        const unsupportedDeploymentAnswer = deploymentActionRequested && looksLikeUnsupportedDeploymentAnswer(finalResponse.content, allToolCalls);
+        const unsupportedConnectedToolAnswer = connectedToolActionRequested && looksLikeUnsupportedConnectedToolActionAnswer(finalResponse.content, allToolCalls);
         const localToolEvidenceRequired =
           allToolCalls.length === 0 &&
           freshLocalToolEvidenceRetries < 2 &&
@@ -2266,7 +2309,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         const approvedPlanExecutionIncomplete = Boolean(approvedPlanExecution && !toolBudgetReached && approvedPlanNeedsToolExecution);
         const approvalRevisionIncomplete = approvalRevisionRequiresToolCall && !toolBudgetReached;
 
-        if (approvedPlanExecutionIncomplete || workspaceMutationIncomplete || approvalRevisionIncomplete || localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolProgress || inFlightToolPlanning || privateThinkingNarration || toolProtocolNarration || unexecutedToolActionPromise || unappliedFileEditAnswer || unnecessaryConfirmation || contradictedSuccessfulFileMutation || visibleToolResultLeak) {
+        if (approvedPlanExecutionIncomplete || workspaceMutationIncomplete || deploymentEvidenceRequiredForPass || connectedToolEvidenceRequiredForPass || approvalRevisionIncomplete || localToolEvidenceRequired || looksLikeOnlyToolPrelude(finalResponse.content) || looksLikeInternalToolRecoveryAnswer(finalResponse.content) || fabricatedToolProgress || inFlightToolPlanning || privateThinkingNarration || toolProtocolNarration || unexecutedToolActionPromise || unappliedFileEditAnswer || unnecessaryConfirmation || contradictedSuccessfulFileMutation || unsupportedDeploymentAnswer || unsupportedConnectedToolAnswer || visibleToolResultLeak) {
           if (approvalRevisionIncomplete) {
             const fallbackApprovalResponse = await createApprovalRevisionFallbackResponse(finalResponse.content, bridgeContext, passIndex);
 
@@ -2312,6 +2355,26 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               };
             }
 
+            if (deploymentEvidenceRequiredForPass) {
+              return {
+                artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+                content: "I could not complete the requested deployment cleanly. No successful MCP or terminal deploy/publish tool result was recorded, so I cannot claim the site is live.",
+                progress: localProgress,
+                sources: allSources.length > 0 ? allSources : undefined,
+                toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+              };
+            }
+
+            if (connectedToolEvidenceRequiredForPass) {
+              return {
+                artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+                content: "I could not complete the requested connected-tool action cleanly. No MCP, native app, or connector tool result was recorded, so I cannot claim it ran.",
+                progress: localProgress,
+                sources: allSources.length > 0 ? allSources : undefined,
+                toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+              };
+            }
+
             const synthesizedResponse = await synthesizeAnswerFromSavedToolResults(
               [...messages, createMessage("assistant", assistantResponse.content)],
               fabricatedToolProgress
@@ -2336,6 +2399,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
                   ? "The previous finalization attempt pasted proposed updated files, but no mutating edit/write tool call succeeded. Apply the edit with real tools instead."
                 : contradictedSuccessfulFileMutation
                   ? "The previous finalization attempt contradicted successful file edit/write tool evidence. Treat the saved file mutation results as already applied and write a normal answer."
+                : unsupportedDeploymentAnswer
+                  ? "The previous finalization attempt claimed or deferred deployment without a successful deploy/publish tool result. Use MCP or terminal deployment tools instead of repeating that answer."
+                : unsupportedConnectedToolAnswer
+                  ? "The previous finalization attempt claimed, deferred, or denied a connected-tool action without current connected-tool evidence. Use MCP, Gmail, Google Calendar, or GitHub tools instead of repeating that answer."
                 : visibleToolResultLeak
                   ? "The previous finalization attempt repeated raw tool result text. Use the saved tool evidence to write a normal answer instead."
                 : "The previous finalization attempt exposed tool progress instead of a user-facing answer. Write the actual answer from the completed tool evidence.",
@@ -2358,6 +2425,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
             ? createLocalComputerProgress("active", "Executing approved plan")
             : workspaceMutationIncomplete
               ? createLocalComputerProgress("active", "Applying file changes")
+            : deploymentEvidenceRequiredForPass
+              ? createLocalComputerProgress("active", "Deploying requested site")
+            : connectedToolEvidenceRequiredForPass
+              ? createLocalComputerProgress("active", "Using connected tools")
             : approvalRevisionIncomplete
               ? createLocalComputerProgress("active", "Revising approved tool action")
             : {
@@ -2378,6 +2449,10 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
               ? "Executing approved plan..."
               : workspaceMutationIncomplete
                 ? "Applying requested file changes..."
+              : deploymentEvidenceRequiredForPass
+                ? "Requesting deployment tool evidence..."
+              : connectedToolEvidenceRequiredForPass
+                ? "Requesting connected tool evidence..."
               : approvalRevisionIncomplete
                 ? "Requesting revised tool action..."
               : localToolEvidenceRequired
@@ -2395,6 +2470,14 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
                 ? createApprovedPlanExecutionRetryInstruction(approvedPlanExecution, finalResponse.content, allToolCalls)
                 : workspaceMutationIncomplete
                 ? createUnappliedFileEditRecoveryInstruction(bridgeSelectionPrompt, finalResponse.content)
+                : deploymentEvidenceRequiredForPass
+                ? createDeploymentEvidenceRecoveryInstruction(bridgeSelectionPrompt, finalResponse.content, {
+                    canUseProviderTools: Boolean(bridgeOptions?.tools?.length),
+                  })
+                : connectedToolEvidenceRequiredForPass
+                ? createConnectedToolEvidenceRecoveryInstruction(bridgeSelectionPrompt, finalResponse.content, {
+                    canUseProviderTools: Boolean(bridgeOptions?.tools?.length),
+                  })
                 : approvalRevisionIncomplete
                 ? createFinalAnswerRecoveryInstruction(
                     prompt,
@@ -2427,6 +2510,14 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
                       prompt,
                       "The previous response said there was no edit/write result even though a successful file mutation tool result exists. Treat the file changes as already applied and summarize the completed work.",
                     )
+                : unsupportedDeploymentAnswer
+                  ? createDeploymentEvidenceRecoveryInstruction(prompt, finalResponse.content, {
+                      canUseProviderTools: Boolean(bridgeOptions?.tools?.length),
+                    })
+                : unsupportedConnectedToolAnswer
+                  ? createConnectedToolEvidenceRecoveryInstruction(prompt, finalResponse.content, {
+                      canUseProviderTools: Boolean(bridgeOptions?.tools?.length),
+                    })
                 : localProgress
                 ? createLocalToolFinalInstruction(prompt)
                 : createFinalAnswerRecoveryInstruction(

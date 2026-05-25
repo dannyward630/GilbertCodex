@@ -1,6 +1,6 @@
 {
   "name": "gilbert-codex",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "GUI-first local desktop agent workspace built with React, Tauri, and Rust.",
   "license": "MIT",
   "type": "module",
@@ -52,10 +52,10 @@
     "app:build:linux": "tauri build --bundles deb,appimage --config src-tauri/tauri.linux.conf.json",
     "installer:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-installer-assets.ps1",
     "app:installer": "npm run installer:assets && npm run dictation:model && npm run dictation:vulkan-sdk && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-whisper-command.ps1 tauri build --bundles nsis --features offline-dictation-gpu",
-    "app:release": "npm run installer:assets && npm run dictation:model && npm run dictation:vulkan-sdk && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-whisper-command.ps1 tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json --features offline-dictation-gpu",
+    "app:release": "node scripts/run-tauri-host-release.mjs",
     "app:release:windows": "npm run installer:assets && npm run dictation:model && npm run dictation:vulkan-sdk && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-whisper-command.ps1 tauri build --bundles nsis --config src-tauri/tauri.updater.conf.json --features offline-dictation-gpu",
-    "app:release:macos": "tauri build --bundles app,dmg --config src-tauri/tauri.updater.conf.json",
-    "app:release:linux": "tauri build --bundles deb,appimage --config src-tauri/tauri.updater.conf.json"
+    "app:release:macos": "tauri build --bundles app,dmg --config src-tauri/tauri.macos.updater.conf.json",
+    "app:release:linux": "tauri build --bundles deb,appimage --config src-tauri/tauri.linux.updater.conf.json"
   },
   "engines": {
     "node": ">=18"

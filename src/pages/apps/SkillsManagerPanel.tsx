@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { BadgeCheck, CheckCircle2, Copy, FileText, FolderOpen, Plus, ShieldCheck, Sparkles, ToggleLeft, ToggleRight, Trash2, Upload, Wand2 } from "lucide-react";
+import { BadgeCheck, CheckCircle2, Copy, FileText, FolderOpen, KeyRound, Plus, ShieldCheck, Sparkles, ToggleLeft, ToggleRight, Trash2, Upload, Wand2 } from "lucide-react";
 import {
   importSkillFromFolder,
   installSkillPreset,
@@ -14,6 +14,7 @@ import { DialogShell } from "../../components/dialogs/AppDialog";
 import type { AppSkill, SkillDraft, SkillPreset, SkillRegistryState, SkillSafetyLevel } from "../../types/skills";
 
 interface SkillsManagerPanelProps {
+  onOpenKeysSettings: () => void;
   searchQuery: string;
 }
 
@@ -39,7 +40,7 @@ const EMPTY_SKILL_DRAFT: SkillDraftForm = {
   trigger: "",
 };
 
-export function SkillsManagerPanel({ searchQuery }: SkillsManagerPanelProps) {
+export function SkillsManagerPanel({ onOpenKeysSettings, searchQuery }: SkillsManagerPanelProps) {
   const [registry, setRegistry] = useState<SkillRegistryState>(() => loadSkillRegistry());
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(() => loadSkillRegistry().skills.find((skill) => skill.installed)?.id ?? null);
   const [editorSkill, setEditorSkill] = useState<AppSkill | null>(null);
@@ -163,6 +164,10 @@ export function SkillsManagerPanel({ searchQuery }: SkillsManagerPanelProps) {
         </div>
 
         <div className="apps-mcp-board-actions">
+          <button className="apps-plugin-secondary" type="button" onClick={onOpenKeysSettings}>
+            <KeyRound size={15} aria-hidden="true" />
+            Keys
+          </button>
           <button className="apps-plugin-primary" type="button" disabled={busyAction === "import"} onClick={() => void handleImportFolder()}>
             <FolderOpen size={15} aria-hidden="true" />
             {busyAction === "import" ? "Importing" : "Import folder"}

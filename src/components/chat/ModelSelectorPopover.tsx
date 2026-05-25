@@ -369,8 +369,7 @@ function getModelSelectorBounds(anchor: HTMLElement) {
   const rightOverlayRect =
     getVisibleRect(document.querySelector(".right-rail")) ??
     getVisibleRect(document.querySelector(".browser-preview-panel")) ??
-    getVisibleRect(document.querySelector(".coding-sidecar-panel")) ??
-    getVisibleRect(document.querySelector(".git-review-panel"));
+    getVisibleRect(document.querySelector(".coding-sidecar-panel"));
   const rawBounds = workspaceRect
     ? {
         bottom: Math.min(workspaceRect.bottom, viewportRect.bottom),
