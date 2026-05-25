@@ -421,17 +421,17 @@ jobs:
 
           if (( ${#missing[@]} > 0 )); then
             echo "available=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice::Skipping trusted macOS release artifacts because Apple signing/notarization secrets are missing: ${missing[*]}. Add these secrets to publish macOS DMG/app updater artifacts."
+            echo "::notice::Apple signing/notarization secrets are missing: ${missing[*]}. Building ad-hoc macOS DMG/app updater artifacts without notarization."
             exit 0
           fi
 
           echo "available=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Skip macOS release artifacts
+      - name: Note ad-hoc macOS release artifacts
         if: steps.apple_signing.outputs.available != 'true'
         shell: bash
         run: |
-          echo "Trusted macOS release artifacts were skipped because Apple Developer signing/notarization secrets are not configured yet."
+          echo "macOS artifacts will be ad-hoc signed and not notarized because Apple Developer signing/notarization secrets are not configured yet."
 
       - name: Import Apple Developer ID certificate
         if: steps.apple_signing.outputs.available == 'true'
@@ -467,7 +467,6 @@ jobs:
           echo "signing_identity=${signing_identity}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve release tag
-        if: steps.apple_signing.outputs.available == 'true'
         id: release_tag
         shell: bash
         run: |
@@ -484,7 +483,6 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve release notes
-        if: steps.apple_signing.outputs.available == 'true'
         id: release_notes
         shell: bash
         run: |
@@ -508,7 +506,7 @@ jobs:
             echo "GILBERT_RELEASE_NOTES"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build macOS updater release
+      - name: Build trusted macOS updater release
         if: steps.apple_signing.outputs.available == 'true'
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
@@ -530,8 +528,25 @@ jobs:
           includeUpdaterJson: true
           assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
 
+      - name: Build ad-hoc macOS updater release
+        if: steps.apple_signing.outputs.available != 'true'
+        uses: tauri-apps/tauri-action@action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release_tag.outputs.tag }}
+          releaseName: Gilbert Codex ${{ steps.release_tag.outputs.tag }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: false
+          tauriScript: npm run tauri:direct
+          args: --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.macos.updater.conf.json
+          includeUpdaterJson: true
+          assetNamePattern: Gilbert-Codex-[version]-macos-${{ matrix.asset_arch }}[ext]
+
       - name: Upload macOS checksums
-        if: steps.apple_signing.outputs.available == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
