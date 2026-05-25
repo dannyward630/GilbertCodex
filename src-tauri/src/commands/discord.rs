@@ -1403,7 +1403,7 @@ fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
 
 #[cfg(all(not(windows), not(target_os = "macos")))]
 fn push_common_ngrok_dirs(dirs: &mut Vec<PathBuf>) {
-    for directory in common_unix_ngrok_dirs(home_dir_for_path_expansion()) {
+    for directory in common_linux_ngrok_dirs(home_dir_for_path_expansion()) {
         push_ngrok_root(dirs, directory);
     }
 }
@@ -1430,13 +1430,18 @@ fn common_unix_ngrok_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
         );
     }
 
-    if !cfg!(target_os = "macos") {
-        dirs.push(PathBuf::from("/usr/local/bin"));
-        dirs.push(PathBuf::from("/usr/bin"));
-        dirs.push(PathBuf::from("/bin"));
-        dirs.push(PathBuf::from("/snap/bin"));
-        dirs.push(PathBuf::from("/var/lib/flatpak/exports/bin"));
-    }
+    dirs
+}
+
+#[cfg(any(test, all(not(windows), not(target_os = "macos"))))]
+fn common_linux_ngrok_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = common_unix_ngrok_dirs(home);
+
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs.push(PathBuf::from("/usr/bin"));
+    dirs.push(PathBuf::from("/bin"));
+    dirs.push(PathBuf::from("/snap/bin"));
+    dirs.push(PathBuf::from("/var/lib/flatpak/exports/bin"));
 
     dirs
 }
@@ -1915,7 +1920,7 @@ mod tests {
     #[test]
     fn linux_ngrok_dirs_include_user_and_desktop_bins() {
         let home = PathBuf::from("/home/example");
-        let dirs = common_unix_ngrok_dirs(Some(home.clone()));
+        let dirs = common_linux_ngrok_dirs(Some(home.clone()));
 
         assert!(dirs.contains(&home.join(".local").join("bin")));
         assert!(dirs.contains(&home.join(".asdf").join("shims")));

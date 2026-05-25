@@ -7,7 +7,7 @@ import {
   CONNECTED_TOOL_SERVICE_PROMPT_PATTERN,
   DEPLOYMENT_HOSTING_PROMPT_PATTERN,
   DEPLOYMENT_TOOL_EVIDENCE_PATTERN,
-} from "../toolBridge/mcpServicePatterns";
+} from "../lib/mcpServicePatterns";
 import { createLocalComputerToolCallPreviews, createLocalComputerToolRequestContent, hasLocalComputerToolCalls } from "../localWorkspace/localToolRuntimeDisabled";
 import type { LocalComputerToolExecutionPolicy } from "../localWorkspace/localToolRuntimeDisabled";
 import type {
