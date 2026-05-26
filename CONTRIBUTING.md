@@ -61,6 +61,14 @@ Use [Branching And Release Model](docs/BRANCHING.md) and [Contribution Process](
 - Treat terminal, file write, and full-computer scope changes as security-sensitive.
 - Keep large behavior changes split into reviewable pieces unless the behavior must land together.
 
+## License Boundary
+
+Gilbert Codex uses a split license: implementation code and developer documentation are available under MIT except for Reserved Materials, while the Gilbert Codex UI, UX visual design, product identity, branding, screenshots, installer artwork, promotional assets, product look and feel, and agent tool system are proprietary and all rights are reserved.
+
+By submitting a contribution, you agree that your contribution is provided under the repository license in [LICENSE](LICENSE). Contributions that add or change UI, UX, branding, screenshots, installer artwork, promotional material, AI tools, tool schemas, tool prompts, permission flows, or local action/tool orchestration become part of the Reserved Materials unless maintainers explicitly mark them otherwise in writing.
+
+Do not open pull requests that copy another product's protected UI, brand, trade dress, or permissioned tool system, and do not reuse Gilbert Codex protected UI, tool system, or brand assets outside this project without written permission. See [License And UI Protection](docs/LICENSE_POLICY.md).
+
 ## Pull Request Shape
 
 Use a short title and include:

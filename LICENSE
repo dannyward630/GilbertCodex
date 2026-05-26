@@ -1,13 +1,23 @@
-MIT License
+Gilbert Codex Repository License
 
 Copyright (c) 2026 Gilbert Codex Contributors
 
+This repository uses a split license. The project is shared so people can
+study the idea and contribute to the implementation. The Gilbert Codex
+product identity, user interface design, and agent tool system are
+proprietary.
+
+1. MIT Licensed Materials
+
+Except for the Reserved Materials listed below, application source code and
+developer documentation in this repository are licensed under the MIT License:
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+of the MIT Licensed Materials and associated documentation files (the
+"Software"), to deal in the Software without restriction, including without
+limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom
+the Software is furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
@@ -19,3 +29,44 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+2. Reserved Materials - All Rights Reserved
+
+The MIT License above does not grant permission to copy, clone, reuse,
+redistribute, sublicense, sell, or create derivative works from the Reserved
+Materials.
+
+Reserved Materials include:
+
+- The Gilbert Codex name, logos, marks, app icons, installer artwork,
+  screenshots, promotional assets, and product identity.
+- The Gilbert Codex user interface and user experience visual design,
+  including the exact layout, window chrome, chat workspace, composer,
+  sidebars, settings pages, Apps/Skills/Plugins surfaces, color palettes,
+  spacing, typography choices, animations, component composition, and overall
+  look and feel.
+- The Gilbert Codex agent tool system, including AI tool names, schemas,
+  tool-call contracts, tool prompts, app-managed tool workflows, local action
+  bridge behavior, permission flows, connected-tool presets, automation/tool
+  orchestration, and visible tool-progress protocols.
+- Files under `docs/assets/`, `public/`, `src-tauri/icons/`, and
+  `src-tauri/windows/`.
+- UI implementation files under `src/components/`, `src/pages/`, and
+  `src/styles/` to the extent they embody or reproduce the Gilbert Codex
+  visual design.
+- Tool implementation and definition files under `src/prompts/agent/`,
+  `src/app/workspace/tools/`, `src/localWorkspace/`, `src/tools/`,
+  `src/coding/`, `src-tauri/src/commands/computer/`,
+  `src-tauri/src/commands/mcp.rs`, `src-tauri/src/commands/terminal.rs`,
+  `src-tauri/src/commands/agent_runs.rs`, and `src/toolBridge/` to the extent
+  they embody or reproduce the Gilbert Codex agent tool system.
+
+You may study the product idea and architecture. You may not ship a product
+that copies, substantially replicates, or confusingly imitates the Gilbert
+Codex UI, trade dress, product identity, branding, or agent tool system
+without written permission. Gilbert Codex AI tools may be used only through
+authorized Gilbert Codex builds, authorized project workflows, or separate
+written permission from the maintainers.
+
+Unauthorized use, copying, distribution, or external integration of Reserved
+Materials may result in legal action.

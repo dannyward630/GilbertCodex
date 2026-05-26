@@ -1,6 +1,6 @@
 # Gilbert Codex Promo Assets
 
-This folder contains a lightweight promotional scene for sharing Gilbert Codex as an open-source desktop agent workspace.
+This folder contains a lightweight promotional scene for sharing Gilbert Codex as a source-available desktop agent workspace with a protected UI, tool system, and brand.
 
 Last reviewed for the v0.8.2 release prep on May 25, 2026. Recapture the screenshots after major composer, chat workspace, subscription, image-generation, voice, Apps, MCP, Keys, or settings UI changes so the public README does not drift behind the app.
 
@@ -48,4 +48,4 @@ If Playwright is not available in the local environment, install it outside the 
 
 ## GitHub Sharing Notes
 
-GitHub READMEs are friendlier to images than repo-hosted video tags. Keep release assets focused on installable builds and checksums. Use the social preview banner plus current screenshots in README copy, and only attach standalone video to issues, discussions, or social posts when needed.
+GitHub READMEs are friendlier to images than repo-hosted video tags. Keep release assets focused on installable builds and checksums. Use the social preview banner plus current screenshots in README copy, and only attach standalone video to issues, discussions, or social posts when needed. These screenshots and promo assets are Reserved Materials under the repository license.

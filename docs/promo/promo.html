@@ -290,8 +290,8 @@
           drawLogo(70, 58, 48, 1);
           drawText("Gilbert Codex", 106, 40, 22, colors.text, 800);
           drawText("local desktop agent workspace", 106, 68, 13, colors.muted, 650);
-          drawPill("MIT", 1126, 38, colors.gold, 70);
-          drawPill("open source", 1020, 38, colors.green, 96);
+          drawPill("code MIT", 1114, 38, colors.gold, 92);
+          drawPill("UI/tools protected", 948, 38, colors.green, 158);
         });
       }
 
@@ -484,7 +484,7 @@
 
         fillRound(x + 24, y + h - 112, w - 54, 78, 15, "rgba(128, 223, 184, 0.075)");
         strokeRound(x + 24, y + h - 112, w - 54, 78, 15, "rgba(128, 223, 184, 0.16)");
-        drawText("Open-source posture", x + 48, y + h - 92, 15, colors.green, 790);
+        drawText("Public repo posture", x + 48, y + h - 92, 15, colors.green, 790);
         drawText("Generated output, local logs, databases, and secrets stay out of Git.", x + 48, y + h - 64, 13, colors.text, 560);
 
         drawText("Repo checks", railX + 20, y + 22, 17, colors.text, 780);
@@ -492,7 +492,7 @@
           ["npm run check", colors.green],
           ["git diff --check", colors.blue],
           ["audit prod deps", colors.gold],
-          ["MIT license", colors.purple],
+          ["protected tools", colors.purple],
         ];
         checks.forEach((check, index) => {
           const rowY = y + 84 + index * 62;
@@ -565,7 +565,7 @@
           drawLogo(WIDTH / 2, cardY, 104, 1);
           drawText("Build with us", WIDTH / 2, cardY + 86, 58, colors.text, 850, "center");
           drawText("github.com/UrbanWafflezz/GilbertCodex", WIDTH / 2, cardY + 158, 28, colors.green, 760, "center");
-          drawText("MIT | local-first | React + Tauri + Rust | collaboration-ready", WIDTH / 2, cardY + 204, 18, colors.muted, 600, "center");
+          drawText("code MIT | UI/tools protected | React + Tauri + Rust", WIDTH / 2, cardY + 204, 18, colors.muted, 680, "center");
 
           const x = 318;
           const y = cardY + 268;

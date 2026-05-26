@@ -29,6 +29,7 @@ Delivered:
 - Voluntary support/funding page using public hosted links only, with secret-like values rejected before display.
 - Apps page with live Gmail, Google Calendar, GitHub, MCP, plugin, and Skills management surfaces.
 - Documentation refreshed for the current public alpha story, updater release path, and contributor readiness.
+- Repository licensing now separates MIT-licensed implementation code from proprietary Gilbert Codex UI, visual design, branding, screenshots, installer artwork, promotional assets, and agent tool system.
 - v0.8.x subscription setup keeps install, sign-in, model selection, usage/quota, and fallback states separated so users can understand what is ready before they send.
 - Model and composer labels now show the route source, including subscription accounts, OpenRouter routes, direct provider APIs, and local model servers.
 - Full-computer workspace mode can lazily resolve host roots for precise absolute paths while normal selected-folder mode remains project-scoped.
@@ -68,4 +69,4 @@ Known alpha limits:
 - Whether high-impact GitHub release and workflow actions should require a dedicated confirmation card even in full-access mode.
 - How much provider-native tool behavior should be exposed versus normalized through the app bridge.
 - Which voice and multimodal capabilities should land before the next larger public milestone.
-- Which license should remain final if MIT is not the long-term project choice.
+- Whether a formal contributor agreement is needed before accepting larger outside UI, branding, design, or AI tool contributions.

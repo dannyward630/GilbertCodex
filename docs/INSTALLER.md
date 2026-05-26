@@ -78,7 +78,7 @@ Offline dictation is prepared during the Windows release build. The workflow dow
 - The built React frontend from `dist`.
 - Bundled Rust-side runtime dependencies, including SQLite through `rusqlite`'s bundled feature.
 - Offline dictation resources prepared during the build, including the verified Whisper model bundled as a Tauri resource.
-- App icons, Windows shortcut metadata, publisher metadata, homepage metadata, and the MIT license page.
+- App icons, Windows shortcut metadata, publisher metadata, homepage metadata, and the repository license page.
 - A WebView2 runtime check. If WebView2 is missing or older than the configured minimum, the installer downloads and runs Microsoft's bootstrapper silently.
 - A selectable install scope so the user can install for the current account or system-wide.
 

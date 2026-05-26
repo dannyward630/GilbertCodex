@@ -28,7 +28,7 @@
   <a href="https://modelcontextprotocol.io/"><img alt="MCP ready" src="https://img.shields.io/badge/MCP-ready-7c3aed"></a>
   <a href="https://tauri.app/"><img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db"></a>
   <a href="https://react.dev/"><img alt="React 18" src="https://img.shields.io/badge/React-18-61dafb"></a>
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <a href="LICENSE"><img alt="Code MIT plus protected UI" src="https://img.shields.io/badge/License-Code%20MIT%20%2B%20Protected%20UI-4f46e5"></a>
 </p>
 
 ## v0.8.2 Is The Connected Platform Build
@@ -319,7 +319,7 @@ npm run audit:prod
 git diff --check
 ```
 
-Use [CONTRIBUTING.md](CONTRIBUTING.md) for coding and review standards, [docs/CODE_DOCUMENTATION.md](docs/CODE_DOCUMENTATION.md) for source comment expectations, and [PROGRESS.md](PROGRESS.md) for the current roadmap.
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for coding and review standards, [docs/CODE_DOCUMENTATION.md](docs/CODE_DOCUMENTATION.md) for source comment expectations, [docs/LICENSE_POLICY.md](docs/LICENSE_POLICY.md) for the license boundary, and [PROGRESS.md](PROGRESS.md) for the current roadmap.
 
 Branch and contribution flow:
 
@@ -330,4 +330,6 @@ Branch and contribution flow:
 
 ## License
 
-Gilbert Codex is released under the [MIT License](LICENSE).
+Gilbert Codex uses a split license. Implementation code and developer documentation are available under MIT except for Reserved Materials. The Gilbert Codex UI, UX visual design, product identity, brand assets, screenshots, installer artwork, promotional assets, product look and feel, and agent tool system are proprietary and all rights are reserved.
+
+Do not copy, clone, substantially replicate, repackage, or externally integrate the Gilbert Codex UI, branding, or AI tool system without written permission. Gilbert Codex AI tools may be used only through authorized Gilbert Codex builds, authorized project workflows, or separate written permission. See [LICENSE](LICENSE) and [License And UI Protection](docs/LICENSE_POLICY.md).

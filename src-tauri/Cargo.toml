@@ -4,7 +4,7 @@ version = "0.8.2"
 description = "GUI-first local agent workspace."
 authors = ["Gilbert Codex Contributors"]
 edition = "2021"
-license = "MIT"
+license-file = "../LICENSE"
 
 [lib]
 name = "gilbert_codex_lib"

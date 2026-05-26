@@ -1,6 +1,14 @@
-# Open Source Readiness Checklist
+# Public Release Readiness Checklist
 
 Use this checklist before publishing, tagging a release, or inviting outside collaborators.
+
+## License And UI Protection
+
+- Confirm the public README, package metadata, Cargo metadata, installer docs, and promo assets do not describe the whole repository as plain MIT.
+- Confirm [../LICENSE](../LICENSE) and [LICENSE_POLICY.md](LICENSE_POLICY.md) are linked from contributor-facing docs.
+- Confirm protected UI screenshots, brand assets, app icons, installer artwork, promotional materials, AI tool definitions, tool prompts, tool schemas, permission flows, and local action/tool orchestration remain covered by the Reserved Materials language.
+- Do not use GitHub license-template wording or badges that imply the Gilbert Codex UI, brand, visual design, or agent tool system is MIT-licensed.
+- Before inviting outside contributors at scale, have counsel review the split license, contribution terms, copyright posture, trademark/trade dress posture, and whether a contributor agreement is needed.
 
 ## Repository Hygiene
 
@@ -38,7 +46,7 @@ If a restricted shell blocks Vite config resolution on Windows, rerun `npm.cmd r
 
 - Frontend app composition belongs in `src/app`.
 - Route-level views belong in `src/pages`.
-- Reusable UI belongs in `src/components`, grouped by product area.
+- Reusable UI belongs in `src/components`, grouped by product area, and remains covered by the protected UI/design boundary when it embodies Gilbert Codex visual expression.
 - Provider, planning, usage, and search clients belong in `src/services`.
 - Provider runtime work should stay documented, tested, and permissioned before new host-facing capabilities are enabled broadly.
 - Shared contracts belong in `src/types`.
