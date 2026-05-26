@@ -380,10 +380,62 @@ export function createProviderVisibleToolSchema(tool: ToolDefinition) {
 '@
 
 Write-ShimFile "adapters\index.ts" @'
-import type { ProviderToolBridgeOptions, ToolBridgeProviderFormat } from "../types";
+import type { ProviderToolBridgeOptions, ToolBridgeProviderFormat, ToolDefinition } from "../types";
 
-export function applyToolBridgeToProviderRequest<T>(body: T, _format: ToolBridgeProviderFormat, _toolBridge?: ProviderToolBridgeOptions): T {
+export function applyToolBridgeToProviderRequest<T>(body: T, format: ToolBridgeProviderFormat, toolBridge?: ProviderToolBridgeOptions): T {
+  if (!toolBridge?.tools?.length || toolBridge.toolChoice === "none") {
+    return body;
+  }
+
+  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const providerVisibleToolIds = new Set(toolBridge.providerVisibleToolIds ?? []);
+  const tools = toolBridge.tools.filter((tool) => providerVisibleToolIds.size === 0 || providerVisibleToolIds.has(tool.id));
+
+  if (tools.length === 0) {
+    return body;
+  }
+
+  if (format === "anthropic-messages") {
+    record.tools = tools.map(toAnthropicTool);
+  } else if (format === "openai-responses") {
+    record.tools = tools.map(toResponsesTool);
+  } else {
+    record.tools = tools.map(toOpenAiCompatibleTool);
+  }
+
+  if (toolBridge.toolChoice && toolBridge.toolChoice !== "auto") {
+    record.tool_choice = toolBridge.toolChoice;
+  }
+
   return body;
+}
+
+function toOpenAiCompatibleTool(tool: ToolDefinition) {
+  return {
+    function: {
+      description: tool.description,
+      name: tool.id,
+      parameters: tool.inputSchema,
+    },
+    type: "function",
+  };
+}
+
+function toResponsesTool(tool: ToolDefinition) {
+  return {
+    description: tool.description,
+    name: tool.id,
+    parameters: tool.inputSchema,
+    type: "function",
+  };
+}
+
+function toAnthropicTool(tool: ToolDefinition) {
+  return {
+    description: tool.description,
+    input_schema: tool.inputSchema,
+    name: tool.id,
+  };
 }
 '@
 
@@ -399,11 +451,25 @@ export function normalizeToolBridgePermissionMode(value: unknown): LocalPermissi
   return value === "auto-review" || value === "full-access" || value === "default" ? value : "default";
 }
 
-export function resolveToolPermission(_tool: ToolDefinition, _context: Pick<ToolExecutionContext, "automationScope" | "permissionMode">): ToolPermissionDecision {
+export function resolveToolPermission(tool: ToolDefinition, context: Pick<ToolExecutionContext, "automationScope" | "permissionMode">): ToolPermissionDecision {
+  if (context.permissionMode === "full-access") {
+    return {
+      allowed: true,
+      requiresApproval: false,
+    };
+  }
+
+  if (tool.permission === "diagnostic" || tool.permission === "read-only") {
+    return {
+      allowed: true,
+      requiresApproval: false,
+    };
+  }
+
   return {
     allowed: false,
-    reason: "Provider tool bridge is not bundled in this public build.",
-    requiresApproval: false,
+    reason: "Tool requires approval before execution.",
+    requiresApproval: true,
   };
 }
 
@@ -477,13 +543,21 @@ import type { ModelProviderId } from "../types/settings";
 import type { ToolCallRequest } from "./types";
 
 export function createToolCallRequest(provider: ModelProviderId, id: string, name: string, args: unknown, raw?: unknown): ToolCallRequest {
-  return {
+  const request: ToolCallRequest = {
     arguments: args,
     id,
     name,
     provider,
     raw,
   };
+
+  if (typeof args === "string") {
+    const parsed = parseJsonArguments(args);
+    request.arguments = parsed.ok ? parsed.value : {};
+    request.argumentsParseError = parsed.ok ? undefined : parsed.error;
+  }
+
+  return request;
 }
 
 export function parseVisibleTextToolCalls(): ToolCallRequest[] {
@@ -498,15 +572,80 @@ export function parseAnthropicToolCalls(..._args: unknown[]): ToolCallRequest[] 
   return [];
 }
 
-export function parseOpenAiCompatibleStreamToolCallDeltas(..._args: unknown[]): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
-  return [];
+export function parseOpenAiCompatibleStreamToolCallDeltas(payload: unknown): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
+  const choice = readArray(readRecord(payload).choices)[0];
+  const delta = readRecord(readRecord(choice).delta ?? readRecord(choice).message);
+  return readArray(delta.tool_calls).map((rawCall, fallbackIndex) => {
+    const call = readRecord(rawCall);
+    const fn = readRecord(call.function);
+    return {
+      argumentsDelta: typeof fn.arguments === "string" ? fn.arguments : undefined,
+      id: typeof call.id === "string" ? call.id : undefined,
+      index: typeof call.index === "number" ? call.index : fallbackIndex,
+      name: typeof fn.name === "string" ? fn.name : undefined,
+      raw: rawCall,
+    };
+  });
 }
 
-export function parseOpenAiCompatibleToolCalls(..._args: unknown[]): ToolCallRequest[] {
-  return [];
+export function parseOpenAiCompatibleToolCalls(message: unknown, provider: ModelProviderId): ToolCallRequest[] {
+  return readArray(readRecord(message).tool_calls).flatMap((rawCall, index) => {
+    const call = readRecord(rawCall);
+    const fn = readRecord(call.function);
+    const name = typeof fn.name === "string" ? fn.name : "";
+    if (!name) {
+      return [];
+    }
+
+    return [createToolCallRequest(
+      provider,
+      typeof call.id === "string" ? call.id : `${name}-${index + 1}`,
+      name,
+      typeof fn.arguments === "string" ? fn.arguments : {},
+      rawCall,
+    )];
+  });
 }
 
-export function parseResponsesStreamToolCallDeltas(..._args: unknown[]): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
+export function parseResponsesStreamToolCallDeltas(payload: unknown): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
+  const record = readRecord(payload);
+  const type = typeof record.type === "string" ? record.type : "";
+  const index = typeof record.output_index === "number" ? record.output_index : 0;
+
+  if (type === "response.output_item.added") {
+    const item = readRecord(record.item);
+    if (item.type !== "function_call") {
+      return [];
+    }
+
+    return [{
+      argumentsDelta: typeof item.arguments === "string" ? item.arguments : undefined,
+      id: typeof item.call_id === "string" ? item.call_id : typeof item.id === "string" ? item.id : undefined,
+      index,
+      name: typeof item.name === "string" ? item.name : undefined,
+      raw: payload,
+    }];
+  }
+
+  if (type === "response.function_call_arguments.delta") {
+    return [{
+      argumentsDelta: typeof record.delta === "string" ? record.delta : "",
+      index,
+      raw: payload,
+    }];
+  }
+
+  if (type === "response.function_call_arguments.done") {
+    const parsed = typeof record.arguments === "string" ? parseJsonArguments(record.arguments) : undefined;
+    return [{
+      argumentsParseError: parsed && !parsed.ok ? parsed.error : undefined,
+      argumentsSnapshot: parsed?.ok ? parsed.value : undefined,
+      index,
+      name: typeof record.name === "string" ? record.name : undefined,
+      raw: payload,
+    }];
+  }
+
   return [];
 }
 
@@ -516,6 +655,30 @@ export function parseResponsesStreamToolCalls(..._args: unknown[]): ToolCallRequ
 
 export function parseResponsesToolCalls(..._args: unknown[]): ToolCallRequest[] {
   return [];
+}
+
+function parseJsonArguments(value: string): { ok: true; value: unknown } | { error: string; ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: true, value: {} };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(trimmed) };
+  } catch (error) {
+    return {
+      error: `Could not parse tool arguments as JSON: ${error instanceof Error ? error.message : String(error)}`,
+      ok: false,
+    };
+  }
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 '@
 
