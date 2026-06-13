@@ -414,6 +414,40 @@ describe("provider structured output request bodies", () => {
     expect(system[1]?.text).toContain("# Current Runtime Context");
   });
 
+  it("normalizes required tool choice for Anthropic Messages", () => {
+    const body = createProviderRequestBody(
+      {
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      },
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "required",
+        tools: [providerTool("files_read")],
+      },
+    ) as Record<string, unknown>;
+
+    expect(body.tool_choice).toEqual({ type: "any" });
+    expect(body.tools).toEqual([
+      {
+        description: "files_read test tool",
+        input_schema: {
+          additionalProperties: false,
+          properties: {},
+          type: "object",
+        },
+        name: "files_read",
+      },
+    ]);
+  });
+
   it("keeps title helper request bodies valid across every configured provider", () => {
     for (const provider of MODEL_PROVIDERS) {
       const model = `${provider.id}-title-model`;
