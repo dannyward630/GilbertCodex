@@ -15,6 +15,12 @@ import {
 import type { ChatMessage } from "../types/chat";
 import type { ProviderSettings, ReasoningEffort } from "../types/settings";
 import type { ToolDefinition } from "../toolBridge/types";
+import {
+  parseAnthropicStreamToolCallDelta,
+  parseAnthropicToolCalls,
+  parseOpenAiCompatibleToolCalls,
+  parseResponsesToolCalls,
+} from "../toolBridge/parsers";
 import { createProviderRequestBody, fetchProviderModelContextLengths, fetchProviderModels, sendProviderMessage, streamProviderMessage } from "./modelProviderClient";
 
 const TITLE_STRUCTURED_OUTPUT = {
@@ -446,6 +452,68 @@ describe("provider structured output request bodies", () => {
         name: "files_read",
       },
     ]);
+  });
+
+  it("preserves an explicitly empty provider-visible tool list", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        providerVisibleToolIds: [],
+        tools: [providerTool("files_read")],
+      },
+    ) as Record<string, unknown>;
+
+    expect(body.tools).toBeUndefined();
+  });
+
+  it("filters advertised tools by provider compatibility", () => {
+    const compatible = providerTool("files_read");
+    compatible.compatibleProviders = ["openai-compatible"];
+    const incompatible = providerTool("media_generate_image", "media");
+    incompatible.compatibleProviders = ["openai-responses"];
+
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      { tools: [compatible, incompatible] },
+    ) as Record<string, unknown>;
+
+    expect(body.tools).toEqual([
+      expect.objectContaining({
+        function: expect.objectContaining({ name: "files_read" }),
+      }),
+    ]);
+  });
+
+  it("forwards inline tool results when no tools can be called", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "inline-user-message",
+        toolResultMessages: [{
+          arguments: { path: "README.md" },
+          callId: "call-read",
+          name: "files_read",
+          result: { content: "file contents", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<{ content: string; role: string }>;
+    const finalMessage = messages[messages.length - 1];
+
+    expect(finalMessage).toMatchObject({ role: "user" });
+    expect(finalMessage?.content).toContain("file contents");
+    expect(body.tools).toBeUndefined();
   });
 
   it("keeps title helper request bodies valid across every configured provider", () => {
@@ -1215,6 +1283,85 @@ describe("streamProviderMessage tool call parsing", () => {
         url: "data:video/mp4;base64,dmlkZW8=",
       },
     });
+  });
+});
+
+describe("provider tool-call parsers", () => {
+  it("parses Anthropic tool calls and streaming deltas", () => {
+    expect(parseAnthropicToolCalls({
+      content: [{
+        id: "toolu_1",
+        input: { path: "README.md" },
+        name: "files_read",
+        type: "tool_use",
+      }],
+    }, "anthropic")).toEqual([
+      expect.objectContaining({
+        arguments: { path: "README.md" },
+        id: "toolu_1",
+        name: "files_read",
+      }),
+    ]);
+
+    expect(parseAnthropicStreamToolCallDelta({
+      content_block: {
+        id: "toolu_1",
+        input: {},
+        name: "files_read",
+        type: "tool_use",
+      },
+      index: 1,
+      type: "content_block_start",
+    })).toMatchObject({
+      argumentsSnapshot: {},
+      id: "toolu_1",
+      index: 1,
+      name: "files_read",
+    });
+    expect(parseAnthropicStreamToolCallDelta({
+      delta: {
+        partial_json: "{\"path\":\"README.md\"}",
+        type: "input_json_delta",
+      },
+      index: 1,
+      type: "content_block_delta",
+    })).toMatchObject({
+      argumentsDelta: "{\"path\":\"README.md\"}",
+      index: 1,
+    });
+  });
+
+  it("parses Responses API calls and object-valued compatible arguments", () => {
+    expect(parseResponsesToolCalls({
+      output: [{
+        arguments: "{\"query\":\"current weather\"}",
+        call_id: "call-search",
+        name: "web_search",
+        type: "function_call",
+      }],
+    }, "openai")).toEqual([
+      expect.objectContaining({
+        arguments: { query: "current weather" },
+        id: "call-search",
+        name: "web_search",
+      }),
+    ]);
+
+    expect(parseOpenAiCompatibleToolCalls({
+      tool_calls: [{
+        function: {
+          arguments: { path: "README.md" },
+          name: "files_read",
+        },
+        id: "call-read",
+      }],
+    }, "openai")).toEqual([
+      expect.objectContaining({
+        arguments: { path: "README.md" },
+        id: "call-read",
+        name: "files_read",
+      }),
+    ]);
   });
 });
 
