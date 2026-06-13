@@ -6,10 +6,17 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const toolBridgeRoot = path.join(repoRoot, "src", "toolBridge");
 const indexPath = path.join(toolBridgeRoot, "index.ts");
+const markerPath = path.join(toolBridgeRoot, ".public-shim");
+const parsersPath = path.join(toolBridgeRoot, "parsers.ts");
 const powerShellSourcePath = path.join(scriptDir, "prepare-public-toolbridge-shim.ps1");
 const force = process.argv.includes("--force");
+const markerContent = "gilbert-codex-public-toolbridge-shim-v1\n";
 
-if (!force && (await fileExists(indexPath))) {
+const existingIndex = await fileExists(indexPath);
+const existingPublicShim = await fileContains(markerPath, markerContent.trim())
+  || await looksLikeLegacyPublicShim();
+
+if (!force && existingIndex && !existingPublicShim) {
   console.log("Existing local tool bridge found; public shim not needed.");
   process.exit(0);
 }
@@ -29,6 +36,8 @@ for (const shimFile of shimFiles) {
   await writeFile(target, shimFile.content, "utf8");
 }
 
+await writeFile(markerPath, markerContent, "utf8");
+
 console.log("Generated public-safe tool bridge shim for CI/release builds.");
 
 async function fileExists(filePath) {
@@ -40,6 +49,30 @@ async function fileExists(filePath) {
     }
     throw error;
   }
+}
+
+async function fileContains(filePath, text) {
+  try {
+    return (await readFile(filePath, "utf8")).includes(text);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function looksLikeLegacyPublicShim() {
+  if (!existingIndex || !(await fileExists(parsersPath))) {
+    return false;
+  }
+
+  const parsers = await readFile(parsersPath, "utf8");
+  return /export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
+    parsers,
+  ) && /export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
+    parsers,
+  );
 }
 
 function parseShimFiles(source) {

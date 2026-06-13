@@ -7,8 +7,19 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $toolBridgeRoot = Join-Path $repoRoot "src\toolBridge"
 $indexPath = Join-Path $toolBridgeRoot "index.ts"
+$markerPath = Join-Path $toolBridgeRoot ".public-shim"
+$parsersPath = Join-Path $toolBridgeRoot "parsers.ts"
+$markerContent = "gilbert-codex-public-toolbridge-shim-v1"
 
-if ((Test-Path $indexPath) -and -not $Force) {
+$isPublicShim = Test-Path $markerPath
+if (-not $isPublicShim -and (Test-Path $parsersPath)) {
+  $parsers = Get-Content -LiteralPath $parsersPath -Raw
+  $isPublicShim =
+    $parsers -match 'export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}' -and
+    $parsers -match 'export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}'
+}
+
+if ((Test-Path $indexPath) -and -not $Force -and -not $isPublicShim) {
   Write-Host "Existing local tool bridge found; public shim not needed."
   exit 0
 }
@@ -403,7 +414,9 @@ export function applyToolBridgeToProviderRequest<T>(body: T, format: ToolBridgeP
     record.tools = tools.map(toOpenAiCompatibleTool);
   }
 
-  if (toolBridge.toolChoice && toolBridge.toolChoice !== "auto") {
+  if (format === "anthropic-messages" && toolBridge.toolChoice === "required") {
+    record.tool_choice = { type: "any" };
+  } else if (toolBridge.toolChoice && toolBridge.toolChoice !== "auto") {
     record.tool_choice = toolBridge.toolChoice;
   }
 
@@ -915,5 +928,7 @@ export interface ProjectToolMemoryStorage {
   save?: (key: string, value: string) => void;
 }
 '@
+
+Set-Content -LiteralPath $markerPath -Value $markerContent -Encoding utf8
 
 Write-Host "Generated public-safe tool bridge shim for CI/release builds."
