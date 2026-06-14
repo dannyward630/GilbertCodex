@@ -9,14 +9,56 @@ $toolBridgeRoot = Join-Path $repoRoot "src\toolBridge"
 $indexPath = Join-Path $toolBridgeRoot "index.ts"
 $markerPath = Join-Path $toolBridgeRoot ".public-shim"
 $parsersPath = Join-Path $toolBridgeRoot "parsers.ts"
-$markerContent = "gilbert-codex-public-toolbridge-shim-v1"
+$markerVersion = "gilbert-codex-public-toolbridge-shim-v2"
 
-$isPublicShim = Test-Path $markerPath
-if (-not $isPublicShim -and (Test-Path $parsersPath)) {
+function Test-LegacyPublicShim {
+  if (-not (Test-Path $indexPath) -or -not (Test-Path $parsersPath)) {
+    return $false
+  }
+
+  $index = Get-Content -LiteralPath $indexPath -Raw
   $parsers = Get-Content -LiteralPath $parsersPath -Raw
-  $isPublicShim =
-    $parsers -match 'export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}' -and
-    $parsers -match 'export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}'
+  return (
+    (
+      $parsers -match 'export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}' -and
+      $parsers -match 'export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}'
+    ) -or (
+      $index -match 'Provider tool bridge is not bundled in this public build\.' -and
+      $index -match 'export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}'
+    )
+  )
+}
+
+function Test-ManagedPublicShim {
+  if (-not (Test-Path $markerPath)) {
+    return $false
+  }
+
+  try {
+    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    if ($marker.version -ne $markerVersion -or $null -eq $marker.files) {
+      return Test-LegacyPublicShim
+    }
+
+    foreach ($file in $marker.files) {
+      $target = Join-Path $toolBridgeRoot $file.path
+      if (-not (Test-Path $target)) {
+        return $false
+      }
+      $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($hash -ne $file.sha256) {
+        return $false
+      }
+    }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+$isPublicShim = Test-ManagedPublicShim
+if (-not $isPublicShim) {
+  $isPublicShim = Test-LegacyPublicShim
 }
 
 if ((Test-Path $indexPath) -and -not $Force -and -not $isPublicShim) {
@@ -26,6 +68,7 @@ if ((Test-Path $indexPath) -and -not $Force -and -not $isPublicShim) {
 
 New-Item -ItemType Directory -Force -Path $toolBridgeRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $toolBridgeRoot "adapters") | Out-Null
+$shimFiles = @()
 
 function Write-ShimFile {
   param(
@@ -37,6 +80,7 @@ function Write-ShimFile {
   $targetDir = Split-Path -Parent $target
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
   Set-Content -LiteralPath $target -Value $Content -Encoding utf8
+  $script:shimFiles += $RelativePath
 }
 
 Write-ShimFile "types.ts" @'
@@ -433,7 +477,7 @@ export function applyToolBridgeToProviderRequest<T>(body: T, format: ToolBridgeP
   }
 
   if (format === "anthropic-messages" && toolBridge.toolChoice === "required") {
-    record.tool_choice = { type: "any" };
+    record.tool_choice = record.thinking ? { type: "auto" } : { type: "any" };
   } else if (toolBridge.toolChoice && toolBridge.toolChoice !== "auto") {
     record.tool_choice = toolBridge.toolChoice;
   }
@@ -463,9 +507,14 @@ function appendToolResults(
     remaining = decrementRemainingChars(remaining, message.providerRawCharCount);
     return { result, content: message.content };
   });
+  const includeAssistantTurn = !toolBridge.resultsHistoryAlreadyContainsAssistantTurns;
 
   if (format === "openai-responses") {
     const input = Array.isArray(record.input) ? [...record.input] : [];
+    if (includeAssistantTurn) {
+      input.push(...createResponsesReasoningItems(toolBridge));
+      input.push(...finalized.map(({ result }) => createResponsesFunctionCall(result)));
+    }
     record.input = input.concat(finalized.map(({ result, content }) => ({
       call_id: result.callId,
       output: content,
@@ -476,6 +525,15 @@ function appendToolResults(
 
   const messages = Array.isArray(record.messages) ? [...record.messages] : [];
   if (format === "anthropic-messages") {
+    if (includeAssistantTurn) {
+      messages.push({
+        content: [
+          ...createAnthropicReasoningBlocks(toolBridge),
+          ...finalized.map(({ result }) => createAnthropicToolUse(result)),
+        ],
+        role: "assistant",
+      });
+    }
     messages.push({
       content: finalized.map(({ result, content }) => ({
         content,
@@ -485,6 +543,9 @@ function appendToolResults(
       role: "user",
     });
   } else {
+    if (includeAssistantTurn) {
+      messages.push(createOpenAiCompatibleAssistantTurn(finalized.map(({ result }) => result), toolBridge));
+    }
     messages.push(...finalized.map(({ result, content }) => ({
       content,
       role: "tool",
@@ -492,6 +553,83 @@ function appendToolResults(
     })));
   }
   record.messages = messages;
+}
+
+function createAnthropicReasoningBlocks(toolBridge: ProviderToolBridgeOptions) {
+  if (toolBridge.reasoningState?.format !== "anthropic-thinking") {
+    return [];
+  }
+  return toolBridge.reasoningState.entries.map((entry) => entry.value);
+}
+
+function createAnthropicToolUse(result: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>[number]) {
+  const raw = readRecord(result.rawCall);
+  return raw.type === "tool_use"
+    ? raw
+    : {
+        id: result.callId,
+        input: result.arguments,
+        name: result.name,
+        type: "tool_use",
+      };
+}
+
+function createResponsesReasoningItems(toolBridge: ProviderToolBridgeOptions) {
+  if (toolBridge.reasoningState?.format !== "openai-responses") {
+    return [];
+  }
+  return toolBridge.reasoningState.entries.map((entry) => entry.value);
+}
+
+function createResponsesFunctionCall(result: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>[number]) {
+  const raw = readRecord(result.rawCall);
+  return raw.type === "function_call"
+    ? raw
+    : {
+        arguments: stringifyArguments(result.arguments),
+        call_id: result.callId,
+        name: result.name,
+        type: "function_call",
+      };
+}
+
+function createOpenAiCompatibleAssistantTurn(
+  results: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>,
+  toolBridge: ProviderToolBridgeOptions,
+) {
+  const message: Record<string, unknown> = {
+    content: null,
+    role: "assistant",
+    tool_calls: results.map((result) => {
+      const raw = readRecord(result.rawCall);
+      const rawFunction = readRecord(raw.function);
+      return raw.type === "function" && typeof rawFunction.name === "string"
+        ? raw
+        : {
+            function: {
+              arguments: stringifyArguments(result.arguments),
+              name: result.name,
+            },
+            id: result.callId,
+            type: "function",
+          };
+    }),
+  };
+
+  for (const entry of toolBridge.reasoningState?.entries ?? []) {
+    if (entry.type === "reasoning_details" || entry.type === "reasoning_content" || entry.type === "reasoning" || entry.type === "thinking") {
+      message[entry.type] = entry.value;
+    }
+  }
+  return message;
+}
+
+function stringifyArguments(value: unknown) {
+  return typeof value === "string" ? value : JSON.stringify(value ?? {});
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
 function toOpenAiCompatibleTool(tool: ToolDefinition) {
@@ -653,8 +791,9 @@ export function parseAnthropicStreamToolCallDelta(payload: unknown): { arguments
   const index = typeof record.index === "number" ? record.index : 0;
   const block = readRecord(record.content_block);
   if (record.type === "content_block_start" && block.type === "tool_use") {
+    const input = readRecord(block.input);
     return {
-      argumentsSnapshot: block.input ?? {},
+      argumentsSnapshot: Object.keys(input).length > 0 ? input : undefined,
       id: typeof block.id === "string" ? block.id : undefined,
       index,
       name: typeof block.name === "string" ? block.name : undefined,
@@ -1057,6 +1196,16 @@ export interface ProjectToolMemoryStorage {
 }
 '@
 
-Set-Content -LiteralPath $markerPath -Value $markerContent -Encoding utf8
+$markerFiles = $shimFiles | ForEach-Object {
+  $target = Join-Path $toolBridgeRoot $_
+  @{
+    path = $_
+    sha256 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+}
+@{
+  files = @($markerFiles)
+  version = $markerVersion
+} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $markerPath -Encoding utf8
 
 Write-Host "Generated public-safe tool bridge shim for CI/release builds."

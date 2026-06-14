@@ -69,7 +69,7 @@ async function markerMatchesManagedFiles() {
   }
 
   try {
-    const parsed = JSON.parse(marker);
+    const parsed = JSON.parse(marker.replace(/^\uFEFF/, ""));
     if (parsed.version !== markerVersion || !Array.isArray(parsed.files)) {
       return false;
     }
@@ -95,10 +95,14 @@ async function looksLikeLegacyPublicShim() {
   }
 
   const parsers = await readFile(parsersPath, "utf8");
-  return /export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
+  const index = await readFile(indexPath, "utf8");
+  return (/export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
     parsers,
   ) && /export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
     parsers,
+  )) || (
+    index.includes("Provider tool bridge is not bundled in this public build.")
+    && /export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}/m.test(index)
   );
 }
 

@@ -454,6 +454,30 @@ describe("provider structured output request bodies", () => {
     ]);
   });
 
+  it("keeps Anthropic tool choice automatic when extended thinking is enabled", () => {
+    const body = createProviderRequestBody(
+      withThinking({
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      }),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "required",
+        tools: [providerTool("files_read")],
+      },
+    ) as Record<string, unknown>;
+
+    expect(body.thinking).toBeTruthy();
+    expect(body.tool_choice).toEqual({ type: "auto" });
+  });
+
   it("preserves an explicitly empty provider-visible tool list", () => {
     const body = createProviderRequestBody(
       createSettings(),
@@ -514,6 +538,208 @@ describe("provider structured output request bodies", () => {
     expect(finalMessage).toMatchObject({ role: "user" });
     expect(finalMessage?.content).toContain("file contents");
     expect(body.tools).toBeUndefined();
+  });
+
+  it("replays Anthropic thinking and assistant calls before native results", () => {
+    const body = createProviderRequestBody(
+      withThinking({
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      }),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        reasoningState: {
+          entries: [{
+            type: "thinking",
+            value: {
+              signature: "sig",
+              thinking: "private reasoning",
+              type: "thinking",
+            },
+          }],
+          format: "anthropic-thinking",
+          provider: "anthropic",
+        },
+        toolChoice: "required",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "README.md" },
+          callId: "toolu_1",
+          name: "files_read",
+          rawCall: {
+            id: "toolu_1",
+            input: { path: "README.md" },
+            name: "files_read",
+            type: "tool_use",
+          },
+          result: { content: "file contents", ok: true },
+        }],
+        tools: [providerTool("files_read")],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<{ content: unknown; role: string }>;
+
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    expect(messages.slice(-2)).toEqual([
+      {
+        content: [
+          {
+            signature: "sig",
+            thinking: "private reasoning",
+            type: "thinking",
+          },
+          {
+            id: "toolu_1",
+            input: { path: "README.md" },
+            name: "files_read",
+            type: "tool_use",
+          },
+        ],
+        role: "assistant",
+      },
+      {
+        content: [
+          expect.objectContaining({
+            tool_use_id: "toolu_1",
+            type: "tool_result",
+          }),
+        ],
+        role: "user",
+      },
+    ]);
+  });
+
+  it("replays Responses reasoning and calls before native outputs", () => {
+    const body = createProviderRequestBody(
+      withThinking(createSettings()),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        reasoningState: {
+          entries: [{
+            id: "reasoning-1",
+            type: "reasoning",
+            value: {
+              id: "reasoning-1",
+              summary: [],
+              type: "reasoning",
+            },
+          }],
+          format: "openai-responses",
+          provider: "openai",
+        },
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { query: "weather" },
+          callId: "call-search",
+          name: "web_search",
+          result: { content: "sunny", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const input = body.input as unknown[];
+
+    expect(input.slice(-3)).toEqual([
+      {
+        id: "reasoning-1",
+        summary: [],
+        type: "reasoning",
+      },
+      {
+        arguments: "{\"query\":\"weather\"}",
+        call_id: "call-search",
+        name: "web_search",
+        type: "function_call",
+      },
+      expect.objectContaining({
+        call_id: "call-search",
+        type: "function_call_output",
+      }),
+    ]);
+  });
+
+  it("reconstructs OpenAI-compatible assistant calls before native results", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "README.md" },
+          callId: "call-read",
+          name: "files_read",
+          rawCall: {
+            function: {
+              arguments: "{\"path\":",
+            },
+            index: 0,
+          },
+          result: { content: "file contents", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+
+    expect(messages.slice(-2)).toEqual([
+      {
+        content: null,
+        role: "assistant",
+        tool_calls: [{
+          function: {
+            arguments: "{\"path\":\"README.md\"}",
+            name: "files_read",
+          },
+          id: "call-read",
+          type: "function",
+        }],
+      },
+      expect.objectContaining({
+        role: "tool",
+        tool_call_id: "call-read",
+      }),
+    ]);
+  });
+
+  it("does not duplicate assistant calls already present in provider history", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        resultsHistoryAlreadyContainsAssistantTurns: true,
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "README.md" },
+          callId: "call-read",
+          name: "files_read",
+          result: { content: "file contents", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<{ role: string }>;
+
+    expect(messages.filter((message) => message.role === "assistant")).toHaveLength(0);
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call-read",
+    });
   });
 
   it("keeps title helper request bodies valid across every configured provider", () => {
@@ -1303,7 +1529,7 @@ describe("provider tool-call parsers", () => {
       }),
     ]);
 
-    expect(parseAnthropicStreamToolCallDelta({
+    const startDelta = parseAnthropicStreamToolCallDelta({
       content_block: {
         id: "toolu_1",
         input: {},
@@ -1312,12 +1538,13 @@ describe("provider tool-call parsers", () => {
       },
       index: 1,
       type: "content_block_start",
-    })).toMatchObject({
-      argumentsSnapshot: {},
+    });
+    expect(startDelta).toMatchObject({
       id: "toolu_1",
       index: 1,
       name: "files_read",
     });
+    expect(startDelta?.argumentsSnapshot).toBeUndefined();
     expect(parseAnthropicStreamToolCallDelta({
       delta: {
         partial_json: "{\"path\":\"README.md\"}",
