@@ -2595,13 +2595,12 @@ function createStreamProviderReasoningState(
   trimmed = false,
 ) {
   if (provider === "anthropic") {
-    const thinking = [
-      ...entries
-        .filter((entry) => entry.type === "thinking_delta")
-        .map((entry) => entry.value)
-        .filter((value): value is string => typeof value === "string"),
-      reasoning,
-    ].join("");
+    const streamedThinking = entries
+      .filter((entry) => entry.type === "thinking_delta")
+      .map((entry) => entry.value)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+    const thinking = streamedThinking || reasoning;
     const signature = entries
       .filter((entry) => entry.type === "signature_delta")
       .map((entry) => entry.value)

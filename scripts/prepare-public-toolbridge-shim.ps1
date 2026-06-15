@@ -414,12 +414,27 @@ export function createInlineToolResultMessage(result: ToolResultMessage, remaini
   };
 }
 
+export function createBudgetedToolResultMessages(results: ToolResultMessage[], maxChars: number | null | undefined) {
+  const finalized = new Array<ReturnType<typeof createInlineToolResultMessage>>(results.length);
+  let remaining = normalizeRemainingChars(maxChars);
+
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    const result = results[index];
+    if (!result) {
+      continue;
+    }
+    const message = createInlineToolResultMessage(result, remaining);
+    remaining = decrementRemainingChars(remaining, message.providerRawCharCount);
+    finalized[index] = message;
+  }
+
+  return finalized;
+}
+
 export function appendInlineUserToolResultMessages(currentMessages: unknown, results: ToolResultMessage[], options: { maxToolResultContentChars?: number | null }) {
   const messages = Array.isArray(currentMessages) ? [...currentMessages] : [];
-  let remaining = normalizeRemainingChars(options.maxToolResultContentChars);
-  for (const result of results) {
-    const inlineResult = createInlineToolResultMessage(result, remaining);
-    remaining = decrementRemainingChars(remaining, inlineResult.providerRawCharCount);
+  const finalized = createBudgetedToolResultMessages(results, options.maxToolResultContentChars);
+  for (const inlineResult of finalized) {
     messages.push({ content: inlineResult.content, role: "user" });
   }
   return messages;
@@ -439,9 +454,7 @@ import type { ProviderToolBridgeOptions, ToolBridgeProviderFormat, ToolDefinitio
 import { isToolCompatibleWithProvider } from "../registry";
 import {
   appendInlineUserToolResultMessages,
-  createInlineToolResultMessage,
-  decrementRemainingChars,
-  normalizeRemainingChars,
+  createBudgetedToolResultMessages,
 } from "./sharedUtils";
 
 export function applyToolBridgeToProviderRequest<T>(body: T, format: ToolBridgeProviderFormat, toolBridge?: ProviderToolBridgeOptions): T {
@@ -501,12 +514,13 @@ function appendToolResults(
     return;
   }
 
-  let remaining = normalizeRemainingChars(toolBridge.maxToolResultContentChars);
-  const finalized = results.map((result) => {
-    const message = createInlineToolResultMessage(result, remaining);
-    remaining = decrementRemainingChars(remaining, message.providerRawCharCount);
-    return { result, content: message.content };
-  });
+  const finalized = createBudgetedToolResultMessages(
+    results,
+    toolBridge.maxToolResultContentChars,
+  ).map((message, index) => ({
+    content: message.content,
+    result: results[index]!,
+  }));
   const includeAssistantTurn = !toolBridge.resultsHistoryAlreadyContainsAssistantTurns;
 
   if (format === "openai-responses") {
@@ -537,6 +551,7 @@ function appendToolResults(
     messages.push({
       content: finalized.map(({ result, content }) => ({
         content,
+        is_error: !result.result.ok,
         tool_use_id: result.callId,
         type: "tool_result",
       })),
@@ -618,7 +633,14 @@ function createOpenAiCompatibleAssistantTurn(
 
   for (const entry of toolBridge.reasoningState?.entries ?? []) {
     if (entry.type === "reasoning_details" || entry.type === "reasoning_content" || entry.type === "reasoning" || entry.type === "thinking") {
-      message[entry.type] = entry.value;
+      const existing = message[entry.type];
+      if (typeof existing === "string" && typeof entry.value === "string") {
+        message[entry.type] = existing + entry.value;
+      } else if (Array.isArray(existing) && Array.isArray(entry.value)) {
+        message[entry.type] = [...existing, ...entry.value];
+      } else if (existing === undefined) {
+        message[entry.type] = entry.value;
+      }
     }
   }
   return message;

@@ -616,6 +616,41 @@ describe("provider structured output request bodies", () => {
     ]);
   });
 
+  it("marks failed Anthropic native tool results as errors", () => {
+    const body = createProviderRequestBody(
+      {
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      },
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "missing.md" },
+          callId: "toolu_failed",
+          name: "files_read",
+          result: { content: "", error: "File not found", ok: false },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<{ content: Array<Record<string, unknown>>; role: string }>;
+
+    expect(messages[messages.length - 1]?.content[0]).toMatchObject({
+      is_error: true,
+      tool_use_id: "toolu_failed",
+      type: "tool_result",
+    });
+  });
+
   it("replays Responses reasoning and calls before native outputs", () => {
     const body = createProviderRequestBody(
       withThinking(createSettings()),
@@ -712,6 +747,83 @@ describe("provider structured output request bodies", () => {
         tool_call_id: "call-read",
       }),
     ]);
+  });
+
+  it("combines fragmented OpenAI-compatible reasoning state", () => {
+    const body = createProviderRequestBody(
+      createOpenRouterSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        reasoningState: {
+          entries: [
+            { type: "reasoning_content", value: "first " },
+            { type: "reasoning_content", value: "second" },
+            { type: "reasoning_details", value: [{ data: "one" }] },
+            { type: "reasoning_details", value: [{ data: "two" }] },
+          ],
+          format: "openrouter-reasoning",
+          provider: "openrouter",
+        },
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: {},
+          callId: "call-reasoning",
+          name: "files_read",
+          result: { content: "done", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const assistant = messages[messages.length - 2];
+
+    expect(assistant?.reasoning_content).toBe("first second");
+    expect(assistant?.reasoning_details).toEqual([{ data: "one" }, { data: "two" }]);
+  });
+
+  it("reserves a shared tool-result budget for the newest result", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        maxToolResultContentChars: 6,
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [
+          {
+            arguments: {},
+            callId: "call-old",
+            name: "files_read",
+            result: { content: "older evidence", ok: true },
+          },
+          {
+            arguments: {},
+            callId: "call-new",
+            name: "files_read",
+            result: { content: "newest", ok: true },
+          },
+        ],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const toolMessages = messages.slice(-2);
+
+    expect(toolMessages[0]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call-old",
+    });
+    expect(toolMessages[0]?.content).not.toContain("older evidence");
+    expect(toolMessages[1]).toMatchObject({
+      content: "newest",
+      role: "tool",
+      tool_call_id: "call-new",
+    });
   });
 
   it("does not duplicate assistant calls already present in provider history", () => {
@@ -1143,6 +1255,62 @@ describe("streamProviderMessage tool call parsing", () => {
       name: "files_write",
     });
     expect(response.toolCalls?.[0]?.argumentsParseError).toBeUndefined();
+  });
+
+  it("preserves the exact Anthropic streamed thinking block", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => streamResponse([
+      `data: ${JSON.stringify({
+        content_block: { thinking: "", type: "thinking" },
+        index: 0,
+        type: "content_block_start",
+      })}`,
+      `data: ${JSON.stringify({
+        delta: { thinking: "private ", type: "thinking_delta" },
+        index: 0,
+        type: "content_block_delta",
+      })}`,
+      `data: ${JSON.stringify({
+        delta: { thinking: "reasoning", type: "thinking_delta" },
+        index: 0,
+        type: "content_block_delta",
+      })}`,
+      `data: ${JSON.stringify({
+        delta: { signature: "signed", type: "signature_delta" },
+        index: 0,
+        type: "content_block_delta",
+      })}`,
+      `data: ${JSON.stringify({
+        content_block: {
+          id: "toolu_1",
+          input: {},
+          name: "files_read",
+          type: "tool_use",
+        },
+        index: 1,
+        type: "content_block_start",
+      })}`,
+      "data: [DONE]",
+    ])));
+
+    const response = await streamProviderMessage(withThinking({
+      ...createSettings(),
+      apiKeys: {
+        ...defaultProviderSettings.apiKeys,
+        anthropic: "anthropic-test-key",
+      },
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+    }), [createMessage()], vi.fn());
+
+    expect(response.reasoningState?.entries[0]?.value).toEqual({
+      signature: "signed",
+      thinking: "private reasoning",
+      type: "thinking",
+    });
   });
 
   it("sends stable Gilbert Codex attribution headers to OpenRouter", async () => {
