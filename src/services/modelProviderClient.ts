@@ -2429,12 +2429,37 @@ function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumul
       argumentsText: `${existing.argumentsText}${toolDelta.argumentsDelta ?? ""}`,
       id: toolDelta.id ?? existing.id,
       name: toolDelta.name ?? existing.name,
-      raw: toolDelta.raw ?? existing.raw,
+      raw: mergeStreamToolCallRaw(existing.raw, toolDelta.raw),
     });
     changed = true;
   }
 
   return changed;
+}
+
+function mergeStreamToolCallRaw(existing: unknown, next: unknown): unknown {
+  if (next === undefined) {
+    return existing;
+  }
+  if (existing === undefined) {
+    return next;
+  }
+  if (
+    existing === null
+    || next === null
+    || Array.isArray(existing)
+    || Array.isArray(next)
+    || typeof existing !== "object"
+    || typeof next !== "object"
+  ) {
+    return next;
+  }
+
+  const merged: Record<string, unknown> = { ...(existing as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(next as Record<string, unknown>)) {
+    merged[key] = mergeStreamToolCallRaw(merged[key], value);
+  }
+  return merged;
 }
 
 function findStreamToolCallAccumulatorKey(

@@ -651,6 +651,67 @@ describe("provider structured output request bodies", () => {
     });
   });
 
+  it("preserves Anthropic assistant and result ordering across provider turns", () => {
+    const firstReasoning = {
+      entries: [{
+        type: "thinking",
+        value: { signature: "sig-1", thinking: "first", type: "thinking" },
+      }],
+      format: "anthropic-thinking" as const,
+      provider: "anthropic" as const,
+    };
+    const secondReasoning = {
+      entries: [{
+        type: "thinking",
+        value: { signature: "sig-2", thinking: "second", type: "thinking" },
+      }],
+      format: "anthropic-thinking" as const,
+      provider: "anthropic" as const,
+    };
+    const result = (callId: string, providerTurnId: number, reasoningState: typeof firstReasoning) => ({
+      arguments: { path: `${callId}.md` },
+      callId,
+      name: "files_read",
+      providerTurnId,
+      reasoningState,
+      result: { content: `${callId} result`, ok: true },
+    });
+    const body = createProviderRequestBody(
+      {
+        ...createSettings(),
+        apiKeys: {
+          ...defaultProviderSettings.apiKeys,
+          anthropic: "anthropic-test-key",
+        },
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+      },
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [
+          result("toolu_1", 1, firstReasoning),
+          result("toolu_2", 2, secondReasoning),
+        ],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<{ content: Array<Record<string, unknown>>; role: string }>;
+
+    expect(messages.slice(-4).map((message) => [
+      message.role,
+      message.content[0]?.signature ?? message.content[0]?.tool_use_id,
+    ])).toEqual([
+      ["assistant", "sig-1"],
+      ["user", "toolu_1"],
+      ["assistant", "sig-2"],
+      ["user", "toolu_2"],
+    ]);
+  });
+
   it("replays Responses reasoning and calls before native outputs", () => {
     const body = createProviderRequestBody(
       withThinking(createSettings()),
@@ -747,6 +808,40 @@ describe("provider structured output request bodies", () => {
         tool_call_id: "call-read",
       }),
     ]);
+  });
+
+  it("rebuilds provider calls when executed arguments differ from raw arguments", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "approved.md" },
+          callId: "call-read",
+          name: "files_read",
+          rawCall: {
+            function: {
+              arguments: "{\"path\":\"original.md\"}",
+              name: "files_read",
+            },
+            id: "call-read",
+            type: "function",
+          },
+          result: { content: "approved contents", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const assistant = messages[messages.length - 2] as {
+      tool_calls: Array<{ function: { arguments: string } }>;
+    };
+
+    expect(assistant.tool_calls[0]?.function.arguments).toBe("{\"path\":\"approved.md\"}");
   });
 
   it("combines fragmented OpenAI-compatible reasoning state", () => {
@@ -1186,6 +1281,64 @@ describe("streamProviderMessage tool call parsing", () => {
       name: "files_write",
     });
     expect(response.toolCalls?.[0]?.argumentsParseError).toBeUndefined();
+  });
+
+  it("merges Gemini thought signatures with later streamed arguments", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => streamResponse([
+      `data: ${JSON.stringify({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              extra_content: {
+                google: { thought_signature: "signed-call" },
+              },
+              function: { name: "files_read" },
+              id: "call-google",
+              index: 0,
+              type: "function",
+            }],
+          },
+        }],
+      })}`,
+      `data: ${JSON.stringify({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              function: { arguments: "{\"path\":\"README.md\"}" },
+              index: 0,
+            }],
+          },
+        }],
+      })}`,
+      "data: [DONE]",
+    ])));
+
+    const response = await streamProviderMessage({
+      ...createSettings(),
+      apiKeys: {
+        ...defaultProviderSettings.apiKeys,
+        google: "google-test-key",
+      },
+      model: "gemini-3-pro",
+      provider: "google",
+    }, [createMessage()], vi.fn());
+
+    expect(response.toolCalls?.[0]).toMatchObject({
+      arguments: { path: "README.md" },
+      raw: {
+        extra_content: {
+          google: { thought_signature: "signed-call" },
+        },
+        function: {
+          arguments: "{\"path\":\"README.md\"}",
+          name: "files_read",
+        },
+      },
+    });
   });
 
   it("preserves streaming JSON parse errors instead of passing raw strings to validation", async () => {

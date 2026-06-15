@@ -219,7 +219,9 @@ export interface ToolResultMessage {
   arguments: unknown;
   callId: string;
   name: string;
+  providerTurnId?: number;
   rawCall?: unknown;
+  reasoningState?: ProviderReasoningState;
   result: ToolExecutionResult;
 }
 
@@ -450,6 +452,7 @@ export function createProviderVisibleToolSchema(tool: ToolDefinition) {
 '@
 
 Write-ShimFile "adapters\index.ts" @'
+import type { ProviderReasoningState } from "../../types/reasoning";
 import type { ProviderToolBridgeOptions, ToolBridgeProviderFormat, ToolDefinition } from "../types";
 import { isToolCompatibleWithProvider } from "../registry";
 import {
@@ -522,64 +525,103 @@ function appendToolResults(
     result: results[index]!,
   }));
   const includeAssistantTurn = !toolBridge.resultsHistoryAlreadyContainsAssistantTurns;
+  const turns = groupFinalizedToolResultsByProviderTurn(finalized, toolBridge.reasoningState);
 
   if (format === "openai-responses") {
     const input = Array.isArray(record.input) ? [...record.input] : [];
-    if (includeAssistantTurn) {
-      input.push(...createResponsesReasoningItems(toolBridge));
-      input.push(...finalized.map(({ result }) => createResponsesFunctionCall(result)));
+    for (const turn of turns) {
+      if (includeAssistantTurn) {
+        input.push(...createResponsesReasoningItems(turn.reasoningState));
+        input.push(...turn.results.map(({ result }) => createResponsesFunctionCall(result)));
+      }
+      input.push(...turn.results.map(({ result, content }) => ({
+        call_id: result.callId,
+        output: content,
+        type: "function_call_output",
+      })));
     }
-    record.input = input.concat(finalized.map(({ result, content }) => ({
-      call_id: result.callId,
-      output: content,
-      type: "function_call_output",
-    })));
+    record.input = input;
     return;
   }
 
   const messages = Array.isArray(record.messages) ? [...record.messages] : [];
   if (format === "anthropic-messages") {
-    if (includeAssistantTurn) {
+    for (const turn of turns) {
+      if (includeAssistantTurn) {
+        messages.push({
+          content: [
+            ...createAnthropicReasoningBlocks(turn.reasoningState),
+            ...turn.results.map(({ result }) => createAnthropicToolUse(result)),
+          ],
+          role: "assistant",
+        });
+      }
       messages.push({
-        content: [
-          ...createAnthropicReasoningBlocks(toolBridge),
-          ...finalized.map(({ result }) => createAnthropicToolUse(result)),
-        ],
-        role: "assistant",
+        content: turn.results.map(({ result, content }) => ({
+          content,
+          is_error: !result.result.ok,
+          tool_use_id: result.callId,
+          type: "tool_result",
+        })),
+        role: "user",
       });
     }
-    messages.push({
-      content: finalized.map(({ result, content }) => ({
-        content,
-        is_error: !result.result.ok,
-        tool_use_id: result.callId,
-        type: "tool_result",
-      })),
-      role: "user",
-    });
   } else {
-    if (includeAssistantTurn) {
-      messages.push(createOpenAiCompatibleAssistantTurn(finalized.map(({ result }) => result), toolBridge));
+    for (const turn of turns) {
+      if (includeAssistantTurn) {
+        messages.push(createOpenAiCompatibleAssistantTurn(
+          turn.results.map(({ result }) => result),
+          turn.reasoningState,
+        ));
+      }
+      messages.push(...turn.results.map(({ result, content }) => ({
+        content,
+        role: "tool",
+        tool_call_id: result.callId,
+      })));
     }
-    messages.push(...finalized.map(({ result, content }) => ({
-      content,
-      role: "tool",
-      tool_call_id: result.callId,
-    })));
   }
   record.messages = messages;
 }
 
-function createAnthropicReasoningBlocks(toolBridge: ProviderToolBridgeOptions) {
-  if (toolBridge.reasoningState?.format !== "anthropic-thinking") {
+function groupFinalizedToolResultsByProviderTurn(
+  finalized: Array<{
+    content: string;
+    result: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>[number];
+  }>,
+  fallbackReasoningState?: ProviderReasoningState,
+) {
+  const turns: Array<{
+    providerTurnId?: number;
+    reasoningState?: ProviderReasoningState;
+    results: typeof finalized;
+  }> = [];
+
+  for (const item of finalized) {
+    const current = turns[turns.length - 1];
+    if (!current || current.providerTurnId !== item.result.providerTurnId) {
+      turns.push({
+        providerTurnId: item.result.providerTurnId,
+        reasoningState: item.result.reasoningState ?? fallbackReasoningState,
+        results: [item],
+      });
+    } else {
+      current.results.push(item);
+    }
+  }
+  return turns;
+}
+
+function createAnthropicReasoningBlocks(reasoningState?: ProviderReasoningState) {
+  if (reasoningState?.format !== "anthropic-thinking") {
     return [];
   }
-  return toolBridge.reasoningState.entries.map((entry) => entry.value);
+  return reasoningState.entries.map((entry) => entry.value);
 }
 
 function createAnthropicToolUse(result: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>[number]) {
   const raw = readRecord(result.rawCall);
-  return raw.type === "tool_use"
+  return raw.type === "tool_use" && argumentsMatch(raw.input, result.arguments)
     ? raw
     : {
         id: result.callId,
@@ -589,16 +631,16 @@ function createAnthropicToolUse(result: NonNullable<ProviderToolBridgeOptions["t
       };
 }
 
-function createResponsesReasoningItems(toolBridge: ProviderToolBridgeOptions) {
-  if (toolBridge.reasoningState?.format !== "openai-responses") {
+function createResponsesReasoningItems(reasoningState?: ProviderReasoningState) {
+  if (reasoningState?.format !== "openai-responses") {
     return [];
   }
-  return toolBridge.reasoningState.entries.map((entry) => entry.value);
+  return reasoningState.entries.map((entry) => entry.value);
 }
 
 function createResponsesFunctionCall(result: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>[number]) {
   const raw = readRecord(result.rawCall);
-  return raw.type === "function_call"
+  return raw.type === "function_call" && argumentsMatch(raw.arguments, result.arguments)
     ? raw
     : {
         arguments: stringifyArguments(result.arguments),
@@ -610,7 +652,7 @@ function createResponsesFunctionCall(result: NonNullable<ProviderToolBridgeOptio
 
 function createOpenAiCompatibleAssistantTurn(
   results: NonNullable<ProviderToolBridgeOptions["toolResultMessages"]>,
-  toolBridge: ProviderToolBridgeOptions,
+  reasoningState?: ProviderReasoningState,
 ) {
   const message: Record<string, unknown> = {
     content: null,
@@ -618,7 +660,9 @@ function createOpenAiCompatibleAssistantTurn(
     tool_calls: results.map((result) => {
       const raw = readRecord(result.rawCall);
       const rawFunction = readRecord(raw.function);
-      return raw.type === "function" && typeof rawFunction.name === "string"
+      return raw.type === "function"
+        && typeof rawFunction.name === "string"
+        && argumentsMatch(rawFunction.arguments, result.arguments)
         ? raw
         : {
             function: {
@@ -631,7 +675,7 @@ function createOpenAiCompatibleAssistantTurn(
     }),
   };
 
-  for (const entry of toolBridge.reasoningState?.entries ?? []) {
+  for (const entry of reasoningState?.entries ?? []) {
     if (entry.type === "reasoning_details" || entry.type === "reasoning_content" || entry.type === "reasoning" || entry.type === "thinking") {
       const existing = message[entry.type];
       if (typeof existing === "string" && typeof entry.value === "string") {
@@ -644,6 +688,18 @@ function createOpenAiCompatibleAssistantTurn(
     }
   }
   return message;
+}
+
+function argumentsMatch(rawArguments: unknown, executedArguments: unknown) {
+  let normalizedRaw = rawArguments;
+  if (typeof rawArguments === "string") {
+    try {
+      normalizedRaw = JSON.parse(rawArguments);
+    } catch {
+      return false;
+    }
+  }
+  return stringifyArguments(normalizedRaw) === stringifyArguments(executedArguments);
 }
 
 function stringifyArguments(value: unknown) {

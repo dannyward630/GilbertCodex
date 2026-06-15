@@ -166,6 +166,18 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       ? (event) => updateCodingRun((run) => withCodingTelemetryEvent(run, event))
       : undefined;
 
+    function rememberBridgeToolResults(
+      resultMessages: ToolResultMessage[],
+      providerTurnId: number,
+      reasoningState?: ProviderReasoningState,
+    ) {
+      bridgeToolResultMessages.push(...resultMessages.map((message) => ({
+        ...message,
+        providerTurnId,
+        reasoningState,
+      })));
+    }
+
     function createActiveBridgeToolPreviews(calls: ToolCallRequest[], activePassIndex: number): ChatToolCall[] {
       return stampLocalToolCallIds(
         calls.map((call) =>
@@ -1191,7 +1203,9 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
 
       const [firstCall, ...restCalls] = calls;
 
-      return firstCall ? [{ ...firstCall, arguments: decision.editedArgs }, ...restCalls] : calls;
+      return firstCall
+        ? [{ ...firstCall, arguments: decision.editedArgs, raw: undefined }, ...restCalls]
+        : calls;
     }
 
     function getBridgeCallFamilies(calls: ToolCallRequest[]): ToolBridgeToolFamily[] {
@@ -1514,7 +1528,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
       const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
       updateCodingRun((run) => withCodingBridgeBatch(run, completedBridgeToolCalls));
       totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
-      bridgeToolResultMessages.push(...bridgeRun.resultMessages);
+      rememberBridgeToolResults(bridgeRun.resultMessages, passIndex, bridgeReasoningState);
       rememberProjectToolMemoryFromBridgeRun(chatId, workspaceSettings, prompt, bridgeRun);
       allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
       applyBridgeRunSideEffects(bridgeRun, completedBridgeToolCalls);
@@ -2144,7 +2158,7 @@ export async function streamAssistantWithLocalTools(deps: WorkspaceRuntimeDeps, 
         const completedBridgeToolCalls = stampLocalToolCallIds(bridgeRun.toolCalls, passIndex);
         updateCodingRun((run) => withCodingBridgeBatch(run, completedBridgeToolCalls));
         totalExecutedToolCalls += getBridgeHandledCount(bridgeRun);
-        bridgeToolResultMessages.push(...bridgeRun.resultMessages);
+        rememberBridgeToolResults(bridgeRun.resultMessages, passIndex, bridgeReasoningState);
         rememberProjectToolMemoryFromBridgeRun(chatId, workspaceSettings, prompt, bridgeRun);
         allToolCalls = [...allToolCalls, ...completedBridgeToolCalls];
         applyBridgeRunSideEffects(bridgeRun, completedBridgeToolCalls);
