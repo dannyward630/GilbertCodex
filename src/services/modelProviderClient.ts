@@ -2620,6 +2620,9 @@ function createStreamProviderReasoningState(
   trimmed = false,
 ) {
   if (provider === "anthropic") {
+    const redactedThinkingBlocks = entries
+      .filter((entry) => entry.type === "redacted_thinking")
+      .map((entry) => entry.value);
     const streamedThinking = entries
       .filter((entry) => entry.type === "thinking_delta")
       .map((entry) => entry.value)
@@ -2632,14 +2635,24 @@ function createStreamProviderReasoningState(
       .filter((value): value is string => typeof value === "string")
       .join("");
 
-    return createProviderReasoningState(provider, "anthropic-thinking", thinking || signature ? [{
-      type: "thinking",
-      value: {
-        signature: signature || undefined,
-        thinking,
-        type: "thinking",
-      },
-    }] : []);
+    const thinkingBlock = thinking || signature
+      ? [{
+          type: "thinking",
+          value: {
+            signature: signature || undefined,
+            thinking,
+            type: "thinking",
+          },
+        }]
+      : [];
+
+    return createProviderReasoningState(provider, "anthropic-thinking", [
+      ...redactedThinkingBlocks.map((value) => ({
+        type: "redacted_thinking",
+        value,
+      })),
+      ...thinkingBlock,
+    ]);
   }
 
   if (provider === "openrouter") {

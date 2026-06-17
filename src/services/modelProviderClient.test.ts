@@ -1466,6 +1466,52 @@ describe("streamProviderMessage tool call parsing", () => {
     });
   });
 
+  it("preserves Anthropic streamed redacted thinking blocks", async () => {
+    vi.stubGlobal("window", {
+      clearTimeout: globalThis.clearTimeout,
+      setTimeout: globalThis.setTimeout,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => streamResponse([
+      `data: ${JSON.stringify({
+        content_block: {
+          data: "opaque-redacted-thinking",
+          type: "redacted_thinking",
+        },
+        index: 0,
+        type: "content_block_start",
+      })}`,
+      `data: ${JSON.stringify({
+        content_block: {
+          id: "toolu_1",
+          input: {},
+          name: "files_read",
+          type: "tool_use",
+        },
+        index: 1,
+        type: "content_block_start",
+      })}`,
+      "data: [DONE]",
+    ])));
+
+    const response = await streamProviderMessage(withThinking({
+      ...createSettings(),
+      apiKeys: {
+        ...defaultProviderSettings.apiKeys,
+        anthropic: "anthropic-test-key",
+      },
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+    }), [createMessage()], vi.fn());
+
+    expect(response.reasoningState?.entries[0]).toEqual({
+      type: "redacted_thinking",
+      value: {
+        data: "opaque-redacted-thinking",
+        type: "redacted_thinking",
+      },
+    });
+  });
+
   it("sends stable Gilbert Codex attribution headers to OpenRouter", async () => {
     vi.stubGlobal("window", {
       clearTimeout: globalThis.clearTimeout,
