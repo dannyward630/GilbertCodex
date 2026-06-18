@@ -18,15 +18,15 @@ function Test-LegacyPublicShim {
 
   $index = Get-Content -LiteralPath $indexPath -Raw
   $parsers = Get-Content -LiteralPath $parsersPath -Raw
-  return (
-    (
-      $parsers -match 'export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}' -and
-      $parsers -match 'export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}'
-    ) -or (
-      $index -match 'Provider tool bridge is not bundled in this public build\.' -and
-      $index -match 'export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}'
-    )
+  $hasLegacyParserStubs = (
+    $parsers -match 'export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}' -and
+    $parsers -match 'export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}'
   )
+  $hasLegacyIndexStub = (
+    $index -match 'Provider tool bridge is not bundled in this public build\.' -and
+    $index -match 'export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}'
+  )
+  return ($hasLegacyParserStubs -and $hasLegacyIndexStub)
 }
 
 function Test-ManagedPublicShim {
@@ -960,7 +960,7 @@ export function parseResponsesStreamToolCallDeltas(payload: unknown): Array<{ ar
       id: typeof item.call_id === "string" ? item.call_id : typeof item.id === "string" ? item.id : undefined,
       index,
       name: typeof item.name === "string" ? item.name : undefined,
-      raw: payload,
+      raw: item,
     }];
   }
 
@@ -968,7 +968,7 @@ export function parseResponsesStreamToolCallDeltas(payload: unknown): Array<{ ar
     return [{
       argumentsDelta: typeof record.delta === "string" ? record.delta : "",
       index,
-      raw: payload,
+      raw: { arguments: typeof record.delta === "string" ? record.delta : "" },
     }];
   }
 
@@ -979,7 +979,7 @@ export function parseResponsesStreamToolCallDeltas(payload: unknown): Array<{ ar
       argumentsSnapshot: parsed?.ok ? parsed.value : undefined,
       index,
       name: typeof record.name === "string" ? record.name : undefined,
-      raw: payload,
+      raw: typeof record.name === "string" ? { name: record.name } : undefined,
     }];
   }
 

@@ -1308,7 +1308,17 @@ describe("streamProviderMessage tool call parsing", () => {
         choices: [{
           delta: {
             tool_calls: [{
-              function: { arguments: "{\"path\":\"README.md\"}" },
+              function: { arguments: "{\"path\"" },
+              index: 0,
+            }],
+          },
+        }],
+      })}`,
+      `data: ${JSON.stringify({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              function: { arguments: ":\"README.md\"}" },
               index: 0,
             }],
           },
@@ -1406,6 +1416,13 @@ describe("streamProviderMessage tool call parsing", () => {
       arguments: { content: "hello", path: "index.html" },
       id: "call-write",
       name: "files_write",
+      raw: {
+        arguments: "{\"path\":\"index.html\",\"content\":\"hello\"}",
+        call_id: "call-write",
+        id: "fc-write",
+        name: "files_write",
+        type: "function_call",
+      },
     });
     expect(response.toolCalls?.[0]?.argumentsParseError).toBeUndefined();
   });

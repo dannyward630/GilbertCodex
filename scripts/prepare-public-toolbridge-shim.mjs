@@ -96,14 +96,14 @@ async function looksLikeLegacyPublicShim() {
 
   const parsers = await readFile(parsersPath, "utf8");
   const index = await readFile(indexPath, "utf8");
-  return (/export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
+  const hasLegacyParserStubs = /export function parseAnthropicToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
     parsers,
   ) && /export function parseResponsesToolCalls\([^)]*\)[^{]*\{\s*return \[\];\s*\}/m.test(
     parsers,
-  )) || (
-    index.includes("Provider tool bridge is not bundled in this public build.")
-    && /export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}/m.test(index)
   );
+  const hasLegacyIndexStub = index.includes("Provider tool bridge is not bundled in this public build.")
+    && /export function selectAdvertisedBridgeTools\([^)]*\)[^{]*\{\s*return \[\] as ToolDefinition\[\];\s*\}/m.test(index);
+  return hasLegacyParserStubs && hasLegacyIndexStub;
 }
 
 function createMarkerContent(files) {

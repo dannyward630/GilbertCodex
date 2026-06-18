@@ -2437,12 +2437,19 @@ function applyStreamToolCallDelta(accumulator: Map<number, StreamToolCallAccumul
   return changed;
 }
 
-function mergeStreamToolCallRaw(existing: unknown, next: unknown): unknown {
+function mergeStreamToolCallRaw(existing: unknown, next: unknown, path: string[] = []): unknown {
   if (next === undefined) {
     return existing;
   }
   if (existing === undefined) {
     return next;
+  }
+  if (
+    typeof existing === "string"
+    && typeof next === "string"
+    && path[path.length - 1] === "arguments"
+  ) {
+    return `${existing}${next}`;
   }
   if (
     existing === null
@@ -2457,7 +2464,7 @@ function mergeStreamToolCallRaw(existing: unknown, next: unknown): unknown {
 
   const merged: Record<string, unknown> = { ...(existing as Record<string, unknown>) };
   for (const [key, value] of Object.entries(next as Record<string, unknown>)) {
-    merged[key] = mergeStreamToolCallRaw(merged[key], value);
+    merged[key] = mergeStreamToolCallRaw(merged[key], value, [...path, key]);
   }
   return merged;
 }
