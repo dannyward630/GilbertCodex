@@ -10,6 +10,7 @@ $indexPath = Join-Path $toolBridgeRoot "index.ts"
 $markerPath = Join-Path $toolBridgeRoot ".public-shim"
 $parsersPath = Join-Path $toolBridgeRoot "parsers.ts"
 $markerVersion = "gilbert-codex-public-toolbridge-shim-v2"
+$legacyMarkerVersion = "gilbert-codex-public-toolbridge-shim-v1"
 
 function Test-LegacyPublicShim {
   if (-not (Test-Path $indexPath) -or -not (Test-Path $parsersPath)) {
@@ -35,7 +36,12 @@ function Test-ManagedPublicShim {
   }
 
   try {
-    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    $markerContent = Get-Content -LiteralPath $markerPath -Raw
+    if ($markerContent.Trim() -eq $legacyMarkerVersion) {
+      return $true
+    }
+
+    $marker = $markerContent | ConvertFrom-Json
     if ($marker.version -ne $markerVersion -or $null -eq $marker.files) {
       return Test-LegacyPublicShim
     }
@@ -663,7 +669,7 @@ function createOpenAiCompatibleAssistantTurn(
       return raw.type === "function"
         && typeof rawFunction.name === "string"
         && argumentsMatch(rawFunction.arguments, result.arguments)
-        ? raw
+        ? normalizeOpenAiCompatibleToolCallRaw(raw)
         : {
             function: {
               arguments: stringifyArguments(result.arguments),
@@ -688,6 +694,11 @@ function createOpenAiCompatibleAssistantTurn(
     }
   }
   return message;
+}
+
+function normalizeOpenAiCompatibleToolCallRaw(raw: Record<string, unknown>) {
+  const { index: _index, ...normalized } = raw;
+  return normalized;
 }
 
 function argumentsMatch(rawArguments: unknown, executedArguments: unknown) {
@@ -911,7 +922,7 @@ export function parseAnthropicToolCalls(payload: unknown, provider: ModelProvide
 
 export function parseOpenAiCompatibleStreamToolCallDeltas(payload: unknown): Array<{ argumentsDelta?: string; argumentsParseError?: string; argumentsSnapshot?: unknown; id?: string; index: number; name?: string; raw?: unknown }> {
   const choice = readArray(readRecord(payload).choices)[0];
-  const delta = readRecord(readRecord(choice).delta ?? readRecord(choice).message);
+  const delta = readRecord(readRecord(choice).delta);
   return readArray(delta.tool_calls).map((rawCall, fallbackIndex) => {
     const call = readRecord(rawCall);
     const fn = readRecord(call.function);

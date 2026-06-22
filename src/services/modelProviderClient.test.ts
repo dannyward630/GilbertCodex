@@ -18,6 +18,7 @@ import type { ToolDefinition } from "../toolBridge/types";
 import {
   parseAnthropicStreamToolCallDelta,
   parseAnthropicToolCalls,
+  parseOpenAiCompatibleStreamToolCallDeltas,
   parseOpenAiCompatibleToolCalls,
   parseResponsesToolCalls,
 } from "../toolBridge/parsers";
@@ -842,6 +843,54 @@ describe("provider structured output request bodies", () => {
     };
 
     expect(assistant.tool_calls[0]?.function.arguments).toBe("{\"path\":\"approved.md\"}");
+  });
+
+  it("strips OpenAI-compatible stream-only fields when replaying raw calls", () => {
+    const body = createProviderRequestBody(
+      createSettings(),
+      [createMessage()],
+      undefined,
+      false,
+      {
+        toolChoice: "none",
+        toolResultDelivery: "native",
+        toolResultMessages: [{
+          arguments: { path: "README.md" },
+          callId: "call-read",
+          name: "files_read",
+          rawCall: {
+            extra_content: {
+              google: { thought_signature: "signed-call" },
+            },
+            function: {
+              arguments: "{\"path\":\"README.md\"}",
+              name: "files_read",
+            },
+            id: "call-read",
+            index: 0,
+            type: "function",
+          },
+          result: { content: "readme", ok: true },
+        }],
+        tools: [],
+      },
+    ) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const assistant = messages[messages.length - 2] as {
+      tool_calls: Array<Record<string, unknown>>;
+    };
+
+    expect(assistant.tool_calls[0]).toEqual({
+      extra_content: {
+        google: { thought_signature: "signed-call" },
+      },
+      function: {
+        arguments: "{\"path\":\"README.md\"}",
+        name: "files_read",
+      },
+      id: "call-read",
+      type: "function",
+    });
   });
 
   it("combines fragmented OpenAI-compatible reasoning state", () => {
@@ -1973,6 +2022,41 @@ describe("provider tool-call parsers", () => {
         name: "files_read",
       }),
     ]);
+  });
+
+  it("ignores final OpenAI-compatible stream snapshots as tool-call deltas", () => {
+    const delta = parseOpenAiCompatibleStreamToolCallDeltas({
+      choices: [{
+        delta: {
+          tool_calls: [{
+            function: {
+              arguments: "{\"path\":\"README.md\"}",
+              name: "files_read",
+            },
+            id: "call-read",
+            index: 0,
+            type: "function",
+          }],
+        },
+      }],
+    });
+    const finalSnapshot = parseOpenAiCompatibleStreamToolCallDeltas({
+      choices: [{
+        message: {
+          tool_calls: [{
+            function: {
+              arguments: "{\"path\":\"README.md\"}",
+              name: "files_read",
+            },
+            id: "call-read",
+            type: "function",
+          }],
+        },
+      }],
+    });
+
+    expect(delta).toHaveLength(1);
+    expect(finalSnapshot).toEqual([]);
   });
 });
 

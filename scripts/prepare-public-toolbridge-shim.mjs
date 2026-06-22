@@ -12,6 +12,7 @@ const parsersPath = path.join(toolBridgeRoot, "parsers.ts");
 const powerShellSourcePath = path.join(scriptDir, "prepare-public-toolbridge-shim.ps1");
 const force = process.argv.includes("--force");
 const markerVersion = "gilbert-codex-public-toolbridge-shim-v2";
+const legacyMarkerVersion = "gilbert-codex-public-toolbridge-shim-v1";
 
 const existingIndex = await fileExists(indexPath);
 const powerShellSource = await readFile(powerShellSourcePath, "utf8");
@@ -66,6 +67,10 @@ async function markerMatchesManagedFiles() {
   const marker = await readTextFile(markerPath);
   if (!marker) {
     return false;
+  }
+
+  if (marker.replace(/^\uFEFF/, "").trim() === legacyMarkerVersion) {
+    return true;
   }
 
   try {
